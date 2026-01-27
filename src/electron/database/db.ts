@@ -4,49 +4,66 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 let db: Database.Database | null = null;
+let initializationPromise: Promise<Database.Database> | null = null;
 
 export async function initializeDatabase(): Promise<Database.Database> {
   if (db) {
     return db;
   }
 
-  const { app } = await import('electron');
-  const userDataPath = app.getPath('userData');
-  const dbPath = path.join(userDataPath, 'vod-pipeline.db');
+  if (initializationPromise) {
+    return await initializationPromise;
+  }
 
-  console.log('Initializing database at:', dbPath);
+  initializationPromise = (async () => {
+    const { app } = await import('electron');
+    const userDataPath = app.getPath('userData');
+    const dbPath = path.join(userDataPath, 'vod-pipeline.db');
 
-  db = new Database(dbPath);
+    console.log('Initializing database at:', dbPath);
 
-  db.pragma('journal_mode = WAL');
+    const database = new Database(dbPath);
+    database.pragma('journal_mode = WAL');
 
-  const modulePath = fileURLToPath(import.meta.url);
-  const moduleDirname = path.dirname(modulePath);
+    const modulePath = fileURLToPath(import.meta.url);
+    const moduleDirname = path.dirname(modulePath);
 
-  const possiblePaths = [
-    path.join(moduleDirname, '../../database/schema.sql'),
-    path.join(moduleDirname, '../../../database/schema.sql'),
-    path.join(app.getAppPath(), 'database/schema.sql'),
-  ];
+    const possiblePaths = [
+      path.join(moduleDirname, '../../database/schema.sql'),
+      path.join(moduleDirname, '../../../database/schema.sql'),
+      path.join(app.getAppPath(), 'database/schema.sql'),
+    ];
 
-  let schema: string | null = null;
-  for (const schemaPath of possiblePaths) {
-    if (fs.existsSync(schemaPath)) {
-      schema = fs.readFileSync(schemaPath, 'utf-8');
-      console.log('Database schema loaded from:', schemaPath);
-      break;
+    let schema: string | null = null;
+    for (const schemaPath of possiblePaths) {
+      if (fs.existsSync(schemaPath)) {
+        schema = fs.readFileSync(schemaPath, 'utf-8');
+        console.log('Database schema loaded from:', schemaPath);
+        break;
+      }
     }
-  }
 
-  if (schema) {
-    db.exec(schema);
-    console.log('Database schema initialized successfully');
-  } else {
-    console.error('Schema file not found. Tried paths:', possiblePaths);
-    throw new Error('Database schema not found - cannot initialize database');
-  }
+    if (schema) {
+      database.exec(schema);
+      console.log('Database schema initialized successfully');
+    } else {
+      console.error('Schema file not found. Tried paths:', possiblePaths);
+      throw new Error('Database schema not found - cannot initialize database');
+    }
 
-  return db;
+    return database;
+  })()
+    .then((database) => {
+      db = database;
+      initializationPromise = null;
+      return database;
+    })
+    .catch((error) => {
+      initializationPromise = null;
+      throw error;
+    });
+
+  return await initializationPromise;
 }
 
 export async function getDatabase(): Promise<Database.Database> {
