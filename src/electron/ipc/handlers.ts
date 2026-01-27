@@ -1,32 +1,52 @@
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from './channels';
+import { createProject, getProject, listProjects, deleteProject, updateProject } from '../database/db';
 
 export function registerIpcHandlers() {
   console.log('Registering IPC handlers...');
 
   ipcMain.handle(IPC_CHANNELS.PROJECT_CREATE, async (_, { name }) => {
     console.log('IPC: project:create', name);
-    return { success: false, error: 'Database not initialized yet' };
+    try {
+      const project = createProject(name);
+      return { success: true, data: project };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.PROJECT_GET_ALL, async () => {
     console.log('IPC: project:get-all');
-    return { success: false, data: [], error: 'Database not initialized yet' };
+    try {
+      const projects = listProjects();
+      return { success: true, data: projects };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.PROJECT_GET, async (_, { id }) => {
     console.log('IPC: project:get', id);
-    return { success: false, error: 'Database not initialized yet' };
+    try {
+      const project = getProject(id);
+      if (project) {
+        return { success: true, data: project };
+      } else {
+        return { success: false, error: 'Project not found' };
+      }
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, { projectId, filePath }) => {
     console.log('IPC: asset:add', projectId, filePath);
-    return { success: false, error: 'Database not initialized yet' };
+    return { success: false, error: 'Asset management not implemented yet' };
   });
 
   ipcMain.handle(IPC_CHANNELS.CHAPTER_CREATE, async (_, { projectId, title, start, end }) => {
     console.log('IPC: chapter:create', projectId, title, start, end);
-    return { success: false, error: 'Database not initialized yet' };
+    return { success: false, error: 'Chapter management not implemented yet' };
   });
 
   ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, { projectId, message }) => {
