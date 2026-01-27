@@ -1,0 +1,39 @@
+{
+  "appId": "com.vod-pipeline.app",
+  "productName": "VOD Pipeline",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "src/**/*",
+    "package.json"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "binaries/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "binaries/",
+      "to": "binaries/",
+      "filter": ["**/*"]
+    }
+  ],
+  "afterPack": "./scripts/after-pack.js",
+  "win": {
+    "target": ["nsis"],
+    "icon": "assets/icon.ico"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "icon": "assets/icon.icns",
+    "category": "public.app-category.video",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "assets/icon.png",
+    "category": "Video"
+  }
+}
