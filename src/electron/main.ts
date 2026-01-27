@@ -1,9 +1,9 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import * as fs from 'fs';
 import { registerIpcHandlers } from './ipc/handlers';
 import { initializeDatabase, closeDatabase } from './database/db';
+import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,8 +88,10 @@ function detectFFmpeg(): string | null {
   const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const resourcesPath = process.resourcesPath || process.cwd();
 
+  const platformPath = (PLATFORM_CONFIG as Record<string, { path: string }>)[platform]?.path || '';
+
   const possiblePaths = [
-    path.join(resourcesPath, 'binaries', PLATFORM_CONFIG[platform]?.path || '', binaryName),
+    path.join(resourcesPath, 'binaries', platformPath, binaryName),
     path.join(process.cwd(), 'binaries', platform, binaryName),
     path.join(app.getPath('userData'), 'binaries', binaryName),
     binaryName,
@@ -104,8 +106,12 @@ function detectFFmpeg(): string | null {
   return null;
 }
 
-const PLATFORM_CONFIG = {
+const PLATFORM_CONFIG: Record<string, { path: string }> = {
   win32: { path: '' },
   darwin: { path: '' },
   linux: { path: '' },
+  aix: { path: '' },
+  freebsd: { path: '' },
+  openbsd: { path: '' },
+  sunos: { path: '' },
 };
