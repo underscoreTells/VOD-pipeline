@@ -13,6 +13,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"],
+    "outDir": "./dist",
     "paths": {
       "$shared/*": ["./src/shared/*"]
     }
