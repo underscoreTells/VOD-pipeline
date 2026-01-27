@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { resolve } from 'path';
 
+const __dirname = new URL('.', import.meta.url).pathname;
+
 export default defineConfig({
   plugins: [svelte()],
   root: 'src/renderer',

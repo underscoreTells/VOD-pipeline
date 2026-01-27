@@ -53,11 +53,14 @@ const FFmpegConfig = {
     name: 'linux',
     arch: {
       x64: 'amd64',
-      arm64: 'aarch64',
+      arm64: 'arm64',
       arm: 'armhf',
-      ia32: 'x86',
+      ia32: 'i686',
     },
-    downloadUrl: () => 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz',
+    downloadUrl: () => {
+      const mappedArch = FFmpegConfig.linux.arch[ARCH] || 'amd64';
+      return `https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${mappedArch}-static.tar.xz`;
+    },
     binaryName: 'ffmpeg',
   },
 };
@@ -67,14 +70,18 @@ const INSTALL_DIR = IS_DEV
   ? path.join(process.cwd(), 'binaries', PLATFORM)
   : path.join(process.resourcesPath, 'binaries');
 
-async function downloadFile(url, destPath) {
+async function downloadFile(url, destPath, maxRedirects = 5) {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
     const file = fs.createWriteStream(destPath);
 
     protocol.get(url, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
-        return downloadFile(response.headers.location, destPath)
+        if (maxRedirects <= 0) {
+          reject(new Error('Too many redirects'));
+          return;
+        }
+        return downloadFile(response.headers.location, destPath, maxRedirects - 1)
           .then(resolve)
           .catch(reject);
       }

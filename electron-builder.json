@@ -5,8 +5,9 @@
     "output": "dist"
   },
   "files": [
-    "src/**/*",
-    "package.json"
+    "dist/**",
+    "package.json",
+    "database/**"
   ],
   "asar": true,
   "asarUnpack": [
