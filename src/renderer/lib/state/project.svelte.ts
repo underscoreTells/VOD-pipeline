@@ -1,4 +1,4 @@
-import { getProjects, type CreateProjectResult, type GetProjectsResult } from './electron.svelte';
+import { createProject as ipcCreateProject, getProjects, type CreateProjectResult, type GetProjectsResult } from './electron.svelte';
 
 export interface Project {
   id: number;
@@ -38,7 +38,7 @@ export async function loadProjects() {
 
 export async function createProject(name: string) {
   try {
-    const result: CreateProjectResult = await createProject(name);
+    const result: CreateProjectResult = await ipcCreateProject(name);
     if (result.success && result.data) {
       projects.items = [result.data, ...projects.items];
       projects.selectedId = result.data.id;
