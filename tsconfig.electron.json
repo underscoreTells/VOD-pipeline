@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020"],
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "outDir": "./dist",
+    "paths": {
+      "$shared/*": ["./src/shared/*"]
+    }
+  },
+  "include": [
+    "src/electron/**/*",
+    "src/agent/**/*",
+    "src/pipeline/**/*",
+    "src/shared/**/*"
+  ]
+}

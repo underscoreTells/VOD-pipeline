@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@/*": ["./src/renderer/*"],
+      "$shared/*": ["./src/shared/*"]
+    }
+  },
+  "include": [],
+  "references": [
+    { "path": "./tsconfig.electron.json" },
+    { "path": "./tsconfig.renderer.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
