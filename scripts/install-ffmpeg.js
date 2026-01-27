@@ -26,7 +26,27 @@ const FFmpegConfig = {
   darwin: {
     name: 'macos',
     arch: arch => arch,
-    downloadUrl: () => 'https://evermeet.cx/ffmpeg/getrelease',
+    downloadUrl: async () => {
+      return new Promise((resolve, reject) => {
+        const url = 'https://evermeet.cx/ffmpeg/getrelease';
+        https.get(url, (response) => {
+          let data = '';
+          response.on('data', (chunk) => {
+            data += chunk;
+          });
+          response.on('end', () => {
+            try {
+              const json = JSON.parse(data);
+              resolve(json.url);
+            } catch (e) {
+              reject(new Error('Failed to parse FFmpeg release info'));
+            }
+          });
+        }).on('error', (e) => {
+          reject(e);
+        });
+      });
+    },
     binaryName: 'ffmpeg',
   },
   linux: {
@@ -172,7 +192,7 @@ async function installFFmpeg() {
 
   fs.mkdirSync(INSTALL_DIR, { recursive: true });
 
-  const downloadUrl = config.downloadUrl();
+  const downloadUrl = await config.downloadUrl();
   const archiveName = path.basename(downloadUrl);
   const archivePath = path.join(INSTALL_DIR, archiveName);
 

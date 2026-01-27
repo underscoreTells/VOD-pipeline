@@ -19,13 +19,27 @@ export function initializeDatabase(): Database.Database {
 
   db.pragma('journal_mode = WAL');
 
-  const schemaPath = path.join(__dirname, '../../database/schema.sql');
-  if (fs.existsSync(schemaPath)) {
-    const schema = fs.readFileSync(schemaPath, 'utf-8');
+  const possiblePaths = [
+    path.join(__dirname, '../../database/schema.sql'),
+    path.join(__dirname, '../../../database/schema.sql'),
+    path.join(app.getAppPath(), 'database/schema.sql'),
+  ];
+
+  let schema: string | null = null;
+  for (const schemaPath of possiblePaths) {
+    if (fs.existsSync(schemaPath)) {
+      schema = fs.readFileSync(schemaPath, 'utf-8');
+      console.log('Database schema loaded from:', schemaPath);
+      break;
+    }
+  }
+
+  if (schema) {
     db.exec(schema);
     console.log('Database schema initialized successfully');
   } else {
-    console.warn('Schema file not found at:', schemaPath);
+    console.error('Schema file not found. Tried paths:', possiblePaths);
+    throw new Error('Database schema not found - cannot initialize database');
   }
 
   return db;

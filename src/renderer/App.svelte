@@ -50,6 +50,12 @@
               <div 
                 class="project-card" 
                 onclick={() => selectProject(project.id)}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    selectProject(project.id);
+                  }
+                }}
                 role="button"
                 tabindex="0"
               >

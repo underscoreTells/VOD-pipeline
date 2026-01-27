@@ -39,6 +39,34 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.PROJECT_UPDATE, async (_, { id, name }) => {
+    console.log('IPC: project:update', id, name);
+    try {
+      const success = updateProject(id, name);
+      if (success) {
+        return { success: true };
+      } else {
+        return { success: false, error: 'Project not found' };
+      }
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.PROJECT_DELETE, async (_, { id }) => {
+    console.log('IPC: project:delete', id);
+    try {
+      const success = deleteProject(id);
+      if (success) {
+        return { success: true };
+      } else {
+        return { success: false, error: 'Project not found' };
+      }
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, { projectId, filePath }) => {
     console.log('IPC: asset:add', projectId, filePath);
     return { success: false, error: 'Asset management not implemented yet' };
