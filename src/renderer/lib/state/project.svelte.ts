@@ -52,8 +52,7 @@ export async function createProject(name: string) {
 }
 
 export async function deleteProject(id: number) {
-  // Placeholder - will implement in Phase 3
-  console.log('Delete project:', id);
+  throw new Error('deleteProject not implemented');
 }
 
 export function selectProject(id: number | null) {

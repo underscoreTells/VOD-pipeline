@@ -1,15 +1,16 @@
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 let db: Database.Database | null = null;
 
-export function initializeDatabase(): Database.Database {
+export async function initializeDatabase(): Promise<Database.Database> {
   if (db) {
     return db;
   }
 
-  const { app } = require('electron');
+  const { app } = await import('electron');
   const userDataPath = app.getPath('userData');
   const dbPath = path.join(userDataPath, 'vod-pipeline.db');
 
@@ -19,9 +20,12 @@ export function initializeDatabase(): Database.Database {
 
   db.pragma('journal_mode = WAL');
 
+  const modulePath = fileURLToPath(import.meta.url);
+  const moduleDirname = path.dirname(modulePath);
+
   const possiblePaths = [
-    path.join(__dirname, '../../database/schema.sql'),
-    path.join(__dirname, '../../../database/schema.sql'),
+    path.join(moduleDirname, '../../database/schema.sql'),
+    path.join(moduleDirname, '../../../database/schema.sql'),
     path.join(app.getAppPath(), 'database/schema.sql'),
   ];
 
@@ -45,9 +49,9 @@ export function initializeDatabase(): Database.Database {
   return db;
 }
 
-export function getDatabase(): Database.Database {
+export async function getDatabase(): Promise<Database.Database> {
   if (!db) {
-    return initializeDatabase();
+    return await initializeDatabase();
   }
   return db;
 }
@@ -66,8 +70,8 @@ export interface Project {
   updated_at?: string;
 }
 
-export function createProject(name: string): Project {
-  const database = getDatabase();
+export async function createProject(name: string): Promise<Project> {
+  const database = await getDatabase();
   const now = new Date().toISOString();
   
   const result = database.prepare(
@@ -82,8 +86,8 @@ export function createProject(name: string): Project {
   };
 }
 
-export function getProject(id: number): Project | null {
-  const database = getDatabase();
+export async function getProject(id: number): Promise<Project | null> {
+  const database = await getDatabase();
   const result = database.prepare(
     'SELECT id, name, created_at, updated_at FROM projects WHERE id = ?'
   ).get(id) as Project | undefined;
@@ -91,8 +95,8 @@ export function getProject(id: number): Project | null {
   return result || null;
 }
 
-export function listProjects(): Project[] {
-  const database = getDatabase();
+export async function listProjects(): Promise<Project[]> {
+  const database = await getDatabase();
   const results = database.prepare(
     'SELECT id, name, created_at, updated_at FROM projects ORDER BY created_at DESC'
   ).all() as Project[];
@@ -100,15 +104,15 @@ export function listProjects(): Project[] {
   return results;
 }
 
-export function deleteProject(id: number): boolean {
-  const database = getDatabase();
+export async function deleteProject(id: number): Promise<boolean> {
+  const database = await getDatabase();
   const result = database.prepare('DELETE FROM projects WHERE id = ?').run(id);
   
   return result.changes > 0;
 }
 
-export function updateProject(id: number, name: string): boolean {
-  const database = getDatabase();
+export async function updateProject(id: number, name: string): Promise<boolean> {
+  const database = await getDatabase();
   const now = new Date().toISOString();
   
   const result = database.prepare(
