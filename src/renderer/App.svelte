@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { projects, selectedProject, loadProjects, createProject, selectProject } from './lib/state/project.svelte';
+  import { projects, getSelectedProject, loadProjects, createProject, selectProject } from './lib/state/project.svelte';
+
+  const selectedProject = $derived.by(() => getSelectedProject());
 
   let newProjectName = $state('');
   let showCreateDialog = $state(false);

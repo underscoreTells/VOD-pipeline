@@ -14,9 +14,9 @@ export const projects = $state({
   selectedId: null as number | null,
 });
 
-export const selectedProject = $derived(() =>
-  projects.items.find((p) => p.id === projects.selectedId) ?? null
-);
+export function getSelectedProject(): Project | null {
+  return projects.items.find((p) => p.id === projects.selectedId) ?? null;
+}
 
 export async function loadProjects() {
   projects.loading = true;
