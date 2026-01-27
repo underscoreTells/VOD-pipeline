@@ -1,22 +1,47 @@
 {
-  "name": "VOD-pipeline",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "vod-pipeline",
+  "version": "0.1.0",
+  "description": "AI-Assisted Video Editor for Twitch VODs",
+  "main": "dist/electron/main.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "pnpm rebuild && concurrently \"pnpm dev:renderer\" \"wait-on http://localhost:5173 && pnpm dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "tsc -p tsconfig.electron.json --watch",
+    "dev:main": "electron dist/electron/main.js",
+    "build": "pnpm build:renderer && pnpm build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "dist": "pnpm build && electron-builder",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "lint": "echo \"Linting not configured yet\"",
+    "postinstall": "node ./scripts/install-ffmpeg.js"
   },
-  "keywords": [],
+  "keywords": [
+    "video",
+    "editor",
+    "electron",
+    "twitch",
+    "vod",
+    "ai"
+  ],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.26.0",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "svelte": "^5.48.3"
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "adm-zip": "^0.5.16",
+    "concurrently": "^9.2.1",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
     "svelte-check": "^4.3.5",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1"
-  },
-  "dependencies": {
-    "svelte": "^5.48.3"
+    "vite": "^7.3.1",
+    "wait-on": "^8.0.5"
   }
 }
