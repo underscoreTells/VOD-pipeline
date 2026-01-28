@@ -5,9 +5,23 @@ export type AgentInputMessage =
   | AnalyzeChaptersInputMessage
   | StopInputMessage;
 
+export type AgentInputMessageWithId = AgentInputMessage;
+
+export type AgentInputMessageWithoutId =
+  | ChatInputMessageWithoutId
+  | AnalyzeChaptersInputMessageWithoutId
+  | StopInputMessageWithoutId;
+
 export interface ChatInputMessage {
   type: "chat";
   requestId: string;
+  threadId?: string;
+  messages: Array<{ role: string; content: string }>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChatInputMessageWithoutId {
+  type: "chat";
   threadId?: string;
   messages: Array<{ role: string; content: string }>;
   metadata?: Record<string, unknown>;
@@ -27,9 +41,27 @@ export interface AnalyzeChaptersInputMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface AnalyzeChaptersInputMessageWithoutId {
+  type: "analyze-chapters";
+  threadId?: string;
+  projectId: string;
+  chapters: Array<{
+    id: string;
+    transcript: string;
+    videoPath?: string;
+  }>;
+  instructions: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface StopInputMessage {
   type: "stop";
   requestId: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StopInputMessageWithoutId {
+  type: "stop";
   metadata?: Record<string, unknown>;
 }
 

@@ -6,7 +6,8 @@ import { JSONStdinWriter, JSONStdoutReader } from "../agent/ipc/json-message-tra
 import {
   type AgentInputMessage,
   type AgentOutputMessage,
-} from "../../shared/types/agent-ipc.js";
+  type AgentInputMessageWithoutId,
+} from "../shared/types/agent-ipc.js";
 import { v4 as uuidv4 } from "uuid";
 
 const AGENT_STARTUP_TIMEOUT = 10000;
@@ -136,7 +137,7 @@ export class AgentBridge extends EventEmitter {
   }
 
   async send(
-    message: Omit<AgentInputMessage, "requestId">,
+    message: AgentInputMessageWithoutId,
     timeoutMs: number = AGENT_REQUEST_TIMEOUT
   ): Promise<AgentOutputMessage> {
     if (!this.stdinWriter) {
@@ -144,10 +145,10 @@ export class AgentBridge extends EventEmitter {
     }
 
     const requestId = uuidv4();
-    const fullMessage: AgentInputMessage = {
+    const fullMessage = {
       ...message,
       requestId,
-    };
+    } as AgentInputMessage;
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -175,7 +176,7 @@ export class AgentBridge extends EventEmitter {
     console.log("[AgentBridge] Stopping agent...");
 
     try {
-      await this.send({ type: "stop", requestId: "shutdown" }, 5000);
+      await this.send({ type: "stop" }, 5000);
     } catch (error) {
       console.warn("[AgentBridge] Failed to send stop signal:", error);
     }
