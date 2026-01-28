@@ -79,7 +79,7 @@ describe("Agent Config", () => {
       providers: {},
     });
 
-    await expect(loadConfig()).rejects.toThrow("No API key found for provider: gemini");
+    await expect(loadConfig()).rejects.toThrow("No API keys found");
   });
 });
 

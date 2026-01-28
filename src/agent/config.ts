@@ -33,6 +33,10 @@ export async function loadConfig(): Promise<AgentConfig> {
         config.maxTokens = ipcConfig.maxTokens;
       }
 
+      if (Object.keys(config.providers).length === 0) {
+        throw new Error("No API keys found. Please set at least one provider key.");
+      }
+
       return config;
     }
   } catch (error) {
