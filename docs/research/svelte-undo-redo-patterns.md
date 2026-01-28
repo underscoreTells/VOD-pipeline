@@ -2092,10 +2092,10 @@ This approach combines:
 
 ## References
 
-- https://svelte.dev/docs/svelte/$state
-- https://svelte.dev/docs/svelte/$derived
-- https://svelte.dev/docs/svelte/$effect
-- https://svelte.dev/blog/runes
-- https://refactoring.guru/design-patterns/command
-- https://github.com/eihabkhan/reddojs
-- https://github.com/topics/undo-redo
+- [Svelte $state](https://svelte.dev/docs/svelte/$state)
+- [Svelte $derived](https://svelte.dev/docs/svelte/$derived)
+- [Svelte $effect](https://svelte.dev/docs/svelte/$effect)
+- [Svelte runes blog](https://svelte.dev/blog/runes)
+- [Refactoring Guru Command pattern](https://refactoring.guru/design-patterns/command)
+- [reddojs repo](https://github.com/eihabkhan/reddojs)
+- [undo-redo topic](https://github.com/topics/undo-redo)

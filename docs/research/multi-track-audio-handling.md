@@ -1,6 +1,6 @@
 # Multi-Track Audio Handling in Video Editing Pipelines
 
-**Date:** January 26, 2026  
+**Date:** January 26, 2026,  
 **Project:** VOD Pipeline - AI-Assisted Video Editor  
 **Focus:** Multi-track audio support for MKV imports, timeline UI, and NLE exports
 
@@ -385,7 +385,8 @@ Audio Tracks:
 └──────────────────────────────────────────────────┘
 ```
 
-**Elements:**
+##### Elements
+
 - **Track ID**: A1, A2, A3 (auto-numbered)
 - **Track Name**: Editable text field (click to edit)
 - **Track Type Icon**: 🎵 (stereo), 🔈 (mono), 🎧 (5.1), 🎬 (commentary)
@@ -549,15 +550,15 @@ FCPXML represents audio tracks within the `<spine>` element, with each track on 
             frameDuration="1000/30000s" displayAspectRatio="16/9"/>
     
     <!-- Source media assets -->
-    <asset id="v1" name="vod_stream.mkv" src="file://localhost/path/to/vod_stream.mkv"
+    <asset id="v1" name="vod_stream.mkv" src="file://<PATH>vod_stream.mkv"
            format="r1" duration="180000/30000s" hasVideo="1" hasAudio="1"/>
     
     <!-- Audio-only assets if separate files -->
-    <asset id="a1" name="game_audio.wav" src="file://localhost/path/to/game_audio.wav"
+    <asset id="a1" name="game_audio.wav" src="file://<PATH>game_audio.wav"
            format="r1" duration="180000/30000s" hasVideo="0" hasAudio="1"/>
-    <asset id="a2" name="commentary.wav" src="file://localhost/path/to/commentary.wav"
+    <asset id="a2" name="commentary.wav" src="file://<PATH>commentary.wav"
            format="r1" duration="180000/30000s" hasVideo="0" hasAudio="1"/>
-    <asset id="a3" name="music.wav" src="file://localhost/path/to/music.wav"
+    <asset id="a3" name="music.wav" src="file://<PATH>music.wav"
            format="r1" duration="180000/30000s" hasVideo="0" hasAudio="1"/>
   </resources>
   
@@ -571,17 +572,17 @@ FCPXML represents audio tracks within the `<spine>` element, with each track on 
             <!-- Video track (first in spine) -->
             <video-clip offset="0/30000s" ref="v1" name="VOD Stream" duration="180000/30000s">
               <audio-clip offset="0/30000s" ref="a1" name="Game Audio" duration="180000/30000s">
-                <audio-source src="file://localhost/path/to/game_audio.wav"/>
+                <audio-source src="file://<PATH>game_audio.wav"/>
               </audio-clip>
             </video-clip>
             
             <!-- Additional audio tracks as separate clips -->
             <audio-clip offset="0/30000s" ref="a2" name="Commentary" duration="180000/30000s">
-              <audio-source src="file://localhost/path/to/commentary.wav"/>
+              <audio-source src="file://<PATH>commentary.wav"/>
             </audio-clip>
             
             <audio-clip offset="0/30000s" ref="a3" name="Music" duration="180000/30000s">
-              <audio-source src="file://localhost/path/to/music.wav"/>
+              <audio-source src="file://<PATH>music.wav"/>
             </audio-clip>
           </spine>
           
@@ -608,7 +609,7 @@ FCPXML 1.1 introduces `<role>` elements for audio organization:
     <role id="r3" uniqueID="3" title="Effects" type="effects" icon="Effects"/>
     <role id="r4" uniqueID="4" title="Dialogue-Character" type="dialogue" subrole="character1"/>
     
-    <asset id="v1" name="vod_stream.mkv" src="file://localhost/path/to/vod_stream.mkv"
+    <asset id="v1" name="vod_stream.mkv" src="file://<PATH>vod_stream.mkv"
            format="r1" duration="180000/30000s" hasVideo="1" hasAudio="1"/>
   </resources>
   
@@ -656,7 +657,7 @@ FCPXML 1.1+ supports audio effects for volume and pan:
 
 ```xml
 <audio-clip offset="0/30000s" ref="a2" name="Commentary" duration="180000/30000s">
-  <audio-source src="file://localhost/path/to/commentary.wav"/>
+  <audio-source src="file://<PATH>commentary.wav"/>
   
   <!-- Audio adjustment effects -->
   <adjust-volume>
@@ -775,7 +776,7 @@ Some extended formats add limited audio support:
 
 ```xml
 <!-- DaVinci Resolve specific metadata -->
-<asset id="a1" name="game_audio" src="file://localhost/path/to/game_audio.wav"
+<asset id="a1" name="game_audio" src="file://<PATH>game_audio.wav"
        format="r1" duration="180000/30000s" hasVideo="0" hasAudio="1">
   <!-- Resolve track color (hex) -->
   <metadata key="resolveTrackColor">#FF5722</metadata>
@@ -1022,12 +1023,15 @@ function mixAudioToStereo(tracks: AudioTrack[]): Buffer {
   // Decode all tracks first to determine output duration
   const decodedTracks = tracks.map(track => ({
     ...track,
-    audio: decodeAudioTrack(track.sourcePath)
+    decoded: decodeAudioTrack(track.sourcePath)
   }));
 
-  // Calculate total samples based on the longest track
-  const maxDuration = Math.max(...decodedTracks.map(t => t.audio.length / t.channelCount));
-  const totalSamples = Math.floor(maxDuration);
+  // Calculate each track's duration in seconds using its sample rate
+  const trackDurationsSeconds = decodedTracks.map(t => t.decoded.samples.length / (t.decoded.channelCount * t.decoded.sampleRate));
+  const maxDurationSeconds = Math.max(...trackDurationsSeconds);
+
+  // Calculate total samples using output sample rate
+  const totalSamples = Math.floor(maxDurationSeconds * outputSampleRate);
 
   let mixedAudio = new Float32Array(totalSamples * outputChannels);
 
@@ -1035,23 +1039,24 @@ function mixAudioToStereo(tracks: AudioTrack[]): Buffer {
     const volumeDbToLinear = Math.pow(10, track.volumeDb / 20);
 
     // Apply volume and apply pan (for mono tracks)
-    for (let i = 0; i < track.audio.length; i += track.channelCount) {
+    for (let i = 0; i < track.decoded.samples.length; i += track.channelCount) {
+      // Calculate time in seconds for this sample
+      const timeSeconds = i / (track.decoded.channelCount * track.decoded.sampleRate);
+      const frameIndex = Math.floor(timeSeconds * outputSampleRate);
+      const outBase = frameIndex * outputChannels;
+
       if (track.channelCount === 1) {
         // Mono: split to L/R based on pan
         const pan = track.pan; // -1 to 1
         const leftPercent = (1 - pan) / 2;
         const rightPercent = (1 + pan) / 2;
-        
-        // Map mono sample index to interleaved stereo frame index
-        const frameIndex = Math.floor(i / track.channelCount);
-        const outBase = frameIndex * outputChannels;
-        
-        mixedAudio[outBase] += track.audio[i] * volumeDbToLinear * leftPercent;
-        mixedAudio[outBase + 1] += track.audio[i] * volumeDbToLinear * rightPercent;
+
+        mixedAudio[outBase] += track.decoded.samples[i] * volumeDbToLinear * leftPercent;
+        mixedAudio[outBase + 1] += track.decoded.samples[i] * volumeDbToLinear * rightPercent;
       } else if (track.channelCount === 2) {
         // Stereo: Mix directly
-        mixedAudio[i] += track.audio[i] * volumeDbToLinear;
-        mixedAudio[i + 1] += track.audio[i + 1] * volumeDbToLinear;
+        mixedAudio[outBase] += track.decoded.samples[i] * volumeDbToLinear;
+        mixedAudio[outBase + 1] += track.decoded.samples[i + 1] * volumeDbToLinear;
       }
       // Surround: downmix to stereo (5.1 → 2)
     }
@@ -2187,7 +2192,7 @@ interface AudioTrack {
 
 <!-- Audio clip with effects (FCPXML 1.1+) -->
 <audio-clip offset="0/30000s" ref="asset_id" name="Clip Name" duration="180000/30000s">
-  <audio-source src="file://localhost/path/to/audio.wav"/>
+  <audio-source src="file://<PATH>audio.wav"/>
   <adjust-volume>
     <volume-adjust-mode>
       <adjust-volume type="absolute">
@@ -2218,5 +2223,5 @@ interface AudioTrack {
 ---
 
 **Document Version:** 1.0  
-**Last Updated:** January 26, 2026  
+**Last Updated:** January 26, 2026,  
 **Author:** VOD Pipeline Project Research

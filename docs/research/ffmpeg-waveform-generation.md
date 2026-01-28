@@ -935,8 +935,8 @@ class WaveformProgressReporter extends Transform {
   }
   
   private reportProgress() {
-    const progress = Math.min(this.totalBytesReceived / (this.totalBytesExpected || 1), 100);
-    
+    const progress = Math.min(this.totalBytesReceived / (this.totalBytesExpected || 1), 1);
+
     // Send to UI via IPC
     if (mainWindow) {
       mainWindow.webContents.send('waveform:progress', {
