@@ -14,7 +14,7 @@ export interface AgentConfig {
 
 export let ipcConfig: Partial<AgentConfig> | null = null;
 
-export function setIpcConfig(config: Partial<AgentConfig>): void {
+export function setIpcConfig(config: Partial<AgentConfig> | null): void {
   ipcConfig = config;
 }
 
