@@ -680,26 +680,10 @@ function framesToFCPXMLRational(frames: number, frameRate: FrameRate): string {
   return `${frames}/${Math.round(frameRate.denominator * frameRate.fps)}s`;
 }
 
-// Convert decimal seconds to timecode
+ // Convert decimal seconds to timecode
 function secondsToTimecode(seconds: number, frameRate: FrameRate): string {
   const totalFrames = Math.floor(seconds * frameRate.fps);
   return framesToTimecode(totalFrames, frameRate);
-}
-
-// Convert frames to timecode
-function framesToTimecode(frames: number, frameRate: FrameRate): string {
-  const hours = Math.floor(frames / (3600 * frameRate.fps));
-  const remaining = frames % (3600 * frameRate.fps);
-  const minutes = Math.floor(remaining / (60 * frameRate.fps));
-  const remaining2 = remaining % (60 * frameRate.fps);
-  const seconds = Math.floor(remaining2 / frameRate.fps);
-  const f = frames % Math.floor(frameRate.fps);
-  
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(f)}`;
-}
-
-function pad(n: number): string {
-  return n.toString().padStart(2, '0');
 }
 
 // Convert timecode to frames

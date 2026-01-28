@@ -43,7 +43,7 @@ The VOD Pipeline needs to support:
 MKV (Matroska Video) is a container format designed to store unlimited numbers of video, audio, and subtitle tracks. Unlike MP4 which has limited multi-audio support in some applications, MKV natively supports complex audio structures.
 
 **MKV Audio Track Structure:**
-```
+```text
 MKV Container
 ├── Video Track (Track 1)
 ├── Audio Track 1 (Track 2)    # Game audio
@@ -1041,9 +1041,13 @@ function mixAudioToStereo(tracks: AudioTrack[]): Buffer {
         const pan = track.pan; // -1 to 1
         const leftPercent = (1 - pan) / 2;
         const rightPercent = (1 + pan) / 2;
-
-        mixedAudio[i] += track.audio[i] * volumeDbToLinear * leftPercent;
-        mixedAudio[i + 1] += track.audio[i] * volumeDbToLinear * rightPercent;
+        
+        // Map mono sample index to interleaved stereo frame index
+        const frameIndex = Math.floor(i / track.channelCount);
+        const outBase = frameIndex * outputChannels;
+        
+        mixedAudio[outBase] += track.audio[i] * volumeDbToLinear * leftPercent;
+        mixedAudio[outBase + 1] += track.audio[i] * volumeDbToLinear * rightPercent;
       } else if (track.channelCount === 2) {
         // Stereo: Mix directly
         mixedAudio[i] += track.audio[i] * volumeDbToLinear;
