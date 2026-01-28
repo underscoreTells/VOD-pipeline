@@ -1,6 +1,6 @@
 import { StateGraph, END, START } from "@langchain/langgraph";
 import { createLLM, type LLMConfig } from "../providers/index.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, getProviderLLMConfig } from "../config.js";
 import { ChapterState } from "../state/schemas.js";
 import { narrativeAnalysisPrompt } from "../prompts/narrative-analysis.js";
 import { beatExtractionPrompt } from "../prompts/beat-extraction.js";
@@ -10,11 +10,7 @@ async function narrativeAnalyzeNode(
   config: any
 ) {
   const agentConfig = await loadConfig();
-  const llmConfig = {
-    ...agentConfig,
-    provider: agentConfig.defaultProvider,
-    apiKey: agentConfig.providers[agentConfig.defaultProvider],
-  } as LLMConfig;
+  const llmConfig = getProviderLLMConfig(agentConfig);
 
   const llm = createLLM(llmConfig);
 
@@ -70,11 +66,7 @@ async function beatExtractNode(
   config: any
 ) {
   const agentConfig = await loadConfig();
-  const llmConfig = {
-    ...agentConfig,
-    provider: agentConfig.defaultProvider,
-    apiKey: agentConfig.providers[agentConfig.defaultProvider],
-  } as LLMConfig;
+  const llmConfig = getProviderLLMConfig(agentConfig);
 
   const llm = createLLM(llmConfig);
 

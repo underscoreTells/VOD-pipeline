@@ -1,7 +1,7 @@
 import { StateGraph, END, START, Send } from "@langchain/langgraph";
 import { BaseMessage } from "@langchain/core/messages";
 import { createLLM, type LLMConfig } from "../providers/index.js";
-import { loadConfig, type AgentConfig } from "../config.js";
+import { loadConfig, type AgentConfig, getProviderLLMConfig } from "../config.js";
 import { MainState, ChapterState } from "../state/schemas.js";
 import { createChapterSubgraph } from "./chapter-subgraph.js";
 import { narrativeAnalysisPrompt } from "../prompts/narrative-analysis.js";
@@ -14,11 +14,7 @@ interface CreateMainGraphOptions {
 
 async function chatNode(state: typeof MainState.State, config: any) {
   const agentConfig = await loadConfig();
-  const llmConfig = {
-    ...agentConfig,
-    provider: agentConfig.defaultProvider,
-    apiKey: agentConfig.providers[agentConfig.defaultProvider],
-  } as LLMConfig;
+  const llmConfig = getProviderLLMConfig(agentConfig);
 
   const llm = createLLM(llmConfig);
 
@@ -119,11 +115,7 @@ async function storyCohesionNode(
   config: any
 ) {
   const agentConfig = await loadConfig();
-  const llmConfig = {
-    ...agentConfig,
-    provider: agentConfig.defaultProvider,
-    apiKey: agentConfig.providers[agentConfig.defaultProvider],
-  } as LLMConfig;
+  const llmConfig = getProviderLLMConfig(agentConfig);
 
   const llm = createLLM(llmConfig);
 
