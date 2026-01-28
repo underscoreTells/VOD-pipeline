@@ -69,7 +69,6 @@ export type AgentOutputMessage =
   | ReadyOutputMessage
   | ProgressOutputMessage
   | TokenOutputMessage
-  | NodeCompleteOutputMessage
   | GraphCompleteOutputMessage
   | ErrorOutputMessage;
 
@@ -95,14 +94,6 @@ export interface TokenOutputMessage {
   content: string;
   role: string;
   nodeName: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface NodeCompleteOutputMessage {
-  type: "node-complete";
-  requestId: string;
-  nodeName: string;
-  output: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 

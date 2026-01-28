@@ -45,7 +45,7 @@ export async function loadConfig(): Promise<AgentConfig> {
       return config;
     }
   } catch (error) {
-    console.warn("[Config] Failed to load IPC config, falling back to .env");
+    console.warn("[Config] Failed to load IPC config, falling back to .env:", error);
   }
 
   dotenv.config();

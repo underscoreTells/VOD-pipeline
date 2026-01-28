@@ -21,10 +21,10 @@ async function main() {
     const mainGraph = await createMainGraph({ checkpointer });
     console.error("[Agent] Main graph created");
 
-    const stdinReader = new JSONStdoutReader(process.stdin);
-    const stdoutWriter = new JSONStdinWriter(process.stdout);
+    const inputReader = new JSONStdoutReader(process.stdin);
+    const outputWriter = new JSONStdinWriter(process.stdout);
 
-    stdinReader.on("message", async (message: AgentInputMessage) => {
+    inputReader.on("message", async (message: AgentInputMessage) => {
       const { type, requestId } = message;
       const threadId = "threadId" in message ? message.threadId : undefined;
 
@@ -34,10 +34,10 @@ async function main() {
       activeRequests.set(requestId, controller);
 
       try {
-        await processMessage(message, mainGraph, stdoutWriter, controller);
+        await processMessage(message, mainGraph, outputWriter, controller);
       } catch (error) {
         console.error(`[Agent] Error processing request ${requestId}:`, error);
-        stdoutWriter.write({
+        outputWriter.write({
           type: "error",
           requestId,
           error: String(error),
@@ -48,17 +48,17 @@ async function main() {
       }
     });
 
-    stdinReader.on("error", (error: Error) => {
-      console.error("[Agent] Stdout reader error:", error);
+    inputReader.on("error", (error: Error) => {
+      console.error("[Agent] Input reader error:", error);
     });
 
-    stdinReader.on("close", () => {
-      console.error("[Agent] Stdin closed, shutting down...");
+    inputReader.on("close", () => {
+      console.error("[Agent] Input closed, shutting down...");
     });
 
     process.stdin.resume();
 
-    stdoutWriter.write({ type: "ready", requestId: "init" });
+    outputWriter.write({ type: "ready", requestId: "init" });
     console.error("[Agent] Ready signal sent");
 
   } catch (error) {

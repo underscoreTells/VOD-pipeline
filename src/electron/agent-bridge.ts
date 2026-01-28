@@ -113,7 +113,7 @@ export class AgentBridge extends EventEmitter {
   private async handleMessage(message: AgentOutputMessage): Promise<void> {
     console.log(`[AgentBridge] Received message type=${message.type}`);
 
-    if (message.type === "progress" || message.type === "token" || message.type === "node-complete") {
+    if (message.type === "progress" || message.type === "token") {
       this.emit("stream", message);
       return;
     }

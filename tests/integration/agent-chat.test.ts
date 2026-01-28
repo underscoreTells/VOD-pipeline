@@ -4,6 +4,23 @@ import path from "path";
 import { JSONStdinWriter, JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
 import type { AgentOutputMessage } from "../../src/shared/types/agent-ipc.js";
 
+/**
+ * Integration tests for the agent chat system.
+ *
+ * These tests require:
+ * 1. The agent code to be built (pnpm build)
+ * 2. Valid API keys in environment variables
+ *
+ * Tests are skipped by default because:
+ * - They require external API calls (cost money)
+ * - They require the agent build to be present
+ * - They may be flaky due to network/API dependencies
+ *
+ * To run these tests:
+ * 1. Build the agent: pnpm build
+ * 2. Set API keys: export GEMINI_API_KEY=your_key
+ * 3. Remove .skip() from tests or run with --testNamePattern
+ */
 describe("Agent Chat Integration", () => {
   let agentProcess: ChildProcess | null = null;
   let stdinWriter: JSONStdinWriter | null = null;
@@ -33,7 +50,7 @@ describe("Agent Chat Integration", () => {
     stdoutReader.on("message", (msg: AgentOutputMessage) => {
       messages.push(msg);
 
-      if (msg.type === "token" || msg.type === "progress" || msg.type === "node-complete") {
+      if (msg.type === "token" || msg.type === "progress") {
         return;
       }
 
