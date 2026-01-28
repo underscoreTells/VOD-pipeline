@@ -25,7 +25,8 @@ async function main() {
     const stdoutWriter = new JSONStdinWriter(process.stdout);
 
     stdinReader.on("message", async (message: AgentInputMessage) => {
-      const { type, requestId, threadId } = message;
+      const { type, requestId } = message;
+      const threadId = "threadId" in message ? message.threadId : undefined;
 
       console.error(`[Agent] Received message type=${type} requestId=${requestId}`);
 
@@ -72,7 +73,8 @@ async function processMessage(
   writer: JSONStdinWriter,
   controller: AbortController
 ): Promise<void> {
-  const { type, requestId, threadId } = message;
+  const { type, requestId } = message;
+  const threadId = "threadId" in message ? message.threadId : undefined;
 
   const config: any = {};
   if (threadId) {

@@ -43,7 +43,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.PROJECT_UPDATE, async (_, { id, name }) => {
     console.log('IPC: project:update', id, name);
     try {
-      const success = updateProject(id, name);
+      const success = await updateProject(id, name);
       if (success) {
         return { success: true };
       } else {
@@ -57,7 +57,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.PROJECT_DELETE, async (_, { id }) => {
     console.log('IPC: project:delete', id);
     try {
-      const success = deleteProject(id);
+      const success = await deleteProject(id);
       if (success) {
         return { success: true };
       } else {
@@ -85,8 +85,8 @@ export function registerIpcHandlers() {
 
       const response = await agentBridge.send({
         type: 'chat',
-        projectId,
         messages: [{ role: 'user', content: message }],
+        metadata: { projectId },
       });
 
       return { success: true, data: response };
