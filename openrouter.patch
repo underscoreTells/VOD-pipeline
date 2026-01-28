@@ -1,0 +1,157 @@
+From 080bf836ca0c1ee31ca38b42b41610ef847c2554 Mon Sep 17 00:00:00 2001
+From: Alexandre Tellier <alex.tellier01@gmail.com>
+Date: Tue, 27 Jan 2026 19:39:08 -0500
+Subject: [PATCH] Add OpenRouter provider support
+
+- Added 'openrouter' to LLMProviderType
+- Created OpenRouter factory using ChatOpenAI with custom baseURL
+  * Default model: anthropic/claude-sonnet-4-20250514
+  * Default baseURL: https://openrouter.ai/api/v1
+- Updated AgentConfig to include openrouter provider and baseURL
+- Added OPENROUTER_API_KEY and OPENROUTER_BASE_URL to .env.example
+- Updated loadConfig() to read OpenRouter env vars
+- Updated getProviderLLMConfig() to pass baseURL for OpenRouter
+
+Users can now:
+1. Set DEFAULT_PROVIDER=openrouter in .env
+2. Provide OPENROUTER_API_KEY
+3. Optionally set OPENROUTER_BASE_URL for custom endpoint
+4. Access any model via OpenRouter's unified API
+---
+ .env.example                 |  4 ++++
+ src/agent/config.ts          | 19 +++++++++++++++++--
+ src/agent/providers/index.ts | 17 +++++++++++++++--
+ 3 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index 17c5612..8391772 100644
+--- a/.env.example
++++ b/.env.example
+@@ -2,6 +2,10 @@
+ GEMINI_API_KEY=your_gemini_key_here
+ OPENAI_API_KEY=your_openai_key_here
+ ANTHROPIC_API_KEY=your_anthropic_key_here
++OPENROUTER_API_KEY=your_openrouter_key_here
+ 
+ # Default Provider
+ DEFAULT_PROVIDER=gemini
++
++# OpenRouter Base URL (optional, defaults to https://openrouter.ai/api/v1)
++OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+diff --git a/src/agent/config.ts b/src/agent/config.ts
+index 7797c6c..d07fb4d 100644
+--- a/src/agent/config.ts
++++ b/src/agent/config.ts
+@@ -7,9 +7,11 @@ export interface AgentConfig {
+     gemini?: string;
+     openai?: string;
+     anthropic?: string;
++    openrouter?: string;
+   };
+   temperature?: number;
+   maxTokens?: number;
++  openrouterBaseURL?: string;
+ }
+ 
+ export let ipcConfig: Partial<AgentConfig> | null = null;
+@@ -32,6 +34,9 @@ export async function loadConfig(): Promise<AgentConfig> {
+       if (ipcConfig.maxTokens !== undefined) {
+         config.maxTokens = ipcConfig.maxTokens;
+       }
++      if (ipcConfig.openrouterBaseURL !== undefined) {
++        config.openrouterBaseURL = ipcConfig.openrouterBaseURL;
++      }
+ 
+       if (Object.keys(config.providers).length === 0) {
+         throw new Error("No API keys found. Please set at least one provider key.");
+@@ -57,10 +62,13 @@ export async function loadConfig(): Promise<AgentConfig> {
+   if (process.env.ANTHROPIC_API_KEY) {
+     providers.anthropic = process.env.ANTHROPIC_API_KEY;
+   }
++  if (process.env.OPENROUTER_API_KEY) {
++    providers.openrouter = process.env.OPENROUTER_API_KEY;
++  }
+ 
+   if (Object.keys(providers).length === 0) {
+     throw new Error(
+-      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY in .env"
++      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY in .env"
+     );
+   }
+ 
+@@ -69,6 +77,7 @@ export async function loadConfig(): Promise<AgentConfig> {
+     providers,
+     temperature: 0.7,
+     maxTokens: undefined,
++    openrouterBaseURL: process.env.OPENROUTER_BASE_URL,
+   };
+ }
+ 
+@@ -83,10 +92,16 @@ export function getProviderLLMConfig(
+     throw new Error(`No API key found for provider: ${providerType}`);
+   }
+ 
+-  return {
++  const llmConfig: LLMConfig = {
+     provider: providerType,
+     apiKey,
+     temperature: agentConfig.temperature,
+     maxTokens: agentConfig.maxTokens,
+   };
++
++  if (providerType === "openrouter") {
++    llmConfig.baseURL = agentConfig.openrouterBaseURL;
++  }
++
++  return llmConfig;
+ }
+diff --git a/src/agent/providers/index.ts b/src/agent/providers/index.ts
+index 27e5b1b..4bcb559 100644
+--- a/src/agent/providers/index.ts
++++ b/src/agent/providers/index.ts
+@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
+ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+ import { ChatAnthropic } from "@langchain/anthropic";
+ 
+-export type LLMProviderType = "openai" | "gemini" | "anthropic";
++export type LLMProviderType = "openai" | "gemini" | "anthropic" | "openrouter";
+ 
+ export interface LLMConfig {
+   provider: LLMProviderType;
+@@ -11,12 +11,14 @@ export interface LLMConfig {
+   model?: string;
+   temperature?: number;
+   maxTokens?: number;
++  baseURL?: string;
+ }
+ 
+ const DEFAULT_MODELS: Record<LLMProviderType, string> = {
+   openai: "gpt-4o",
+   gemini: "gemini-2.0-flash-exp",
+-  anthropic: "claude-sonnet-4-20250514"
++  anthropic: "claude-sonnet-4-20250514",
++  openrouter: "anthropic/claude-sonnet-4-20250514"
+ };
+ 
+ export function createLLM(config: LLMConfig): BaseChatModel {
+@@ -31,6 +33,17 @@ export function createLLM(config: LLMConfig): BaseChatModel {
+         maxTokens: config.maxTokens,
+       });
+ 
++    case "openrouter":
++      return new ChatOpenAI({
++        apiKey: config.apiKey,
++        model,
++        temperature: config.temperature ?? 0.7,
++        maxTokens: config.maxTokens,
++        configuration: {
++          baseURL: config.baseURL || "https://openrouter.ai/api/v1",
++        },
++      }) as BaseChatModel;
++
+     case "gemini":
+       return new ChatGoogleGenerativeAI({
+         apiKey: config.apiKey,
+-- 
+2.52.0
+

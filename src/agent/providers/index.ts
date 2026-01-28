@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { ChatAnthropic } from "@langchain/anthropic";
 
-export type LLMProviderType = "openai" | "gemini" | "anthropic";
+export type LLMProviderType = "openai" | "gemini" | "anthropic" | "openrouter";
 
 export interface LLMConfig {
   provider: LLMProviderType;
@@ -11,12 +11,14 @@ export interface LLMConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  baseURL?: string;
 }
 
 const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   openai: "gpt-4o",
   gemini: "gemini-2.0-flash-exp",
-  anthropic: "claude-sonnet-4-20250514"
+  anthropic: "claude-sonnet-4-20250514",
+  openrouter: "anthropic/claude-sonnet-4-20250514"
 };
 
 export function createLLM(config: LLMConfig): BaseChatModel {
@@ -30,6 +32,17 @@ export function createLLM(config: LLMConfig): BaseChatModel {
         temperature: config.temperature ?? 0.7,
         maxTokens: config.maxTokens,
       });
+
+    case "openrouter":
+      return new ChatOpenAI({
+        apiKey: config.apiKey,
+        model,
+        temperature: config.temperature ?? 0.7,
+        maxTokens: config.maxTokens,
+        configuration: {
+          baseURL: config.baseURL || "https://openrouter.ai/api/v1",
+        },
+      }) as BaseChatModel;
 
     case "gemini":
       return new ChatGoogleGenerativeAI({
