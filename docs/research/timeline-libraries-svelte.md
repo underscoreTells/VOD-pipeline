@@ -300,7 +300,7 @@ For hour+ videos in Electron:
   });
 
   function addChapter(start: number, end: number) {
-    const id = items.length + 1;
+    const id = chapters.length + 1;
     chapters = [
       ...chapters,
       { id, content: `Chapter ${id}`, start, end, group: 'video-track' }
@@ -1276,16 +1276,12 @@ class TimelineEngine {
     return peaks;
   }
   
-  renderClip(clip: Clip) {
-    // ...draw clip background
+  async renderClip(clip: Clip) {
     
-    // Draw waveform if audio clip
     if (clip.type === 'audio') {
-      const peaks = await this.loadWavepeaks(clip.audioPath);
+      const peaks = await this.loadWaveform(clip.audioPath);
       this.drawWaveform(peaks, clip.startTime, clip.duration);
     }
-    
-    // ...draw clip label, etc.
   }
   
   private drawWaveform(peaks: number[], startTime: number, duration: number) {

@@ -1018,38 +1018,47 @@ Chapter {n}: {role}  → Chapter 1: Game Audio, Chapter 1: Commentary...
 function mixAudioToStereo(tracks: AudioTrack[]): Buffer {
   const outputSampleRate = 48000;
   const outputChannels = 2;
-  
+
+  // Decode all tracks first to determine output duration
+  const decodedTracks = tracks.map(track => ({
+    ...track,
+    audio: decodeAudioTrack(track.sourcePath)
+  }));
+
+  // Calculate total samples based on the longest track
+  const maxDuration = Math.max(...decodedTracks.map(t => t.audio.length / t.channelCount));
+  const totalSamples = Math.floor(maxDuration);
+
   let mixedAudio = new Float32Array(totalSamples * outputChannels);
-  
-  tracks.forEach(track => {
-    const trackAudio = decodeAudioTrack(track.sourcePath);
+
+  decodedTracks.forEach(track => {
     const volumeDbToLinear = Math.pow(10, track.volumeDb / 20);
-    
+
     // Apply volume and apply pan (for mono tracks)
-    for (let i = 0; i < trackAudio.length; i += track.channelCount) {
+    for (let i = 0; i < track.audio.length; i += track.channelCount) {
       if (track.channelCount === 1) {
         // Mono: split to L/R based on pan
         const pan = track.pan; // -1 to 1
         const leftPercent = (1 - pan) / 2;
         const rightPercent = (1 + pan) / 2;
-        
-        mixedAudio[i] += trackAudio[i] * volumeDbToLinear * leftPercent;
-        mixedAudio[i + 1] += trackAudio[i] * volumeDbToLinear * rightPercent;
+
+        mixedAudio[i] += track.audio[i] * volumeDbToLinear * leftPercent;
+        mixedAudio[i + 1] += track.audio[i] * volumeDbToLinear * rightPercent;
       } else if (track.channelCount === 2) {
         // Stereo: Mix directly
-        mixedAudio[i] += trackAudio[i] * volumeDbToLinear;
-        mixedAudio[i + 1] += trackAudio[i + 1] * volumeDbToLinear;
+        mixedAudio[i] += track.audio[i] * volumeDbToLinear;
+        mixedAudio[i + 1] += track.audio[i + 1] * volumeDbToLinear;
       }
       // Surround: downmix to stereo (5.1 → 2)
     }
   });
-  
+
   // Normalize to prevent clipping
   const maxPeak = Math.max(...mixedAudio.map(Math.abs));
   if (maxPeak > 1.0) {
     mixedAudio = mixedAudio.map(sample => sample / maxPeak);
   }
-  
+
   return encodeAudioToAAC(mixedAudio);
 }
 ```

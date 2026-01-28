@@ -100,7 +100,7 @@ Professional NLEs use a pyramidal LOD approach similar to mipmapping in 3D graph
 ├─────────────────────────────────────┤
 │ Tier 1: 5 samples/sec (200x)        │ ← Clip icon/overview
 └─────────────────────────────────────┘
-(Assumes 1000 samples/sec ≈ 48kHz audio)
+(Downsampled visualization rate: 100 samples/sec from 48kHz audio = 480× downsampling)
 ```
 
 **Key Implementation Details**:

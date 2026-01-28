@@ -1222,8 +1222,8 @@ await checkpointer.setup();
 const graph = createOrchestratorGraph({ checkpointer });
 
 // Set up IPC
-const stdin = new JSONStdoutReader(process.stdin);
-const stdout = new JSONStdinWriter(process.stdout);
+const stdin = new JSONStdinWriter(process.stdin);
+const stdout = new JSONStdoutReader(process.stdout);
 
 // Active requests with abort controllers
 const activeRequests = new Map<

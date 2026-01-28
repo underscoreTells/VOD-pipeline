@@ -420,19 +420,22 @@ export class CompositeCommand implements Command {
 // Usage: Delete multiple clips at once
 function deleteClips(clipIds: number[], history: CommandHistory) {
   const composite = new CompositeCommand();
-  
+
   for (const id of clipIds) {
-    composite.executeStateCommand(
-      () => timeline.clips.find(c => c.id === id),
-      (clip) => {
+    const deleteCommand = new SimpleCommand(
+      () => {
+        const clip = timeline.clips.find(c => c.id === id);
         if (clip) deletedClips.add(clip);
         timeline.clips = timeline.clips.filter(c => c.id !== id);
       },
-      null,
+      () => {
+        timeline.clips = [...timeline.clips, ...Array.from(deletedClips)];
+      },
       'delete-clip'
     );
+    composite.add(deleteCommand);
   }
-  
+
   history.execute(composite);
 }
 ```
@@ -1175,22 +1178,22 @@ export function createTimelineTimelineHistory() {
         execute: () => {
           const originalClip = timeline.clips.find(c => c.id === clipId);
           if (!originalClip) return;
-          
+
+          const newClipId = Date.now();
           const newClip = {
             ...originalClip,
-            id: Date.now(),
+            id: newClipId,
             in: splitPoint
           };
-          
+
           originalClip.out = splitPoint;
           timeline.clips.push(newClip);
         },
         undo: () => {
-          // Remove the newly created clip
-          timeline.clips = timeline.clips.filter(c => c.id !== Date.now());
-          // Restore original clip
+          const newClipId = 0;
+          timeline.clips = timeline.clips.filter(c => c.id !== newClipId);
           const originalClip = timeline.clips.find(c => c.id === clipId);
-          if (originalClip) originalClip.out = splitPoint + 1; // approximate
+          if (originalClip) originalClip.out = splitPoint;
         }
       });
     }

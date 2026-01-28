@@ -1339,16 +1339,15 @@ export class WaveformExtractor {
   async extract(options: ExtractOptions): Promise<Buffer> {
     const args = this.buildFFmpegArgs(options);
     const bytesPerSample = this.BYTES_PER_SAMPLE[options.format];
-    
+
+    const duration = options.endTime
+      ? options.endTime - (options.startTime || 0)
+      : await this.getDuration(options.inputPath);
+
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
-      
-      // Calculate expected duration
-      const duration = options.endTime 
-        ? options.endTime - (options.startTime || 0)
-        : await this.getDuration(options.inputPath);
-      
+
       const expectedBytes = duration * options.sampleRate * options.channels * bytesPerSample;
       
       const ffmpeg = spawn('ffmpeg', args);
@@ -1413,21 +1412,20 @@ export class WaveformExtractor {
    * Parse 16-bit signed little-endian PCM
    */
   private parseS16LE(buffer: Buffer, bytesPerSample: number, channels: number): number[] | number[][] {
-    const samples = Array.from(new Int16Array(buffer.buffer));
-    
+    const samples = Array.from(new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / bytesPerSample));
+
     if (channels === 1) {
       return samples;
     }
-    
-    // Separate channels
+
     const left: number[] = [];
     const right: number[] = [];
-    
+
     for (let i = 0; i < samples.length; i += channels) {
       left.push(samples[i]);
       right.push(samples[i + 1] || samples[i]);
     }
-    
+
     return [left, right];
   }
 
@@ -1435,20 +1433,20 @@ export class WaveformExtractor {
    * Parse 32-bit signed little-endian PCM
    */
   private parseS32LE(buffer: Buffer, bytesPerSample: number, channels: number): number[] | number[][] {
-    const samples = Array.from(new Int32Array(buffer.buffer));
-    
+    const samples = Array.from(new Int32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / bytesPerSample));
+
     if (channels === 1) {
       return samples;
     }
-    
+
     const left: number[] = [];
     const right: number[] = [];
-    
+
     for (let i = 0; i < samples.length; i += channels) {
       left.push(samples[i]);
       right.push(samples[i + 1] || samples[i]);
     }
-    
+
     return [left, right];
   }
 
@@ -1456,15 +1454,15 @@ export class WaveformExtractor {
    * Parse 32-bit floating-point PCM
    */
   private parseF32LE(buffer: Buffer, bytesPerSample: number, channels: number): number[] | number[][] {
-    const samples = Array.from(new Float32Array(buffer.buffer));
-    
+    const samples = Array.from(new Float32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / bytesPerSample));
+
     if (channels === 1) {
       return samples;
     }
-    
+
     const left: number[] = [];
     const right: number[] = [];
-    
+
     for (let i = 0; i < samples.length; i += channels) {
       left.push(samples[i]);
       right.push(samples[i + 1] || samples[i]);
