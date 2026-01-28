@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from './channels';
 import { createProject, getProject, listProjects, deleteProject, updateProject } from '../database/db';
+import { getAgentBridge } from '../agent-bridge.js';
 
 export function registerIpcHandlers() {
   console.log('Registering IPC handlers...');
@@ -79,6 +80,19 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, { projectId, message }) => {
     console.log('IPC: agent:chat', projectId, message);
-    return { success: false, error: 'Agent worker not initialized yet' };
+    try {
+      const agentBridge = getAgentBridge();
+
+      const response = await agentBridge.send({
+        type: 'chat',
+        projectId,
+        messages: [{ role: 'user', content: message }],
+      });
+
+      return { success: true, data: response };
+    } catch (error) {
+      console.error('[IPC] agent:chat error:', error);
+      return { success: false, error: (error as Error).message };
+    }
   });
 }
