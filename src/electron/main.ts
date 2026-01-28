@@ -3,12 +3,14 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { registerIpcHandlers } from './ipc/handlers';
 import { initializeDatabase, closeDatabase } from './database/db';
+import { getAgentBridge } from './agent-bridge.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
+let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -40,7 +42,7 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   console.log('Electron app starting...');
   console.log('Platform:', process.platform);
   console.log('Node version:', process.version);
@@ -51,6 +53,8 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();
 
+  await startAgentBridge();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -60,15 +64,45 @@ app.whenReady().then(() => {
   initializeFFmpeg();
 });
 
+async function startAgentBridge() {
+  try {
+    console.log('[Main] Starting agent bridge...');
+    agentBridge = getAgentBridge();
+    await agentBridge.start();
+
+    agentBridge.on('stream', (message: any) => {
+      mainWindow?.webContents.send('agent:stream', message);
+    });
+
+    agentBridge.on('error', (error: Error) => {
+      console.error('[Main] Agent bridge error:', error);
+      mainWindow?.webContents.send('agent:error', { error: error.message });
+    });
+
+    agentBridge.on('exit', (code: number, signal: string) => {
+      console.log(`[Main] Agent bridge exited: ${code} (${signal})`);
+    });
+
+    console.log('[Main] Agent bridge started successfully');
+  } catch (error) {
+    console.error('[Main] Failed to start agent bridge:', error);
+  }
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   console.log('App is quitting...');
   closeDatabase();
+
+  if (agentBridge) {
+    console.log('[Main] Stopping agent bridge...');
+    await agentBridge.stop();
+  }
 });
 
 function initializeFFmpeg() {

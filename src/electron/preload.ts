@@ -18,11 +18,25 @@ export interface GetProjectResult {
   error?: string;
 }
 
+export interface AgentChatResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+export interface Message {
+  role: string;
+  content: string;
+}
+
 export interface ElectronAPI {
   projects: {
     create: (name: string) => Promise<CreateProjectResult>;
     getAll: () => Promise<GetProjectsResult>;
     get: (id: number) => Promise<GetProjectResult>;
+  };
+  agent: {
+    chat: (projectId: string, message: string, threadId?: string) => Promise<AgentChatResult>;
   };
 }
 
@@ -31,6 +45,10 @@ const electronAPI: ElectronAPI = {
     create: (name) => ipcRenderer.invoke('project:create', { name }),
     getAll: () => ipcRenderer.invoke('project:get-all'),
     get: (id) => ipcRenderer.invoke('project:get', { id }),
+  },
+  agent: {
+    chat: (projectId, message, threadId) =>
+      ipcRenderer.invoke('agent:chat', { projectId, message, threadId }),
   },
 };
 
