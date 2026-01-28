@@ -1063,9 +1063,17 @@ function mixAudioToStereo(tracks: AudioTrack[]): Buffer {
   });
 
   // Normalize to prevent clipping
-  const maxPeak = Math.max(...mixedAudio.map(Math.abs));
+  let maxPeak = 0;
+  for (let i = 0; i < mixedAudio.length; i++) {
+    const absValue = Math.abs(mixedAudio[i]);
+    if (absValue > maxPeak) {
+      maxPeak = absValue;
+    }
+  }
   if (maxPeak > 1.0) {
-    mixedAudio = mixedAudio.map(sample => sample / maxPeak);
+    for (let i = 0; i < mixedAudio.length; i++) {
+      mixedAudio[i] = mixedAudio[i] / maxPeak;
+    }
   }
 
   return encodeAudioToAAC(mixedAudio);

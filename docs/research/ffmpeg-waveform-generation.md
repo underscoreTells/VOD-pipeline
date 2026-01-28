@@ -238,7 +238,7 @@ For stereo, samples are interleaved: `[L1, R1, L2, R2, L3, R3, ...]`
 
 **Separating channels in Node.js:**
 ```typescript
-const samples = new Int16Array(buffer.buffer);
+const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / Int16Array.BYTES_PER_ELEMENT);
 const left = samples.filter((_, i) => i % 2 === 0);
 const right = samples.filter((_, i) => i % 2 === 1);
 ```
@@ -812,7 +812,19 @@ type QueueJob = {
 
 class WaveformJobQueue {
   private queue: QueueJob[] = [];
-  private maxConcurrent = (typeof window === 'undefined' && typeof navigator === 'undefined' && require && require('os') && require('os').cpus() ? require('os').cpus().length : 4) || 4;
+  private maxConcurrent = (() => {
+    if (typeof require !== 'undefined') {
+      try {
+        const os = require('os');
+        if (os && typeof os.cpus === 'function') {
+          return os.cpus().length;
+        }
+      } catch {
+        // OS module not available
+      }
+    }
+    return 4;
+  })();
   private active = 0;
   
   async enqueue(job: Omit<QueueJob, 'resolve' | 'reject'>): Promise<Buffer> {
@@ -1508,7 +1520,7 @@ export class WaveformExtractor {
   /**
    * Get audio duration using ffprobe
    */
-  private async getDuration(path: string): Promise<number> {
+  public async getDuration(path: string): Promise<number> {
     const ffprobe = spawn('ffprobe', [
       '-v', 'error',
       '-show_entries', 'format=duration',
@@ -1678,7 +1690,7 @@ export class WaveformStore {
     
     // Generate new waveform
     const extractor = new WaveformExtractor();
-    const duration = await extractor['getDuration'](inputPath);
+    const duration = await extractor.getDuration(inputPath);
     
     const waveform = await extractor.extract({
       ...options,
