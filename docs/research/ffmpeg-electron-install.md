@@ -633,7 +633,7 @@ Binaries placed outside ASAR, copied to `resources/` directory:
 ```
 
 Directory structure expected:
-```
+```text
 project/
 ├── binaries/
 │   ├── darwin/
@@ -666,7 +666,7 @@ Exclude binaries from ASAR archive:
 ```
 
 **Important**: If using `asarUnpack`, FFmpeg will be extracted to:
-```
+```text
 /path/to/app/resources/app.asar.unpacked/binaries/
 ```
 
@@ -1408,7 +1408,7 @@ Given the project requirements (local-first, video processing, cross-platform):
 4. **Detection**: Check locations in order: bundled → user-data → system PATH
 
 ### File Structure
-```
+```text
 vod-pipeline/
 ├── scripts/
 │   ├── install-local-ffmpeg.js  (Dev: download to binaries/)

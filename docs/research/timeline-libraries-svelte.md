@@ -51,8 +51,8 @@ After researching multiple timeline editing and video visualization libraries, w
 
 ### 2.1 wavesurfer.js ⭐ Highly Recommended for Audio
 
-**Repository:** https://github.com/katspaugh/wavesurfer.js
-**NPM:** https://www.npmjs.com/package/wavesurfer.js
+**Repository:** [wavesurfer.js](https://github.com/katspaugh/wavesurfer.js)
+**NPM:** [wavesurfer.js on NPM](https://www.npmjs.com/package/wavesurfer.js)
 **Version:** 7.12.1 (published 2 months ago)
 **Weekly Downloads:** 463,238
 **Stars:** 10.1k

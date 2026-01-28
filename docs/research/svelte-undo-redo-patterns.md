@@ -420,19 +420,20 @@ export class CompositeCommand implements Command {
 // Usage: Delete multiple clips at once
 function deleteClips(clipIds: number[], history: CommandHistory) {
   const composite = new CompositeCommand();
+  const deletedClips = new Set<any>();
 
   for (const id of clipIds) {
-    const deleteCommand = new SimpleCommand(
-      () => {
+    const deleteCommand = {
+      execute: () => {
         const clip = timeline.clips.find(c => c.id === id);
         if (clip) deletedClips.add(clip);
         timeline.clips = timeline.clips.filter(c => c.id !== id);
       },
-      () => {
+      undo: () => {
         timeline.clips = [...timeline.clips, ...Array.from(deletedClips)];
       },
-      'delete-clip'
-    );
+      key: 'delete-clip'
+    };
     composite.add(deleteCommand);
   }
 
@@ -1493,7 +1494,7 @@ export function createWaveformAwareHistory() {
       operations: []
     };
     
-    if (!excludeWaveformData) {
+    if (!excludeWaveforms) {
       snapshot.waveformData = state.waveforms;
     }
     
@@ -1728,7 +1729,7 @@ function createOptimizedHistory() {
   }, 300);
   
   function updateState(newState: any) {
-    state = state(newState);
+    state = newState;
     saveToHistory();
   }
   

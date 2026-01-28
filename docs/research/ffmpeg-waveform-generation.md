@@ -194,7 +194,7 @@ ffmpeg -i video.mp4 -filter_complex "showwaves=mode=point:rate=25" output.mp4
 
 #### Raw PCM Format (Binary)
 
-```
+```text
 [Sample1_Lo Byte][Sample1_Hi Byte][Sample2_Lo Byte][Sample2_Hi Byte]...
 ```
 
@@ -812,7 +812,7 @@ type QueueJob = {
 
 class WaveformJobQueue {
   private queue: QueueJob[] = [];
-  private maxConcurrent = navigator.hardwareConcurrency || 4;
+  private maxConcurrent = (typeof window === 'undefined' && typeof navigator === 'undefined' && require && require('os') && require('os').cpus() ? require('os').cpus().length : 4) || 4;
   private active = 0;
   
   async enqueue(job: Omit<QueueJob, 'resolve' | 'reject'>): Promise<Buffer> {
@@ -1993,11 +1993,11 @@ describe('WaveformExtractor', () => {
 
 ## References
 
-- FFmpeg Documentation: https://ffmpeg.org/documentation.html
-- FFmpeg PCM Formats: https://ffmpeg.org/ffmpeg-formats.html#pcm
-- Node.js Streams: https://nodejs.org/api/stream.html
-- SQLite BLOB Storage: https://www.sqlite.org/datatype3.html#blob
-- Electron IPC: https://www.electronjs.org/docs/latest/tutorial/ipc
+- FFmpeg Documentation: [FFmpeg Documentation](https://ffmpeg.org/documentation.html)
+- FFmpeg PCM Formats: [FFmpeg PCM Formats](https://ffmpeg.org/ffmpeg-formats.html#pcm)
+- Node.js Streams: [Node.js Streams](https://nodejs.org/api/stream.html)
+- SQLite BLOB Storage: [SQLite BLOB Storage](https://www.sqlite.org/datatype3.html#blob)
+- Electron IPC: [Electron IPC](https://www.electronjs.org/docs/latest/tutorial/ipc)
 
 ---
 

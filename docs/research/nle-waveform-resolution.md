@@ -88,7 +88,7 @@ This document researches waveform resolution standards used by professional Non-
 
 Professional NLEs use a pyramidal LOD approach similar to mipmapping in 3D graphics:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │ Tier 5: 100 samples/sec (10x)      │ ← Full zoom-in, sample-accurate editing
 ├─────────────────────────────────────┤
@@ -410,7 +410,7 @@ Note: Actual implementation requires custom FFmpeg invocation with stats parsing
 #### 5.2.4 Storage and Cache Management
 
 **Cache Location**:
-```
+```text
 project-root/
 ├── database/
 │   └── vod-pipeline.db          # SQLite database
