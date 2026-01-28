@@ -574,7 +574,7 @@ pnpm dist
 - Personal software project - no shipping deadlines
 - Prioritize Google Gemini for video understanding
 - Whisper local transcription preferred for privacy/cost
-- Use LangSqlieSaver for agent state persistence (local-only, no cloud)
+- Use LangSqliteSaver for agent state persistence (local-only, no cloud)
 - All processing runs locally to respect user hardware and API key budget
 - Streaming is mandatory for all agent operations (good UX)
 - Non-destructive editing - original VOD never modified

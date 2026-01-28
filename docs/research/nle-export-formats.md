@@ -72,7 +72,7 @@ DaVinci Resolve has robust support for FCPXML, particularly versions 1.0 and 1.1
     </event>
   </library>
 </fcpxml>
-```
+```xml
 
 **What Resolve Accepts:**
 - Multiple video/audio tracks
@@ -116,7 +116,7 @@ EDL (CMX 3600 format) is a decades-old text format that provides basic cut list 
 - **Standard:** CMX 3600
 
 **EDL Structure:**
-```
+```text
 001  CLIP V  C        00:00:30:00 00:01:00:00 00:00:00:00 00:00:30:00
 * FROM CLIP NAME: video_clip.mp4
 * FROM FILE: /path/to/video_clip.mp4
@@ -126,7 +126,7 @@ EDL (CMX 3600 format) is a decades-old text format that provides basic cut list 
 ```
 
 **Field Breakdown per line:**
-```
+```text
 001    CLIP    V    C     00:00:30:00   00:01:00:00    00:00:00:00   00:00:30:00
 |      |       |    |     |             |              |              |
 Event  Reel    Trk  Type  Source In     Source Out     Record In     Record Out
@@ -430,7 +430,7 @@ JSON is ideal as the primary internal format for cut lists - it's human-readable
     }
   }
 }
-```
+```json
 
 ### Example JSON Cut List
 
@@ -661,9 +661,23 @@ interface FrameRate {
   fps: number;
 }
 
-// Convert frames to FCPXML rational time format
+function framesToTimecode(frames: number, frameRate: FrameRate): string {
+  const hours = Math.floor(frames / (3600 * frameRate.fps));
+  const remaining = frames % (3600 * frameRate.fps);
+  const minutes = Math.floor(remaining / (60 * frameRate.fps));
+  const remaining2 = remaining % (60 * frameRate.fps);
+  const seconds = Math.floor(remaining2 / frameRate.fps);
+  const f = frames % Math.floor(frameRate.fps);
+
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(f)}`;
+}
+
+function pad(n: number): string {
+  return n.toString().padStart(2, '0');
+}
+
 function framesToFCPXMLRational(frames: number, frameRate: FrameRate): string {
-  return `${frames}/${frameRate.numerator * (frameRate.denominator / frameRate.fps)}s`;
+  return `${frames}/${Math.round(frameRate.denominator * frameRate.fps)}s`;
 }
 
 // Convert decimal seconds to timecode
@@ -862,7 +876,7 @@ export class JsonToFcpXmlConverter {
           target: { id: 'clip-001' },
           startTime: framesToFCPXMLRational(beat.time.frames, frameRate),
           duration: '1/2997s',
-         /value: beat.label,
+          value: beat.label,
           type: beat.type.charAt(0).toUpperCase() + beat.type.slice(1) // Capitalize
         });
       });

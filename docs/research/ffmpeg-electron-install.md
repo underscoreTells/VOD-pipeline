@@ -16,18 +16,18 @@
 #### Windows
 - **Source**: [Gyan.dev FFmpeg Builds](https://www.gyan.dev/ffmpeg/builds/)
 - **Download URLs**:
-  - Essentials build (Windows 7+): 
-    ```
+  - Essentials build (Windows 7+):
+    ```text
     https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
     https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z
     ```
   - Full build (Windows 10+):
-    ```
+    ```text
     https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z
     https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z
     ```
-- **File Structure**: 
-  ```
+- **File Structure**:
+  ```text
   ffmpeg-git-essentials.7z
   ├── bin/
   │   ├── ffmpeg.exe
@@ -43,13 +43,13 @@
 #### macOS
 - **Source**: [evermeet.cx FFmpeg](https://evermeet.cx/ffmpeg/)
 - **Download URLs**:
-  ```
+  ```text
   https://evermeet.cx/ffmpeg/getrelease (latest release as zip)
   https://evermeet.cx/ffmpeg/getrelease/zip (latest release explicitly)
   https://evermeet.cx/ffmpeg/get (latest git snapshot as zip)
   ```
 - **File Structure**:
-  ```
+  ```text
   ffmpeg-X.Y.Z.zip
   ├── ffmpeg
   ├── ffprobe
@@ -62,18 +62,18 @@
 #### Linux
 - **Source**: [John Van Sickle FFmpeg Static Builds](https://johnvansickle.com/ffmpeg/)
 - **Download URLs**:
-  ```
+  ```text
   https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
   https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz
   ```
-- **Architectures**: 
+- **Architectures**:
   - `amd64` (x86_64)
   - `i686` (32-bit)
   - `arm64` (aarch64)
   - `armhf` (ARM hard float)
   - `armel` (ARM little endian)
 - **File Structure**:
-  ```
+  ```text
   ffmpeg-release-amd64-static.tar.xz
   └── ffmpeg-git-2024xxxxx-amar64-static/
       ├── ffmpeg
