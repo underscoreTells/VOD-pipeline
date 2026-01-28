@@ -80,11 +80,12 @@ describe("JSONStdoutReader", () => {
     reader.on("error", (err) => errors.push(err));
   });
 
-  it("should parse newline-delimited JSON messages", () => {
+  it("should parse newline-delimited JSON messages", async () => {
     const input = JSON.stringify({ type: "msg1" }) + "\n" +
                   JSON.stringify({ type: "msg2" }) + "\n";
 
     mockReadable!.push(input);
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(messages).toHaveLength(2);
     expect(messages[0]).toEqual({ type: "msg1" });
@@ -92,9 +93,12 @@ describe("JSONStdoutReader", () => {
   });
 
   it("should handle partial reads and buffer accumulation", async () => {
-    const chunk1 = JSON.stringify({ type: "part1" }).substring(0, 10);
-    const chunk2 = JSON.stringify({ type: "part1" }).substring(10) + "\n";
+    const part1String = JSON.stringify({ type: "part1" });
+    const chunk1 = part1String.substring(0, 10);
+    const chunk2 = part1String.substring(10) + "\n";
     const chunk3 = JSON.stringify({ type: "part2" }) + "\n";
+
+    messages = [];
 
     mockReadable!.push(chunk1);
     await new Promise((r) => setTimeout(r, 10));
@@ -110,11 +114,12 @@ describe("JSONStdoutReader", () => {
     expect(messages[1]).toEqual({ type: "part2" });
   });
 
-  it("should skip empty lines", () => {
+  it("should skip empty lines", async () => {
     const input = JSON.stringify({ type: "msg1" }) + "\n\n\n" +
                   JSON.stringify({ type: "msg2" }) + "\n";
 
     mockReadable!.push(input);
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(messages).toHaveLength(2);
     expect(messages[0]).toEqual({ type: "msg1" });
@@ -122,6 +127,9 @@ describe("JSONStdoutReader", () => {
   });
 
   it("should emit error on invalid JSON", async () => {
+    messages = [];
+    errors = [];
+
     const input = "invalid json\n" + JSON.stringify({ type: "valid" }) + "\n";
 
     mockReadable!.push(input);
@@ -133,11 +141,14 @@ describe("JSONStdoutReader", () => {
     expect(messages[0]).toEqual({ type: "valid" });
   });
 
-  it("should handle messages with whitespace", () => {
+  it("should handle messages with whitespace", async () => {
+    messages = [];
+
     const input = "  " + JSON.stringify({ type: "msg1" }) + "  \n" +
                   "\t" + JSON.stringify({ type: "msg2" }) + "\t\n";
 
     mockReadable!.push(input);
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(messages).toHaveLength(2);
     expect(messages[0]).toEqual({ type: "msg1" });
