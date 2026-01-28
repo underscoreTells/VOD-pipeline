@@ -7,9 +7,11 @@ export interface AgentConfig {
     gemini?: string;
     openai?: string;
     anthropic?: string;
+    openrouter?: string;
   };
   temperature?: number;
   maxTokens?: number;
+  openrouterBaseURL?: string;
 }
 
 export let ipcConfig: Partial<AgentConfig> | null = null;
@@ -31,6 +33,9 @@ export async function loadConfig(): Promise<AgentConfig> {
       }
       if (ipcConfig.maxTokens !== undefined) {
         config.maxTokens = ipcConfig.maxTokens;
+      }
+      if (ipcConfig.openrouterBaseURL !== undefined) {
+        config.openrouterBaseURL = ipcConfig.openrouterBaseURL;
       }
 
       if (Object.keys(config.providers).length === 0) {
@@ -57,10 +62,13 @@ export async function loadConfig(): Promise<AgentConfig> {
   if (process.env.ANTHROPIC_API_KEY) {
     providers.anthropic = process.env.ANTHROPIC_API_KEY;
   }
+  if (process.env.OPENROUTER_API_KEY) {
+    providers.openrouter = process.env.OPENROUTER_API_KEY;
+  }
 
   if (Object.keys(providers).length === 0) {
     throw new Error(
-      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY in .env"
+      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY in .env"
     );
   }
 
@@ -69,6 +77,7 @@ export async function loadConfig(): Promise<AgentConfig> {
     providers,
     temperature: 0.7,
     maxTokens: undefined,
+    openrouterBaseURL: process.env.OPENROUTER_BASE_URL,
   };
 }
 
@@ -83,10 +92,16 @@ export function getProviderLLMConfig(
     throw new Error(`No API key found for provider: ${providerType}`);
   }
 
-  return {
+  const llmConfig: LLMConfig = {
     provider: providerType,
     apiKey,
     temperature: agentConfig.temperature,
     maxTokens: agentConfig.maxTokens,
   };
+
+  if (providerType === "openrouter") {
+    llmConfig.baseURL = agentConfig.openrouterBaseURL;
+  }
+
+  return llmConfig;
 }
