@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import { registerIpcHandlers } from './ipc/handlers';
 import { initializeDatabase, closeDatabase } from './database/db';
 import { getAgentBridge } from './agent-bridge.js';
+import { detectFFmpeg } from './ffmpegDetector.js';
+import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,10 +51,15 @@ app.whenReady().then(async () => {
   console.log('Electron version:', process.versions.electron);
   console.log('Development mode:', process.env.NODE_ENV !== 'production');
 
+  // Initialize core systems
   initializeDatabase();
   registerIpcHandlers();
-  createWindow();
 
+  // Detect external dependencies
+  await initializeFFmpeg();
+  await initializePython();
+
+  createWindow();
   await startAgentBridge();
 
   app.on('activate', () => {
@@ -60,8 +67,6 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
-
-  initializeFFmpeg();
 });
 
 async function startAgentBridge() {
@@ -105,47 +110,42 @@ app.on('before-quit', async () => {
   }
 });
 
-function initializeFFmpeg() {
-  console.log('Initializing FFmpeg...');
+async function initializeFFmpeg() {
+  console.log('[Main] Initializing FFmpeg...');
 
-  const ffmpegPath = detectFFmpeg();
-  if (ffmpegPath) {
-    console.log(`FFmpeg found at: ${ffmpegPath}`);
-  } else {
-    console.warn('FFmpeg not found. Video processing features will be disabled.');
-    console.warn('Install FFmpeg or run the installer script.');
-  }
-}
-
-function detectFFmpeg(): string | null {
-  const platform = process.platform;
-  const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-  const resourcesPath = process.resourcesPath || process.cwd();
-
-  const platformPath = (PLATFORM_CONFIG as Record<string, { path: string }>)[platform]?.path || '';
-
-  const possiblePaths = [
-    path.join(resourcesPath, 'binaries', platformPath, binaryName),
-    path.join(process.cwd(), 'binaries', platform, binaryName),
-    path.join(app.getPath('userData'), 'binaries', binaryName),
-    binaryName,
-  ];
-
-  for (const testPath of possiblePaths) {
-    if (fs.existsSync(testPath)) {
-      return testPath;
+  try {
+    const result = await detectFFmpeg();
+    if (result) {
+      console.log(`[Main] FFmpeg found: ${result.path}`);
+      console.log(`[Main] FFmpeg version: ${result.version}`);
+      console.log(`[Main] FFmpeg source: ${result.source}`);
+    } else {
+      console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
+      console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
     }
+  } catch (error) {
+    console.error('[Main] FFmpeg detection failed:', error);
+    console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
+    console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
   }
-
-  return null;
 }
 
-const PLATFORM_CONFIG: Record<string, { path: string }> = {
-  win32: { path: '' },
-  darwin: { path: '' },
-  linux: { path: '' },
-  aix: { path: '' },
-  freebsd: { path: '' },
-  openbsd: { path: '' },
-  sunos: { path: '' },
-};
+async function initializePython() {
+  console.log('[Main] Initializing Python...');
+
+  try {
+    const result = await detectPython();
+    if (result) {
+      console.log(`[Main] Python found: ${result.path}`);
+      console.log(`[Main] Python version: ${result.version}`);
+      console.log(`[Main] Python source: ${result.source}`);
+    } else {
+      console.warn('[Main] Python not found. Transcription features will be disabled.');
+      console.warn('[Main] Install Python 3.8+ to enable transcription.');
+    }
+  } catch (error) {
+    console.error('[Main] Python detection failed:', error);
+    console.warn('[Main] Python not found. Transcription features will be disabled.');
+    console.warn('[Main] Install Python 3.8+ to enable transcription.');
+  }
+}
