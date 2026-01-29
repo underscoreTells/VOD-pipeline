@@ -705,23 +705,31 @@ export async function getClipsByAsset(assetId: number): Promise<Clip[]> {
 
 export async function updateClip(id: number, updates: UpdateClipInput): Promise<boolean> {
   const database = await getDatabase();
-  
+
   // Get current clip for validation
   const current = await getClip(id);
   if (!current) {
     return false;
   }
-  
+
+  // Validate asset_id if provided
+  if (updates.asset_id !== undefined) {
+    const asset = await getAsset(updates.asset_id);
+    if (!asset) {
+      throw new Error(`Asset not found: ${updates.asset_id}`);
+    }
+  }
+
   // Validate role if provided
   if (updates.role !== undefined && updates.role !== null && !VALID_CLIP_ROLES.includes(updates.role)) {
     throw new Error(`Invalid role: ${updates.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
   }
-  
+
   // Validate time ranges
   const newInPoint = updates.in_point ?? current.in_point;
   const newOutPoint = updates.out_point ?? current.out_point;
   const newStartTime = updates.start_time ?? current.start_time;
-  
+
   if (newStartTime < 0) {
     throw new Error('Start time must be >= 0');
   }
@@ -731,10 +739,10 @@ export async function updateClip(id: number, updates: UpdateClipInput): Promise<
   if (newOutPoint <= newInPoint) {
     throw new Error('Out point must be greater than in point');
   }
-  
+
   const fields: string[] = [];
   const values: unknown[] = [];
-  
+
   if (updates.asset_id !== undefined) {
     fields.push('asset_id = ?');
     values.push(updates.asset_id);
@@ -767,17 +775,17 @@ export async function updateClip(id: number, updates: UpdateClipInput): Promise<
     fields.push('is_essential = ?');
     values.push(updates.is_essential ? 1 : 0);
   }
-  
+
   if (fields.length === 0) {
     return true; // Nothing to update
   }
-  
+
   values.push(id);
-  
+
   const result = database.prepare(
     `UPDATE clips SET ${fields.join(', ')} WHERE id = ?`
   ).run(...values);
-  
+
   return result.changes > 0;
 }
 
@@ -799,51 +807,94 @@ export async function batchUpdateClips(
   updates: Array<{ id: number } & UpdateClipInput>
 ): Promise<number> {
   const database = await getDatabase();
-  
-  const updateStmt = database.prepare(
-    `UPDATE clips SET 
-      asset_id = COALESCE(?, asset_id),
-      track_index = COALESCE(?, track_index),
-      start_time = COALESCE(?, start_time),
-      in_point = COALESCE(?, in_point),
-      out_point = COALESCE(?, out_point),
-      role = COALESCE(?, role),
-      description = COALESCE(?, description),
-      is_essential = COALESCE(?, is_essential)
-    WHERE id = ?`
-  );
-  
+
   const transaction = database.transaction((items: typeof updates) => {
     let count = 0;
     for (const item of items) {
       const { id, ...clipUpdates } = item;
-      
+
       // Get current clip to validate
       const current = database.prepare('SELECT * FROM clips WHERE id = ?').get(id) as Clip | undefined;
       if (!current) continue;
-      
+
+      // Validate asset_id if provided
+      if (clipUpdates.asset_id !== undefined) {
+        const asset = database.prepare('SELECT id FROM assets WHERE id = ?').get(clipUpdates.asset_id);
+        if (!asset) {
+          throw new Error(`Asset not found: ${clipUpdates.asset_id}`);
+        }
+      }
+
+      // Validate role if provided
+      if (clipUpdates.role !== undefined && clipUpdates.role !== null && !VALID_CLIP_ROLES.includes(clipUpdates.role)) {
+        throw new Error(`Invalid role: ${clipUpdates.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
+      }
+
+      // Validate time ranges
+      const newStartTime = clipUpdates.start_time ?? current.start_time;
       const newInPoint = clipUpdates.in_point ?? current.in_point;
       const newOutPoint = clipUpdates.out_point ?? current.out_point;
-      
-      if (newOutPoint <= newInPoint) continue;
-      
-      const result = updateStmt.run(
-        clipUpdates.asset_id ?? null,
-        clipUpdates.track_index ?? null,
-        clipUpdates.start_time ?? null,
-        clipUpdates.in_point ?? null,
-        clipUpdates.out_point ?? null,
-        clipUpdates.role ?? null,
-        clipUpdates.description ?? null,
-        clipUpdates.is_essential !== undefined ? (clipUpdates.is_essential ? 1 : 0) : null,
-        id
-      );
-      
+
+      if (newStartTime < 0) {
+        throw new Error('Start time must be >= 0');
+      }
+      if (newInPoint < 0) {
+        throw new Error('In point must be >= 0');
+      }
+      if (newOutPoint <= newInPoint) {
+        throw new Error('Out point must be greater than in point');
+      }
+
+      // Build dynamic update statement (only update provided fields)
+      const fields: string[] = [];
+      const values: unknown[] = [];
+
+      if (clipUpdates.asset_id !== undefined) {
+        fields.push('asset_id = ?');
+        values.push(clipUpdates.asset_id);
+      }
+      if (clipUpdates.track_index !== undefined) {
+        fields.push('track_index = ?');
+        values.push(clipUpdates.track_index);
+      }
+      if (clipUpdates.start_time !== undefined) {
+        fields.push('start_time = ?');
+        values.push(clipUpdates.start_time);
+      }
+      if (clipUpdates.in_point !== undefined) {
+        fields.push('in_point = ?');
+        values.push(clipUpdates.in_point);
+      }
+      if (clipUpdates.out_point !== undefined) {
+        fields.push('out_point = ?');
+        values.push(clipUpdates.out_point);
+      }
+      if (clipUpdates.role !== undefined) {
+        fields.push('role = ?');
+        values.push(clipUpdates.role);
+      }
+      if (clipUpdates.description !== undefined) {
+        fields.push('description = ?');
+        values.push(clipUpdates.description);
+      }
+      if (clipUpdates.is_essential !== undefined) {
+        fields.push('is_essential = ?');
+        values.push(clipUpdates.is_essential ? 1 : 0);
+      }
+
+      if (fields.length === 0) continue; // Nothing to update
+
+      values.push(id);
+
+      const result = database.prepare(
+        `UPDATE clips SET ${fields.join(', ')} WHERE id = ?`
+      ).run(...values);
+
       if (result.changes > 0) count++;
     }
     return count;
   });
-  
+
   return transaction(updates);
 }
 
@@ -1042,27 +1093,27 @@ export async function getWaveformCacheCount(): Promise<number> {
  */
 export async function cleanupWaveformCache(maxEntries: number = MAX_WAVEFORM_CACHE_ENTRIES): Promise<number> {
   const database = await getDatabase();
-  
+
   // Count current entries
   const countResult = database.prepare('SELECT COUNT(*) as count FROM waveform_cache').get() as { count: number };
   const currentCount = countResult.count;
-  
+
   if (currentCount <= maxEntries) {
     return 0; // No cleanup needed
   }
-  
+
   const entriesToDelete = currentCount - maxEntries;
-  
-  // Delete oldest entries (by generated_at timestamp)
+
+  // Delete oldest entries (by generated_at timestamp) using rowid
   const result = database.prepare(
-    `DELETE FROM waveform_cache 
-     WHERE id IN (
-       SELECT id FROM waveform_cache 
-       ORDER BY generated_at ASC 
+    `DELETE FROM waveform_cache
+     WHERE rowid IN (
+       SELECT rowid FROM waveform_cache
+       ORDER BY generated_at ASC
        LIMIT ?
      )`
   ).run(entriesToDelete);
-  
+
   console.log(`[Waveform Cache] Cleaned up ${result.changes} old entries. Remaining: ${currentCount - result.changes}`);
   return result.changes;
 }

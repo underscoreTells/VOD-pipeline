@@ -4,7 +4,7 @@
   import { projects } from '../state/project.svelte';
   
   interface Props {
-    onExport?: (format: ExportFormat, filePath: string) => Promise<void>;
+    onExport?: (format: ExportFormat, filePath: string, frameRate: number, includeAudio: boolean) => Promise<void>;
   }
   
   let { onExport }: Props = $props();
@@ -39,32 +39,36 @@
   // Handle export
   async function handleExport() {
     if (!formatConfig || !onExport) return;
-    
+
     // Show save dialog
     const suggestedFilename = `${projectName}${formatConfig.extension}`;
-    
+
     isExporting = true;
     exportProgress = 0;
     exportError = null;
     exportSuccess = null;
-    
+
+    let progressInterval: ReturnType<typeof setInterval> | null = null;
+
     try {
       // For now, use a mock file path - in real implementation this would open a save dialog
       const filePath = suggestedFilename;
-      
+
       // Simulate progress
-      const progressInterval = setInterval(() => {
+      progressInterval = setInterval(() => {
         exportProgress = Math.min(exportProgress + 10, 90);
       }, 100);
-      
-      await onExport(selectedFormat, filePath);
-      
-      clearInterval(progressInterval);
+
+      await onExport(selectedFormat, filePath, frameRate, includeAudio);
+
       exportProgress = 100;
       exportSuccess = `Exported to ${filePath}`;
     } catch (error) {
       exportError = (error as Error).message || 'Export failed';
     } finally {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
       isExporting = false;
     }
   }
