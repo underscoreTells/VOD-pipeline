@@ -132,18 +132,17 @@ def main():
             language=args.language,
             compute_type=args.compute_type,
         )
-
-        # Output JSON to stdout
-        print(json.dumps(result))
-
     except RuntimeError as e:
         print(f"ERROR: Transcription failed (runtime error): {e}", file=sys.stderr)
         sys.exit(1)
     except ValueError as e:
         print(f"ERROR: Transcription failed (invalid parameter): {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Output JSON to stdout (separate try for serialization errors)
+    try:
+        print(json.dumps(result))
     except (TypeError, ValueError) as e:
-        # JSON serialization errors manifest as TypeError or ValueError
         print(
             f"ERROR: Transcription failed (serialization error): {e}", file=sys.stderr
         )
