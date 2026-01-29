@@ -1,0 +1,113 @@
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import TimelineTrack from './TimelineTrack.svelte';
+  import { timelineState, loadTimeline, setPlaying } from '../state/timeline.svelte';
+  import type { Clip, TimelineState as TimelineStateType } from '../../../shared/types/database';
+  
+  interface Props {
+    projectId: number;
+    audioUrls: string[]; // Array of audio URLs, one per track
+    clips: Clip[];
+    initialState?: TimelineStateType | null;
+  }
+  
+  let { projectId, audioUrls, clips, initialState = null }: Props = $props();
+  
+  let isLoading = $state(true);
+  let error = $state<string | null>(null);
+  
+  // Load timeline data
+  $effect(() => {
+    if (projectId && clips) {
+      loadTimeline(projectId, clips, initialState);
+      isLoading = false;
+    }
+  });
+  
+  // Update loading state when clips change
+  $effect(() => {
+    if (clips && clips.length > 0) {
+      isLoading = false;
+    }
+  });
+</script>
+
+<div class="timeline">
+  {#if isLoading}
+    <div class="loading">
+      <span class="loading-spinner"></span>
+      <p>Loading timeline...</p>
+    </div>
+  {:else if error}
+    <div class="error">
+      <p>Error: {error}</p>
+    </div>
+  {:else}
+    <div class="tracks-container">
+      {#each audioUrls as audioUrl, index (index)}
+        <TimelineTrack 
+          {audioUrl} 
+          trackIndex={index} 
+          height={100}
+        />
+      {/each}
+    </div>
+    
+    {#if audioUrls.length === 0}
+      <div class="empty">
+        <p>No audio tracks loaded</p>
+        <p class="hint">Import a video to see the timeline</p>
+      </div>
+    {/if}
+  {/if}
+</div>
+
+<style>
+  .timeline {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #0f0f0f;
+    overflow: hidden;
+  }
+  
+  .tracks-container {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  
+  .loading, .error, .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #888;
+    padding: 2rem;
+  }
+  
+  .loading-spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 3px solid #333;
+    border-top-color: #007bff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .error {
+    color: #dc3545;
+  }
+  
+  .empty .hint {
+    font-size: 0.875rem;
+    color: #666;
+  }
+</style>
