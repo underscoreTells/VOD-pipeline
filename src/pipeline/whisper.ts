@@ -114,7 +114,7 @@ export async function transcribe(
       ));
     });
 
-    proc.on('exit', (code) => {
+    proc.on('close', (code) => {
       if (code !== 0) {
         reject(new WhisperError(
           `Transcription failed with code ${code}: ${stderr}`,
