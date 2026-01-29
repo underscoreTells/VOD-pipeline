@@ -156,7 +156,7 @@ export function registerIpcHandlers() {
         project_id: projectId,
         file_path: filePath,
         file_type: fileType,
-        duration: metadata?.duration ?? null,
+        duration: (metadata as { duration?: number })?.duration ?? null,
         metadata,
       });
 
