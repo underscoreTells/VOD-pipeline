@@ -157,3 +157,40 @@ export interface FFprobeOutput {
   streams: FFprobeStream[];
   format: FFprobeFormat;
 }
+
+// Waveform generation types
+export interface WaveformPeak {
+  min: number;
+  max: number;
+}
+
+export interface WaveformTier {
+  level: 1 | 2 | 3;
+  ratio: number;
+  resolution: number; // samples per second
+}
+
+export const WAVEFORM_TIERS: Record<number, WaveformTier> = {
+  1: { level: 1, ratio: 256, resolution: 172 },    // Overview: 256:1
+  2: { level: 2, ratio: 16, resolution: 2756 },    // Standard: 16:1
+  3: { level: 3, ratio: 4, resolution: 11025 },    // Fine: 4:1
+};
+
+export interface WaveformProgress {
+  tier: 1 | 2 | 3;
+  percent: number;
+  status: string;
+}
+
+export type WaveformProgressCallback = (progress: WaveformProgress) => void;
+
+export interface WaveformGenerationResult {
+  assetId: number;
+  trackIndex: number;
+  tiers: Array<{
+    level: 1 | 2 | 3;
+    peaks: WaveformPeak[];
+    sampleRate: number;
+    duration: number;
+  }>;
+}

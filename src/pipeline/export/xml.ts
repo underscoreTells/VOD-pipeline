@@ -1,0 +1,175 @@
+import type { Clip } from '../../shared/types/database';
+
+export interface FCPXMLOptions {
+  projectName: string;
+  projectId: number;
+  frameRate: number;
+  clips: Clip[];
+  assetPaths: Map<number, string>; // assetId -> file path
+  assetDurations?: Map<number, number>; // assetId -> duration in seconds (optional)
+}
+
+export function generateFCPXML(options: FCPXMLOptions): string {
+  const { projectName, projectId, frameRate, clips, assetPaths } = options;
+  
+  // Calculate total duration
+  const totalDuration = clips.length > 0 
+    ? Math.max(...clips.map(c => c.start_time + (c.out_point - c.in_point)))
+    : 0;
+  
+  // Format frame rate
+  const frameRateStr = formatFrameRate(frameRate);
+  const timebase = frameRate.toString();
+  
+  // Build resources (assets)
+  const assetResources: string[] = [];
+  const formatResource = `    <format id="r0" name="FFVideoFormat${frameRateStr}" width="1920" height="1080" frameDuration="${formatFrameDuration(frameRate)}"/>`;
+  
+  const uniqueAssetIds = [...new Set(clips.map(c => c.asset_id))];
+  let assetCounter = 1;
+  const assetIdMap = new Map<number, string>(); // assetId -> resource id
+
+  // Validate all asset paths exist before generating XML
+  const missingAssetIds: number[] = [];
+  for (const assetId of uniqueAssetIds) {
+    const assetPath = assetPaths.get(assetId);
+    if (!assetPath) {
+      missingAssetIds.push(assetId);
+    }
+  }
+
+  if (missingAssetIds.length > 0) {
+    throw new Error(
+      `Cannot generate FCPXML: Missing file paths for asset(s): ${missingAssetIds.join(', ')}. ` +
+      `Ensure all referenced assets have valid file paths.`
+    );
+  }
+
+  for (const assetId of uniqueAssetIds) {
+    const assetPath = assetPaths.get(assetId)!;
+    const resourceId = `r${assetCounter}`;
+    assetIdMap.set(assetId, resourceId);
+
+    // Use actual asset duration if available, otherwise use total timeline duration
+    const assetDuration = options.assetDurations?.get(assetId) ?? totalDuration;
+
+    assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="file://${escapeXml(assetPath)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(assetDuration, frameRate)}"/>`);
+    assetCounter++;
+  }
+
+  // Validate all clips reference valid assets before building spine
+  const clipsWithMissingAssets: Array<{ index: number; id: number; assetId: number }> = [];
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const assetResourceId = assetIdMap.get(clip.asset_id);
+    if (!assetResourceId) {
+      clipsWithMissingAssets.push({ index: i, id: clip.id, assetId: clip.asset_id });
+    }
+  }
+
+  if (clipsWithMissingAssets.length > 0) {
+    const details = clipsWithMissingAssets
+      .map(c => `clip index ${c.index} (id=${c.id}, asset_id=${c.assetId})`)
+      .join('; ');
+    throw new Error(
+      `Cannot generate FCPXML: ${clipsWithMissingAssets.length} clip(s) reference missing or invalid assets: ${details}`
+    );
+  }
+
+  // Build spine (clips)
+  const spineClips: string[] = [];
+  for (const clip of clips) {
+    const assetResourceId = assetIdMap.get(clip.asset_id)!;
+    
+    const clipDuration = clip.out_point - clip.in_point;
+    const offset = secondsToTimecode(clip.start_time, frameRate);
+    const sourceIn = secondsToTimecode(clip.in_point, frameRate);
+    const sourceOut = secondsToTimecode(clip.out_point, frameRate);
+    
+    spineClips.push(`      <clip name="${escapeXml(clip.description || `Clip ${clip.id}`)}" offset="${offset}" duration="${secondsToTimecode(clipDuration, frameRate)}">
+        <asset-clip ref="${assetResourceId}" offset="0s" duration="${secondsToTimecode(clipDuration, frameRate)}" start="${sourceIn}"/> 
+      </clip>`);
+  }
+  
+  // Build full XML
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.10">
+  <resources>
+${formatResource}
+${assetResources.join('\n')}
+  </resources>
+  <project name="${escapeXml(projectName)}" uid="project-${projectId}">
+    <sequence format="r0" duration="${secondsToTimecode(totalDuration, frameRate)}" tcStart="0s" tcFormat="NDF">
+      <spine>
+${spineClips.join('\n')}
+      </spine>
+    </sequence>
+  </project>
+</fcpxml>`;
+
+  return xml;
+}
+
+function formatFrameRate(frameRate: number): string {
+  // Convert common frame rates to FCP format names
+  if (Math.abs(frameRate - 23.976) < 0.1) return '1080p23.976';
+  if (Math.abs(frameRate - 24) < 0.1) return '1080p24';
+  if (Math.abs(frameRate - 25) < 0.1) return '1080p25';
+  if (Math.abs(frameRate - 29.97) < 0.1) return '1080p29.97';
+  if (Math.abs(frameRate - 30) < 0.1) return '1080p30';
+  if (Math.abs(frameRate - 50) < 0.1) return '1080p50';
+  if (Math.abs(frameRate - 59.94) < 0.1) return '1080p59.94';
+  if (Math.abs(frameRate - 60) < 0.1) return '1080p60';
+  return `1080p${Math.round(frameRate)}`;
+}
+
+function formatFrameDuration(frameRate: number): string {
+  // Format as FCP time duration (e.g., "1001/24000s" for 23.976fps)
+  if (Math.abs(frameRate - 23.976) < 0.1) return '1001/24000s';
+  if (Math.abs(frameRate - 29.97) < 0.1) return '1001/30000s';
+  if (Math.abs(frameRate - 59.94) < 0.1) return '1001/60000s';
+  
+  const denominator = Math.round(frameRate);
+  return `1/${denominator}s`;
+}
+
+function secondsToTimecode(seconds: number, frameRate: number): string {
+  // Use integer-rational logic like formatFrameDuration
+  let multiplier = 1;
+  let denominatorMultiplier = 1;
+
+  // Handle non-integer frame rates with standard multipliers
+  if (Math.abs(frameRate - 23.976) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 24000;
+  } else if (Math.abs(frameRate - 29.97) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 30000;
+  } else if (Math.abs(frameRate - 59.94) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 60000;
+  } else {
+    // Integer frame rates
+    denominatorMultiplier = Math.round(frameRate);
+  }
+
+  const numerator = Math.round(seconds * frameRate * multiplier);
+  const denominator = Math.round(frameRate * multiplier);
+
+  return `${numerator}/${denominator}s`;
+}
+
+function getFilename(path: string): string {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
