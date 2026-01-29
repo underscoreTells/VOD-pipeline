@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import WaveSurfer from 'wavesurfer.js';
-  import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
-  import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.js';
+import { onMount } from 'svelte';
+import WaveSurfer from 'wavesurfer.js';
+import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
   import { timelineState, selectClip, getClipsByTrack, setScroll, getTotalDuration } from '../state/timeline.svelte';
   import { MoveClipCommand, ResizeClipCommand, executeCommand } from '../state/undo-redo.svelte';
@@ -20,6 +19,7 @@
   let waveSurfer: WaveSurfer | null = null;
   let regionsPlugin: RegionsPlugin | null = null;
   let isReady = $state(false);
+  let isScrolling = false; // Flag to prevent scroll loop
   
   // Role colors for clips
   const ROLE_COLORS: Record<string, string> = {
@@ -75,10 +75,16 @@
     });
     
     waveSurfer.on('scroll', (scrollLeft: number) => {
+      // Prevent feedback loop
+      if (isScrolling) return;
+      
       // Convert scroll position to seconds
       if (waveSurfer) {
-        const scrollTime = scrollLeft / waveSurfer.options.minPxPerSec;
+        const scrollTime = scrollLeft / timelineState.zoomLevel;
+        isScrolling = true;
         setScroll(scrollTime);
+        // Reset flag after state update
+        setTimeout(() => { isScrolling = false; }, 0);
       }
     });
     
@@ -175,9 +181,12 @@
   
   // Sync scroll position with other tracks
   $effect(() => {
-    if (container && isReady) {
+    if (container && isReady && !isScrolling) {
       const scrollLeft = timelineState.scrollPosition * timelineState.zoomLevel;
-      container.scrollLeft = scrollLeft;
+      // Only update if significantly different to avoid fighting
+      if (Math.abs(container.scrollLeft - scrollLeft) > 1) {
+        container.scrollLeft = scrollLeft;
+      }
     }
   });
 </script>

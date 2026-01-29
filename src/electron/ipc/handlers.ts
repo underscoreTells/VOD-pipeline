@@ -39,7 +39,9 @@ import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js
 import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError } from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError } from '../../pipeline/whisper.js';
-import type { AssetMetadata } from '../../shared/types/database.js';
+import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export/index.js';
+import type { AssetMetadata, Clip } from '../../shared/types/database.js';
+import type { ExportFormat } from '../../pipeline/export/index.js';
 
 // Helper to create consistent error responses
 function createErrorResponse(error: unknown, code: IPCErrorCode = IPC_ERROR_CODES.UNKNOWN_ERROR) {
@@ -696,10 +698,8 @@ export function registerIpcHandlers() {
         }
       );
 
-      // Save generated waveforms to database
-      for (const tier of result.tiers) {
-        await saveWaveform(assetId, trackIndex ?? 0, tier.level, tier.peaks, tier.sampleRate, tier.duration);
-      }
+      // Note: Waveforms are now saved to database by the generateWaveformTiers function
+      // to avoid redundant writes and race conditions
 
       return createSuccessResponse(result);
     } catch (error) {
@@ -778,20 +778,99 @@ export function registerIpcHandlers() {
   });
 
   // Export handlers
-  ipcMain.handle(IPC_CHANNELS.EXPORT_GENERATE, async (_, { projectId, format, options }) => {
-    console.log('IPC: export:generate', projectId, format);
+  ipcMain.handle(IPC_CHANNELS.EXPORT_GENERATE, async (event, { projectId, format, options, filePath }: { projectId: number; format: ExportFormat; options?: { frameRate?: number; includeAudio?: boolean }; filePath: string }) => {
+    console.log('IPC: export:generate', projectId, format, filePath);
     try {
-      if (!projectId || !format) {
-        return createErrorResponse('Project ID and format are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      if (!projectId || !format || !filePath) {
+        return createErrorResponse('Project ID, format, and file path are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      // TODO: Implement actual export generation
-      // This will generate XML, EDL, or AAF files based on the format
-      console.log(`[Export] Generating ${format} for project ${projectId} with options:`, options);
+      // Get project data
+      const project = await getProject(projectId);
+      if (!project) {
+        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
 
-      return createErrorResponse('Export generation not yet implemented', IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
+      // Get clips for project
+      const clips = await getClipsByProject(projectId);
+      if (clips.length === 0) {
+        return createErrorResponse('No clips in project to export', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      // Get asset paths and durations
+      const uniqueAssetIds = [...new Set(clips.map(c => c.asset_id))];
+      const assetPaths = new Map<number, string>();
+      const assetDurations = new Map<number, number>();
+      const assetTrackIndices = new Map<number, number>();
+
+      for (const assetId of uniqueAssetIds) {
+        const asset = await getAsset(assetId);
+        if (asset) {
+          assetPaths.set(assetId, asset.file_path);
+          assetDurations.set(assetId, asset.duration ?? 0);
+          // Track index is per clip, but we can use the first clip's track index as reference
+          const clipWithAsset = clips.find(c => c.asset_id === assetId);
+          if (clipWithAsset) {
+            assetTrackIndices.set(assetId, clipWithAsset.track_index);
+          }
+        }
+      }
+
+      // Calculate total duration
+      const totalDuration = Math.max(...clips.map(c => c.start_time + (c.out_point - c.in_point)));
+
+      // Generate export content based on format
+      let content: string;
+      const frameRate = options?.frameRate ?? 30;
+
+      switch (format) {
+        case 'fcpxml':
+          content = generateFCPXML({
+            projectName: project.name,
+            projectId,
+            frameRate,
+            clips,
+            assetPaths,
+            assetDurations,
+          });
+          break;
+
+        case 'json':
+          content = generateJSON({
+            projectId,
+            projectName: project.name,
+            frameRate,
+            totalDuration,
+            clips,
+            assetPaths,
+            audioTracks: Array.from(assetTrackIndices.entries()).map(([assetId, trackIndex]) => ({
+              index: trackIndex,
+              sourceFile: assetPaths.get(assetId) ?? '',
+            })),
+          });
+          break;
+
+        case 'edl':
+          content = generateEDL({
+            title: project.name,
+            frameRate,
+            clips,
+            reelNames: new Map(Array.from(assetPaths.entries()).map(([id, path]) => [id, `REEL${id}`])),
+          });
+          break;
+
+        default:
+          return createErrorResponse(`Unsupported export format: ${format}`, IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      // Write to file
+      await fs.promises.writeFile(filePath, content, 'utf-8');
+      console.log(`[Export] Successfully exported ${format} to ${filePath}`);
+
+      return createSuccessResponse({ filePath, format, clipCount: clips.length });
     } catch (error) {
-      return createErrorResponse(error, IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
+      console.error('[Export] Generation failed:', error);
+      return createErrorResponse(error instanceof Error ? error.message : String(error), IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
     }
   });
 

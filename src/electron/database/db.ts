@@ -1020,3 +1020,64 @@ export async function deleteWaveformsByAsset(assetId: number): Promise<number> {
   
   return result.changes;
 }
+
+// ============================================================================
+// WAVEFORM CACHE MAINTENANCE (LRU Eviction)
+// ============================================================================
+
+const MAX_WAVEFORM_CACHE_ENTRIES = 1000; // Maximum number of waveform entries to keep
+
+/**
+ * Get the total count of waveform cache entries
+ */
+export async function getWaveformCacheCount(): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('SELECT COUNT(*) as count FROM waveform_cache').get() as { count: number };
+  return result.count;
+}
+
+/**
+ * Clean up old waveform cache entries using LRU policy
+ * Keeps the most recently generated entries, removes oldest ones
+ */
+export async function cleanupWaveformCache(maxEntries: number = MAX_WAVEFORM_CACHE_ENTRIES): Promise<number> {
+  const database = await getDatabase();
+  
+  // Count current entries
+  const countResult = database.prepare('SELECT COUNT(*) as count FROM waveform_cache').get() as { count: number };
+  const currentCount = countResult.count;
+  
+  if (currentCount <= maxEntries) {
+    return 0; // No cleanup needed
+  }
+  
+  const entriesToDelete = currentCount - maxEntries;
+  
+  // Delete oldest entries (by generated_at timestamp)
+  const result = database.prepare(
+    `DELETE FROM waveform_cache 
+     WHERE id IN (
+       SELECT id FROM waveform_cache 
+       ORDER BY generated_at ASC 
+       LIMIT ?
+     )`
+  ).run(entriesToDelete);
+  
+  console.log(`[Waveform Cache] Cleaned up ${result.changes} old entries. Remaining: ${currentCount - result.changes}`);
+  return result.changes;
+}
+
+/**
+ * Delete waveform cache entries older than specified days
+ */
+export async function deleteOldWaveforms(olderThanDays: number): Promise<number> {
+  const database = await getDatabase();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
+  
+  const result = database.prepare(
+    'DELETE FROM waveform_cache WHERE generated_at < ?'
+  ).run(cutoffDate.toISOString());
+  
+  return result.changes;
+}
