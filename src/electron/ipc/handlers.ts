@@ -22,7 +22,20 @@ import {
   removeAssetFromChapter,
   getAssetsForChapter,
   replaceTranscripts,
+  createClip,
+  getClip,
+  getClipsByProject,
+  getClipsByAsset,
+  updateClip,
+  deleteClip,
+  batchUpdateClips,
+  saveTimelineState,
+  loadTimelineState,
+  updateTimelineState,
+  saveWaveform,
+  getWaveform,
 } from '../database/db.js';
+import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js';
 import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError } from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError } from '../../pipeline/whisper.js';
@@ -479,6 +492,319 @@ export function registerIpcHandlers() {
       return createSuccessResponse(response);
     } catch (error) {
       console.error('[IPC] agent:chat error:', error);
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  // Clip handlers
+  ipcMain.handle(IPC_CHANNELS.CLIP_CREATE, async (_, { projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
+    console.log('IPC: clip:create', projectId, assetId);
+    try {
+      if (!projectId || !assetId) {
+        return createErrorResponse('Project ID and Asset ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (startTime < 0) {
+        return createErrorResponse('Start time must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (inPoint < 0) {
+        return createErrorResponse('In point must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (outPoint <= inPoint) {
+        return createErrorResponse('Out point must be greater than in point', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const clip = await createClip({
+        project_id: projectId,
+        asset_id: assetId,
+        track_index: trackIndex ?? 0,
+        start_time: startTime,
+        in_point: inPoint,
+        out_point: outPoint,
+        role: role ?? null,
+        description: description ?? null,
+        is_essential: isEssential ?? false,
+      });
+
+      return createSuccessResponse(clip);
+    } catch (error) {
+      if (error instanceof Error && (error.message.includes('time') || error.message.includes('point'))) {
+        return createErrorResponse(error.message, IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_GET, async (_, { id }) => {
+    console.log('IPC: clip:get', id);
+    try {
+      const clip = await getClip(id);
+      if (clip) {
+        return createSuccessResponse(clip);
+      } else {
+        return createErrorResponse('Clip not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_GET_BY_PROJECT, async (_, { projectId }) => {
+    console.log('IPC: clip:get-by-project', projectId);
+    try {
+      const clips = await getClipsByProject(projectId);
+      return createSuccessResponse(clips);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_GET_BY_ASSET, async (_, { assetId }) => {
+    console.log('IPC: clip:get-by-asset', assetId);
+    try {
+      const clips = await getClipsByAsset(assetId);
+      return createSuccessResponse(clips);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_UPDATE, async (_, { id, updates }) => {
+    console.log('IPC: clip:update', id, updates);
+    try {
+      const success = await updateClip(id, updates);
+      if (success) {
+        return createSuccessResponse(null);
+      } else {
+        return createErrorResponse('Clip not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+    } catch (error) {
+      if (error instanceof Error && (error.message.includes('time') || error.message.includes('point'))) {
+        return createErrorResponse(error.message, IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_DELETE, async (_, { id }) => {
+    console.log('IPC: clip:delete', id);
+    try {
+      const success = await deleteClip(id);
+      if (success) {
+        return createSuccessResponse(null);
+      } else {
+        return createErrorResponse('Clip not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_BATCH_UPDATE, async (_, { updates }) => {
+    console.log('IPC: clip:batch-update', updates?.length);
+    try {
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return createErrorResponse('Updates array is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const updatedCount = await batchUpdateClips(updates);
+      return createSuccessResponse({ updatedCount });
+    } catch (error) {
+      if (error instanceof Error && (error.message.includes('time') || error.message.includes('point'))) {
+        return createErrorResponse(error.message, IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  // Timeline state handlers
+  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_SAVE, async (_, { projectId, zoomLevel, scrollPosition, playheadTime, selectedClipIds }) => {
+    console.log('IPC: timeline:state-save', projectId);
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const state = await saveTimelineState({
+        project_id: projectId,
+        zoom_level: zoomLevel ?? 100.0,
+        scroll_position: scrollPosition ?? 0.0,
+        playhead_time: playheadTime ?? 0.0,
+        selected_clip_ids: selectedClipIds ?? [],
+      });
+
+      return createSuccessResponse(state);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_LOAD, async (_, { projectId }) => {
+    console.log('IPC: timeline:state-load', projectId);
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const state = await loadTimelineState(projectId);
+      if (state) {
+        return createSuccessResponse(state);
+      } else {
+        return createSuccessResponse(null);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_UPDATE, async (_, { projectId, updates }) => {
+    console.log('IPC: timeline:state-update', projectId, updates);
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const success = await updateTimelineState(projectId, updates);
+      return createSuccessResponse({ success });
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  // Waveform handlers
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, { assetId, trackIndex }) => {
+    console.log('IPC: waveform:generate', assetId, trackIndex);
+    try {
+      if (!assetId) {
+        return createErrorResponse('Asset ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const asset = await getAsset(assetId);
+      if (!asset) {
+        return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      if (!fs.existsSync(asset.file_path)) {
+        return createErrorResponse('Asset file not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
+      }
+
+      const result = await generateWaveformTiers(
+        asset.file_path,
+        assetId,
+        trackIndex ?? 0,
+        (progress) => {
+          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, { assetId, progress });
+        }
+      );
+
+      // Save generated waveforms to database
+      for (const tier of result.tiers) {
+        await saveWaveform(assetId, trackIndex ?? 0, tier.level, tier.peaks, tier.sampleRate, tier.duration);
+      }
+
+      return createSuccessResponse(result);
+    } catch (error) {
+      if (error instanceof WaveformError) {
+        const validCodes = Object.values(IPC_ERROR_CODES);
+        const errorCode = validCodes.includes(error.code as IPCErrorCode)
+          ? error.code as IPCErrorCode
+          : IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED;
+        return createErrorResponse(error.message, errorCode);
+      }
+      return createErrorResponse(error, IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GET, async (_, { assetId, trackIndex, tierLevel }) => {
+    console.log('IPC: waveform:get', assetId, trackIndex, tierLevel);
+    try {
+      if (!assetId || tierLevel === undefined) {
+        return createErrorResponse('Asset ID and tier level are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const waveform = await getWaveform(assetId, trackIndex ?? 0, tierLevel);
+      if (waveform) {
+        return createSuccessResponse(waveform);
+      } else {
+        return createSuccessResponse(null);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE_TIER, async (event, { assetId, trackIndex, tierLevel }) => {
+    console.log('IPC: waveform:generate-tier', assetId, trackIndex, tierLevel);
+    try {
+      if (!assetId || !tierLevel) {
+        return createErrorResponse('Asset ID and tier level are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      // Generate specific tier - reuses full generation but we could optimize this later
+      const asset = await getAsset(assetId);
+      if (!asset) {
+        return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      if (!fs.existsSync(asset.file_path)) {
+        return createErrorResponse('Asset file not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
+      }
+
+      const result = await generateWaveformTiers(
+        asset.file_path,
+        assetId,
+        trackIndex ?? 0,
+        (progress) => {
+          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, { assetId, tierLevel, progress });
+        }
+      );
+
+      // Save the specific tier
+      const tier = result.tiers.find(t => t.level === tierLevel);
+      if (tier) {
+        await saveWaveform(assetId, trackIndex ?? 0, tierLevel, tier.peaks, tier.sampleRate, tier.duration);
+      }
+
+      return createSuccessResponse({ assetId, tierLevel, generated: !!tier });
+    } catch (error) {
+      if (error instanceof WaveformError) {
+        const validCodes = Object.values(IPC_ERROR_CODES);
+        const errorCode = validCodes.includes(error.code as IPCErrorCode)
+          ? error.code as IPCErrorCode
+          : IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED;
+        return createErrorResponse(error.message, errorCode);
+      }
+      return createErrorResponse(error, IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+    }
+  });
+
+  // Export handlers
+  ipcMain.handle(IPC_CHANNELS.EXPORT_GENERATE, async (_, { projectId, format, options }) => {
+    console.log('IPC: export:generate', projectId, format);
+    try {
+      if (!projectId || !format) {
+        return createErrorResponse('Project ID and format are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      // TODO: Implement actual export generation
+      // This will generate XML, EDL, or AAF files based on the format
+      console.log(`[Export] Generating ${format} for project ${projectId} with options:`, options);
+
+      return createErrorResponse('Export generation not yet implemented', IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.EXPORT_GET_FORMATS, async () => {
+    console.log('IPC: export:get-formats');
+    try {
+      const formats = [
+        { id: 'xml', name: 'FCPXML', description: 'Final Cut Pro XML format', extensions: ['.fcpxml'] },
+        { id: 'edl', name: 'EDL', description: 'Edit Decision List (CMX3600)', extensions: ['.edl'] },
+        { id: 'aaf', name: 'AAF', description: 'Advanced Authoring Format', extensions: ['.aaf'] },
+      ];
+      return createSuccessResponse(formats);
+    } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
