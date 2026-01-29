@@ -128,13 +128,13 @@ export class DeleteClipCommand implements Command {
     public description: string,
     private clipId: number
   ) {
-    // Store clip data at creation
+    // Store clip data at creation (deep clone for safety)
     const index = timelineState.clips.findIndex(c => c.id === this.clipId);
     if (index !== -1) {
       this.clipData = {
         id: this.clipId,
         index,
-        clip: { ...timelineState.clips[index] },
+        clip: structuredClone(timelineState.clips[index]),
       };
     }
   }
@@ -147,7 +147,7 @@ export class DeleteClipCommand implements Command {
         this.clipData = {
           id: this.clipId,
           index,
-          clip: { ...timelineState.clips[index] },
+          clip: structuredClone(timelineState.clips[index]),
         };
       }
     }

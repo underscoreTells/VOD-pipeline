@@ -800,15 +800,48 @@ export async function batchUpdateClips(
 ): Promise<number> {
   const database = await getDatabase();
   
-  let updatedCount = 0;
+  const updateStmt = database.prepare(
+    `UPDATE clips SET 
+      asset_id = COALESCE(?, asset_id),
+      track_index = COALESCE(?, track_index),
+      start_time = COALESCE(?, start_time),
+      in_point = COALESCE(?, in_point),
+      out_point = COALESCE(?, out_point),
+      role = COALESCE(?, role),
+      description = COALESCE(?, description),
+      is_essential = COALESCE(?, is_essential)
+    WHERE id = ?`
+  );
   
-  const transaction = database.transaction(async (items: typeof updates) => {
+  const transaction = database.transaction((items: typeof updates) => {
+    let count = 0;
     for (const item of items) {
       const { id, ...clipUpdates } = item;
-      const success = await updateClip(id, clipUpdates);
-      if (success) updatedCount++;
+      
+      // Get current clip to validate
+      const current = database.prepare('SELECT * FROM clips WHERE id = ?').get(id) as Clip | undefined;
+      if (!current) continue;
+      
+      const newInPoint = clipUpdates.in_point ?? current.in_point;
+      const newOutPoint = clipUpdates.out_point ?? current.out_point;
+      
+      if (newOutPoint <= newInPoint) continue;
+      
+      const result = updateStmt.run(
+        clipUpdates.asset_id ?? null,
+        clipUpdates.track_index ?? null,
+        clipUpdates.start_time ?? null,
+        clipUpdates.in_point ?? null,
+        clipUpdates.out_point ?? null,
+        clipUpdates.role ?? null,
+        clipUpdates.description ?? null,
+        clipUpdates.is_essential !== undefined ? (clipUpdates.is_essential ? 1 : 0) : null,
+        id
+      );
+      
+      if (result.changes > 0) count++;
     }
-    return updatedCount;
+    return count;
   });
   
   return transaction(updates);

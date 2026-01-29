@@ -51,8 +51,10 @@ export function generateEDL(options: EDLOptions): string {
 function secondsToTimecode(seconds: number, frameRate: number): string {
   const totalFrames = Math.round(seconds * frameRate);
   
-  const frames = totalFrames % Math.round(frameRate);
-  const totalSeconds = Math.floor(totalFrames / Math.round(frameRate));
+  // Preserve original frameRate precision (don't round 29.97, 59.94)
+  const frameRateInt = Math.round(frameRate);
+  const frames = totalFrames % frameRateInt;
+  const totalSeconds = Math.floor(totalFrames / frameRateInt);
   
   const secs = totalSeconds % 60;
   const totalMinutes = Math.floor(totalSeconds / 60);
