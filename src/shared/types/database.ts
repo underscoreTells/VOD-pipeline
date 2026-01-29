@@ -91,7 +91,51 @@ export type CreateTranscriptInput = Omit<Transcript, 'id'>;
 export type CreateBeatInput = Omit<Beat, 'id'>;
 export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
 
+export interface Clip {
+  id: number;
+  project_id: number;
+  asset_id: number;
+  track_index: number;
+  start_time: number;
+  in_point: number;
+  out_point: number;
+  role: 'setup' | 'escalation' | 'twist' | 'payoff' | 'transition' | null;
+  description: string | null;
+  is_essential: boolean;
+  created_at: string;
+}
+
+export interface TimelineState {
+  project_id: number;
+  zoom_level: number;
+  scroll_position: number;
+  playhead_time: number;
+  selected_clip_ids: number[];
+}
+
+export interface WaveformCache {
+  asset_id: number;
+  track_index: number;
+  tier_level: 1 | 2 | 3;
+  peaks: Array<{ min: number; max: number }>;
+  sample_rate: number;
+  duration: number;
+  generated_at: string;
+}
+
+// Input types (for creating new records)
+export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
+export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
+export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at'>;
+export type CreateTranscriptInput = Omit<Transcript, 'id'>;
+export type CreateBeatInput = Omit<Beat, 'id'>;
+export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
+export type CreateClipInput = Omit<Clip, 'id' | 'created_at'>;
+export type CreateTimelineStateInput = Omit<TimelineState, 'selected_clip_ids'> & { selected_clip_ids?: number[] };
+
 // Update types
 export type UpdateProjectInput = Partial<Omit<Project, 'id' | 'created_at'>>;
 export type UpdateAssetInput = Partial<Omit<Asset, 'id' | 'project_id' | 'created_at'>>;
 export type UpdateChapterInput = Partial<Omit<Chapter, 'id' | 'project_id' | 'created_at'>>;
+export type UpdateClipInput = Partial<Omit<Clip, 'id' | 'project_id' | 'created_at'>>;
+export type UpdateTimelineStateInput = Partial<Omit<TimelineState, 'project_id'>>;
