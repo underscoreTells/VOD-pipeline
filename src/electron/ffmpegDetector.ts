@@ -23,42 +23,47 @@ export async function detectFFmpeg(): Promise<FFmpegPathResult | null> {
     return cachedResult;
   }
 
-  const platform = process.platform;
-  const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-  const resourcesPath = process.resourcesPath || process.cwd();
+  try {
+    const platform = process.platform;
+    const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+    const resourcesPath = process.resourcesPath || process.cwd();
 
-  const detectionOrder: Array<{ path: string; source: FFmpegPathResult['source'] }> = [
-    {
-      path: path.join(resourcesPath, 'binaries', platform, binaryName),
-      source: 'bundled',
-    },
-    {
-      path: path.join(process.cwd(), 'binaries', platform, binaryName),
-      source: 'development',
-    },
-    {
-      path: path.join(app.getPath('userData'), 'binaries', binaryName),
-      source: 'userData',
-    },
-    {
-      path: binaryName,
-      source: 'system',
-    },
-  ];
+    const detectionOrder: Array<{ path: string; source: FFmpegPathResult['source'] }> = [
+      {
+        path: path.join(resourcesPath, 'binaries', platform, binaryName),
+        source: 'bundled',
+      },
+      {
+        path: path.join(process.cwd(), 'binaries', platform, binaryName),
+        source: 'development',
+      },
+      {
+        path: path.join(app.getPath('userData'), 'binaries', binaryName),
+        source: 'userData',
+      },
+      {
+        path: binaryName,
+        source: 'system',
+      },
+    ];
 
-  for (const { path: testPath, source } of detectionOrder) {
-    if (await isExecutable(testPath)) {
-      const version = await getFFmpegVersion(testPath);
-      if (version) {
-        cachedResult = { path: testPath, source, version };
-        console.log(`[FFmpeg] Found at: ${testPath} (source: ${source}, version: ${version})`);
-        return cachedResult;
+    for (const { path: testPath, source } of detectionOrder) {
+      if (await isExecutable(testPath)) {
+        const version = await getFFmpegVersion(testPath);
+        if (version) {
+          cachedResult = { path: testPath, source, version };
+          console.log(`[FFmpeg] Found at: ${testPath} (source: ${source}, version: ${version})`);
+          return cachedResult;
+        }
       }
     }
-  }
 
-  console.warn('[FFmpeg] No FFmpeg installation found');
-  return null;
+    console.warn('[FFmpeg] No FFmpeg installation found');
+    return null;
+  } catch (error) {
+    console.error('[FFmpeg] Detection failed:', error);
+    return null;
+  }
 }
 
 /**

@@ -2,7 +2,7 @@
  * Pipeline types for video processing
  */
 
-import type { FFmpegPathResult } from '../../electron/ffmpeg-detector';
+import type { FFmpegPathResult } from '../../electron/ffmpegDetector';
 
 export { FFmpegPathResult };
 

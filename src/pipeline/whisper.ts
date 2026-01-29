@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
-import { getPythonPath, hasFasterWhisper } from '../electron/python-detector';
+import { fileURLToPath } from 'url';
+import { getPythonPath, hasFasterWhisper } from '../electron/pythonDetector';
 import type {
   TranscriptionResult,
   TranscriptionSegment,
@@ -8,6 +9,10 @@ import type {
   TranscriptionProgress,
   TranscriptionProgressCallback,
 } from '../shared/types/pipeline';
+
+// Define __dirname for ESM modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class WhisperError extends Error {
   constructor(

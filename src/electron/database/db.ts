@@ -512,3 +512,32 @@ export async function batchInsertTranscripts(
   
   return insertMany(segments);
 }
+
+/**
+ * Replace all transcripts for a chapter atomically (delete + insert in transaction)
+ */
+export async function replaceTranscripts(
+  chapterId: number,
+  segments: Array<Omit<CreateTranscriptInput, 'chapter_id'>>
+): Promise<number> {
+  const database = await getDatabase();
+  
+  const deleteStmt = database.prepare('DELETE FROM transcripts WHERE chapter_id = ?');
+  const insert = database.prepare(
+    'INSERT INTO transcripts (chapter_id, text, start_time, end_time) VALUES (?, ?, ?, ?)'
+  );
+  
+  const replaceTransaction = database.transaction((items: typeof segments) => {
+    // Delete existing transcripts
+    deleteStmt.run(chapterId);
+    
+    // Insert new transcripts
+    for (const item of items) {
+      insert.run(chapterId, item.text, item.start_time, item.end_time);
+    }
+    
+    return items.length;
+  });
+  
+  return replaceTransaction(segments);
+}

@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getFFmpegPath, getFFprobePath } from '../electron/ffmpeg-detector';
+import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -63,7 +63,7 @@ export async function getVideoMetadata(filePath: string): Promise<VideoMetadata>
       ));
     });
 
-    proc.on('exit', (code) => {
+    proc.on('close', (code) => {
       if (code !== 0) {
         reject(new FFmpegError(
           `ffprobe failed with code ${code}: ${errorOutput}`,

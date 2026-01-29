@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import { registerIpcHandlers } from './ipc/handlers';
 import { initializeDatabase, closeDatabase } from './database/db';
 import { getAgentBridge } from './agent-bridge.js';
-import { detectFFmpeg } from './ffmpeg-detector.js';
-import { detectPython } from './python-detector.js';
+import { detectFFmpeg } from './ffmpegDetector.js';
+import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -113,12 +113,18 @@ app.on('before-quit', async () => {
 async function initializeFFmpeg() {
   console.log('[Main] Initializing FFmpeg...');
 
-  const result = await detectFFmpeg();
-  if (result) {
-    console.log(`[Main] FFmpeg found: ${result.path}`);
-    console.log(`[Main] FFmpeg version: ${result.version}`);
-    console.log(`[Main] FFmpeg source: ${result.source}`);
-  } else {
+  try {
+    const result = await detectFFmpeg();
+    if (result) {
+      console.log(`[Main] FFmpeg found: ${result.path}`);
+      console.log(`[Main] FFmpeg version: ${result.version}`);
+      console.log(`[Main] FFmpeg source: ${result.source}`);
+    } else {
+      console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
+      console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
+    }
+  } catch (error) {
+    console.error('[Main] FFmpeg detection failed:', error);
     console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
     console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
   }
@@ -127,12 +133,18 @@ async function initializeFFmpeg() {
 async function initializePython() {
   console.log('[Main] Initializing Python...');
 
-  const result = await detectPython();
-  if (result) {
-    console.log(`[Main] Python found: ${result.path}`);
-    console.log(`[Main] Python version: ${result.version}`);
-    console.log(`[Main] Python source: ${result.source}`);
-  } else {
+  try {
+    const result = await detectPython();
+    if (result) {
+      console.log(`[Main] Python found: ${result.path}`);
+      console.log(`[Main] Python version: ${result.version}`);
+      console.log(`[Main] Python source: ${result.source}`);
+    } else {
+      console.warn('[Main] Python not found. Transcription features will be disabled.');
+      console.warn('[Main] Install Python 3.8+ to enable transcription.');
+    }
+  } catch (error) {
+    console.error('[Main] Python detection failed:', error);
     console.warn('[Main] Python not found. Transcription features will be disabled.');
     console.warn('[Main] Install Python 3.8+ to enable transcription.');
   }
