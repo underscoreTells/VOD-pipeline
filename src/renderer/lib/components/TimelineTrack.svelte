@@ -135,12 +135,11 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
         const newEnd = region.end;
         const newDuration = newEnd - newStart;
 
-        const startChanged = Math.abs(newStart - clip.start_time) > 0.01;
-        const endChanged = Math.abs(newEnd - (clip.start_time + duration)) > 0.01;
+        const EPSILON = 0.01;
+        const durationChanged = Math.abs(newDuration - duration) > EPSILON;
 
-        // Determine if this was a move or resize
-        if (startChanged && !endChanged) {
-          // Pure move - only start changed, end stayed relative
+        if (!durationChanged) {
+          // Duration unchanged - this is a pure move
           const command = new MoveClipCommand(
             'Move clip',
             clip.id,
@@ -148,21 +147,21 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
             newStart
           );
           executeCommand(command);
-        } else if (startChanged || endChanged) {
-          // Resize occurred - detect which edge moved
-          const leftEdgeChanged = startChanged;
-          const rightEdgeChanged = endChanged;
+        } else {
+          // Duration changed - this is a resize
+          const startChanged = Math.abs(newStart - clip.start_time) > EPSILON;
+          const endChanged = Math.abs(newEnd - (clip.start_time + duration)) > EPSILON;
 
           let newInPoint = clip.in_point;
           let newOutPoint = clip.out_point;
 
-          if (leftEdgeChanged) {
+          if (startChanged) {
             // Left edge moved - adjust in_point
             const startDelta = newStart - clip.start_time;
             newInPoint = clip.in_point + startDelta;
           }
 
-          if (rightEdgeChanged) {
+          if (endChanged) {
             // Right edge moved - adjust out_point based on new duration
             newOutPoint = clip.in_point + newDuration;
           }

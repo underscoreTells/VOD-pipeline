@@ -38,7 +38,10 @@
   
   // Handle export
   async function handleExport() {
-    if (!formatConfig || !onExport) return;
+    if (!formatConfig || !onExport) {
+      console.warn('Export handler not provided or format not selected');
+      return;
+    }
 
     // Show save dialog
     const suggestedFilename = `${projectName}${formatConfig.extension}`;
@@ -142,10 +145,10 @@
     </div>
   {/if}
   
-  <button 
-    class="export-btn" 
+  <button
+    class="export-btn"
     onclick={handleExport}
-    disabled={isExporting || timelineState.clips.length === 0}
+    disabled={isExporting || !onExport || timelineState.clips.length === 0}
   >
     {isExporting ? 'Exporting...' : 'Export Timeline'}
   </button>

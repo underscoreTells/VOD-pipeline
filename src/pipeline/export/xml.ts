@@ -28,26 +28,58 @@ export function generateFCPXML(options: FCPXMLOptions): string {
   const uniqueAssetIds = [...new Set(clips.map(c => c.asset_id))];
   let assetCounter = 1;
   const assetIdMap = new Map<number, string>(); // assetId -> resource id
-  
+
+  // Validate all asset paths exist before generating XML
+  const missingAssetIds: number[] = [];
   for (const assetId of uniqueAssetIds) {
     const assetPath = assetPaths.get(assetId);
-    if (!assetPath) continue;
-    
+    if (!assetPath) {
+      missingAssetIds.push(assetId);
+    }
+  }
+
+  if (missingAssetIds.length > 0) {
+    throw new Error(
+      `Cannot generate FCPXML: Missing file paths for asset(s): ${missingAssetIds.join(', ')}. ` +
+      `Ensure all referenced assets have valid file paths.`
+    );
+  }
+
+  for (const assetId of uniqueAssetIds) {
+    const assetPath = assetPaths.get(assetId)!;
     const resourceId = `r${assetCounter}`;
     assetIdMap.set(assetId, resourceId);
-    
+
     // Use actual asset duration if available, otherwise use total timeline duration
     const assetDuration = options.assetDurations?.get(assetId) ?? totalDuration;
-    
+
     assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="file://${escapeXml(assetPath)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(assetDuration, frameRate)}"/>`);
     assetCounter++;
   }
-  
+
+  // Validate all clips reference valid assets before building spine
+  const clipsWithMissingAssets: Array<{ index: number; id: number; assetId: number }> = [];
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const assetResourceId = assetIdMap.get(clip.asset_id);
+    if (!assetResourceId) {
+      clipsWithMissingAssets.push({ index: i, id: clip.id, assetId: clip.asset_id });
+    }
+  }
+
+  if (clipsWithMissingAssets.length > 0) {
+    const details = clipsWithMissingAssets
+      .map(c => `clip index ${c.index} (id=${c.id}, asset_id=${c.assetId})`)
+      .join('; ');
+    throw new Error(
+      `Cannot generate FCPXML: ${clipsWithMissingAssets.length} clip(s) reference missing or invalid assets: ${details}`
+    );
+  }
+
   // Build spine (clips)
   const spineClips: string[] = [];
   for (const clip of clips) {
-    const assetResourceId = assetIdMap.get(clip.asset_id);
-    if (!assetResourceId) continue;
+    const assetResourceId = assetIdMap.get(clip.asset_id)!;
     
     const clipDuration = clip.out_point - clip.in_point;
     const offset = secondsToTimecode(clip.start_time, frameRate);
