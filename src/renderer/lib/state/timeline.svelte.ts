@@ -45,7 +45,7 @@ export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineS
     timelineState.selectedClipIds = new Set(state.selected_clip_ids);
   } else {
     // Reset view state to defaults when no state is provided
-    timelineState.zoomLevel = 1;
+    timelineState.zoomLevel = 100;
     timelineState.scrollPosition = 0;
     timelineState.playheadTime = 0;
     timelineState.selectedClipIds = new Set();
