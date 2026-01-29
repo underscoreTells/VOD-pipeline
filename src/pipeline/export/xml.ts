@@ -103,8 +103,29 @@ function formatFrameDuration(frameRate: number): string {
 }
 
 function secondsToTimecode(seconds: number, frameRate: number): string {
-  const totalFrames = Math.round(seconds * frameRate);
-  return `${totalFrames}/${Math.round(frameRate * 1000) / 1000}s`;
+  // Use integer-rational logic like formatFrameDuration
+  let multiplier = 1;
+  let denominatorMultiplier = 1;
+
+  // Handle non-integer frame rates with standard multipliers
+  if (Math.abs(frameRate - 23.976) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 24000;
+  } else if (Math.abs(frameRate - 29.97) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 30000;
+  } else if (Math.abs(frameRate - 59.94) < 0.1) {
+    multiplier = 1001;
+    denominatorMultiplier = 60000;
+  } else {
+    // Integer frame rates
+    denominatorMultiplier = Math.round(frameRate);
+  }
+
+  const numerator = Math.round(seconds * frameRate * multiplier);
+  const denominator = Math.round(frameRate * multiplier);
+
+  return `${numerator}/${denominator}s`;
 }
 
 function getFilename(path: string): string {

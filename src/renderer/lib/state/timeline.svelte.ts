@@ -37,12 +37,18 @@ export function getClipsByTrack(): Map<number, Clip[]> {
 export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineState | null) {
   timelineState.projectId = projectId;
   timelineState.clips = clips;
-  
+
   if (state) {
     timelineState.zoomLevel = state.zoom_level;
     timelineState.scrollPosition = state.scroll_position;
     timelineState.playheadTime = state.playhead_time;
     timelineState.selectedClipIds = new Set(state.selected_clip_ids);
+  } else {
+    // Reset view state to defaults when no state is provided
+    timelineState.zoomLevel = 1;
+    timelineState.scrollPosition = 0;
+    timelineState.playheadTime = 0;
+    timelineState.selectedClipIds = new Set();
   }
 }
 
@@ -110,7 +116,8 @@ export function zoomToFit() {
   const duration = getTotalDuration();
   if (duration > 0) {
     // Assume viewport width of 1000px for default
-    timelineState.zoomLevel = 1000 / duration;
+    const targetZoom = 1000 / duration;
+    setZoom(targetZoom);
   }
 }
 

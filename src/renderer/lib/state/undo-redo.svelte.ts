@@ -52,21 +52,35 @@ export function executeCommand(command: Command) {
 // Undo last command
 export function undo(): boolean {
   if (undoRedoState.undoStack.length === 0) return false;
-  
+
   const command = undoRedoState.undoStack.pop()!;
-  command.undo();
-  undoRedoState.redoStack.push(command);
-  return true;
+  try {
+    command.undo();
+    undoRedoState.redoStack.push(command);
+    return true;
+  } catch (error) {
+    // Restore command to undo stack on failure
+    undoRedoState.undoStack.push(command);
+    console.error('Undo failed:', error);
+    return false;
+  }
 }
 
 // Redo last undone command
 export function redo(): boolean {
   if (undoRedoState.redoStack.length === 0) return false;
-  
+
   const command = undoRedoState.redoStack.pop()!;
-  command.execute();
-  undoRedoState.undoStack.push(command);
-  return true;
+  try {
+    command.execute();
+    undoRedoState.undoStack.push(command);
+    return true;
+  } catch (error) {
+    // Restore command to redo stack on failure
+    undoRedoState.redoStack.push(command);
+    console.error('Redo failed:', error);
+    return false;
+  }
 }
 
 // Clear all history

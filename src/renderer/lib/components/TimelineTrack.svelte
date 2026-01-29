@@ -134,10 +134,13 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
         const newStart = region.start;
         const newEnd = region.end;
         const newDuration = newEnd - newStart;
-        
+
+        const startChanged = Math.abs(newStart - clip.start_time) > 0.01;
+        const endChanged = Math.abs(newEnd - (clip.start_time + duration)) > 0.01;
+
         // Determine if this was a move or resize
-        if (Math.abs(newStart - clip.start_time) > 0.01) {
-          // This is a move
+        if (startChanged && !endChanged) {
+          // Pure move - only start changed, end stayed relative
           const command = new MoveClipCommand(
             'Move clip',
             clip.id,
@@ -145,22 +148,37 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
             newStart
           );
           executeCommand(command);
-        }
-        
-        if (Math.abs(newDuration - duration) > 0.01) {
-          // This is a resize - adjust out_point proportionally
-          const ratio = newDuration / duration;
-          const newOutPoint = clip.in_point + (duration * ratio);
-          
-          const command = new ResizeClipCommand(
-            'Resize clip',
-            clip.id,
-            clip.in_point,
-            clip.out_point,
-            clip.in_point,
-            newOutPoint
-          );
-          executeCommand(command);
+        } else if (startChanged || endChanged) {
+          // Resize occurred - detect which edge moved
+          const leftEdgeChanged = startChanged;
+          const rightEdgeChanged = endChanged;
+
+          let newInPoint = clip.in_point;
+          let newOutPoint = clip.out_point;
+
+          if (leftEdgeChanged) {
+            // Left edge moved - adjust in_point
+            const startDelta = newStart - clip.start_time;
+            newInPoint = clip.in_point + startDelta;
+          }
+
+          if (rightEdgeChanged) {
+            // Right edge moved - adjust out_point based on new duration
+            newOutPoint = clip.in_point + newDuration;
+          }
+
+          // Validate that out_point is still greater than in_point
+          if (newOutPoint > newInPoint) {
+            const command = new ResizeClipCommand(
+              'Resize clip',
+              clip.id,
+              clip.in_point,
+              clip.out_point,
+              newInPoint,
+              newOutPoint
+            );
+            executeCommand(command);
+          }
         }
       });
       

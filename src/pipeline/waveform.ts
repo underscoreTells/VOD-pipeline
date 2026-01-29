@@ -95,6 +95,96 @@ export async function generateWaveformTiers(
 }
 
 /**
+ * Stream PCM data and calculate waveform peaks
+ * Processes data incrementally without loading entire file into memory
+ */
+async function streamPcmPeaks(
+  pcmPath: string,
+  windowSize: number
+): Promise<{ peaks: WaveformPeak[]; sampleCount: number }> {
+  return new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(pcmPath);
+    const peaks: WaveformPeak[] = [];
+
+    // Buffer to accumulate bytes across chunk boundaries
+    let byteBuffer = Buffer.alloc(0);
+    let sampleCount = 0;
+    let windowMin = 32767;
+    let windowMax = -32768;
+    let windowSampleCount = 0;
+
+    stream.on('data', (chunk: Buffer) => {
+      // Append new chunk to buffer
+      byteBuffer = Buffer.concat([byteBuffer, chunk]);
+
+      // Process complete 16-bit samples (2 bytes each)
+      const samplesToProcess = Math.floor(byteBuffer.length / 2);
+
+      for (let i = 0; i < samplesToProcess; i++) {
+        // Read 16-bit signed integer (little-endian)
+        const sample = byteBuffer.readInt16LE(i * 2);
+        sampleCount++;
+
+        // Update window min/max
+        if (sample < windowMin) windowMin = sample;
+        if (sample > windowMax) windowMax = sample;
+        windowSampleCount++;
+
+        // When window is full, save peak and reset
+        if (windowSampleCount >= windowSize) {
+          peaks.push({
+            min: windowMin / 32768,
+            max: windowMax / 32768,
+          });
+          windowMin = 32767;
+          windowMax = -32768;
+          windowSampleCount = 0;
+        }
+      }
+
+      // Keep remaining bytes (incomplete sample) for next chunk
+      const remainingBytes = byteBuffer.length % 2;
+      if (remainingBytes > 0) {
+        byteBuffer = byteBuffer.subarray(byteBuffer.length - remainingBytes);
+      } else {
+        byteBuffer = Buffer.alloc(0);
+      }
+    });
+
+    stream.on('end', () => {
+      // Process any remaining samples in the buffer
+      const samplesToProcess = Math.floor(byteBuffer.length / 2);
+      for (let i = 0; i < samplesToProcess; i++) {
+        const sample = byteBuffer.readInt16LE(i * 2);
+        sampleCount++;
+
+        if (sample < windowMin) windowMin = sample;
+        if (sample > windowMax) windowMax = sample;
+        windowSampleCount++;
+      }
+
+      // Save final partial window if any
+      if (windowSampleCount > 0) {
+        peaks.push({
+          min: windowMin / 32768,
+          max: windowMax / 32768,
+        });
+      }
+
+      resolve({ peaks, sampleCount });
+    });
+
+    stream.on('error', (error) => {
+      reject(new WaveformError(
+        `Failed to stream PCM data: ${error.message}`,
+        'STREAM_ERROR',
+        error
+      ));
+    });
+  });
+}
+
+/**
  * Generate a single tier of waveform data
  */
 async function generateTier(
@@ -104,35 +194,22 @@ async function generateTier(
   const tier = WAVEFORM_TIERS[tierLevel];
   const windowSize = tier.ratio;
 
-  // Read PCM data (16-bit signed integers, mono)
-  const buffer = fs.readFileSync(pcmPath);
-  const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
-
   // Calculate sample rate based on FFmpeg output (assuming 44.1kHz default)
   const sampleRate = 44100;
-  const duration = samples.length / sampleRate;
 
-  // Calculate peaks
-  const peaks: WaveformPeak[] = [];
+  try {
+    // Stream PCM data and calculate peaks
+    const { peaks, sampleCount } = await streamPcmPeaks(pcmPath, windowSize);
+    const duration = sampleCount / sampleRate;
 
-  for (let i = 0; i < samples.length; i += windowSize) {
-    let min = 32767;
-    let max = -32768;
-
-    for (let j = 0; j < windowSize && i + j < samples.length; j++) {
-      const sample = samples[i + j];
-      if (sample < min) min = sample;
-      if (sample > max) max = sample;
-    }
-
-    // Normalize to -1 to 1 range
-    peaks.push({
-      min: min / 32768,
-      max: max / 32768,
-    });
+    return { peaks, sampleRate, duration };
+  } catch (error) {
+    throw new WaveformError(
+      `Failed to generate tier ${tierLevel}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'TIER_GENERATION_ERROR',
+      error
+    );
   }
-
-  return { peaks, sampleRate, duration };
 }
 
 /**
