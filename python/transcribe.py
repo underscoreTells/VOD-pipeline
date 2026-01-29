@@ -8,6 +8,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 try:
     from faster_whisper import WhisperModel
@@ -29,7 +30,7 @@ def emit_progress(percent: int, status: str):
 def transcribe(
     audio_path: str,
     model_name: str = "base",
-    language: str | None = None,
+    language: Optional[str] = None,
     compute_type: str = "int8",
 ) -> dict:
     """
@@ -135,8 +136,17 @@ def main():
         # Output JSON to stdout
         print(json.dumps(result))
 
-    except Exception as e:
-        print(f"ERROR: Transcription failed: {e}", file=sys.stderr)
+    except RuntimeError as e:
+        print(f"ERROR: Transcription failed (runtime error): {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"ERROR: Transcription failed (invalid parameter): {e}", file=sys.stderr)
+        sys.exit(1)
+    except (TypeError, ValueError) as e:
+        # JSON serialization errors manifest as TypeError or ValueError
+        print(
+            f"ERROR: Transcription failed (serialization error): {e}", file=sys.stderr
+        )
         sys.exit(1)
 
 

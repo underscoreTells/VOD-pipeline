@@ -108,7 +108,9 @@ export async function getPythonVersion(executablePath: string): Promise<string |
  */
 export async function hasPythonPackage(pythonPath: string, packageName: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const proc = spawn(pythonPath, ['-c', `import ${packageName}`]);
+    // Use argv to pass package name safely (avoid injection)
+    const script = 'import importlib, sys; importlib.import_module(sys.argv[1]); sys.exit(0)';
+    const proc = spawn(pythonPath, ['-c', script, packageName]);
 
     proc.on('error', () => resolve(false));
     proc.on('exit', (code) => resolve(code === 0));

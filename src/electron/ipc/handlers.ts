@@ -21,8 +21,7 @@ import {
   addAssetToChapter,
   removeAssetFromChapter,
   getAssetsForChapter,
-  batchInsertTranscripts,
-  deleteTranscriptsByChapter,
+  replaceTranscripts,
 } from '../database/db.js';
 import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError } from '../../pipeline/ffmpeg.js';
@@ -123,30 +122,7 @@ export function registerIpcHandlers() {
         return createErrorResponse('File not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
       }
 
-      if (!await isValidVideo(filePath)) {
-        return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
-      }
-
-      let metadata: AssetMetadata;
-      let duration: number | null = null;
-      try {
-        const videoMetadata = await getVideoMetadata(filePath);
-        metadata = {
-          width: videoMetadata.width,
-          height: videoMetadata.height,
-          fps: videoMetadata.fps,
-          videoCodec: videoMetadata.videoCodec,
-          audioCodec: videoMetadata.audioCodec,
-          audioTracks: videoMetadata.audioTracks,
-          bitrate: videoMetadata.bitrate,
-          container: videoMetadata.container,
-        };
-        duration = videoMetadata.duration;
-      } catch (error) {
-        console.warn('[Asset Add] Failed to extract metadata:', error);
-        metadata = {};
-      }
-
+      // Determine file type from extension first
       const ext = path.extname(filePath).toLowerCase();
       const videoExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
       const audioExtensions = ['.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg', '.wma'];
@@ -161,6 +137,34 @@ export function registerIpcHandlers() {
         fileType = 'video';
       } else {
         return createErrorResponse(`Unsupported file extension: ${ext}`, IPC_ERROR_CODES.INVALID_FORMAT);
+      }
+
+      // Only validate video files with FFmpeg
+      let metadata: AssetMetadata = {};
+      let duration: number | null = null;
+      
+      if (fileType === 'video') {
+        if (!await isValidVideo(filePath)) {
+          return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
+        }
+
+        try {
+          const videoMetadata = await getVideoMetadata(filePath);
+          metadata = {
+            width: videoMetadata.width,
+            height: videoMetadata.height,
+            fps: videoMetadata.fps,
+            videoCodec: videoMetadata.videoCodec,
+            audioCodec: videoMetadata.audioCodec,
+            audioTracks: videoMetadata.audioTracks,
+            bitrate: videoMetadata.bitrate,
+            container: videoMetadata.container,
+            duration: videoMetadata.duration,
+          };
+          duration = videoMetadata.duration;
+        } catch (error) {
+          console.warn('[Asset Add] Failed to extract video metadata:', error);
+        }
       }
 
       const asset = await createAsset({
@@ -376,6 +380,10 @@ export function registerIpcHandlers() {
           channels: 1,
         });
       } catch (error) {
+        // Preserve FFmpegError to allow proper error code mapping
+        if (error instanceof FFmpegError) {
+          throw error;
+        }
         throw new Error(`Failed to extract audio: ${error instanceof Error ? error.message : String(error)}`);
       }
 
@@ -383,8 +391,6 @@ export function registerIpcHandlers() {
         chapterId,
         progress: { percent: 10, status: 'Starting transcription...' },
       });
-
-      await deleteTranscriptsByChapter(chapterId);
 
       const result = await transcribe(
         {
@@ -407,7 +413,8 @@ export function registerIpcHandlers() {
         end_time: segment.end,
       }));
 
-      await batchInsertTranscripts(chapterId, transcriptInputs);
+      // Atomically replace transcripts (delete old + insert new in transaction)
+      await replaceTranscripts(chapterId, transcriptInputs);
 
       if (tempAudioPath && fs.existsSync(tempAudioPath)) {
         fs.unlinkSync(tempAudioPath);
@@ -436,6 +443,25 @@ export function registerIpcHandlers() {
           : IPC_ERROR_CODES.UNKNOWN_ERROR;
         return createErrorResponse(error.message, errorCode);
       }
+      
+      if (error instanceof FFmpegError) {
+        // Map FFmpegError codes to appropriate IPC error codes
+        const validCodes = Object.values(IPC_ERROR_CODES);
+        let errorCode: IPCErrorCode;
+        
+        if (error.code === 'TIMEOUT') {
+          errorCode = IPC_ERROR_CODES.TRANSCRIPTION_FAILED;
+        } else if (error.code === 'FFMPEG_NOT_FOUND') {
+          errorCode = IPC_ERROR_CODES.FFMPEG_NOT_FOUND;
+        } else {
+          errorCode = validCodes.includes(error.code as IPCErrorCode) 
+            ? error.code as IPCErrorCode 
+            : IPC_ERROR_CODES.TRANSCRIPTION_FAILED;
+        }
+        
+        return createErrorResponse(error.message, errorCode);
+      }
+      
       return createErrorResponse(error, IPC_ERROR_CODES.TRANSCRIPTION_FAILED);
     }
   });
