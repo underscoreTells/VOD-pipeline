@@ -2,16 +2,16 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { getFFmpegPath } from '../electron/ffmpegDetector';
-import { saveWaveform } from '../electron/database/db';
+import { getFFmpegPath } from '../electron/ffmpegDetector.js';
+import { saveWaveform } from '../electron/database/db.js';
 import type {
   WaveformPeak,
   WaveformTier,
   WaveformProgress,
   WaveformProgressCallback,
   WaveformGenerationResult,
-} from '../shared/types/pipeline';
-import { WAVEFORM_TIERS } from '../shared/types/pipeline';
+} from '../shared/types/pipeline.js';
+import { WAVEFORM_TIERS } from '../shared/types/pipeline.js';
 
 export class WaveformError extends Error {
   constructor(

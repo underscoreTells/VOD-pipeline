@@ -1,14 +1,14 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { getPythonPath, hasFasterWhisper } from '../electron/pythonDetector';
+import { getPythonPath, hasFasterWhisper } from '../electron/pythonDetector.js';
 import type {
   TranscriptionResult,
   TranscriptionSegment,
   TranscriptionOptions,
   TranscriptionProgress,
   TranscriptionProgressCallback,
-} from '../shared/types/pipeline';
+} from '../shared/types/pipeline.js';
 
 // Define __dirname for ESM modules
 const __filename = fileURLToPath(import.meta.url);

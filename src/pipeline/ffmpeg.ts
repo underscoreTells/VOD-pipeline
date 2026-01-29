@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector';
+import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -11,7 +11,7 @@ import type {
   CutOptions,
   AudioExtractOptions,
   FFprobeOutput,
-} from '../shared/types/pipeline';
+} from '../shared/types/pipeline.js';
 
 export class FFmpegError extends Error {
   constructor(

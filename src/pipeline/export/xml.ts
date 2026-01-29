@@ -1,4 +1,4 @@
-import type { Clip } from '../../shared/types/database';
+import type { Clip } from '../../shared/types/database.js';
 
 export interface FCPXMLOptions {
   projectName: string;

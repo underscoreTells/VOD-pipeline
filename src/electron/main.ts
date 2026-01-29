@@ -1,8 +1,8 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import { registerIpcHandlers } from './ipc/handlers';
-import { initializeDatabase, closeDatabase } from './database/db';
+import { registerIpcHandlers } from './ipc/handlers.js';
+import { initializeDatabase, closeDatabase } from './database/db.js';
 import { getAgentBridge } from './agent-bridge.js';
 import { detectFFmpeg } from './ffmpegDetector.js';
 import { detectPython } from './pythonDetector.js';

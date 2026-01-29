@@ -1,6 +1,6 @@
-export { generateFCPXML, type FCPXMLOptions } from './xml';
-export { generateJSON, type JSONExportOptions, type JSONExportData } from './json';
-export { generateEDL, type EDLOptions } from './edl';
+export { generateFCPXML, type FCPXMLOptions } from './xml.js';
+export { generateJSON, type JSONExportOptions, type JSONExportData } from './json.js';
+export { generateEDL, type EDLOptions } from './edl.js';
 
 export type ExportFormat = 'fcpxml' | 'json' | 'edl';
 

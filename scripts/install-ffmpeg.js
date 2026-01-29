@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const http = require('http');
-const { execSync } = require('child_process');
-const os = require('os');
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
+import http from 'http';
+import { execSync } from 'child_process';
+import os from 'os';
 
 // Platform detection
 const PLATFORM = os.platform();

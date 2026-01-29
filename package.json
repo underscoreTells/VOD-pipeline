@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "pnpm rebuild && concurrently \"pnpm dev:renderer\" \"wait-on http://localhost:5173 && pnpm dev:electron\"",
     "dev:renderer": "vite",
-    "dev:electron": "tsc -p tsconfig.electron.json --watch",
+    "dev:electron": "concurrently \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist/src/electron/main.js && electron dist/src/electron/main.js\"",
     "dev:main": "electron dist/src/electron/main.js",
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
