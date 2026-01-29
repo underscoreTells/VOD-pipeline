@@ -128,6 +128,7 @@ export function registerIpcHandlers() {
       }
 
       let metadata: AssetMetadata;
+      let duration: number | null = null;
       try {
         const videoMetadata = await getVideoMetadata(filePath);
         metadata = {
@@ -140,30 +141,45 @@ export function registerIpcHandlers() {
           bitrate: videoMetadata.bitrate,
           container: videoMetadata.container,
         };
+        duration = videoMetadata.duration;
       } catch (error) {
         console.warn('[Asset Add] Failed to extract metadata:', error);
         metadata = {};
       }
 
       const ext = path.extname(filePath).toLowerCase();
-      const fileType: 'video' | 'audio' | 'image' = ['.mp3', '.wav', '.aac', '.flac', '.m4a'].includes(ext)
-        ? 'audio'
-        : ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)
-          ? 'image'
-          : 'video';
+      const videoExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
+      const audioExtensions = ['.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg', '.wma'];
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff'];
+      
+      let fileType: 'video' | 'audio' | 'image';
+      if (audioExtensions.includes(ext)) {
+        fileType = 'audio';
+      } else if (imageExtensions.includes(ext)) {
+        fileType = 'image';
+      } else if (videoExtensions.includes(ext)) {
+        fileType = 'video';
+      } else {
+        return createErrorResponse(`Unsupported file extension: ${ext}`, IPC_ERROR_CODES.INVALID_FORMAT);
+      }
 
       const asset = await createAsset({
         project_id: projectId,
         file_path: filePath,
         file_type: fileType,
-        duration: (metadata as { duration?: number })?.duration ?? null,
+        duration,
         metadata,
       });
 
       return createSuccessResponse(asset);
     } catch (error) {
       if (error instanceof FFmpegError) {
-        return createErrorResponse(error.message, error.code as IPCErrorCode);
+        // Validate error code is a known IPC error code
+        const validCodes = Object.values(IPC_ERROR_CODES);
+        const errorCode = validCodes.includes(error.code as IPCErrorCode) 
+          ? error.code as IPCErrorCode 
+          : IPC_ERROR_CODES.UNKNOWN_ERROR;
+        return createErrorResponse(error.message, errorCode);
       }
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
@@ -413,7 +429,12 @@ export function registerIpcHandlers() {
       }
 
       if (error instanceof WhisperError) {
-        return createErrorResponse(error.message, error.code as IPCErrorCode);
+        // Validate error code is a known IPC error code
+        const validCodes = Object.values(IPC_ERROR_CODES);
+        const errorCode = validCodes.includes(error.code as IPCErrorCode) 
+          ? error.code as IPCErrorCode 
+          : IPC_ERROR_CODES.UNKNOWN_ERROR;
+        return createErrorResponse(error.message, errorCode);
       }
       return createErrorResponse(error, IPC_ERROR_CODES.TRANSCRIPTION_FAILED);
     }

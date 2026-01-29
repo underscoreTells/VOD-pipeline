@@ -137,6 +137,6 @@ export async function getFFmpegVersion(executablePath: string): Promise<string |
 export function getFFprobePath(ffmpegPath: string): string {
   const dir = path.dirname(ffmpegPath);
   const ext = path.extname(ffmpegPath);
-  const baseName = process.platform === 'win32' ? 'ffprobe' : 'ffprobe';
+  const baseName = 'ffprobe';
   return path.join(dir, baseName + ext);
 }

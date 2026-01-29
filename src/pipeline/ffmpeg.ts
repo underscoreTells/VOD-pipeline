@@ -187,7 +187,7 @@ export async function scaleVideo(
   if (options.maintainAspectRatio !== false) {
     // Maintain aspect ratio, scale to fit within dimensions
     if (options.width && options.height) {
-      scaleFilter = `scale=${options.width}:${options.height}:force_original_aspect_ratio=decrease,pad=${options.width}:${options.height}:(ow-iw)/2:(oh-ih)/2`;
+      scaleFilter = `scale=${options.width}:${options.height}:force_original_aspect_ratio=decrease,pad=${options.width}:${options.height}:round((ow-iw)/2):round((oh-ih)/2)`;
     } else if (options.width) {
       scaleFilter = `scale=${options.width}:-2`;
     } else if (options.height) {
@@ -327,18 +327,30 @@ export async function generateMultiResolutionProxies(
 /**
  * Run FFmpeg command and handle errors
  */
-function runFFmpeg(executablePath: string, args: string[]): Promise<void> {
+function runFFmpeg(executablePath: string, args: string[], timeoutMs: number = 30 * 60 * 1000): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log(`[FFmpeg] Running: ${executablePath} ${args.join(' ')}`);
 
     const proc = spawn(executablePath, args);
     let errorOutput = '';
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    // Set timeout
+    timeoutId = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new FFmpegError(
+        `FFmpeg operation timed out after ${timeoutMs}ms`,
+        'TIMEOUT',
+        { timeout: timeoutMs }
+      ));
+    }, timeoutMs);
 
     proc.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
     proc.on('error', (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
       reject(new FFmpegError(
         `Failed to run FFmpeg: ${error.message}`,
         'FFMPEG_ERROR',
@@ -347,6 +359,7 @@ function runFFmpeg(executablePath: string, args: string[]): Promise<void> {
     });
 
     proc.on('exit', (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
       if (code !== 0) {
         reject(new FFmpegError(
           `FFmpeg failed with code ${code}`,
