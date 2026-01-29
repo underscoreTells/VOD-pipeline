@@ -6,6 +6,7 @@ export interface FCPXMLOptions {
   frameRate: number;
   clips: Clip[];
   assetPaths: Map<number, string>; // assetId -> file path
+  assetDurations?: Map<number, number>; // assetId -> duration in seconds (optional)
 }
 
 export function generateFCPXML(options: FCPXMLOptions): string {
@@ -35,7 +36,10 @@ export function generateFCPXML(options: FCPXMLOptions): string {
     const resourceId = `r${assetCounter}`;
     assetIdMap.set(assetId, resourceId);
     
-    assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="file://${escapeXml(assetPath)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(totalDuration, frameRate)}"/>`);
+    // Use actual asset duration if available, otherwise use total timeline duration
+    const assetDuration = options.assetDurations?.get(assetId) ?? totalDuration;
+    
+    assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="file://${escapeXml(assetPath)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(assetDuration, frameRate)}"/>`);
     assetCounter++;
   }
   

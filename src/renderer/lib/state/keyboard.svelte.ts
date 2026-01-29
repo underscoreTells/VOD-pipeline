@@ -3,6 +3,7 @@ import {
   redo,
   canUndo,
   canRedo,
+  executeCommand,
   MoveClipCommand,
   ResizeClipCommand,
   DeleteClipCommand,
@@ -91,12 +92,10 @@ function handleDelete() {
   // Create delete commands for all selected clips
   const selectedIds = Array.from(timelineState.selectedClipIds);
   
-  // Delete from state (commands are created for undo)
+  // Execute commands through undo-redo system
   for (const clipId of selectedIds) {
     const command = new DeleteClipCommand('Delete clip', clipId);
-    // Execute immediately without adding to undo stack here
-    // The actual delete implementation will add to undo stack
-    command.execute();
+    executeCommand(command);
   }
 }
 
