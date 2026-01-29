@@ -802,10 +802,10 @@ export async function batchUpdateClips(
   
   let updatedCount = 0;
   
-  const transaction = database.transaction((items: typeof updates) => {
+  const transaction = database.transaction(async (items: typeof updates) => {
     for (const item of items) {
       const { id, ...clipUpdates } = item;
-      const success = updateClip(id, clipUpdates);
+      const success = await updateClip(id, clipUpdates);
       if (success) updatedCount++;
     }
     return updatedCount;

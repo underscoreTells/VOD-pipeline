@@ -123,13 +123,7 @@ export interface WaveformCache {
   generated_at: string;
 }
 
-// Input types (for creating new records)
-export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
-export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
-export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at'>;
-export type CreateTranscriptInput = Omit<Transcript, 'id'>;
-export type CreateBeatInput = Omit<Beat, 'id'>;
-export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
+// Additional input types for timeline
 export type CreateClipInput = Omit<Clip, 'id' | 'created_at'>;
 export type CreateTimelineStateInput = Omit<TimelineState, 'selected_clip_ids'> & { selected_clip_ids?: number[] };
 
