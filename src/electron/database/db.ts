@@ -10,7 +10,13 @@ import type {
   CreateAssetInput,
   CreateChapterInput,
   CreateTranscriptInput,
+  Clip,
+  TimelineState,
+  CreateClipInput,
+  UpdateClipInput,
+  UpdateTimelineStateInput,
 } from '../../shared/types/database.js';
+import type { WaveformPeak } from '../../shared/types/pipeline.js';
 
 let db: Database.Database | null = null;
 let initializationPromise: Promise<Database.Database> | null = null;
@@ -540,4 +546,444 @@ export async function replaceTranscripts(
   });
   
   return replaceTransaction(segments);
+}
+
+// ============================================================================
+// CLIP CRUD OPERATIONS (Timeline Editor)
+// ============================================================================
+
+const VALID_CLIP_ROLES: Array<'setup' | 'escalation' | 'twist' | 'payoff' | 'transition'> = [
+  'setup', 'escalation', 'twist', 'payoff', 'transition'
+];
+
+export async function createClip(clip: CreateClipInput): Promise<Clip> {
+  const database = await getDatabase();
+  
+  // Validate project exists
+  const project = database.prepare('SELECT id FROM projects WHERE id = ?').get(clip.project_id);
+  if (!project) {
+    throw new Error(`Project not found: ${clip.project_id}`);
+  }
+  
+  // Validate asset exists
+  const asset = database.prepare('SELECT id FROM assets WHERE id = ?').get(clip.asset_id);
+  if (!asset) {
+    throw new Error(`Asset not found: ${clip.asset_id}`);
+  }
+  
+  // Validate time range
+  if (clip.start_time < 0) {
+    throw new Error('Start time must be >= 0');
+  }
+  if (clip.in_point < 0) {
+    throw new Error('In point must be >= 0');
+  }
+  if (clip.out_point <= clip.in_point) {
+    throw new Error('Out point must be greater than in point');
+  }
+  
+  // Validate role if provided
+  if (clip.role !== null && !VALID_CLIP_ROLES.includes(clip.role)) {
+    throw new Error(`Invalid role: ${clip.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
+  }
+  
+  const now = new Date().toISOString();
+  
+  const result = database.prepare(
+    `INSERT INTO clips (project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    clip.project_id,
+    clip.asset_id,
+    clip.track_index,
+    clip.start_time,
+    clip.in_point,
+    clip.out_point,
+    clip.role,
+    clip.description,
+    clip.is_essential ? 1 : 0,
+    now
+  );
+  
+  return {
+    id: result.lastInsertRowid as number,
+    project_id: clip.project_id,
+    asset_id: clip.asset_id,
+    track_index: clip.track_index,
+    start_time: clip.start_time,
+    in_point: clip.in_point,
+    out_point: clip.out_point,
+    role: clip.role,
+    description: clip.description,
+    is_essential: clip.is_essential,
+    created_at: now,
+  };
+}
+
+export async function getClip(id: number): Promise<Clip | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at FROM clips WHERE id = ?'
+  ).get(id) as {
+    id: number;
+    project_id: number;
+    asset_id: number;
+    track_index: number;
+    start_time: number;
+    in_point: number;
+    out_point: number;
+    role: string | null;
+    description: string | null;
+    is_essential: number;
+    created_at: string;
+  } | undefined;
+  
+  if (!result) return null;
+  
+  return {
+    ...result,
+    role: result.role as Clip['role'],
+    is_essential: Boolean(result.is_essential),
+  };
+}
+
+export async function getClipsByProject(projectId: number): Promise<Clip[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    `SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at 
+     FROM clips 
+     WHERE project_id = ? 
+     ORDER BY track_index ASC, start_time ASC`
+  ).all(projectId) as Array<{
+    id: number;
+    project_id: number;
+    asset_id: number;
+    track_index: number;
+    start_time: number;
+    in_point: number;
+    out_point: number;
+    role: string | null;
+    description: string | null;
+    is_essential: number;
+    created_at: string;
+  }>;
+  
+  return results.map(row => ({
+    ...row,
+    role: row.role as Clip['role'],
+    is_essential: Boolean(row.is_essential),
+  }));
+}
+
+export async function getClipsByAsset(assetId: number): Promise<Clip[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    `SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at 
+     FROM clips 
+     WHERE asset_id = ? 
+     ORDER BY start_time ASC`
+  ).all(assetId) as Array<{
+    id: number;
+    project_id: number;
+    asset_id: number;
+    track_index: number;
+    start_time: number;
+    in_point: number;
+    out_point: number;
+    role: string | null;
+    description: string | null;
+    is_essential: number;
+    created_at: string;
+  }>;
+  
+  return results.map(row => ({
+    ...row,
+    role: row.role as Clip['role'],
+    is_essential: Boolean(row.is_essential),
+  }));
+}
+
+export async function updateClip(id: number, updates: UpdateClipInput): Promise<boolean> {
+  const database = await getDatabase();
+  
+  // Get current clip for validation
+  const current = await getClip(id);
+  if (!current) {
+    return false;
+  }
+  
+  // Validate role if provided
+  if (updates.role !== undefined && updates.role !== null && !VALID_CLIP_ROLES.includes(updates.role)) {
+    throw new Error(`Invalid role: ${updates.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
+  }
+  
+  // Validate time ranges
+  const newInPoint = updates.in_point ?? current.in_point;
+  const newOutPoint = updates.out_point ?? current.out_point;
+  const newStartTime = updates.start_time ?? current.start_time;
+  
+  if (newStartTime < 0) {
+    throw new Error('Start time must be >= 0');
+  }
+  if (newInPoint < 0) {
+    throw new Error('In point must be >= 0');
+  }
+  if (newOutPoint <= newInPoint) {
+    throw new Error('Out point must be greater than in point');
+  }
+  
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  
+  if (updates.asset_id !== undefined) {
+    fields.push('asset_id = ?');
+    values.push(updates.asset_id);
+  }
+  if (updates.track_index !== undefined) {
+    fields.push('track_index = ?');
+    values.push(updates.track_index);
+  }
+  if (updates.start_time !== undefined) {
+    fields.push('start_time = ?');
+    values.push(updates.start_time);
+  }
+  if (updates.in_point !== undefined) {
+    fields.push('in_point = ?');
+    values.push(updates.in_point);
+  }
+  if (updates.out_point !== undefined) {
+    fields.push('out_point = ?');
+    values.push(updates.out_point);
+  }
+  if (updates.role !== undefined) {
+    fields.push('role = ?');
+    values.push(updates.role);
+  }
+  if (updates.description !== undefined) {
+    fields.push('description = ?');
+    values.push(updates.description);
+  }
+  if (updates.is_essential !== undefined) {
+    fields.push('is_essential = ?');
+    values.push(updates.is_essential ? 1 : 0);
+  }
+  
+  if (fields.length === 0) {
+    return true; // Nothing to update
+  }
+  
+  values.push(id);
+  
+  const result = database.prepare(
+    `UPDATE clips SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+  
+  return result.changes > 0;
+}
+
+export async function deleteClip(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM clips WHERE id = ?').run(id);
+  
+  return result.changes > 0;
+}
+
+export async function deleteClipsByProject(projectId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM clips WHERE project_id = ?').run(projectId);
+  
+  return result.changes;
+}
+
+export async function batchUpdateClips(
+  updates: Array<{ id: number } & UpdateClipInput>
+): Promise<number> {
+  const database = await getDatabase();
+  
+  let updatedCount = 0;
+  
+  const transaction = database.transaction((items: typeof updates) => {
+    for (const item of items) {
+      const { id, ...clipUpdates } = item;
+      const success = updateClip(id, clipUpdates);
+      if (success) updatedCount++;
+    }
+    return updatedCount;
+  });
+  
+  return transaction(updates);
+}
+
+// ============================================================================
+// TIMELINE STATE OPERATIONS
+// ============================================================================
+
+export async function saveTimelineState(state: TimelineState): Promise<TimelineState> {
+  const database = await getDatabase();
+  
+  database.prepare(
+    `INSERT OR REPLACE INTO timeline_state (project_id, zoom_level, scroll_position, playhead_time, selected_clip_ids)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    state.project_id,
+    state.zoom_level,
+    state.scroll_position,
+    state.playhead_time,
+    JSON.stringify(state.selected_clip_ids)
+  );
+  
+  return state;
+}
+
+export async function loadTimelineState(projectId: number): Promise<TimelineState | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT project_id, zoom_level, scroll_position, playhead_time, selected_clip_ids FROM timeline_state WHERE project_id = ?'
+  ).get(projectId) as {
+    project_id: number;
+    zoom_level: number;
+    scroll_position: number;
+    playhead_time: number;
+    selected_clip_ids: string;
+  } | undefined;
+  
+  if (!result) return null;
+  
+  return {
+    ...result,
+    selected_clip_ids: JSON.parse(result.selected_clip_ids || '[]'),
+  };
+}
+
+export async function updateTimelineState(
+  projectId: number,
+  updates: UpdateTimelineStateInput
+): Promise<boolean> {
+  const database = await getDatabase();
+  
+  const current = await loadTimelineState(projectId);
+  if (!current) {
+    // Create new state with defaults
+    const newState: TimelineState = {
+      project_id: projectId,
+      zoom_level: updates.zoom_level ?? 100.0,
+      scroll_position: updates.scroll_position ?? 0.0,
+      playhead_time: updates.playhead_time ?? 0.0,
+      selected_clip_ids: updates.selected_clip_ids ?? [],
+    };
+    await saveTimelineState(newState);
+    return true;
+  }
+  
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  
+  if (updates.zoom_level !== undefined) {
+    fields.push('zoom_level = ?');
+    values.push(updates.zoom_level);
+  }
+  if (updates.scroll_position !== undefined) {
+    fields.push('scroll_position = ?');
+    values.push(updates.scroll_position);
+  }
+  if (updates.playhead_time !== undefined) {
+    fields.push('playhead_time = ?');
+    values.push(updates.playhead_time);
+  }
+  if (updates.selected_clip_ids !== undefined) {
+    fields.push('selected_clip_ids = ?');
+    values.push(JSON.stringify(updates.selected_clip_ids));
+  }
+  
+  if (fields.length === 0) {
+    return true; // Nothing to update
+  }
+  
+  values.push(projectId);
+  
+  const result = database.prepare(
+    `UPDATE timeline_state SET ${fields.join(', ')} WHERE project_id = ?`
+  ).run(...values);
+  
+  return result.changes > 0;
+}
+
+export async function deleteTimelineState(projectId: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM timeline_state WHERE project_id = ?').run(projectId);
+  
+  return result.changes > 0;
+}
+
+// ============================================================================
+// WAVEFORM CACHE OPERATIONS
+// ============================================================================
+
+export async function saveWaveform(
+  assetId: number,
+  trackIndex: number,
+  tierLevel: 1 | 2 | 3,
+  peaks: WaveformPeak[],
+  sampleRate: number,
+  duration: number
+): Promise<void> {
+  const database = await getDatabase();
+  
+  database.prepare(
+    `INSERT OR REPLACE INTO waveform_cache (asset_id, track_index, tier_level, peaks, sample_rate, duration, generated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    assetId,
+    trackIndex,
+    tierLevel,
+    JSON.stringify(peaks),
+    sampleRate,
+    duration,
+    new Date().toISOString()
+  );
+}
+
+export async function getWaveform(
+  assetId: number,
+  trackIndex: number,
+  tierLevel: 1 | 2 | 3
+): Promise<{ peaks: WaveformPeak[]; sampleRate: number; duration: number; generatedAt: string } | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT peaks, sample_rate, duration, generated_at FROM waveform_cache WHERE asset_id = ? AND track_index = ? AND tier_level = ?'
+  ).get(assetId, trackIndex, tierLevel) as {
+    peaks: string;
+    sample_rate: number;
+    duration: number;
+    generated_at: string;
+  } | undefined;
+  
+  if (!result) return null;
+  
+  return {
+    peaks: JSON.parse(result.peaks),
+    sampleRate: result.sample_rate,
+    duration: result.duration,
+    generatedAt: result.generated_at,
+  };
+}
+
+export async function checkWaveformExists(
+  assetId: number,
+  trackIndex: number,
+  tierLevel: 1 | 2 | 3
+): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT 1 FROM waveform_cache WHERE asset_id = ? AND track_index = ? AND tier_level = ?'
+  ).get(assetId, trackIndex, tierLevel);
+  
+  return !!result;
+}
+
+export async function deleteWaveformsByAsset(assetId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM waveform_cache WHERE asset_id = ?').run(assetId);
+  
+  return result.changes;
 }
