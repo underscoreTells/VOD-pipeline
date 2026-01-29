@@ -89,8 +89,8 @@ export async function transcribe(
       const chunk = data.toString();
       stderr += chunk;
 
-      // Parse progress messages
-      const progressMatch = chunk.match(/PROGRESS:(.+)/);
+      // Parse progress messages - match JSON object after PROGRESS:
+      const progressMatch = chunk.match(/PROGRESS:({.+?})/);
       if (progressMatch && onProgress) {
         try {
           const progress: TranscriptionProgress = JSON.parse(progressMatch[1]);

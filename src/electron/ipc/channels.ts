@@ -11,7 +11,6 @@ export const IPC_CHANNELS = {
   ASSET_GET: 'asset:get',
   ASSET_GET_BY_PROJECT: 'asset:get-by-project',
   ASSET_DELETE: 'asset:delete',
-  ASSET_GET_METADATA: 'asset:get-metadata',
 
   // Chapter channels
   CHAPTER_CREATE: 'chapter:create',
@@ -48,6 +47,7 @@ export const IPC_ERROR_CODES = {
   TRANSCRIPTION_FAILED: 'TRANSCRIPTION_FAILED',
   NOT_FOUND: 'NOT_FOUND',
   UNKNOWN_ERROR: 'UNKNOWN_ERROR',
+  TIMEOUT: 'TIMEOUT',
 } as const;
 
 export type IPCErrorCode = typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES];

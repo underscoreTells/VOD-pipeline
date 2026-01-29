@@ -152,8 +152,22 @@ export async function updateProject(id: number, name: string): Promise<boolean> 
 // ASSET CRUD OPERATIONS
 // ============================================================================
 
+const VALID_FILE_TYPES: Array<'video' | 'audio' | 'image'> = ['video', 'audio', 'image'];
+
 export async function createAsset(asset: CreateAssetInput): Promise<Asset> {
   const database = await getDatabase();
+  
+  // Validate project exists
+  const project = database.prepare('SELECT id FROM projects WHERE id = ?').get(asset.project_id);
+  if (!project) {
+    throw new Error(`Project not found: ${asset.project_id}`);
+  }
+  
+  // Validate file_type (allow null, but if provided must be valid)
+  if (asset.file_type !== null && !VALID_FILE_TYPES.includes(asset.file_type)) {
+    throw new Error(`Invalid file_type: ${asset.file_type}. Must be one of: ${VALID_FILE_TYPES.join(', ')}`);
+  }
+  
   const now = new Date().toISOString();
   
   const result = database.prepare(
@@ -255,6 +269,12 @@ export async function updateAssetMetadata(
 
 export async function createChapter(chapter: CreateChapterInput): Promise<Chapter> {
   const database = await getDatabase();
+  
+  // Validate project exists
+  const project = database.prepare('SELECT id FROM projects WHERE id = ?').get(chapter.project_id);
+  if (!project) {
+    throw new Error(`Project not found: ${chapter.project_id}`);
+  }
   
   // Validate time range
   if (chapter.start_time < 0) {

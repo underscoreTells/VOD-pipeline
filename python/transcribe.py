@@ -73,8 +73,9 @@ def transcribe(
         full_text_parts.append(segment.text.strip())
 
         # Emit progress (10% to 90%)
-        progress = 10 + int((i / total_segments) * 80) if total_segments > 0 else 50
-        emit_progress(progress, f"Processing segment {i + 1}/{total_segments}...")
+        if total_segments > 0:
+            progress = 10 + int((i / total_segments) * 80)
+            emit_progress(progress, f"Processing segment {i + 1}/{total_segments}...")
 
     emit_progress(90, "Finalizing...")
 
