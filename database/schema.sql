@@ -70,6 +70,46 @@ CREATE TABLE IF NOT EXISTS conversations (
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
+-- Timeline clips (represents cuts/beats on timeline)
+CREATE TABLE IF NOT EXISTS clips (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  asset_id INTEGER NOT NULL,
+  track_index INTEGER DEFAULT 0,
+  start_time REAL NOT NULL,
+  in_point REAL NOT NULL,
+  out_point REAL NOT NULL,
+  role TEXT CHECK(role IN ('setup', 'escalation', 'twist', 'payoff', 'transition')),
+  description TEXT,
+  is_essential BOOLEAN DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
+-- Timeline view state
+CREATE TABLE IF NOT EXISTS timeline_state (
+  project_id INTEGER PRIMARY KEY,
+  zoom_level REAL DEFAULT 100.0,
+  scroll_position REAL DEFAULT 0.0,
+  playhead_time REAL DEFAULT 0.0,
+  selected_clip_ids TEXT,  -- JSON array
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- Multi-tier waveform cache
+CREATE TABLE IF NOT EXISTS waveform_cache (
+  asset_id INTEGER,
+  track_index INTEGER DEFAULT 0,
+  tier_level INTEGER CHECK(tier_level IN (1, 2, 3)),
+  peaks BLOB NOT NULL,     -- JSON array of min/max pairs
+  sample_rate INTEGER NOT NULL,
+  duration REAL NOT NULL,
+  generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (asset_id, track_index, tier_level),
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at);
 CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
@@ -81,3 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_transcripts_start_time ON transcripts(start_time)
 CREATE INDEX IF NOT EXISTS idx_beats_chapter_id ON beats(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
+CREATE INDEX IF NOT EXISTS idx_clips_project_id ON clips(project_id);
+CREATE INDEX IF NOT EXISTS idx_clips_asset_id ON clips(asset_id);
+CREATE INDEX IF NOT EXISTS idx_clips_track_index ON clips(track_index);
+CREATE INDEX IF NOT EXISTS idx_waveform_cache_asset_id ON waveform_cache(asset_id);
