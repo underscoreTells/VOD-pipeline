@@ -31,6 +31,30 @@ export const IPC_CHANNELS = {
   // Agent channels
   AGENT_CHAT: 'agent:chat',
   AGENT_STREAM: 'agent:stream',
+
+  // Timeline / Clip channels
+  CLIP_CREATE: 'clip:create',
+  CLIP_GET: 'clip:get',
+  CLIP_GET_BY_PROJECT: 'clip:get-by-project',
+  CLIP_GET_BY_ASSET: 'clip:get-by-asset',
+  CLIP_UPDATE: 'clip:update',
+  CLIP_DELETE: 'clip:delete',
+  CLIP_BATCH_UPDATE: 'clip:batch-update',
+
+  // Timeline state channels
+  TIMELINE_STATE_SAVE: 'timeline:state-save',
+  TIMELINE_STATE_LOAD: 'timeline:state-load',
+  TIMELINE_STATE_UPDATE: 'timeline:state-update',
+
+  // Waveform channels
+  WAVEFORM_GENERATE: 'waveform:generate',
+  WAVEFORM_GET: 'waveform:get',
+  WAVEFORM_GENERATE_TIER: 'waveform:generate-tier',
+  WAVEFORM_PROGRESS: 'waveform:progress',
+
+  // Export channels
+  EXPORT_GENERATE: 'export:generate',
+  EXPORT_GET_FORMATS: 'export:get-formats',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];
@@ -48,6 +72,8 @@ export const IPC_ERROR_CODES = {
   NOT_FOUND: 'NOT_FOUND',
   UNKNOWN_ERROR: 'UNKNOWN_ERROR',
   TIMEOUT: 'TIMEOUT',
+  WAVEFORM_GENERATION_FAILED: 'WAVEFORM_GENERATION_FAILED',
+  EXPORT_GENERATION_FAILED: 'EXPORT_GENERATION_FAILED',
 } as const;
 
 export type IPCErrorCode = typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES];
