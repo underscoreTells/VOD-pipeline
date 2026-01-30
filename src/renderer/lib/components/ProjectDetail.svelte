@@ -132,9 +132,13 @@
     }
   }
   
-  // Get audio URLs for timeline
+  // Get audio URLs for timeline (platform-safe file URLs)
   const audioUrls = $derived.by(() => {
-    return projectDetail.assets.map(asset => `file://${asset.file_path}`);
+    return projectDetail.assets.map(asset => {
+      // Use URL API to create proper file URLs with encoding
+      const fileUrl = new URL(`file://${asset.file_path}`);
+      return fileUrl.href;
+    });
   });
 </script>
 

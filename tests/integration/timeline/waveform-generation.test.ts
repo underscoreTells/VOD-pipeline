@@ -48,6 +48,10 @@ describe('Waveform Generation Integration', () => {
         '-y'
       ], { stdio: 'ignore' });
       
+      proc.on('error', (err) => {
+        reject(err);
+      });
+      
       proc.on('close', (code) => {
         if (code === 0) {
           resolve();

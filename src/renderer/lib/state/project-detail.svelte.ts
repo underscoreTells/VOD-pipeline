@@ -20,7 +20,7 @@ import {
   type WaveformResult 
 } from './electron.svelte';
 import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
-import { timelineState, loadTimeline, setClips, createClip, updateClip, deleteClip, setLoading, setError, clearTimeline } from './timeline.svelte';
+import { timelineState, loadTimeline, setClips, createClip, updateClip, deleteClip, setLoading, setError, clearTimeline, getClipById } from './timeline.svelte';
 import { executeCommand, MoveClipCommand, ResizeClipCommand, DeleteClipCommand, clearHistory } from './undo-redo.svelte';
 
 // Project detail state
@@ -49,18 +49,25 @@ export async function loadProjectDetail(projectId: number) {
     const assetsResult: GetAssetsResult = await ipcGetAssets(projectId);
     if (assetsResult.success && assetsResult.data) {
       projectDetail.assets = assetsResult.data;
+    } else if (!assetsResult.success) {
+      setError(assetsResult.error || 'Failed to load assets');
     }
     
     // Load clips
     const clipsResult: GetClipsResult = await ipcGetClips(projectId);
     if (clipsResult.success && clipsResult.data) {
       setClips(clipsResult.data);
+    } else if (!clipsResult.success) {
+      setError(clipsResult.error || 'Failed to load clips');
     }
     
     // Load timeline state
     const stateResult: TimelineStateResult = await ipcLoadTimelineState(projectId);
     if (stateResult.success && stateResult.data) {
       loadTimeline(projectId, clipsResult.data || [], stateResult.data);
+    } else if (!stateResult.success) {
+      setError(stateResult.error || 'Failed to load timeline state');
+      loadTimeline(projectId, clipsResult.data || [], null);
     } else {
       loadTimeline(projectId, clipsResult.data || [], null);
     }
@@ -145,12 +152,11 @@ export async function updateProjectClip(id: number, updates: Partial<Clip>): Pro
   }
 }
 
-// Delete clip (save to backend)
+// Delete clip (backend only - local state handled by command)
 export async function deleteProjectClip(id: number): Promise<boolean> {
   try {
     const result = await ipcDeleteClip(id);
     if (result.success) {
-      deleteClip(id);
       return true;
     } else {
       throw new Error(result.error || 'Failed to delete clip');
@@ -193,12 +199,18 @@ export async function executeResizeClip(
 
 // Execute delete command and save to backend
 export async function executeDeleteClip(clipId: number) {
-  // Save to backend first
+  // Capture clip data BEFORE deletion
+  const clip = getClipById(clipId);
+  if (!clip) return;
+  
+  // Create command with captured snapshot
+  const command = new DeleteClipCommand('Delete clip', clipId);
+  
+  // Save to backend
   const success = await deleteProjectClip(clipId);
   
   if (success) {
-    // Only update UI/undo stack if backend save succeeded
-    const command = new DeleteClipCommand('Delete clip', clipId);
+    // Execute command to update local state and add to undo stack
     executeCommand(command);
   }
 }

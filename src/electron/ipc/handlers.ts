@@ -895,7 +895,8 @@ export function registerIpcHandlers() {
       const result = await dialog.showSaveDialog(options);
       return result;
     } catch (error) {
-      return { canceled: true };
+      console.error('IPC dialog:showSaveDialog error', error);
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

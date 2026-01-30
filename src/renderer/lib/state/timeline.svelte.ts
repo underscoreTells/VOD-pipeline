@@ -33,6 +33,10 @@ export function getClipsByTrack(): Map<number, Clip[]> {
   return map;
 }
 
+export function getClipById(id: number): Clip | undefined {
+  return timelineState.clips.find(clip => clip.id === id);
+}
+
 // Actions
 export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineState | null) {
   timelineState.projectId = projectId;
