@@ -1,5 +1,6 @@
 <script lang="ts">
   import { projects, getSelectedProject, loadProjects, createProject, selectProject } from './lib/state/project.svelte';
+  import ProjectDetail from './lib/components/ProjectDetail.svelte';
 
   const selectedProject = $derived.by(() => getSelectedProject());
 
@@ -21,6 +22,10 @@
           console.error('Failed to create project:', error);
         });
     }
+  }
+
+  function handleBackToProjects() {
+    selectProject(null);
   }
 </script>
 
@@ -103,19 +108,11 @@
         </div>
       {/if}
     {:else if selectedProject}
-      <!-- Project Detail View -->
-      <section class="project-detail">
-        <div class="project-header">
-          <button onclick={() => selectProject(null)}>← Back to Projects</button>
-          <h2>{selectedProject.name}</h2>
-        </div>
-
-        <div class="project-content">
-          <p class="placeholder">
-            Project details will be implemented in Phase 2.
-          </p>
-        </div>
-      </section>
+      <!-- Project Detail View with Timeline Editor -->
+      <ProjectDetail 
+        project={selectedProject} 
+        onBack={handleBackToProjects}
+      />
     {/if}
   </main>
 </div>
