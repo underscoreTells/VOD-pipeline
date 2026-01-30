@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS transcripts (
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
 );
 
--- Beats table
+-- Beats table (AI-generated narrative beats)
+-- display_order: AI's suggested ordering within the chapter
+-- sort_order: User-defined ordering after manual rearrangement
 CREATE TABLE IF NOT EXISTS beats (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chapter_id INTEGER NOT NULL,
@@ -56,11 +58,11 @@ CREATE TABLE IF NOT EXISTS beats (
   why_essential TEXT,
   visual_dependency TEXT,
   is_essential BOOLEAN DEFAULT 1,
-  display_order INTEGER DEFAULT 0,
-  user_modified BOOLEAN DEFAULT 0,
-  discard BOOLEAN DEFAULT 0,
-  sort_order INTEGER,
-  clip_id INTEGER,
+  display_order INTEGER DEFAULT 0,      -- Original AI-suggested order
+  user_modified BOOLEAN DEFAULT 0,      -- Has user edited this beat?
+  discard BOOLEAN DEFAULT 0,            -- Marked for deletion
+  sort_order INTEGER,                   -- User-defined sort priority
+  clip_id INTEGER,                      -- Linked clip on timeline
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
   FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
