@@ -57,7 +57,12 @@ CREATE TABLE IF NOT EXISTS beats (
   visual_dependency TEXT,
   is_essential BOOLEAN DEFAULT 1,
   display_order INTEGER DEFAULT 0,
-  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+  user_modified BOOLEAN DEFAULT 0,
+  discard BOOLEAN DEFAULT 0,
+  sort_order INTEGER,
+  clip_id INTEGER,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
 
 -- Agent conversations table
