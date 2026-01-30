@@ -12,7 +12,7 @@
     exportProjectToFile,
     generateAssetWaveform
   } from '../state/project-detail.svelte';
-  import { timelineState, getTotalDuration, setError } from '../state/timeline.svelte';
+  import { timelineState, setError } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
   import type { Project } from '../../../shared/types/database';
   
@@ -63,13 +63,18 @@
     
     for (const file of files) {
       if (file.type.startsWith('video/')) {
-        const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
-        if (filePath) {
-          const asset = await addAssetToProject(project.id, filePath);
-          if (asset) {
-            // Auto-generate waveform for the asset
-            generateAssetWaveform(asset.id, 0);
+        try {
+          const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
+          if (filePath) {
+            const asset = await addAssetToProject(project.id, filePath);
+            if (asset) {
+              // Auto-generate waveform for the asset
+              await generateAssetWaveform(asset.id, 0);
+            }
           }
+        } catch (error) {
+          console.error('Failed to import file:', error);
+          setError(`Failed to import ${file.name}: ${(error as Error).message}`);
         }
       }
     }
@@ -86,12 +91,17 @@
     
     for (const file of files) {
       if (file.type.startsWith('video/')) {
-        const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
-        if (filePath) {
-          const asset = await addAssetToProject(project.id, filePath);
-          if (asset) {
-            generateAssetWaveform(asset.id, 0);
+        try {
+          const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
+          if (filePath) {
+            const asset = await addAssetToProject(project.id, filePath);
+            if (asset) {
+              await generateAssetWaveform(asset.id, 0);
+            }
           }
+        } catch (error) {
+          console.error('Failed to import file:', error);
+          setError(`Failed to import ${file.name}: ${(error as Error).message}`);
         }
       }
     }
@@ -102,18 +112,23 @@
     const format = projectDetail.exportFormats.find(f => f.id === selectedExportFormat);
     if (!format) return;
     
-    // Use electron's dialog via IPC
-    const result = await window.electronAPI.dialog.showSaveDialog({
-      defaultPath: `${project.name}${format.extension}`,
-      filters: [{ name: format.name, extensions: [format.extension.replace('.', '')] }]
-    });
-    
-    if (!result.canceled && result.filePath) {
-      const success = await exportProjectToFile(project.id, selectedExportFormat, result.filePath);
-      if (success) {
-        showExportDialog = false;
-        alert('Export completed successfully!');
+    try {
+      // Use electron's dialog via IPC
+      const result = await (window as any).electronAPI.dialog.showSaveDialog({
+        defaultPath: `${project.name}${format.extension}`,
+        filters: [{ name: format.name, extensions: [format.extension.replace('.', '')] }]
+      });
+      
+      if (!result.canceled && result.filePath) {
+        const success = await exportProjectToFile(project.id, selectedExportFormat, result.filePath);
+        if (success) {
+          showExportDialog = false;
+          alert('Export completed successfully!');
+        }
       }
+    } catch (error) {
+      console.error('Export failed:', error);
+      setError(`Export failed: ${(error as Error).message}`);
     }
   }
   

@@ -100,7 +100,7 @@ export async function createProjectClip(
   startTime: number,
   inPoint: number,
   outPoint: number,
-  role?: string,
+  role?: Clip['role'],
   description?: string,
   isEssential: boolean = true
 ): Promise<Clip | null> {
@@ -112,7 +112,7 @@ export async function createProjectClip(
       startTime,
       inPoint,
       outPoint,
-      role: role as any,
+      role,
       description,
       isEssential,
     });
@@ -163,11 +163,14 @@ export async function deleteProjectClip(id: number): Promise<boolean> {
 
 // Execute move command and save to backend
 export async function executeMoveClip(clipId: number, oldStartTime: number, newStartTime: number) {
-  const command = new MoveClipCommand('Move clip', clipId, oldStartTime, newStartTime);
-  executeCommand(command);
+  // Save to backend first
+  const success = await updateProjectClip(clipId, { start_time: newStartTime });
   
-  // Save to backend
-  await updateProjectClip(clipId, { start_time: newStartTime });
+  if (success) {
+    // Only update UI/undo stack if backend save succeeded
+    const command = new MoveClipCommand('Move clip', clipId, oldStartTime, newStartTime);
+    executeCommand(command);
+  }
 }
 
 // Execute resize command and save to backend
@@ -178,20 +181,26 @@ export async function executeResizeClip(
   newInPoint: number,
   newOutPoint: number
 ) {
-  const command = new ResizeClipCommand('Resize clip', clipId, oldInPoint, oldOutPoint, newInPoint, newOutPoint);
-  executeCommand(command);
+  // Save to backend first
+  const success = await updateProjectClip(clipId, { in_point: newInPoint, out_point: newOutPoint });
   
-  // Save to backend
-  await updateProjectClip(clipId, { in_point: newInPoint, out_point: newOutPoint });
+  if (success) {
+    // Only update UI/undo stack if backend save succeeded
+    const command = new ResizeClipCommand('Resize clip', clipId, oldInPoint, oldOutPoint, newInPoint, newOutPoint);
+    executeCommand(command);
+  }
 }
 
 // Execute delete command and save to backend
 export async function executeDeleteClip(clipId: number) {
-  const command = new DeleteClipCommand('Delete clip', clipId);
-  executeCommand(command);
+  // Save to backend first
+  const success = await deleteProjectClip(clipId);
   
-  // Save to backend
-  await deleteProjectClip(clipId);
+  if (success) {
+    // Only update UI/undo stack if backend save succeeded
+    const command = new DeleteClipCommand('Delete clip', clipId);
+    executeCommand(command);
+  }
 }
 
 // Save timeline state
@@ -219,18 +228,6 @@ export async function generateAssetWaveform(assetId: number, trackIndex: number 
   projectDetail.waveformProgress = { assetId, tier: 0, percent: 0, status: 'Starting...' };
   
   try {
-    // Listen for progress events
-    const progressHandler = (event: any, data: any) => {
-      if (data.assetId === assetId) {
-        projectDetail.waveformProgress = {
-          assetId,
-          tier: data.progress?.tier || 0,
-          percent: data.progress?.percent || 0,
-          status: data.progress?.status || 'Processing...',
-        };
-      }
-    };
-    
     // Start generation
     const result: WaveformGenerationResult = await ipcGenerateWaveform(assetId, trackIndex);
     

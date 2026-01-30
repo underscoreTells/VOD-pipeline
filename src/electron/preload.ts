@@ -213,7 +213,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('export:generate', { projectId, format, filePath }),
   },
   dialog: {
-    showSaveDialog: (options) => dialog.showSaveDialog(options),
+    showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
   },
   webUtils: {
     getPathForFile: (file) => webUtils.getPathForFile(file),

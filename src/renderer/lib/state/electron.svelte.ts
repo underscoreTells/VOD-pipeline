@@ -75,7 +75,7 @@ export interface CreateClipInput {
   startTime: number;
   inPoint: number;
   outPoint: number;
-  role?: string;
+  role?: Clip['role'];
   description?: string;
   isEssential?: boolean;
 }
