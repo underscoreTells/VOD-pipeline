@@ -1,6 +1,17 @@
 import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
 
 // ============================================================================
+// Preload Verification
+// ============================================================================
+
+// Check if electronAPI is available (set by preload script)
+if (typeof window === 'undefined' || !window.electronAPI) {
+  console.error('[Renderer] window.electronAPI is not defined!');
+  console.error('[Renderer] This usually means the preload script failed to load.');
+  console.error('[Renderer] Check the main process console for preload-error messages.');
+}
+
+// ============================================================================
 // Project Types & Functions
 // ============================================================================
 
@@ -204,6 +215,9 @@ declare global {
         create: (name: string) => Promise<CreateProjectResult>;
         getAll: () => Promise<GetProjectsResult>;
         get: (id: number) => Promise<GetProjectResult>;
+      };
+      agent: {
+        chat: (projectId: string, message: string, threadId?: string) => Promise<any>;
       };
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;

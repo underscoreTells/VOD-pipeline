@@ -1,12 +1,19 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import dotenv from 'dotenv';
 import { registerIpcHandlers } from './ipc/handlers.js';
 import { initializeDatabase, closeDatabase } from './database/db.js';
 import { getAgentBridge } from './agent-bridge.js';
 import { detectFFmpeg } from './ffmpegDetector.js';
 import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
+
+// Load .env file early and check for errors
+const dotenvResult = dotenv.config();
+if (dotenvResult.error) {
+  console.error('[Main] Failed to load .env file:', dotenvResult.error);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,17 +22,34 @@ let mainWindow: BrowserWindow | null = null;
 let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
 
 function createWindow() {
+  const preloadPath = path.join(__dirname, 'preload.cjs');
+  console.log('[Main] Preload path:', preloadPath);
+  console.log('[Main] Preload exists:', fs.existsSync(preloadPath));
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
+  // Debug: Log preload errors
+  mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
+    console.error(`[Preload Error] Failed to load ${preloadPath}:`, error);
+  });
+
   const isDev = process.env.NODE_ENV !== 'production';
+
+  // Debug: Log renderer console messages (dev only)
+  if (isDev) {
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      const levels = ['debug', 'info', 'warning', 'error'];
+      console.log(`[Renderer ${levels[level] || level}] ${message}`);
+    });
+  }
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -71,6 +95,11 @@ app.whenReady().then(async () => {
 
 async function startAgentBridge() {
   try {
+    if (!hasAgentKeys()) {
+      console.warn('[Main] Agent disabled: no API keys found in environment.');
+      return;
+    }
+
     console.log('[Main] Starting agent bridge...');
     agentBridge = getAgentBridge();
     await agentBridge.start();
@@ -92,6 +121,15 @@ async function startAgentBridge() {
   } catch (error) {
     console.error('[Main] Failed to start agent bridge:', error);
   }
+}
+
+function hasAgentKeys(): boolean {
+  return Boolean(
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENROUTER_API_KEY
+  );
 }
 
 app.on('window-all-closed', () => {

@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
 import { EventEmitter } from "events";
 import { app } from "electron";
 import { JSONStdinWriter, JSONStdoutReader } from "../agent/ipc/json-message-transport.js";
@@ -106,7 +107,10 @@ export class AgentBridge extends EventEmitter {
     if (app.isPackaged) {
       return path.join(process.resourcesPath, "agent", "index.js");
     } else {
-      return path.join(__dirname, "../../agent/index.js");
+      // ES module compatible __dirname replacement
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = path.dirname(__filename);
+      return path.join(__dirname, "../../src/agent/index.js");
     }
   }
 

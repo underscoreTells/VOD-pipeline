@@ -46,6 +46,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
     const possiblePaths = [
       path.join(moduleDirname, '../../database/schema.sql'),
       path.join(moduleDirname, '../../../database/schema.sql'),
+      path.join(moduleDirname, '../../../../database/schema.sql'), // Project root (dev mode)
       path.join(app.getAppPath(), 'database/schema.sql'),
     ];
 
@@ -60,6 +61,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
 
     if (schema) {
       database.exec(schema);
+      ensureSchemaColumns(database);
       console.log('Database schema initialized successfully');
     } else {
       console.error('Schema file not found. Tried paths:', possiblePaths);
@@ -79,6 +81,51 @@ export async function initializeDatabase(): Promise<Database.Database> {
     });
 
   return await initializationPromise;
+}
+
+function ensureSchemaColumns(database: Database.Database) {
+  const migrations = [
+    { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
+  ];
+
+  const failedMigrations: string[] = [];
+
+  for (const { table, column, definition } of migrations) {
+    const success = ensureColumn(database, table, column, definition);
+    if (!success) {
+      failedMigrations.push(`${table}.${column}`);
+    }
+  }
+
+  if (failedMigrations.length > 0) {
+    throw new Error(
+      `Database schema migration failed for columns: ${failedMigrations.join(', ')}. ` +
+      `This will cause INSERT statements to fail with "no such column" errors.`
+    );
+  }
+}
+
+function ensureColumn(
+  database: Database.Database,
+  table: string,
+  column: string,
+  definition: string
+): boolean {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all();
+  const hasColumn = columns.some((col: any) => col.name === column);
+  if (hasColumn) {
+    return true;
+  }
+
+  try {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    console.log(`Database migrated: added ${table}.${column}`);
+    return true;
+  } catch (error) {
+    console.error(`Database migration failed for ${table}.${column}:`, error);
+    return false;
+  }
 }
 
 export async function getDatabase(): Promise<Database.Database> {
