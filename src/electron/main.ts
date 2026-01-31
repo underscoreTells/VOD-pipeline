@@ -15,14 +15,29 @@ let mainWindow: BrowserWindow | null = null;
 let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
 
 function createWindow() {
+  const preloadPath = path.join(__dirname, 'preload.js');
+  console.log('[Main] Preload path:', preloadPath);
+  console.log('[Main] Preload exists:', fs.existsSync(preloadPath));
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Debug: Log preload errors
+  mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
+    console.error(`[Preload Error] Failed to load ${preloadPath}:`, error);
+  });
+
+  // Debug: Log renderer console messages
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    const levels = ['debug', 'info', 'warning', 'error'];
+    console.log(`[Renderer ${levels[level] || level}] ${message}`);
   });
 
   const isDev = process.env.NODE_ENV !== 'production';

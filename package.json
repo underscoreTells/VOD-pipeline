@@ -8,7 +8,7 @@
     "dev": "pnpm setup:dev && concurrently \"pnpm dev:renderer\" \"wait-on http://localhost:5173 && pnpm dev:electron\"",
     "setup:dev": "pnpm rebuild && node ./scripts/copy-database.js",
     "dev:renderer": "vite",
-    "dev:electron": "concurrently \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist/src/electron/main.js && electron dist/src/electron/main.js\"",
+    "dev:electron": "concurrently \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist/src/electron/main.js dist/src/electron/preload.js && electron dist/src/electron/main.js\"",
     "dev:main": "electron dist/src/electron/main.js",
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
