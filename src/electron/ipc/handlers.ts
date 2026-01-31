@@ -579,14 +579,14 @@ export function registerIpcHandlers() {
   });
 
   // Agent handler
-  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, { projectId, message }) => {
-    console.log('IPC: agent:chat', projectId, message);
+  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, { projectId, message, provider, chapterId }) => {
+    console.log('IPC: agent:chat', projectId, provider, chapterId, message);
     try {
       const agentBridge = getAgentBridge();
       const response = await agentBridge.send({
         type: 'chat',
         messages: [{ role: 'user', content: message }],
-        metadata: { projectId },
+        metadata: { projectId, provider, chapterId },
       });
       return createSuccessResponse(response);
     } catch (error) {

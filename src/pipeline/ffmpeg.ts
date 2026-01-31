@@ -446,7 +446,8 @@ export async function isValidVideo(filePath: string): Promise<boolean> {
 export async function generateAIProxy(
   inputPath: string,
   outputPath: string,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  timeoutMs?: number
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
@@ -472,6 +473,27 @@ export async function generateAIProxy(
     const proc = spawn(ffmpegPath.path, args);
     let errorOutput = '';
     let lastProgress = 0;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+
+    // Set up timeout if specified
+    if (timeoutMs && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        proc.kill('SIGTERM');
+        reject(new FFmpegError(
+          `AI proxy generation timed out after ${timeoutMs}ms`,
+          'TIMEOUT',
+          { timeout: timeoutMs }
+        ));
+      }, timeoutMs);
+    }
+
+    // Clear timeout helper
+    const clearTimer = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+    };
 
     proc.stderr.on('data', (data) => {
       const output = data.toString();
@@ -494,6 +516,7 @@ export async function generateAIProxy(
     });
 
     proc.on('error', (error) => {
+      clearTimer();
       reject(new FFmpegError(
         `Failed to generate AI proxy: ${error.message}`,
         'FFMPEG_ERROR',
@@ -502,7 +525,20 @@ export async function generateAIProxy(
     });
 
     proc.on('close', async (code) => {
+      // Clear timeout timer
+      clearTimer();
+
       if (code !== 0) {
+        // Check if this was a timeout kill (SIGTERM)
+        if (code === null || code === 143) {
+          reject(new FFmpegError(
+            `AI proxy generation was terminated`,
+            'TIMEOUT',
+            { code }
+          ));
+          return;
+        }
+        
         reject(new FFmpegError(
           `AI proxy generation failed with code ${code}`,
           'FFMPEG_ERROR',
@@ -536,7 +572,7 @@ export async function generateAIProxy(
 
 /**
  * Generate proxy with progress streaming and timeout
- * Wrapper around generateAIProxy with better error handling
+ * Wrapper around generateAIProxy that sets default timeout
  */
 export async function generateAIProxyWithProgress(
   inputPath: string,
@@ -548,16 +584,6 @@ export async function generateAIProxyWithProgress(
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const timeoutMs = options.timeoutMs || 30 * 60 * 1000; // 30 minutes default
   
-  return Promise.race([
-    generateAIProxy(inputPath, outputPath, options.onProgress),
-    new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new FFmpegError(
-          `AI proxy generation timed out after ${timeoutMs}ms`,
-          'TIMEOUT',
-          { timeout: timeoutMs }
-        ));
-      }, timeoutMs);
-    }),
-  ]);
+  // Delegate to generateAIProxy with timeout built-in
+  return generateAIProxy(inputPath, outputPath, options.onProgress, timeoutMs);
 }

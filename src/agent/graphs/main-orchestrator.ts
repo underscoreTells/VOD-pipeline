@@ -54,10 +54,10 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
   const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
   const llm = createLLM(llmConfig);
 
-  // Get the last user message
-  const lastMessage = state.messages[state.messages.length - 1];
-  const userQuery = typeof lastMessage.content === "string" 
-    ? lastMessage.content 
+  // Get the last human message (not the assistant reply)
+  const lastHumanMessage = getLastHumanMessage(state);
+  const userQuery = lastHumanMessage && typeof lastHumanMessage.content === "string" 
+    ? lastHumanMessage.content 
     : "Analyze this video chapter";
 
   // Build the analysis prompt
@@ -198,10 +198,21 @@ function extractSuggestionsFromResponse(content: string): any[] {
   return suggestions;
 }
 
+function getLastHumanMessage(state: typeof MainState.State): BaseMessage | null {
+  // Scan from end to find the most recent human/user message
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i];
+    if (msg._getType() === "human") {
+      return msg;
+    }
+  }
+  return null;
+}
+
 function shouldContinueChat(state: typeof MainState.State): string {
-  const lastMessage = state.messages[state.messages.length - 1];
-  const content = typeof lastMessage.content === "string"
-    ? lastMessage.content.toLowerCase()
+  const lastHumanMessage = getLastHumanMessage(state);
+  const content = lastHumanMessage && typeof lastHumanMessage.content === "string"
+    ? lastHumanMessage.content.toLowerCase()
     : "";
 
   if (

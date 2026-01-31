@@ -15,6 +15,7 @@ export interface AgentState {
   suggestions: Suggestion[];
   selectedProvider: LLMProviderType;
   isStreaming: boolean;
+  currentProjectId: string | null;
   currentChapterId: string | null;
   proxyPath: string | null;
   error: string | null;
@@ -26,13 +27,32 @@ export const agentState = $state<AgentState>({
   suggestions: [],
   selectedProvider: "gemini",
   isStreaming: false,
+  currentProjectId: null,
   currentChapterId: null,
   proxyPath: null,
   error: null,
 });
 
+export function setProjectContext(projectId: string | null) {
+  agentState.currentProjectId = projectId;
+}
+
 export async function sendChatMessage(message: string) {
   if (!message.trim()) return;
+
+  // Validate that we have a project context
+  if (!agentState.currentProjectId) {
+    console.error("[Agent] Cannot send message: no project selected");
+    agentState.error = "No project selected. Please open a project first.";
+    const errorMessage: ChatMessage = {
+      role: "assistant",
+      content: "Error: No project selected. Please open a project first.",
+      id: uuidv4(),
+      timestamp: new Date(),
+    };
+    agentState.messages.push(errorMessage);
+    return;
+  }
 
   const userMessage: ChatMessage = {
     role: "user",
@@ -47,7 +67,7 @@ export async function sendChatMessage(message: string) {
 
   try {
     const response = await window.electronAPI.agent.chat({
-      projectId: "", // Will be filled by backend from context
+      projectId: agentState.currentProjectId,
       message,
       provider: agentState.selectedProvider,
       chapterId: agentState.currentChapterId || undefined,

@@ -7,7 +7,7 @@ import { AIMessage } from "@langchain/core/messages";
 /**
  * Kimi K2.5 Provider for Moonshot AI
  * Custom LangChain implementation since no official package exists
- * Supports video input via base64 encoding
+ * Supports video and image input via base64 encoding
  */
 
 export interface KimiMessage {
@@ -16,10 +16,14 @@ export interface KimiMessage {
 }
 
 export interface KimiContentPart {
-  type: "text" | "video_url";
+  type: "text" | "video_url" | "image_url";
   text?: string;
   video_url?: {
     url: string;
+  };
+  image_url?: {
+    url: string;
+    detail?: "low" | "high" | "auto";
   };
 }
 
@@ -44,7 +48,7 @@ export interface KimiChatCompletionResponse {
     message: KimiMessage;
     finish_reason: string;
   }>;
-  usage: {
+  usage?: {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
@@ -94,69 +98,104 @@ export class KimiChatModel extends BaseChatModel {
     _options: this["ParsedCallOptions"],
     _runManager?: CallbackManagerForLLMRun
   ): Promise<ChatResult> {
-    const kimiMessages = this.convertToKimiMessages(messages);
-    
-    const requestBody: KimiChatCompletionRequest = {
-      model: this.model,
-      messages: kimiMessages,
-      temperature: this.temperature,
-      max_tokens: this.maxTokens,
-      stream: false,
-    };
+    try {
+      const kimiMessages = this.convertToKimiMessages(messages);
+      
+      const requestBody: KimiChatCompletionRequest = {
+        model: this.model,
+        messages: kimiMessages,
+        temperature: this.temperature,
+        max_tokens: this.maxTokens,
+        stream: false,
+      };
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
+        });
+      } catch (fetchError) {
+        throw new Error(
+          `Kimi API fetch failed: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`
+        );
+      }
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(
-        `Kimi API error: ${response.status} ${response.statusText}\n${errorData}`
-      );
-    }
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(
+          `Kimi API error: ${response.status} ${response.statusText}\n${errorData}`
+        );
+      }
 
-    const data = await response.json() as KimiChatCompletionResponse;
-    const choice = data.choices[0];
-    
-    if (!choice) {
-      throw new Error("No response from Kimi API");
-    }
+      let data: KimiChatCompletionResponse;
+      try {
+        data = await response.json() as KimiChatCompletionResponse;
+      } catch (jsonError) {
+        throw new Error(
+          `Failed to parse Kimi API response: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`
+        );
+      }
 
-    // Convert response back to LangChain format
-    let content: string;
-    if (typeof choice.message.content === "string") {
-      content = choice.message.content;
-    } else {
-      content = choice.message.content
-        .map((part: KimiContentPart) => part.text || "")
-        .join("");
-    }
+      // Defensive: handle missing choices array
+      if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+        throw new Error("No choices returned from Kimi API");
+      }
 
-    const generation: ChatGeneration = {
-      text: content,
-      message: new AIMessage(content),
-    };
+      const choice = data.choices[0];
+      
+      // Defensive: handle missing choice or message
+      if (!choice || !choice.message) {
+        throw new Error("Invalid response structure from Kimi API: missing choice or message");
+      }
 
-    return {
-      generations: [generation],
-      llmOutput: {
-        tokenUsage: {
-          promptTokens: data.usage.prompt_tokens,
-          completionTokens: data.usage.completion_tokens,
-          totalTokens: data.usage.total_tokens,
+      // Convert response back to LangChain format
+      let content: string;
+      if (typeof choice.message.content === "string") {
+        content = choice.message.content;
+      } else if (Array.isArray(choice.message.content)) {
+        content = choice.message.content
+          .map((part: KimiContentPart) => part.text || "")
+          .join("");
+      } else {
+        content = "";
+      }
+
+      // Defensive: handle missing usage data
+      const tokenUsage = data.usage || {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      };
+
+      const generation: ChatGeneration = {
+        text: content,
+        message: new AIMessage(content),
+      };
+
+      return {
+        generations: [generation],
+        llmOutput: {
+          tokenUsage: {
+            promptTokens: tokenUsage.prompt_tokens ?? 0,
+            completionTokens: tokenUsage.completion_tokens ?? 0,
+            totalTokens: tokenUsage.total_tokens ?? 0,
+          },
         },
-      },
-    };
+      };
+    } catch (error) {
+      console.error("[KimiChatModel] _generate error:", error);
+      throw error;
+    }
   }
 
   /**
    * Convert LangChain messages to Kimi format
-   * Handles text and video content
+   * Handles text, video, and image content
    */
   private convertToKimiMessages(messages: BaseMessage[]): KimiMessage[] {
     return messages.map((msg) => {
@@ -180,6 +219,17 @@ export class KimiChatModel extends BaseChatModel {
               contentParts.push({
                 type: "video_url",
                 video_url: { url: videoUrlObj.url },
+              });
+            } else if (partObj.type === "image_url" && 
+                       typeof partObj.image_url === "object" && 
+                       partObj.image_url !== null) {
+              const imageUrlObj = partObj.image_url as Record<string, unknown>;
+              contentParts.push({
+                type: "image_url",
+                image_url: { 
+                  url: String(imageUrlObj.url || ""),
+                  detail: imageUrlObj.detail as "low" | "high" | "auto" | undefined,
+                },
               });
             }
           }
@@ -235,6 +285,19 @@ export function createKimiVideoPart(base64Video: string, mimeType: string = "vid
     type: "video_url",
     video_url: {
       url: `data:${mimeType};base64,${base64Video}`,
+    },
+  };
+}
+
+/**
+ * Create an image message part for Kimi
+ */
+export function createKimiImagePart(base64Image: string, mimeType: string = "image/jpeg", detail?: "low" | "high" | "auto"): KimiContentPart {
+  return {
+    type: "image_url",
+    image_url: {
+      url: `data:${mimeType};base64,${base64Image}`,
+      detail,
     },
   };
 }

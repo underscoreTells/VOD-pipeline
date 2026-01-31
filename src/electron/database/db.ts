@@ -15,7 +15,7 @@ import type {
   CreateClipInput,
   UpdateClipInput,
   UpdateTimelineStateInput,
-  Proxy,
+  Proxy as ProxyModel,
   CreateProxyInput,
   Suggestion,
   CreateSuggestionInput,
@@ -1189,7 +1189,7 @@ export async function deleteOldWaveforms(olderThanDays: number): Promise<number>
 // PROXY CRUD OPERATIONS (Phase 4: Visual AI)
 // ============================================================================
 
-export async function createProxy(proxy: CreateProxyInput): Promise<Proxy> {
+export async function createProxy(proxy: CreateProxyInput): Promise<ProxyModel> {
   const database = await getDatabase();
   
   const result = database.prepare(
@@ -1215,36 +1215,36 @@ export async function createProxy(proxy: CreateProxyInput): Promise<Proxy> {
   };
 }
 
-export async function getProxy(id: number): Promise<Proxy | null> {
+export async function getProxy(id: number): Promise<ProxyModel | null> {
   const database = await getDatabase();
   const result = database.prepare(
     'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE id = ?'
-  ).get(id) as Proxy | undefined;
+  ).get(id) as ProxyModel | undefined;
   
   return result || null;
 }
 
-export async function getProxyByAsset(assetId: number, preset: 'ai_analysis' = 'ai_analysis'): Promise<Proxy | null> {
+export async function getProxyByAsset(assetId: number, preset: 'ai_analysis' = 'ai_analysis'): Promise<ProxyModel | null> {
   const database = await getDatabase();
   const result = database.prepare(
     'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE asset_id = ? AND preset = ?'
-  ).get(assetId, preset) as Proxy | undefined;
+  ).get(assetId, preset) as ProxyModel | undefined;
   
   return result || null;
 }
 
-export async function getProxiesByAsset(assetId: number): Promise<Proxy[]> {
+export async function getProxiesByAsset(assetId: number): Promise<ProxyModel[]> {
   const database = await getDatabase();
   const results = database.prepare(
     'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE asset_id = ? ORDER BY created_at DESC'
-  ).all(assetId) as Proxy[];
+  ).all(assetId) as ProxyModel[];
   
   return results;
 }
 
 export async function updateProxyStatus(
   id: number,
-  status: Proxy['status'],
+  status: ProxyModel['status'],
   errorMessage?: string
 ): Promise<boolean> {
   const database = await getDatabase();
@@ -1389,7 +1389,7 @@ export async function applySuggestion(id: number): Promise<boolean> {
 export async function rejectSuggestion(id: number): Promise<boolean> {
   const database = await getDatabase();
   const result = database.prepare(
-    "UPDATE suggestions SET status = 'rejected' WHERE id = ?"
+    "UPDATE suggestions SET status = 'rejected', applied_at = NULL WHERE id = ?"
   ).run(id);
   
   return result.changes > 0;
@@ -1405,10 +1405,13 @@ export async function updateSuggestion(id: number, updates: UpdateSuggestionInpu
     fields.push('status = ?');
     values.push(updates.status);
     
-    // If applying, set applied_at
+    // Handle applied_at based on status
     if (updates.status === 'applied') {
       fields.push('applied_at = ?');
       values.push(new Date().toISOString());
+    } else {
+      // Clear applied_at for any non-applied status (rejected, pending, etc.)
+      fields.push('applied_at = NULL');
     }
   }
   

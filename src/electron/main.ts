@@ -128,7 +128,8 @@ function hasAgentKeys(): boolean {
     process.env.GEMINI_API_KEY ||
     process.env.OPENAI_API_KEY ||
     process.env.ANTHROPIC_API_KEY ||
-    process.env.OPENROUTER_API_KEY
+    process.env.OPENROUTER_API_KEY ||
+    process.env.KIMI_API_KEY
   );
 }
 

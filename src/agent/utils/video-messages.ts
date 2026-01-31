@@ -29,7 +29,7 @@ export async function createVideoMessage(
 
   switch (provider) {
     case "gemini":
-      return createGeminiVideoMessage(videoPath, textPrompt, mimeType);
+      return await createGeminiVideoMessage(videoPath, textPrompt, mimeType);
     case "kimi":
       return await createKimiVideoMessage(videoPath, textPrompt, mimeType);
     default:
@@ -38,14 +38,32 @@ export async function createVideoMessage(
 }
 
 /**
- * Create message for Gemini (file path reference)
- * Gemini can ingest local video files directly
+ * Maximum video file size for Gemini API (100MB to be safe)
  */
-function createGeminiVideoMessage(
+const GEMINI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Create message for Gemini using base64-encoded video
+ * Gemini requires base64-encoded video data for local files
+ */
+async function createGeminiVideoMessage(
   videoPath: string,
   textPrompt: string,
   mimeType: string
-): HumanMessage {
+): Promise<HumanMessage> {
+  // Check file size before encoding to avoid memory issues
+  const fs = await import("fs");
+  const stats = await fs.promises.stat(videoPath);
+  
+  if (stats.size > GEMINI_MAX_VIDEO_SIZE) {
+    throw new Error(
+      `Video file too large for Gemini API: ${(stats.size / (1024 * 1024)).toFixed(1)}MB ` +
+      `(max ${GEMINI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using a shorter clip.`
+    );
+  }
+
+  const base64Video = await readFileAsBase64(videoPath);
+
   return new HumanMessage({
     content: [
       {
@@ -53,11 +71,10 @@ function createGeminiVideoMessage(
         text: textPrompt,
       },
       {
-        type: "media",
-        mimeType: mimeType,
-        fileData: {
-          filePath: videoPath,
-        },
+        type: "video",
+        source_type: "base64",
+        data: base64Video,
+        mime_type: mimeType,
       },
     ],
   });
