@@ -30,13 +30,21 @@ export async function createVideoMessage(
 ): Promise<HumanMessage> {
   const { provider, videoPath, textPrompt, mimeType = "video/mp4" } = options;
 
-  switch (provider) {
-    case "gemini":
-      return await createGeminiVideoMessage(videoPath, textPrompt, mimeType);
-    case "kimi":
-      return await createKimiVideoMessage(videoPath, textPrompt, mimeType);
-    default:
-      throw new Error(`Unsupported video provider: ${provider}`);
+  try {
+    switch (provider) {
+      case "gemini":
+        return await createGeminiVideoMessage(videoPath, textPrompt, mimeType);
+      case "kimi":
+        return await createKimiVideoMessage(videoPath, textPrompt, mimeType);
+      default:
+        throw new Error(`Unsupported video provider: ${provider}`);
+    }
+  } catch (error) {
+    console.error(
+      `[VideoMessages] createVideoMessage failed: provider=${provider}, videoPath=${videoPath}, textPrompt="${textPrompt.substring(0, 50)}...", mimeType=${mimeType}`,
+      error
+    );
+    throw error;
   }
 }
 

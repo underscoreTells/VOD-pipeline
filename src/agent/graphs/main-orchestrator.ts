@@ -42,6 +42,15 @@ async function chatNode(state: typeof MainState.State, config: any) {
 }
 
 async function visualAnalysisNode(state: typeof MainState.State, config: any) {
+  // Find the index of the last human message to track analysis (do this before try block so catch can access it)
+  let lastHumanMessageIndex = -1;
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    if (state.messages[i]._getType() === "human") {
+      lastHumanMessageIndex = i;
+      break;
+    }
+  }
+
   try {
     config.writer?.({
       type: "progress",
@@ -60,15 +69,6 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
     const userQuery = lastHumanMessage && typeof lastHumanMessage.content === "string" 
       ? lastHumanMessage.content 
       : "Analyze this video chapter";
-
-    // Find the index of the last human message to track analysis
-    let lastHumanMessageIndex = -1;
-    for (let i = state.messages.length - 1; i >= 0; i--) {
-      if (state.messages[i]._getType() === "human") {
-        lastHumanMessageIndex = i;
-        break;
-      }
-    }
 
     // Build the analysis prompt
     const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
@@ -142,6 +142,8 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
     return {
       messages: [new AIMessage(errorContent)],
       suggestions: undefined,
+      // Set lastAnalyzedMessageIndex even on error to prevent repeated retriggering
+      lastAnalyzedMessageIndex: lastHumanMessageIndex >= 0 ? lastHumanMessageIndex : undefined,
     };
   }
 }
