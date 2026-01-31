@@ -64,6 +64,12 @@ function createGeminiVideoMessage(
 }
 
 /**
+ * Maximum video file size for Kimi API (100MB)
+ * Base64 encoding increases size by ~33%, so we check before encoding
+ */
+const KIMI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
+
+/**
  * Create message for Kimi (base64 encoded video)
  * Kimi requires base64-encoded video data
  */
@@ -72,6 +78,17 @@ async function createKimiVideoMessage(
   textPrompt: string,
   mimeType: string
 ): Promise<HumanMessage> {
+  // Check file size before encoding to avoid memory issues
+  const fs = await import("fs");
+  const stats = await fs.promises.stat(videoPath);
+  
+  if (stats.size > KIMI_MAX_VIDEO_SIZE) {
+    throw new Error(
+      `Video file too large for Kimi API: ${(stats.size / (1024 * 1024)).toFixed(1)}MB ` +
+      `(max ${KIMI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using Gemini or a shorter clip.`
+    );
+  }
+
   const base64Video = await readFileAsBase64(videoPath);
 
   return new HumanMessage({

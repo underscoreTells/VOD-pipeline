@@ -129,19 +129,70 @@ Be concise and actionable. Focus on the most important cuts.`;
 function extractSuggestionsFromResponse(content: string): any[] {
   const suggestions: any[] = [];
   
-  // Look for SUGGESTION: JSON format
-  const suggestionRegex = /SUGGESTION:\s*(\{[^}]+\})/g;
-  let match;
+  // Look for SUGGESTION: followed by JSON object
+  // Use a more robust approach: find "SUGGESTION:" and then parse the JSON that follows
+  const suggestionMarker = "SUGGESTION:";
+  let index = content.indexOf(suggestionMarker);
   
-  while ((match = suggestionRegex.exec(content)) !== null) {
-    try {
-      const suggestion = JSON.parse(match[1]);
-      if (suggestion.in_point !== undefined && suggestion.out_point !== undefined) {
-        suggestions.push(suggestion);
+  while (index !== -1) {
+    // Move past the marker
+    const jsonStart = index + suggestionMarker.length;
+    
+    // Find the JSON object by tracking braces
+    let braceCount = 0;
+    let jsonEnd = jsonStart;
+    let inString = false;
+    let escaped = false;
+    
+    for (let i = jsonStart; i < content.length; i++) {
+      const char = content[i];
+      
+      if (escaped) {
+        escaped = false;
+        continue;
       }
-    } catch (e) {
-      // Ignore malformed JSON
+      
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      
+      if (char === '"' && !escaped) {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === "{") {
+          braceCount++;
+          if (braceCount === 1) {
+            jsonEnd = i;
+          }
+        } else if (char === "}") {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEnd = i + 1;
+            break;
+          }
+        }
+      }
     }
+    
+    // Extract and parse the JSON
+    if (jsonEnd > jsonStart) {
+      const jsonStr = content.slice(jsonStart, jsonEnd).trim();
+      try {
+        const suggestion = JSON.parse(jsonStr);
+        if (suggestion.in_point !== undefined && suggestion.out_point !== undefined) {
+          suggestions.push(suggestion);
+        }
+      } catch (e) {
+        // Ignore malformed JSON - continue searching
+      }
+    }
+    
+    // Look for next suggestion
+    index = content.indexOf(suggestionMarker, jsonEnd > jsonStart ? jsonEnd : index + 1);
   }
   
   return suggestions;

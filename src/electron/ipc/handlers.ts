@@ -37,6 +37,7 @@ import {
   createProxy,
   updateProxyStatus,
   updateProxyMetadata,
+  getProxyByAsset,
   createSuggestion,
   getSuggestionsByChapter,
   applySuggestion,
@@ -149,23 +150,25 @@ export function registerIpcHandlers() {
   // Background proxy generation
   async function generateProxyAsync(assetId: number, sourcePath: string, mainWindow: any) {
     const proxyPath = getProxyPath(assetId);
+    let proxyId: number | null = null;
     
-    // Create proxy record
-    await createProxy({
-      asset_id: assetId,
-      file_path: proxyPath,
-      preset: 'ai_analysis',
-      width: null,
-      height: null,
-      framerate: null,
-      file_size: null,
-      duration: null,
-      status: 'generating',
-      error_message: null,
-    });
-
     try {
-      console.log(`[Proxy] Starting generation for asset ${assetId}`);
+      // Create proxy record and get its ID
+      const proxy = await createProxy({
+        asset_id: assetId,
+        file_path: proxyPath,
+        preset: 'ai_analysis',
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        status: 'generating',
+        error_message: null,
+      });
+      proxyId = proxy.id;
+
+      console.log(`[Proxy] Starting generation for asset ${assetId} (proxy ${proxyId})`);
       
       // Generate proxy with progress
       const proxyMetadata = await generateAIProxy(sourcePath, proxyPath, (progress) => {
@@ -175,15 +178,15 @@ export function registerIpcHandlers() {
         }
       });
 
-      // Update proxy record with metadata
-      await updateProxyMetadata(assetId, {
+      // Update proxy record with metadata using the proxy ID
+      await updateProxyMetadata(proxyId, {
         width: proxyMetadata.width,
         height: proxyMetadata.height,
         framerate: proxyMetadata.framerate,
         file_size: proxyMetadata.fileSize,
         duration: proxyMetadata.duration,
       });
-      await updateProxyStatus(assetId, 'ready');
+      await updateProxyStatus(proxyId, 'ready');
 
       console.log(`[Proxy] Generation complete for asset ${assetId}: ${proxyPath}`);
       
@@ -193,7 +196,16 @@ export function registerIpcHandlers() {
       }
     } catch (error) {
       console.error(`[Proxy] Generation failed for asset ${assetId}:`, error);
-      await updateProxyStatus(assetId, 'error', error instanceof Error ? error.message : 'Unknown error');
+      // Try to update status using the proxy ID if we have it, otherwise fall back to finding it
+      if (proxyId) {
+        await updateProxyStatus(proxyId, 'error', error instanceof Error ? error.message : 'Unknown error');
+      } else {
+        // Try to find the proxy by asset ID and update it
+        const existingProxy = await getProxyByAsset(assetId);
+        if (existingProxy) {
+          await updateProxyStatus(existingProxy.id, 'error', error instanceof Error ? error.message : 'Unknown error');
+        }
+      }
       
       // Notify renderer of error
       if (mainWindow && !mainWindow.isDestroyed()) {

@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { agentState, sendChatMessage, setProvider } from "../state/agent.svelte";
+  import { agentState, sendChatMessage, setProvider, applySuggestion, rejectSuggestion, clearSuggestions } from "../state/agent.svelte";
   
   let message = $state("");
   let chatContainer: HTMLDivElement;
+  let showSuggestions = $state(true);
   
   const providers = [
     { value: "gemini", label: "Gemini" },
@@ -27,6 +28,23 @@
   
   function formatTime(date: Date) {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  
+  function formatDuration(start: number, end: number) {
+    const format = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+    return `${format(start)} - ${format(end)}`;
+  }
+  
+  async function handleApplySuggestion(id: number) {
+    await applySuggestion(id);
+  }
+  
+  async function handleRejectSuggestion(id: number) {
+    await rejectSuggestion(id);
   }
 </script>
 
@@ -74,6 +92,44 @@
       </div>
     {/if}
   </div>
+  
+  <!-- Suggestions Panel -->
+  {#if agentState.suggestions.length > 0}
+    <div class="suggestions-panel">
+      <div class="suggestions-header">
+        <h4>Suggestions ({agentState.suggestions.filter(s => s.status === 'pending').length} pending)</h4>
+        <button class="toggle-btn" onclick={() => showSuggestions = !showSuggestions}>
+          {showSuggestions ? 'Hide' : 'Show'}
+        </button>
+      </div>
+      
+      {#if showSuggestions}
+        <div class="suggestions-list">
+          {#each agentState.suggestions.filter(s => s.status === 'pending') as suggestion}
+            <div class="suggestion-card">
+              <div class="suggestion-time">
+                {formatDuration(suggestion.in_point, suggestion.out_point)}
+              </div>
+              <div class="suggestion-description">
+                {suggestion.description || 'No description'}
+              </div>
+              <div class="suggestion-reasoning">
+                {suggestion.reasoning || ''}
+              </div>
+              <div class="suggestion-actions">
+                <button class="apply-btn" onclick={() => handleApplySuggestion(suggestion.id)}>
+                  ✓ Apply
+                </button>
+                <button class="reject-btn" onclick={() => handleRejectSuggestion(suggestion.id)}>
+                  ✕ Reject
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
   
   <form class="chat-input" onsubmit={handleSubmit}>
     <input
@@ -210,5 +266,106 @@
   .chat-input button:disabled {
     background: #444;
     cursor: not-allowed;
+  }
+  
+  .suggestions-panel {
+    border-top: 1px solid #333;
+    background: #252525;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  
+  .suggestions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #333;
+  }
+  
+  .suggestions-header h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #4ade80;
+  }
+  
+  .toggle-btn {
+    padding: 4px 8px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #888;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  
+  .toggle-btn:hover {
+    background: #444;
+    color: #fff;
+  }
+  
+  .suggestions-list {
+    padding: 12px 16px;
+  }
+  
+  .suggestion-card {
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+  }
+  
+  .suggestion-time {
+    font-family: monospace;
+    font-size: 12px;
+    color: #4ade80;
+    margin-bottom: 4px;
+  }
+  
+  .suggestion-description {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+  
+  .suggestion-reasoning {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  
+  .suggestion-actions {
+    display: flex;
+    gap: 8px;
+  }
+  
+  .apply-btn, .reject-btn {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  
+  .apply-btn {
+    background: #4ade80;
+    color: #000;
+  }
+  
+  .apply-btn:hover {
+    background: #22c55e;
+  }
+  
+  .reject-btn {
+    background: #444;
+    color: #fff;
+  }
+  
+  .reject-btn:hover {
+    background: #555;
   }
 </style>
