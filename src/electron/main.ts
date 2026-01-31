@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import dotenv from 'dotenv';
 import { registerIpcHandlers } from './ipc/handlers.js';
 import { initializeDatabase, closeDatabase } from './database/db.js';
 import { getAgentBridge } from './agent-bridge.js';
@@ -15,7 +16,7 @@ let mainWindow: BrowserWindow | null = null;
 let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
 
 function createWindow() {
-  const preloadPath = path.join(__dirname, 'preload.js');
+  const preloadPath = path.join(__dirname, 'preload.cjs');
   console.log('[Main] Preload path:', preloadPath);
   console.log('[Main] Preload exists:', fs.existsSync(preloadPath));
 
@@ -66,6 +67,8 @@ app.whenReady().then(async () => {
   console.log('Electron version:', process.versions.electron);
   console.log('Development mode:', process.env.NODE_ENV !== 'production');
 
+  dotenv.config();
+
   // Initialize core systems
   initializeDatabase();
   registerIpcHandlers();
@@ -86,6 +89,11 @@ app.whenReady().then(async () => {
 
 async function startAgentBridge() {
   try {
+    if (!hasAgentKeys()) {
+      console.warn('[Main] Agent disabled: no API keys found in environment.');
+      return;
+    }
+
     console.log('[Main] Starting agent bridge...');
     agentBridge = getAgentBridge();
     await agentBridge.start();
@@ -107,6 +115,15 @@ async function startAgentBridge() {
   } catch (error) {
     console.error('[Main] Failed to start agent bridge:', error);
   }
+}
+
+function hasAgentKeys(): boolean {
+  return Boolean(
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENROUTER_API_KEY
+  );
 }
 
 app.on('window-all-closed', () => {

@@ -85,8 +85,7 @@ export class JSONStdoutReader extends EventEmitter {
         const message = JSON.parse(line);
         this.emit("message", message);
       } catch (error) {
-        console.error("[JSONStdoutReader] Parse error:", error);
-        this.emit("error", error);
+        console.warn("[JSONStdoutReader] Ignoring non-JSON line:", line);
       }
     }
   }

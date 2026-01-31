@@ -61,6 +61,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
 
     if (schema) {
       database.exec(schema);
+      ensureSchemaColumns(database);
       console.log('Database schema initialized successfully');
     } else {
       console.error('Schema file not found. Tried paths:', possiblePaths);
@@ -80,6 +81,31 @@ export async function initializeDatabase(): Promise<Database.Database> {
     });
 
   return await initializationPromise;
+}
+
+function ensureSchemaColumns(database: Database.Database) {
+  ensureColumn(database, 'assets', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+  ensureColumn(database, 'chapters', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
+}
+
+function ensureColumn(
+  database: Database.Database,
+  table: string,
+  column: string,
+  definition: string
+) {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all();
+  const hasColumn = columns.some((col: any) => col.name === column);
+  if (hasColumn) {
+    return;
+  }
+
+  try {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    console.log(`Database migrated: added ${table}.${column}`);
+  } catch (error) {
+    console.error(`Database migration failed for ${table}.${column}:`, error);
+  }
 }
 
 export async function getDatabase(): Promise<Database.Database> {

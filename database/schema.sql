@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS assets (
   file_type TEXT,
   duration REAL,
   metadata TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   title TEXT,
   start_time REAL NOT NULL,
   end_time REAL NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
