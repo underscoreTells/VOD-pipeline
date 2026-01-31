@@ -34,11 +34,19 @@ import {
   updateTimelineState,
   saveWaveform,
   getWaveform,
+  createProxy,
+  updateProxyStatus,
+  updateProxyMetadata,
+  createSuggestion,
+  getSuggestionsByChapter,
+  applySuggestion,
+  rejectSuggestion,
 } from '../database/db.js';
 import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js';
 import { getAgentBridge } from '../agent-bridge.js';
-import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError } from '../../pipeline/ffmpeg.js';
+import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError, generateAIProxy } from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError } from '../../pipeline/whisper.js';
+import { app } from 'electron';
 import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export/index.js';
 import type { AssetMetadata, Clip } from '../../shared/types/database.js';
 import type { ExportFormat } from '../../pipeline/export/index.js';
@@ -128,6 +136,75 @@ export function registerIpcHandlers() {
     }
   });
 
+  // Helper to get proxy storage path
+  function getProxyPath(assetId: number): string {
+    const userDataPath = app.getPath('userData');
+    const proxiesDir = path.join(userDataPath, 'proxies');
+    if (!fs.existsSync(proxiesDir)) {
+      fs.mkdirSync(proxiesDir, { recursive: true });
+    }
+    return path.join(proxiesDir, `asset_${assetId}_ai_proxy.mp4`);
+  }
+
+  // Background proxy generation
+  async function generateProxyAsync(assetId: number, sourcePath: string, mainWindow: any) {
+    const proxyPath = getProxyPath(assetId);
+    
+    // Create proxy record
+    await createProxy({
+      asset_id: assetId,
+      file_path: proxyPath,
+      preset: 'ai_analysis',
+      width: null,
+      height: null,
+      framerate: null,
+      file_size: null,
+      duration: null,
+      status: 'generating',
+      error_message: null,
+    });
+
+    try {
+      console.log(`[Proxy] Starting generation for asset ${assetId}`);
+      
+      // Generate proxy with progress
+      const proxyMetadata = await generateAIProxy(sourcePath, proxyPath, (progress) => {
+        // Send progress to renderer
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('proxy:progress', { assetId, progress });
+        }
+      });
+
+      // Update proxy record with metadata
+      await updateProxyMetadata(assetId, {
+        width: proxyMetadata.width,
+        height: proxyMetadata.height,
+        framerate: proxyMetadata.framerate,
+        file_size: proxyMetadata.fileSize,
+        duration: proxyMetadata.duration,
+      });
+      await updateProxyStatus(assetId, 'ready');
+
+      console.log(`[Proxy] Generation complete for asset ${assetId}: ${proxyPath}`);
+      
+      // Notify renderer of completion
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('proxy:complete', { assetId, proxyPath });
+      }
+    } catch (error) {
+      console.error(`[Proxy] Generation failed for asset ${assetId}:`, error);
+      await updateProxyStatus(assetId, 'error', error instanceof Error ? error.message : 'Unknown error');
+      
+      // Notify renderer of error
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('proxy:error', { 
+          assetId, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        });
+      }
+    }
+  }
+
   // Asset handlers
   ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (event, { projectId, filePath }) => {
     console.log('IPC: asset:add', projectId, filePath);
@@ -189,6 +266,14 @@ export function registerIpcHandlers() {
         duration,
         metadata,
       });
+
+      // Start proxy generation in background for video assets
+      if (fileType === 'video') {
+        const { getMainWindow } = await import('../main.js');
+        const mainWindow = getMainWindow();
+        // Don't await - run in background
+        generateProxyAsync(asset.id!, filePath, mainWindow);
+      }
 
       return createSuccessResponse(asset);
     } catch (error) {
@@ -897,6 +982,110 @@ export function registerIpcHandlers() {
     } catch (error) {
       console.error('IPC dialog:showSaveDialog error', error);
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  // Suggestion handlers (Phase 4: Visual AI)
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_CREATE, async (_, { chapterId, inPoint, outPoint, description, reasoning, provider }) => {
+    console.log('IPC: suggestion:create', chapterId, inPoint, outPoint);
+    try {
+      if (!chapterId || inPoint === undefined || outPoint === undefined) {
+        return createErrorResponse('Chapter ID, in_point, and out_point are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (inPoint < 0) {
+        return createErrorResponse('In point must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (outPoint <= inPoint) {
+        return createErrorResponse('Out point must be greater than in point', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId,
+        in_point: inPoint,
+        out_point: outPoint,
+        description: description ?? null,
+        reasoning: reasoning ?? null,
+        provider: provider ?? null,
+        status: 'pending',
+        display_order: 0,
+      });
+
+      return createSuccessResponse(suggestion);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_GET_BY_CHAPTER, async (_, { chapterId, status }) => {
+    console.log('IPC: suggestion:get-by-chapter', chapterId, status);
+    try {
+      if (!chapterId) {
+        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const suggestions = await getSuggestionsByChapter(chapterId, status);
+      return createSuccessResponse(suggestions);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY, async (_, { id }) => {
+    console.log('IPC: suggestion:apply', id);
+    try {
+      if (!id) {
+        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const success = await applySuggestion(id);
+      if (success) {
+        return createSuccessResponse({ applied: true });
+      } else {
+        return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_REJECT, async (_, { id }) => {
+    console.log('IPC: suggestion:reject', id);
+    try {
+      if (!id) {
+        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const success = await rejectSuggestion(id);
+      if (success) {
+        return createSuccessResponse({ rejected: true });
+      } else {
+        return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY_ALL, async (_, { chapterId }) => {
+    console.log('IPC: suggestion:apply-all', chapterId);
+    try {
+      if (!chapterId) {
+        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const pendingSuggestions = await getSuggestionsByChapter(chapterId, 'pending');
+      let appliedCount = 0;
+
+      for (const suggestion of pendingSuggestions) {
+        const success = await applySuggestion(suggestion.id);
+        if (success) {
+          appliedCount++;
+        }
+      }
+
+      return createSuccessResponse({ appliedCount, total: pendingSuggestions.length });
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
   });
 }

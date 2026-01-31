@@ -187,3 +187,8 @@ async function initializePython() {
     console.warn('[Main] Install Python 3.8+ to enable transcription.');
   }
 }
+
+// Export mainWindow getter for IPC handlers
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
+}
