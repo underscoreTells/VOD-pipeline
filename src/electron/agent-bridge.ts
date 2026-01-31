@@ -110,7 +110,7 @@ export class AgentBridge extends EventEmitter {
       // ES module compatible __dirname replacement
       const __filename = fileURLToPath(import.meta.url);
       const __dirname = path.dirname(__filename);
-      return path.join(__dirname, "../../agent/index.js");
+      return path.join(__dirname, "../../src/agent/index.js");
     }
   }
 
