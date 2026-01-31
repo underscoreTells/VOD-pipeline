@@ -1,4 +1,5 @@
 import type { Clip } from '../../shared/types/database.js';
+import { pathToFileURL } from 'url';
 
 export interface FCPXMLOptions {
   projectName: string;
@@ -53,7 +54,9 @@ export function generateFCPXML(options: FCPXMLOptions): string {
     // Use actual asset duration if available, otherwise use total timeline duration
     const assetDuration = options.assetDurations?.get(assetId) ?? totalDuration;
 
-    assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="file://${escapeXml(assetPath)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(assetDuration, frameRate)}"/>`);
+    // Convert to proper file URL (platform-safe)
+    const fileUrl = pathToFileURL(assetPath).href;
+    assetResources.push(`    <asset id="${resourceId}" name="${escapeXml(getFilename(assetPath))}" src="${escapeXml(fileUrl)}" hasVideo="1" hasAudio="1" duration="${secondsToTimecode(assetDuration, frameRate)}"/>`);
     assetCounter++;
   }
 

@@ -1,4 +1,9 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
+import type { Asset, Clip, TimelineState } from '../shared/types/database';
+
+// ============================================================================
+// Result Types
+// ============================================================================
 
 export interface CreateProjectResult {
   success: boolean;
@@ -24,10 +29,102 @@ export interface AgentChatResult {
   error?: string;
 }
 
-export interface Message {
-  role: string;
-  content: string;
+export interface GetAssetsResult {
+  success: boolean;
+  data?: Asset[];
+  error?: string;
 }
+
+export interface AddAssetResult {
+  success: boolean;
+  data?: Asset;
+  error?: string;
+}
+
+export interface GetClipsResult {
+  success: boolean;
+  data?: Clip[];
+  error?: string;
+}
+
+export interface CreateClipInput {
+  projectId: number;
+  assetId: number;
+  trackIndex: number;
+  startTime: number;
+  inPoint: number;
+  outPoint: number;
+  role?: string;
+  description?: string;
+  isEssential?: boolean;
+}
+
+export interface CreateClipResult {
+  success: boolean;
+  data?: Clip;
+  error?: string;
+}
+
+export interface UpdateClipResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface DeleteClipResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface TimelineStateResult {
+  success: boolean;
+  data?: TimelineState | null;
+  error?: string;
+}
+
+export interface SaveTimelineStateResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface WaveformResult {
+  success: boolean;
+  data?: {
+    peaks: Array<{ min: number; max: number }>;
+    sampleRate: number;
+    duration: number;
+    generatedAt: string;
+  };
+  error?: string;
+}
+
+export interface WaveformGenerationResult {
+  success: boolean;
+  data?: {
+    assetId: number;
+    trackIndex: number;
+    tiers: Array<{
+      level: 1 | 2 | 3;
+      peaks: Array<{ min: number; max: number }>;
+      sampleRate: number;
+      duration: number;
+    }>;
+  };
+  error?: string;
+}
+
+export interface ExportResult {
+  success: boolean;
+  data?: {
+    filePath: string;
+    format: string;
+    clipCount: number;
+  };
+  error?: string;
+}
+
+// ============================================================================
+// Electron API Interface
+// ============================================================================
 
 export interface ElectronAPI {
   projects: {
@@ -38,7 +135,38 @@ export interface ElectronAPI {
   agent: {
     chat: (projectId: string, message: string, threadId?: string) => Promise<AgentChatResult>;
   };
+  assets: {
+    getByProject: (projectId: number) => Promise<GetAssetsResult>;
+    add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+  };
+  clips: {
+    getByProject: (projectId: number) => Promise<GetClipsResult>;
+    create: (input: CreateClipInput) => Promise<CreateClipResult>;
+    update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
+    delete: (id: number) => Promise<DeleteClipResult>;
+  };
+  timeline: {
+    loadState: (projectId: number) => Promise<TimelineStateResult>;
+    saveState: (state: any) => Promise<SaveTimelineStateResult>;
+  };
+  waveforms: {
+    get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
+    generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+  };
+  exports: {
+    generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
+  };
+  dialog: {
+    showSaveDialog: (options: any) => Promise<{ canceled: boolean; filePath?: string }>;
+  };
+  webUtils: {
+    getPathForFile: (file: File) => string;
+  };
 }
+
+// ============================================================================
+// API Implementation
+// ============================================================================
 
 const electronAPI: ElectronAPI = {
   projects: {
@@ -50,12 +178,56 @@ const electronAPI: ElectronAPI = {
     chat: (projectId, message, threadId) =>
       ipcRenderer.invoke('agent:chat', { projectId, message, threadId }),
   },
+  assets: {
+    getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
+    add: (projectId, filePath) => ipcRenderer.invoke('asset:add', { projectId, filePath }),
+  },
+  clips: {
+    getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
+    create: (input) => ipcRenderer.invoke('clip:create', {
+      projectId: input.projectId,
+      assetId: input.assetId,
+      trackIndex: input.trackIndex,
+      startTime: input.startTime,
+      inPoint: input.inPoint,
+      outPoint: input.outPoint,
+      role: input.role,
+      description: input.description,
+      isEssential: input.isEssential,
+    }),
+    update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
+    delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
+  },
+  timeline: {
+    loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),
+    saveState: (state) => ipcRenderer.invoke('timeline:state-save', state),
+  },
+  waveforms: {
+    get: (assetId, trackIndex, tierLevel) => 
+      ipcRenderer.invoke('waveform:get', { assetId, trackIndex, tierLevel }),
+    generate: (assetId, trackIndex) => 
+      ipcRenderer.invoke('waveform:generate', { assetId, trackIndex }),
+  },
+  exports: {
+    generate: (projectId, format, filePath) => 
+      ipcRenderer.invoke('export:generate', { projectId, format, filePath }),
+  },
+  dialog: {
+    showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
+  },
+  webUtils: {
+    getPathForFile: (file) => webUtils.getPathForFile(file),
+  },
 };
 
+// Expose to renderer
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 
+// Type declarations for TypeScript
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
   }
 }
+
+export {};

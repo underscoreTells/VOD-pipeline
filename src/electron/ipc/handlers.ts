@@ -887,4 +887,16 @@ export function registerIpcHandlers() {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
+
+  // Dialog handler for save dialogs
+  ipcMain.handle('dialog:showSaveDialog', async (event, options) => {
+    const { dialog } = await import('electron');
+    try {
+      const result = await dialog.showSaveDialog(options);
+      return result;
+    } catch (error) {
+      console.error('IPC dialog:showSaveDialog error', error);
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
 }

@@ -72,7 +72,11 @@ export interface Beat {
   why_essential: string | null;
   visual_dependency: 'none' | 'important' | 'critical' | null;
   is_essential: boolean;
-  display_order: number;
+  display_order: number;      // Original AI-suggested order
+  user_modified: boolean;     // Has user edited this beat?
+  discard: boolean;           // Marked for deletion
+  sort_order: number | null;  // User-defined sort priority
+  clip_id: number | null;     // Linked clip on timeline
 }
 
 export interface Conversation {
