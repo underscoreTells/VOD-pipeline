@@ -46,6 +46,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
     const possiblePaths = [
       path.join(moduleDirname, '../../database/schema.sql'),
       path.join(moduleDirname, '../../../database/schema.sql'),
+      path.join(moduleDirname, '../../../../database/schema.sql'), // Project root (dev mode)
       path.join(app.getAppPath(), 'database/schema.sql'),
     ];
 
