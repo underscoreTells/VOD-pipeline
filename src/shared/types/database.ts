@@ -137,3 +137,46 @@ export type UpdateAssetInput = Partial<Omit<Asset, 'id' | 'project_id' | 'create
 export type UpdateChapterInput = Partial<Omit<Chapter, 'id' | 'project_id' | 'created_at'>>;
 export type UpdateClipInput = Partial<Omit<Clip, 'id' | 'project_id' | 'created_at'>>;
 export type UpdateTimelineStateInput = Partial<Omit<TimelineState, 'project_id'>>;
+
+// ============================================================================
+// PROXY TYPES (Phase 4: Visual AI)
+// ============================================================================
+
+export interface Proxy {
+  id: number;
+  asset_id: number;
+  file_path: string;
+  preset: 'ai_analysis';
+  width: number | null;
+  height: number | null;
+  framerate: number | null;
+  file_size: number | null;
+  duration: number | null;
+  status: 'pending' | 'generating' | 'ready' | 'error';
+  error_message: string | null;
+  created_at: string;
+}
+
+export type CreateProxyInput = Omit<Proxy, 'id' | 'created_at'>;
+
+// ============================================================================
+// SUGGESTION TYPES (Phase 4: Visual AI)
+// ============================================================================
+
+export interface Suggestion {
+  id: number;
+  chapter_id: number;
+  in_point: number;
+  out_point: number;
+  description: string | null;
+  reasoning: string | null;
+  provider: 'gemini' | 'kimi' | null;
+  status: 'pending' | 'applied' | 'rejected';
+  display_order: number;
+  created_at: string;
+  applied_at: string | null;
+}
+
+export type CreateSuggestionInput = Omit<Suggestion, 'id' | 'created_at' | 'applied_at'>;
+
+export type UpdateSuggestionInput = Partial<Pick<Suggestion, 'status' | 'display_order'>>;

@@ -15,6 +15,11 @@ import type {
   CreateClipInput,
   UpdateClipInput,
   UpdateTimelineStateInput,
+  Proxy,
+  CreateProxyInput,
+  Suggestion,
+  CreateSuggestionInput,
+  UpdateSuggestionInput,
 } from '../../shared/types/database.js';
 import type { WaveformPeak } from '../../shared/types/pipeline.js';
 
@@ -1176,6 +1181,274 @@ export async function deleteOldWaveforms(olderThanDays: number): Promise<number>
   const result = database.prepare(
     'DELETE FROM waveform_cache WHERE generated_at < ?'
   ).run(cutoffDate.toISOString());
+  
+  return result.changes;
+}
+
+// ============================================================================
+// PROXY CRUD OPERATIONS (Phase 4: Visual AI)
+// ============================================================================
+
+export async function createProxy(proxy: CreateProxyInput): Promise<Proxy> {
+  const database = await getDatabase();
+  
+  const result = database.prepare(
+    `INSERT INTO proxies (asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    proxy.asset_id,
+    proxy.file_path,
+    proxy.preset,
+    proxy.width,
+    proxy.height,
+    proxy.framerate,
+    proxy.file_size,
+    proxy.duration,
+    proxy.status,
+    proxy.error_message
+  );
+  
+  return {
+    id: result.lastInsertRowid as number,
+    ...proxy,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export async function getProxy(id: number): Promise<Proxy | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE id = ?'
+  ).get(id) as Proxy | undefined;
+  
+  return result || null;
+}
+
+export async function getProxyByAsset(assetId: number, preset: 'ai_analysis' = 'ai_analysis'): Promise<Proxy | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE asset_id = ? AND preset = ?'
+  ).get(assetId, preset) as Proxy | undefined;
+  
+  return result || null;
+}
+
+export async function getProxiesByAsset(assetId: number): Promise<Proxy[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    'SELECT id, asset_id, file_path, preset, width, height, framerate, file_size, duration, status, error_message, created_at FROM proxies WHERE asset_id = ? ORDER BY created_at DESC'
+  ).all(assetId) as Proxy[];
+  
+  return results;
+}
+
+export async function updateProxyStatus(
+  id: number,
+  status: Proxy['status'],
+  errorMessage?: string
+): Promise<boolean> {
+  const database = await getDatabase();
+  
+  const result = database.prepare(
+    'UPDATE proxies SET status = ?, error_message = ? WHERE id = ?'
+  ).run(status, errorMessage || null, id);
+  
+  return result.changes > 0;
+}
+
+export async function updateProxyMetadata(
+  id: number,
+  updates: { width?: number; height?: number; framerate?: number; file_size?: number; duration?: number }
+): Promise<boolean> {
+  const database = await getDatabase();
+  
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  
+  if (updates.width !== undefined) {
+    fields.push('width = ?');
+    values.push(updates.width);
+  }
+  if (updates.height !== undefined) {
+    fields.push('height = ?');
+    values.push(updates.height);
+  }
+  if (updates.framerate !== undefined) {
+    fields.push('framerate = ?');
+    values.push(updates.framerate);
+  }
+  if (updates.file_size !== undefined) {
+    fields.push('file_size = ?');
+    values.push(updates.file_size);
+  }
+  if (updates.duration !== undefined) {
+    fields.push('duration = ?');
+    values.push(updates.duration);
+  }
+  
+  if (fields.length === 0) {
+    return true; // Nothing to update
+  }
+  
+  values.push(id);
+  
+  const result = database.prepare(
+    `UPDATE proxies SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+  
+  return result.changes > 0;
+}
+
+export async function deleteProxy(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM proxies WHERE id = ?').run(id);
+  
+  return result.changes > 0;
+}
+
+export async function deleteProxiesByAsset(assetId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM proxies WHERE asset_id = ?').run(assetId);
+  
+  return result.changes;
+}
+
+// ============================================================================
+// SUGGESTION CRUD OPERATIONS (Phase 4: Visual AI)
+// ============================================================================
+
+export async function createSuggestion(suggestion: CreateSuggestionInput): Promise<Suggestion> {
+  const database = await getDatabase();
+  
+  const result = database.prepare(
+    `INSERT INTO suggestions (chapter_id, in_point, out_point, description, reasoning, provider, status, display_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    suggestion.chapter_id,
+    suggestion.in_point,
+    suggestion.out_point,
+    suggestion.description,
+    suggestion.reasoning,
+    suggestion.provider,
+    suggestion.status,
+    suggestion.display_order
+  );
+  
+  return {
+    id: result.lastInsertRowid as number,
+    ...suggestion,
+    created_at: new Date().toISOString(),
+    applied_at: null,
+  };
+}
+
+export async function getSuggestion(id: number): Promise<Suggestion | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE id = ?'
+  ).get(id) as Suggestion | undefined;
+  
+  return result || null;
+}
+
+export async function getSuggestionsByChapter(chapterId: number, status?: Suggestion['status']): Promise<Suggestion[]> {
+  const database = await getDatabase();
+  
+  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ?';
+  const params: unknown[] = [chapterId];
+  
+  if (status) {
+    query += ' AND status = ?';
+    params.push(status);
+  }
+  
+  query += ' ORDER BY display_order ASC, created_at DESC';
+  
+  const results = database.prepare(query).all(...params) as Suggestion[];
+  return results;
+}
+
+export async function getSuggestionsByProvider(chapterId: number, provider: 'gemini' | 'kimi'): Promise<Suggestion[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
+  ).all(chapterId, provider) as Suggestion[];
+  
+  return results;
+}
+
+export async function applySuggestion(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    "UPDATE suggestions SET status = 'applied', applied_at = ? WHERE id = ?"
+  ).run(new Date().toISOString(), id);
+  
+  return result.changes > 0;
+}
+
+export async function rejectSuggestion(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    "UPDATE suggestions SET status = 'rejected' WHERE id = ?"
+  ).run(id);
+  
+  return result.changes > 0;
+}
+
+export async function updateSuggestion(id: number, updates: UpdateSuggestionInput): Promise<boolean> {
+  const database = await getDatabase();
+  
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+    
+    // If applying, set applied_at
+    if (updates.status === 'applied') {
+      fields.push('applied_at = ?');
+      values.push(new Date().toISOString());
+    }
+  }
+  
+  if (updates.display_order !== undefined) {
+    fields.push('display_order = ?');
+    values.push(updates.display_order);
+  }
+  
+  if (fields.length === 0) {
+    return true; // Nothing to update
+  }
+  
+  values.push(id);
+  
+  const result = database.prepare(
+    `UPDATE suggestions SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+  
+  return result.changes > 0;
+}
+
+export async function deleteSuggestion(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM suggestions WHERE id = ?').run(id);
+  
+  return result.changes > 0;
+}
+
+export async function deleteSuggestionsByChapter(chapterId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM suggestions WHERE chapter_id = ?').run(chapterId);
+  
+  return result.changes;
+}
+
+export async function clearPendingSuggestions(chapterId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    "DELETE FROM suggestions WHERE chapter_id = ? AND status = 'pending'"
+  ).run(chapterId);
   
   return result.changes;
 }

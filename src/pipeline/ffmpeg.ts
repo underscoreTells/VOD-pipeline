@@ -438,3 +438,126 @@ export async function isValidVideo(filePath: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Generate AI analysis proxy (640px, 5fps, H.264, AAC)
+ * Optimized for AI video analysis - small file size, adequate quality
+ */
+export async function generateAIProxy(
+  inputPath: string,
+  outputPath: string,
+  onProgress?: (percent: number) => void
+): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
+  const ffmpegPath = getFFmpegPath();
+  if (!ffmpegPath) {
+    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
+  }
+
+  // Get source metadata first
+  const metadata = await getVideoMetadata(inputPath);
+
+  const args: string[] = [
+    '-i', inputPath,
+    '-vf', 'scale=640:-2,fps=5', // 640px width, maintain aspect, 5fps
+    '-c:v', 'libx264',
+    '-preset', 'fast',
+    '-crf', '28', // Good quality, smaller file size
+    '-c:a', 'aac',
+    '-b:a', '64k', // Low bitrate audio is fine for analysis
+    '-movflags', '+faststart', // Web-optimized
+    '-y', outputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath.path, args);
+    let errorOutput = '';
+    let lastProgress = 0;
+
+    proc.stderr.on('data', (data) => {
+      const output = data.toString();
+      errorOutput += output;
+
+      // Parse progress from FFmpeg output
+      const timeMatch = output.match(/time=(\d+):(\d+):(\d+\.\d+)/);
+      if (timeMatch && metadata.duration > 0) {
+        const hours = parseInt(timeMatch[1], 10);
+        const minutes = parseInt(timeMatch[2], 10);
+        const seconds = parseFloat(timeMatch[3]);
+        const currentTime = hours * 3600 + minutes * 60 + seconds;
+        const progress = Math.min(100, Math.round((currentTime / metadata.duration) * 100));
+        
+        if (progress > lastProgress) {
+          lastProgress = progress;
+          onProgress?.(progress);
+        }
+      }
+    });
+
+    proc.on('error', (error) => {
+      reject(new FFmpegError(
+        `Failed to generate AI proxy: ${error.message}`,
+        'FFMPEG_ERROR',
+        error
+      ));
+    });
+
+    proc.on('close', async (code) => {
+      if (code !== 0) {
+        reject(new FFmpegError(
+          `AI proxy generation failed with code ${code}`,
+          'FFMPEG_ERROR',
+          { code, error: errorOutput }
+        ));
+        return;
+      }
+
+      try {
+        // Get proxy metadata
+        const proxyMetadata = await getVideoMetadata(outputPath);
+        const stats = fs.statSync(outputPath);
+
+        resolve({
+          width: proxyMetadata.width,
+          height: proxyMetadata.height,
+          framerate: Math.round(proxyMetadata.fps),
+          fileSize: stats.size,
+          duration: proxyMetadata.duration,
+        });
+      } catch (error) {
+        reject(new FFmpegError(
+          'Failed to read generated proxy metadata',
+          'METADATA_ERROR',
+          error
+        ));
+      }
+    });
+  });
+}
+
+/**
+ * Generate proxy with progress streaming and timeout
+ * Wrapper around generateAIProxy with better error handling
+ */
+export async function generateAIProxyWithProgress(
+  inputPath: string,
+  outputPath: string,
+  options: {
+    onProgress?: (percent: number) => void;
+    timeoutMs?: number;
+  } = {}
+): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
+  const timeoutMs = options.timeoutMs || 30 * 60 * 1000; // 30 minutes default
+  
+  return Promise.race([
+    generateAIProxy(inputPath, outputPath, options.onProgress),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new FFmpegError(
+          `AI proxy generation timed out after ${timeoutMs}ms`,
+          'TIMEOUT',
+          { timeout: timeoutMs }
+        ));
+      }, timeoutMs);
+    }),
+  ]);
+}
