@@ -12,7 +12,7 @@
     "dev:main": "electron dist/src/electron/main.js",
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json && node ./scripts/copy-preload.js",
+    "build:electron": "tsc -p tsconfig.electron.json && node ./scripts/copy-database.js && node ./scripts/copy-preload.js",
     "dist": "pnpm build && electron-builder",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
     "lint": "echo \"Linting not configured yet\"",

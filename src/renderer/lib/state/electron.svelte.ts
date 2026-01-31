@@ -216,6 +216,9 @@ declare global {
         getAll: () => Promise<GetProjectsResult>;
         get: (id: number) => Promise<GetProjectResult>;
       };
+      agent: {
+        chat: (projectId: string, message: string, threadId?: string) => Promise<any>;
+      };
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string) => Promise<AddAssetResult>;

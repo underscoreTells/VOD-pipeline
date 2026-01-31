@@ -9,6 +9,12 @@ import { detectFFmpeg } from './ffmpegDetector.js';
 import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
 
+// Load .env file early and check for errors
+const dotenvResult = dotenv.config();
+if (dotenvResult.error) {
+  console.error('[Main] Failed to load .env file:', dotenvResult.error);
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -35,13 +41,15 @@ function createWindow() {
     console.error(`[Preload Error] Failed to load ${preloadPath}:`, error);
   });
 
-  // Debug: Log renderer console messages
-  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    const levels = ['debug', 'info', 'warning', 'error'];
-    console.log(`[Renderer ${levels[level] || level}] ${message}`);
-  });
-
   const isDev = process.env.NODE_ENV !== 'production';
+
+  // Debug: Log renderer console messages (dev only)
+  if (isDev) {
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      const levels = ['debug', 'info', 'warning', 'error'];
+      console.log(`[Renderer ${levels[level] || level}] ${message}`);
+    });
+  }
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -66,8 +74,6 @@ app.whenReady().then(async () => {
   console.log('Node version:', process.version);
   console.log('Electron version:', process.versions.electron);
   console.log('Development mode:', process.env.NODE_ENV !== 'production');
-
-  dotenv.config();
 
   // Initialize core systems
   initializeDatabase();
