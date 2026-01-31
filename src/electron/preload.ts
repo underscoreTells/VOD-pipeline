@@ -133,7 +133,10 @@ export interface ElectronAPI {
     get: (id: number) => Promise<GetProjectResult>;
   };
   agent: {
-    chat: (projectId: string, message: string, threadId?: string) => Promise<AgentChatResult>;
+    chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
+    getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
+    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+    rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
   };
   assets: {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
@@ -175,8 +178,14 @@ const electronAPI: ElectronAPI = {
     get: (id) => ipcRenderer.invoke('project:get', { id }),
   },
   agent: {
-    chat: (projectId, message, threadId) =>
-      ipcRenderer.invoke('agent:chat', { projectId, message, threadId }),
+    chat: (params) =>
+      ipcRenderer.invoke('agent:chat', params),
+    getSuggestions: (chapterId) =>
+      ipcRenderer.invoke('suggestion:get-by-chapter', { chapterId }),
+    applySuggestion: (suggestionId) =>
+      ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
+    rejectSuggestion: (suggestionId) =>
+      ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
   },
   assets: {
     getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
