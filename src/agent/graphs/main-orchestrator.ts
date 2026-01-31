@@ -81,11 +81,25 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       message: "Sending video to AI...",
     });
 
+    // Defensive validation: ensure provider supports video and proxy path exists
+    if (!state.selectedProvider || !VIDEO_CAPABLE_PROVIDERS.includes(state.selectedProvider)) {
+      throw new Error(
+        `Provider ${state.selectedProvider || "undefined"} does not support video analysis. ` +
+        `Supported providers: ${VIDEO_CAPABLE_PROVIDERS.join(", ")}`
+      );
+    }
+    
+    if (!state.proxyPath) {
+      throw new Error(
+        "No proxy video path available. Please ensure a video chapter is selected and proxy generation is complete."
+      );
+    }
+
     // Create multimodal message with video
     const provider = state.selectedProvider as VideoProvider;
     const videoMessage = await createVideoMessage({
       provider,
-      videoPath: state.proxyPath!,
+      videoPath: state.proxyPath,
       textPrompt: analysisPrompt,
     });
 

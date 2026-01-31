@@ -41,7 +41,8 @@ export async function createVideoMessage(
 }
 
 /**
- * Maximum video file size for Gemini API (100MB to be safe)
+ * Maximum base64-encoded video file size for Gemini API (100MB)
+ * Base64 encoding increases size by ~33%, so we check the estimated encoded size
  */
 const GEMINI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -67,10 +68,16 @@ async function createGeminiVideoMessage(
     );
   }
   
-  if (stats.size > GEMINI_MAX_VIDEO_SIZE) {
+  // Base64 encoding increases size by ~33% (4/3 ratio)
+  // Estimate the encoded size before actually encoding
+  const estimatedBase64Size = Math.ceil(stats.size * 4 / 3);
+  
+  if (estimatedBase64Size > GEMINI_MAX_VIDEO_SIZE) {
+    const estimatedMB = (estimatedBase64Size / (1024 * 1024)).toFixed(1);
+    const rawMB = (stats.size / (1024 * 1024)).toFixed(1);
     throw new Error(
-      `Video file too large for Gemini API: ${(stats.size / (1024 * 1024)).toFixed(1)}MB ` +
-      `(max ${GEMINI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using a shorter clip.`
+      `Video file too large for Gemini API: estimated ${estimatedMB}MB after base64 encoding ` +
+      `(raw: ${rawMB}MB, max: ${GEMINI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using a shorter clip.`
     );
   }
 

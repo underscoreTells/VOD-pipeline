@@ -223,9 +223,18 @@ export class KimiChatModel extends BaseChatModel {
                   detail: imageUrlObj.detail as "low" | "high" | "auto" | undefined,
                 },
               });
+            } else if (partObj.type === "video_url" &&
+                       typeof partObj.video_url === "object" &&
+                       partObj.video_url !== null) {
+              const videoUrlObj = partObj.video_url as Record<string, unknown>;
+              contentParts.push({
+                type: "video_url",
+                video_url: {
+                  url: String(videoUrlObj.url || ""),
+                },
+              });
             }
-            // Note: video_url type is not supported by Kimi API
-            // Video should be sent via base64 encoding in video_url field
+            // Kimi K2.5 supports video_url in multimodal messages for video analysis
           }
         }
         
@@ -266,9 +275,14 @@ export class KimiChatModel extends BaseChatModel {
  * Used for sending video files to Kimi
  */
 export async function readFileAsBase64(filePath: string): Promise<string> {
-  const fs = await import("fs");
-  const buffer = await fs.promises.readFile(filePath);
-  return buffer.toString("base64");
+  try {
+    const fs = await import("fs");
+    const buffer = await fs.promises.readFile(filePath);
+    return buffer.toString("base64");
+  } catch (error) {
+    console.error(`[readFileAsBase64] Failed for filePath=${filePath}:`, error);
+    throw error;
+  }
 }
 
 /**
