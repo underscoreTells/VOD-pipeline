@@ -1,12 +1,14 @@
 import { StateGraph, END, START, Send } from "@langchain/langgraph";
-import { BaseMessage } from "@langchain/core/messages";
-import { createLLM, type LLMConfig } from "../providers/index.js";
+import { BaseMessage, AIMessage } from "@langchain/core/messages";
+import { createLLM, type LLMConfig, VIDEO_CAPABLE_PROVIDERS } from "../providers/index.js";
 import { loadConfig, type AgentConfig, getProviderLLMConfig } from "../config.js";
 import { MainState, ChapterState } from "../state/schemas.js";
 import { createChapterSubgraph } from "./chapter-subgraph.js";
 import { narrativeAnalysisPrompt } from "../prompts/narrative-analysis.js";
 import { storyCohesionPrompt } from "../prompts/story-cohesion.js";
 import { exportGenerationPrompt } from "../prompts/export-generation.js";
+import { createVideoMessage, type VideoProvider } from "../utils/video-messages.js";
+import type { LLMProviderType } from "../providers/index.js";
 
 interface CreateMainGraphOptions {
   checkpointer: any;
@@ -14,7 +16,7 @@ interface CreateMainGraphOptions {
 
 async function chatNode(state: typeof MainState.State, config: any) {
   const agentConfig = await loadConfig();
-  const llmConfig = getProviderLLMConfig(agentConfig);
+  const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
 
   const llm = createLLM(llmConfig);
 
@@ -39,6 +41,112 @@ async function chatNode(state: typeof MainState.State, config: any) {
   };
 }
 
+async function visualAnalysisNode(state: typeof MainState.State, config: any) {
+  config.writer?.({
+    type: "progress",
+    status: "analyzing_video",
+    nodeName: "visual_analysis",
+    progress: 0,
+    message: "Preparing video analysis...",
+  });
+
+  const agentConfig = await loadConfig();
+  const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
+  const llm = createLLM(llmConfig);
+
+  // Get the last user message
+  const lastMessage = state.messages[state.messages.length - 1];
+  const userQuery = typeof lastMessage.content === "string" 
+    ? lastMessage.content 
+    : "Analyze this video chapter";
+
+  // Build the analysis prompt
+  const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
+
+  config.writer?.({
+    type: "progress",
+    status: "analyzing_video",
+    nodeName: "visual_analysis",
+    progress: 50,
+    message: "Sending video to AI...",
+  });
+
+  // Create multimodal message with video
+  const provider = state.selectedProvider as VideoProvider;
+  const videoMessage = await createVideoMessage({
+    provider,
+    videoPath: state.proxyPath!,
+    textPrompt: analysisPrompt,
+  });
+
+  // Send to LLM
+  const response = await llm.invoke([videoMessage]);
+  const content = typeof response.content === "string" ? response.content : "";
+
+  config.writer?.({
+    type: "progress",
+    status: "analyzing_video",
+    nodeName: "visual_analysis",
+    progress: 100,
+    message: "Analysis complete",
+  });
+
+  // Parse suggestions from response
+  const suggestions = extractSuggestionsFromResponse(content);
+
+  return {
+    messages: [new AIMessage(content)],
+    suggestions: suggestions.length > 0 ? suggestions : undefined,
+  };
+}
+
+function buildVisualAnalysisPrompt(userQuery: string, transcript?: string): string {
+  let prompt = `You are a professional video editor analyzing a video chapter.
+
+User question: ${userQuery}
+
+Watch the video and analyze both visual content and dialogue. Identify:
+1. Sections to KEEP (essential content, key moments, visual interest, dialogue)
+2. Sections to CUT (dead air, repetitive content, off-topic, boring visuals)
+
+For each suggestion, provide:
+- Time range (start → end in seconds)
+- Brief description of what's happening
+- Reasoning (why keep or cut this section)
+
+Format suggestions as JSON:
+SUGGESTION: {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
+
+Be concise and actionable. Focus on the most important cuts.`;
+
+  if (transcript) {
+    prompt += `\n\nTranscript:\n${transcript}\n\nUse the transcript to understand dialogue timing, but also pay attention to visual content (action, gameplay, reactions, etc.).`;
+  }
+
+  return prompt;
+}
+
+function extractSuggestionsFromResponse(content: string): any[] {
+  const suggestions: any[] = [];
+  
+  // Look for SUGGESTION: JSON format
+  const suggestionRegex = /SUGGESTION:\s*(\{[^}]+\})/g;
+  let match;
+  
+  while ((match = suggestionRegex.exec(content)) !== null) {
+    try {
+      const suggestion = JSON.parse(match[1]);
+      if (suggestion.in_point !== undefined && suggestion.out_point !== undefined) {
+        suggestions.push(suggestion);
+      }
+    } catch (e) {
+      // Ignore malformed JSON
+    }
+  }
+  
+  return suggestions;
+}
+
 function shouldContinueChat(state: typeof MainState.State): string {
   const lastMessage = state.messages[state.messages.length - 1];
   const content = typeof lastMessage.content === "string"
@@ -51,6 +159,22 @@ function shouldContinueChat(state: typeof MainState.State): string {
     content.includes("process chapters")
   ) {
     return "dispatch_chapters";
+  }
+
+  // Check if we should do visual analysis
+  // Requires: active chapter, video-capable provider, video intent
+  if (state.selectedProvider && 
+      VIDEO_CAPABLE_PROVIDERS.includes(state.selectedProvider) &&
+      state.currentChapterId &&
+      state.proxyPath) {
+    const videoIntentKeywords = [
+      "watch", "video", "visual", "see", "look", "analyze video",
+      "what's in the video", "what happens", "show me", "review video"
+    ];
+    
+    if (videoIntentKeywords.some(kw => content.includes(kw))) {
+      return "visual_analysis";
+    }
   }
 
   return "chat_node";
@@ -230,6 +354,7 @@ async function generateExportsNode(
 export async function createMainGraph({ checkpointer }: CreateMainGraphOptions) {
   const workflow = new StateGraph(MainState)
     .addNode("chat_node", chatNode as any)
+    .addNode("visual_analysis", visualAnalysisNode as any)
     .addNode("dispatch_chapters", dispatchChaptersNode as any)
     .addNode("chapter_agent", await createChapterSubgraph())
     .addNode("story_cohesion", storyCohesionNode as any)
@@ -238,7 +363,9 @@ export async function createMainGraph({ checkpointer }: CreateMainGraphOptions) 
     .addConditionalEdges("chat_node", shouldContinueChat, {
       chat_node: "chat_node",
       dispatch_chapters: "dispatch_chapters",
+      visual_analysis: "visual_analysis",
     } as any)
+    .addEdge("visual_analysis", "chat_node")
     .addEdge("chapter_agent", "story_cohesion")
     .addEdge("story_cohesion", "generate_exports")
     .addEdge("generate_exports", END);

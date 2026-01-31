@@ -1,4 +1,5 @@
 import { Annotation } from "@langchain/langgraph";
+import type { LLMProviderType } from "../providers/index.js";
 
 const messagesReducer = (left: any[], right: any[]) => left.concat(right);
 
@@ -17,6 +18,12 @@ export const MainState = Annotation.Root({
       }
     | undefined
   >,
+  // Visual AI fields (Phase 4)
+  selectedProvider: Annotation<LLMProviderType | undefined>,
+  currentChapterId: Annotation<string | undefined>,
+  proxyPath: Annotation<string | undefined>,
+  transcript: Annotation<string | undefined>,
+  suggestions: Annotation<any[] | undefined>,
 });
 
 export const ChapterState = Annotation.Root({
