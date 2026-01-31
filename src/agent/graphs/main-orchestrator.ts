@@ -42,62 +42,94 @@ async function chatNode(state: typeof MainState.State, config: any) {
 }
 
 async function visualAnalysisNode(state: typeof MainState.State, config: any) {
-  config.writer?.({
-    type: "progress",
-    status: "analyzing_video",
-    nodeName: "visual_analysis",
-    progress: 0,
-    message: "Preparing video analysis...",
-  });
+  try {
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 0,
+      message: "Preparing video analysis...",
+    });
 
-  const agentConfig = await loadConfig();
-  const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
-  const llm = createLLM(llmConfig);
+    const agentConfig = await loadConfig();
+    const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
+    const llm = createLLM(llmConfig);
 
-  // Get the last human message (not the assistant reply)
-  const lastHumanMessage = getLastHumanMessage(state);
-  const userQuery = lastHumanMessage && typeof lastHumanMessage.content === "string" 
-    ? lastHumanMessage.content 
-    : "Analyze this video chapter";
+    // Get the last human message (not the assistant reply)
+    const lastHumanMessage = getLastHumanMessage(state);
+    const userQuery = lastHumanMessage && typeof lastHumanMessage.content === "string" 
+      ? lastHumanMessage.content 
+      : "Analyze this video chapter";
 
-  // Build the analysis prompt
-  const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
+    // Find the index of the last human message to track analysis
+    let lastHumanMessageIndex = -1;
+    for (let i = state.messages.length - 1; i >= 0; i--) {
+      if (state.messages[i]._getType() === "human") {
+        lastHumanMessageIndex = i;
+        break;
+      }
+    }
 
-  config.writer?.({
-    type: "progress",
-    status: "analyzing_video",
-    nodeName: "visual_analysis",
-    progress: 50,
-    message: "Sending video to AI...",
-  });
+    // Build the analysis prompt
+    const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
 
-  // Create multimodal message with video
-  const provider = state.selectedProvider as VideoProvider;
-  const videoMessage = await createVideoMessage({
-    provider,
-    videoPath: state.proxyPath!,
-    textPrompt: analysisPrompt,
-  });
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 50,
+      message: "Sending video to AI...",
+    });
 
-  // Send to LLM
-  const response = await llm.invoke([videoMessage]);
-  const content = typeof response.content === "string" ? response.content : "";
+    // Create multimodal message with video
+    const provider = state.selectedProvider as VideoProvider;
+    const videoMessage = await createVideoMessage({
+      provider,
+      videoPath: state.proxyPath!,
+      textPrompt: analysisPrompt,
+    });
 
-  config.writer?.({
-    type: "progress",
-    status: "analyzing_video",
-    nodeName: "visual_analysis",
-    progress: 100,
-    message: "Analysis complete",
-  });
+    // Send to LLM
+    const response = await llm.invoke([videoMessage]);
+    const content = typeof response.content === "string" ? response.content : "";
 
-  // Parse suggestions from response
-  const suggestions = extractSuggestionsFromResponse(content);
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 100,
+      message: "Analysis complete",
+    });
 
-  return {
-    messages: [new AIMessage(content)],
-    suggestions: suggestions.length > 0 ? suggestions : undefined,
-  };
+    // Parse suggestions from response
+    const suggestions = extractSuggestionsFromResponse(content);
+
+    return {
+      messages: [new AIMessage(content)],
+      suggestions: suggestions.length > 0 ? suggestions : undefined,
+      lastAnalyzedMessageIndex: lastHumanMessageIndex,
+    };
+  } catch (error) {
+    console.error("[VisualAnalysis] Error during video analysis:", error);
+    
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 0,
+      message: `Video analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+    });
+
+    // Return user-visible error message so the graph doesn't crash
+    const errorContent = error instanceof Error 
+      ? `Sorry, video analysis failed: ${error.message}`
+      : "Sorry, video analysis failed. Please try again or check your API keys.";
+
+    return {
+      messages: [new AIMessage(errorContent)],
+      suggestions: undefined,
+    };
+  }
 }
 
 function buildVisualAnalysisPrompt(userQuery: string, transcript?: string): string {
@@ -235,7 +267,19 @@ function shouldContinueChat(state: typeof MainState.State): string {
     ];
     
     if (videoIntentKeywords.some(kw => content.includes(kw))) {
-      return "visual_analysis";
+      // Find the index of the last human message
+      let lastHumanMessageIndex = -1;
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        if (state.messages[i]._getType() === "human") {
+          lastHumanMessageIndex = i;
+          break;
+        }
+      }
+      
+      // Prevent repeated analysis: only analyze if we haven't analyzed this message yet
+      if (lastHumanMessageIndex !== state.lastAnalyzedMessageIndex) {
+        return "visual_analysis";
+      }
     }
   }
 

@@ -6,8 +6,11 @@ import { readFileAsBase64 } from "../providers/kimi.js";
  * Normalizes video content across different LLM providers
  * 
  * Providers:
- * - Gemini: Can reference local file path directly via fileData
- * - Kimi: Requires base64-encoded video via video_url
+ * - Gemini: Requires base64-encoded video data. Gemini's fileData field only accepts
+ *   uploaded/hosted URIs (Gemini Files API upload, GCS, or HTTP URL), not local paths.
+ *   Local files are converted to base64 before being passed to Gemini via createGeminiVideoMessage.
+ * - Kimi: Requires base64-encoded video via video_url field with data URI format.
+ *   Video is encoded as base64 and sent as a data URL (data:video/mp4;base64,...).
  */
 
 export type VideoProvider = "gemini" | "kimi";
@@ -53,7 +56,16 @@ async function createGeminiVideoMessage(
 ): Promise<HumanMessage> {
   // Check file size before encoding to avoid memory issues
   const fs = await import("fs");
-  const stats = await fs.promises.stat(videoPath);
+  
+  let stats;
+  try {
+    stats = await fs.promises.stat(videoPath);
+  } catch (error) {
+    console.error(`[VideoMessages] Failed to stat video file: ${videoPath}`, error);
+    throw new Error(
+      `Failed to access video file: ${videoPath}. ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
   
   if (stats.size > GEMINI_MAX_VIDEO_SIZE) {
     throw new Error(
@@ -62,7 +74,15 @@ async function createGeminiVideoMessage(
     );
   }
 
-  const base64Video = await readFileAsBase64(videoPath);
+  let base64Video;
+  try {
+    base64Video = await readFileAsBase64(videoPath);
+  } catch (error) {
+    console.error(`[VideoMessages] Failed to encode video to base64: ${videoPath}`, error);
+    throw new Error(
+      `Failed to encode video file: ${videoPath}. ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
 
   return new HumanMessage({
     content: [
@@ -81,8 +101,8 @@ async function createGeminiVideoMessage(
 }
 
 /**
- * Maximum video file size for Kimi API (100MB)
- * Base64 encoding increases size by ~33%, so we check before encoding
+ * Maximum base64-encoded video file size for Kimi API (100MB)
+ * Base64 encoding increases size by ~33%, so we check the estimated encoded size
  */
 const KIMI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -97,16 +117,39 @@ async function createKimiVideoMessage(
 ): Promise<HumanMessage> {
   // Check file size before encoding to avoid memory issues
   const fs = await import("fs");
-  const stats = await fs.promises.stat(videoPath);
   
-  if (stats.size > KIMI_MAX_VIDEO_SIZE) {
+  let stats;
+  try {
+    stats = await fs.promises.stat(videoPath);
+  } catch (error) {
+    console.error(`[VideoMessages] Failed to stat video file: ${videoPath}`, error);
     throw new Error(
-      `Video file too large for Kimi API: ${(stats.size / (1024 * 1024)).toFixed(1)}MB ` +
-      `(max ${KIMI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using Gemini or a shorter clip.`
+      `Failed to access video file: ${videoPath}. ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
+  
+  // Base64 encoding increases size by ~33% (4/3 ratio)
+  // Estimate the encoded size before actually encoding
+  const estimatedBase64Size = Math.ceil(stats.size * 4 / 3);
+  
+  if (estimatedBase64Size > KIMI_MAX_VIDEO_SIZE) {
+    const estimatedMB = (estimatedBase64Size / (1024 * 1024)).toFixed(1);
+    const rawMB = (stats.size / (1024 * 1024)).toFixed(1);
+    throw new Error(
+      `Video file too large for Kimi API: estimated ${estimatedMB}MB after base64 encoding ` +
+      `(raw: ${rawMB}MB, max: ${KIMI_MAX_VIDEO_SIZE / (1024 * 1024)}MB). Consider using Gemini or a shorter clip.`
     );
   }
 
-  const base64Video = await readFileAsBase64(videoPath);
+  let base64Video;
+  try {
+    base64Video = await readFileAsBase64(videoPath);
+  } catch (error) {
+    console.error(`[VideoMessages] Failed to encode video to base64: ${videoPath}`, error);
+    throw new Error(
+      `Failed to encode video file: ${videoPath}. ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
 
   return new HumanMessage({
     content: [
@@ -137,8 +180,15 @@ export function supportsVideo(provider: VideoProvider): boolean {
  */
 export async function getVideoFileSize(videoPath: string): Promise<number> {
   const fs = await import("fs");
-  const stats = await fs.promises.stat(videoPath);
-  return stats.size;
+  try {
+    const stats = await fs.promises.stat(videoPath);
+    return stats.size;
+  } catch (error) {
+    console.error(`[VideoMessages] Failed to get video file size: ${videoPath}`, error);
+    throw new Error(
+      `Failed to access video file: ${videoPath}. ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
 }
 
 /**

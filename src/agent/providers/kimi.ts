@@ -212,14 +212,6 @@ export class KimiChatModel extends BaseChatModel {
             const partObj = part as Record<string, unknown>;
             if (partObj.type === "text" && typeof partObj.text === "string") {
               contentParts.push({ type: "text", text: partObj.text });
-            } else if (partObj.type === "video_url" && 
-                       typeof partObj.video_url === "object" && 
-                       partObj.video_url !== null) {
-              const videoUrlObj = partObj.video_url as Record<string, string>;
-              contentParts.push({
-                type: "video_url",
-                video_url: { url: videoUrlObj.url },
-              });
             } else if (partObj.type === "image_url" && 
                        typeof partObj.image_url === "object" && 
                        partObj.image_url !== null) {
@@ -232,6 +224,8 @@ export class KimiChatModel extends BaseChatModel {
                 },
               });
             }
+            // Note: video_url type is not supported by Kimi API
+            // Video should be sent via base64 encoding in video_url field
           }
         }
         

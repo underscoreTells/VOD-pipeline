@@ -24,6 +24,8 @@ export const MainState = Annotation.Root({
   proxyPath: Annotation<string | undefined>,
   transcript: Annotation<string | undefined>,
   suggestions: Annotation<any[] | undefined>,
+  // Track last analyzed message to prevent repeated analysis loops
+  lastAnalyzedMessageIndex: Annotation<number | undefined>,
 });
 
 export const ChapterState = Annotation.Root({
