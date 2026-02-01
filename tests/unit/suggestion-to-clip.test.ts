@@ -300,8 +300,8 @@ describe("Suggestion to Clip Integration (Task 4.9)", () => {
       // Reject suggestion
       const result = await rejectSuggestion(suggestionId);
 
-      // Should fail due to db instance mismatch
-      expect(result).toBe(false);
+      // Should succeed now that test database is properly injected
+      expect(result).toBe(true);
     });
   });
 });

@@ -1471,14 +1471,14 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
     
     // Validate that the clip has positive duration after trimming
     if (inPoint >= outPoint) {
-      // Mark suggestion as skipped since it would have no duration
+      // Mark suggestion as rejected since it would have no duration
       database.prepare(
-        "UPDATE suggestions SET status = 'skipped' WHERE id = ?"
+        "UPDATE suggestions SET status = 'rejected' WHERE id = ?"
       ).run(id);
       
       return { 
         success: false, 
-        error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as skipped.` 
+        error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as rejected.` 
       };
     }
     
