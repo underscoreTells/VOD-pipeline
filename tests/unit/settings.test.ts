@@ -312,7 +312,9 @@ describe("Settings Type Definitions (Task 4.10)", () => {
 
     beforeEach(() => {
       // Clear mock storage
-      Object.keys(localStorageMock).forEach((key) => delete localStorageMock[key]);
+      for (const key of Object.keys(localStorageMock)) {
+        delete localStorageMock[key];
+      }
     });
 
     it("should serialize settings to JSON", () => {

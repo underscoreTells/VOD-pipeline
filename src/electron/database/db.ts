@@ -92,6 +92,7 @@ function ensureSchemaColumns(database: Database.Database) {
   const migrations = [
     { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
   ];
 
   const failedMigrations: string[] = [];
@@ -145,6 +146,15 @@ export function closeDatabase() {
     db.close();
     db = null;
   }
+}
+
+/**
+ * Set database instance for testing purposes only.
+ * This allows tests to inject a test database instance.
+ */
+export function setDatabaseForTesting(database: Database.Database | null): void {
+  db = database;
+  initializationPromise = null;
 }
 
 export interface Project {
@@ -1457,6 +1467,19 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
       inPoint = suggestion.in_point + shiftAmount;
       
       // outPoint stays the same - duration automatically shortened
+    }
+    
+    // Validate that the clip has positive duration after trimming
+    if (inPoint >= outPoint) {
+      // Mark suggestion as skipped since it would have no duration
+      database.prepare(
+        "UPDATE suggestions SET status = 'skipped' WHERE id = ?"
+      ).run(id);
+      
+      return { 
+        success: false, 
+        error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as skipped.` 
+      };
     }
     
     // Create the clip from the suggestion (potentially trimmed)

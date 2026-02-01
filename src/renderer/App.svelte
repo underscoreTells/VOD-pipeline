@@ -118,8 +118,6 @@
         </div>
       {/if}
       
-      <!-- Settings Panel -->
-      <SettingsPanel />
     {:else if selectedProject}
       <!-- Project Detail View with Timeline Editor -->
       <ProjectDetail 
@@ -127,6 +125,9 @@
         onBack={handleBackToProjects}
       />
     {/if}
+    
+    <!-- Settings Panel - rendered outside conditional so it works from any view -->
+    <SettingsPanel />
   </main>
 </div>
 
@@ -139,6 +140,9 @@
   }
 
   header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     background: #1e1e1e;
     color: white;
     padding: 1rem 2rem;
@@ -148,16 +152,6 @@
   header h1 {
     margin: 0;
     font-size: 1.5rem;
-  }
-
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #1e1e1e;
-    color: white;
-    padding: 1rem 2rem;
-    border-bottom: 1px solid #333;
   }
 
   .settings-btn {

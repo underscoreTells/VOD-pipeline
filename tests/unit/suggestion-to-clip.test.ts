@@ -16,6 +16,7 @@ import {
   rejectSuggestion,
   getClipsByProject,
   getClip,
+  setDatabaseForTesting,
 } from "../../src/electron/database/db.js";
 
 describe("Suggestion to Clip Integration (Task 4.9)", () => {
@@ -51,6 +52,9 @@ describe("Suggestion to Clip Integration (Task 4.9)", () => {
   });
 
   beforeEach(async () => {
+    // Inject test database into the module
+    setDatabaseForTesting(db);
+    
     // Clear tables before each test
     db.prepare("DELETE FROM suggestions").run();
     db.prepare("DELETE FROM clips").run();
@@ -108,13 +112,14 @@ describe("Suggestion to Clip Integration (Task 4.9)", () => {
         );
       const suggestionId = suggestionResult.lastInsertRowid as number;
 
-      // Apply the suggestion (we need to use the actual function)
-      // Since we're using a different db instance, we need to test manually
+      // Apply the suggestion
       const result = await applySuggestionWithClip(suggestionId);
 
-      // Should fail because we're using a different db instance
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("not found");
+      // Should succeed now that we've wired the test database
+      expect(result.success).toBe(true);
+      expect(result.clip).toBeDefined();
+      expect(result.clip?.in_point).toBe(120.5);
+      expect(result.clip?.out_point).toBe(180.0);
     });
 
     it("should validate suggestion exists", async () => {
@@ -444,7 +449,7 @@ describe("Clip Collision Detection (Code Review Fix)", () => {
     expect(result.out_point).toBe(180);
   });
 
-  it("should handle multiple overlapping clips", () => {
+  it("should reject suggestion when fully consumed by existing clips", () => {
     const existingClips = [
       { start_time: 0, in_point: 100, out_point: 150 },   // duration 50s, ends at 50s
       { start_time: 50, in_point: 200, out_point: 250 },  // duration 50s, ends at 100s
@@ -459,7 +464,8 @@ describe("Clip Collision Detection (Code Review Fix)", () => {
     expect(result.start_time).toBe(100);
     expect(result.in_point).toBe(100); // 25 + (100 - 25) = 100
     expect(result.out_point).toBe(75); // Unchanged
-    // Duration: 75 - 100 = -25 (completely trimmed)
+    // Note: in_point (100) >= out_point (75), so this would be rejected by createClip validation
+    // The applySuggestionWithClip function checks for inPoint >= outPoint and returns an error
   });
 
   it("should place trimmed clip adjacent to previous clip (no gap)", () => {

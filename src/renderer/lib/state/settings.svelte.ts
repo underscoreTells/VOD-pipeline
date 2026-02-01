@@ -85,16 +85,18 @@ export async function loadSettings(): Promise<void> {
     // Decrypt API keys if present
     if (parsed._encryptedKeys) {
       const response = await window.electronAPI.settings.decrypt(parsed._encryptedKeys);
-      if (response.success && response.data) {
-        const keys = JSON.parse(response.data);
-        settingsState.settings.geminiApiKey = keys.geminiApiKey || "";
-        settingsState.settings.openaiApiKey = keys.openaiApiKey || "";
-        settingsState.settings.anthropicApiKey = keys.anthropicApiKey || "";
-        settingsState.settings.kimiApiKey = keys.kimiApiKey || "";
-        settingsState.settings.openrouterApiKey = keys.openrouterApiKey || "";
-      } else {
+      if (!response.success) {
         throw new Error(response.error || "Failed to decrypt API keys");
       }
+      if (!response.data) {
+        throw new Error("Decryption succeeded but no data returned");
+      }
+      const keys = JSON.parse(response.data);
+      settingsState.settings.geminiApiKey = keys.geminiApiKey || "";
+      settingsState.settings.openaiApiKey = keys.openaiApiKey || "";
+      settingsState.settings.anthropicApiKey = keys.anthropicApiKey || "";
+      settingsState.settings.kimiApiKey = keys.kimiApiKey || "";
+      settingsState.settings.openrouterApiKey = keys.openrouterApiKey || "";
     }
     // Backwards compatibility: if no encrypted keys but plaintext keys exist, migrate them
     else if (parsed.geminiApiKey !== undefined) {
