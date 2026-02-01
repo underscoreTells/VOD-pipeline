@@ -40,7 +40,6 @@ import {
   getProxyByAsset,
   createSuggestion,
   getSuggestionsByChapter,
-  applySuggestion,
   applySuggestionWithClip,
   rejectSuggestion,
 } from '../database/db.js';
