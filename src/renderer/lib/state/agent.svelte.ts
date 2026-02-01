@@ -137,16 +137,24 @@ export async function applySuggestion(suggestionId: number) {
   try {
     const response = await window.electronAPI.agent.applySuggestion(suggestionId);
     if (response.success) {
+      const result = response.data as { applied: boolean; clip?: { id: number } };
+      
       // Update local state
       const suggestion = agentState.suggestions.find((s) => s.id === suggestionId);
       if (suggestion) {
         suggestion.status = "applied";
+        if (result.clip) {
+          suggestion.clip_id = result.clip.id;
+        }
       }
+      
+      // Return the created clip info for timeline refresh
+      return { success: true, clip: result.clip };
     }
-    return response.success;
+    return { success: false, error: response.error };
   } catch (error) {
     console.error("Failed to apply suggestion:", error);
-    return false;
+    return { success: false, error: (error as Error).message };
   }
 }
 

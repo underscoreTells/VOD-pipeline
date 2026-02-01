@@ -135,8 +135,12 @@ export interface ElectronAPI {
   agent: {
     chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
     getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
-    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
     rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+  };
+  settings: {
+    encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+    decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
   };
   assets: {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
@@ -186,6 +190,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
+  },
+  settings: {
+    encrypt: (text) => ipcRenderer.invoke('settings:encrypt', { text }),
+    decrypt: (encrypted) => ipcRenderer.invoke('settings:decrypt', { encrypted }),
   },
   assets: {
     getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),

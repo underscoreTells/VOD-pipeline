@@ -175,8 +175,9 @@ export interface Suggestion {
   display_order: number;
   created_at: string;
   applied_at: string | null;
+  clip_id: number | null;  // Linked clip on timeline when applied
 }
 
-export type CreateSuggestionInput = Omit<Suggestion, 'id' | 'created_at' | 'applied_at'>;
+export type CreateSuggestionInput = Omit<Suggestion, 'id' | 'created_at' | 'applied_at' | 'clip_id'> & { clip_id?: number | null };
 
 export type UpdateSuggestionInput = Partial<Pick<Suggestion, 'status' | 'display_order'>>;
