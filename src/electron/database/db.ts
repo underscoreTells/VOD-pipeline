@@ -1339,13 +1339,14 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
     ...suggestion,
     created_at: new Date().toISOString(),
     applied_at: null,
+    clip_id: null,
   };
 }
 
 export async function getSuggestion(id: number): Promise<Suggestion | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE id = ?'
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE id = ?'
   ).get(id) as Suggestion | undefined;
   
   return result || null;
@@ -1354,7 +1355,7 @@ export async function getSuggestion(id: number): Promise<Suggestion | null> {
 export async function getSuggestionsByChapter(chapterId: number, status?: Suggestion['status']): Promise<Suggestion[]> {
   const database = await getDatabase();
   
-  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ?';
+  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ?';
   const params: unknown[] = [chapterId];
   
   if (status) {
@@ -1371,7 +1372,7 @@ export async function getSuggestionsByChapter(chapterId: number, status?: Sugges
 export async function getSuggestionsByProvider(chapterId: number, provider: 'gemini' | 'kimi'): Promise<Suggestion[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
   ).all(chapterId, provider) as Suggestion[];
   
   return results;
@@ -1384,6 +1385,85 @@ export async function applySuggestion(id: number): Promise<boolean> {
   ).run(new Date().toISOString(), id);
   
   return result.changes > 0;
+}
+
+export interface ApplySuggestionResult {
+  success: boolean;
+  clip?: Clip;
+  error?: string;
+}
+
+/**
+ * Apply a suggestion and create a corresponding timeline clip
+ * This is the enhanced version that actually creates the cut on the timeline
+ */
+export async function applySuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+  
+  try {
+    // Get the suggestion
+    const suggestion = await getSuggestion(id);
+    if (!suggestion) {
+      return { success: false, error: 'Suggestion not found' };
+    }
+    
+    if (suggestion.status === 'applied') {
+      return { success: false, error: 'Suggestion has already been applied' };
+    }
+    
+    // Get the chapter
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) {
+      return { success: false, error: 'Chapter not found for this suggestion' };
+    }
+    
+    // Get assets for this chapter
+    const assetIds = await getAssetsForChapter(chapter.id);
+    if (assetIds.length === 0) {
+      return { success: false, error: 'No assets found for this chapter' };
+    }
+    
+    // Use the first asset
+    const assetId = assetIds[0];
+    const asset = await getAsset(assetId);
+    if (!asset) {
+      return { success: false, error: 'Asset not found' };
+    }
+    
+    // Calculate start_time - where to place the clip on the timeline
+    // For now, place it at the in_point (source-relative positioning)
+    const startTime = suggestion.in_point;
+    
+    // Create the clip from the suggestion
+    const clipInput: CreateClipInput = {
+      project_id: chapter.project_id,
+      asset_id: assetId,
+      track_index: 0, // Default to first track
+      start_time: startTime,
+      in_point: suggestion.in_point,
+      out_point: suggestion.out_point,
+      role: null, // Suggestions don't have roles currently
+      description: suggestion.description,
+      is_essential: true, // Suggested cuts are typically essential
+    };
+    
+    const clip = await createClip(clipInput);
+    
+    // Update the suggestion with the clip_id and status
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ? WHERE id = ?"
+    ).run(new Date().toISOString(), clip.id, id);
+    
+    if (updateResult.changes === 0) {
+      return { success: false, error: 'Failed to update suggestion status' };
+    }
+    
+    return { success: true, clip };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[applySuggestionWithClip] Error applying suggestion ${id}:`, error);
+    return { success: false, error: errorMessage };
+  }
 }
 
 export async function rejectSuggestion(id: number): Promise<boolean> {

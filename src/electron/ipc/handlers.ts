@@ -41,6 +41,7 @@ import {
   createSuggestion,
   getSuggestionsByChapter,
   applySuggestion,
+  applySuggestionWithClip,
   rejectSuggestion,
 } from '../database/db.js';
 import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js';
@@ -1049,11 +1050,14 @@ export function registerIpcHandlers() {
         return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const success = await applySuggestion(id);
-      if (success) {
-        return createSuccessResponse({ applied: true });
+      const result = await applySuggestionWithClip(id);
+      if (result.success) {
+        return createSuccessResponse({ 
+          applied: true, 
+          clip: result.clip 
+        });
       } else {
-        return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
+        return createErrorResponse(result.error || 'Failed to apply suggestion', IPC_ERROR_CODES.DATABASE_ERROR);
       }
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -1086,16 +1090,27 @@ export function registerIpcHandlers() {
       }
 
       const pendingSuggestions = await getSuggestionsByChapter(chapterId, 'pending');
-      let appliedCount = 0;
+      const results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }> = [];
 
       for (const suggestion of pendingSuggestions) {
-        const success = await applySuggestion(suggestion.id);
-        if (success) {
-          appliedCount++;
-        }
+        const result = await applySuggestionWithClip(suggestion.id);
+        results.push({
+          suggestionId: suggestion.id,
+          success: result.success,
+          clip: result.clip,
+          error: result.error,
+        });
       }
 
-      return createSuccessResponse({ appliedCount, total: pendingSuggestions.length });
+      const appliedCount = results.filter(r => r.success).length;
+      const createdClips = results.filter(r => r.success && r.clip).map(r => r.clip!);
+
+      return createSuccessResponse({ 
+        appliedCount, 
+        total: pendingSuggestions.length,
+        clips: createdClips,
+        results,
+      });
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }

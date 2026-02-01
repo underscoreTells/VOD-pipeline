@@ -135,7 +135,7 @@ export interface ElectronAPI {
   agent: {
     chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
     getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
-    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
     rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
   };
   assets: {
