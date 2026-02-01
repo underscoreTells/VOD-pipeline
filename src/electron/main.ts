@@ -128,7 +128,8 @@ function hasAgentKeys(): boolean {
     process.env.GEMINI_API_KEY ||
     process.env.OPENAI_API_KEY ||
     process.env.ANTHROPIC_API_KEY ||
-    process.env.OPENROUTER_API_KEY
+    process.env.OPENROUTER_API_KEY ||
+    process.env.KIMI_API_KEY
   );
 }
 
@@ -186,4 +187,9 @@ async function initializePython() {
     console.warn('[Main] Python not found. Transcription features will be disabled.');
     console.warn('[Main] Install Python 3.8+ to enable transcription.');
   }
+}
+
+// Export mainWindow getter for IPC handlers
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
 }

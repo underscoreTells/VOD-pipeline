@@ -8,6 +8,7 @@ export interface AgentConfig {
     openai?: string;
     anthropic?: string;
     openrouter?: string;
+    kimi?: string;
   };
   temperature?: number;
   maxTokens?: number;
@@ -65,10 +66,13 @@ export async function loadConfig(): Promise<AgentConfig> {
   if (process.env.OPENROUTER_API_KEY) {
     providers.openrouter = process.env.OPENROUTER_API_KEY;
   }
+  if (process.env.KIMI_API_KEY) {
+    providers.kimi = process.env.KIMI_API_KEY;
+  }
 
   if (Object.keys(providers).length === 0) {
     throw new Error(
-      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY in .env"
+      "No API keys found. Please set at least one of: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY in .env"
     );
   }
 

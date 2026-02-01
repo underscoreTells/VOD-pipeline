@@ -119,6 +119,39 @@ CREATE TABLE IF NOT EXISTS waveform_cache (
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
+-- Proxy videos for AI analysis (640px, 5fps)
+CREATE TABLE IF NOT EXISTS proxies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id INTEGER NOT NULL,
+  file_path TEXT NOT NULL,
+  preset TEXT NOT NULL CHECK(preset IN ('ai_analysis')),
+  width INTEGER,
+  height INTEGER,
+  framerate INTEGER,
+  file_size INTEGER,
+  duration REAL,
+  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'generating', 'ready', 'error')),
+  error_message TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
+-- AI cut suggestions (pending user approval)
+CREATE TABLE IF NOT EXISTS suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  in_point REAL NOT NULL,
+  out_point REAL NOT NULL,
+  description TEXT,
+  reasoning TEXT,  -- Why AI suggested this
+  provider TEXT,   -- 'gemini' or 'kimi'
+  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected')),
+  display_order INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  applied_at DATETIME,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at);
 CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
@@ -134,3 +167,8 @@ CREATE INDEX IF NOT EXISTS idx_clips_project_id ON clips(project_id);
 CREATE INDEX IF NOT EXISTS idx_clips_asset_id ON clips(asset_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track_index ON clips(track_index);
 CREATE INDEX IF NOT EXISTS idx_waveform_cache_asset_id ON waveform_cache(asset_id);
+CREATE INDEX IF NOT EXISTS idx_proxies_asset_id ON proxies(asset_id);
+CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
+CREATE INDEX IF NOT EXISTS idx_suggestions_chapter_id ON suggestions(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
+CREATE INDEX IF NOT EXISTS idx_suggestions_provider ON suggestions(provider);

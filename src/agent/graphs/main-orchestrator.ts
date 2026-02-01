@@ -1,12 +1,14 @@
 import { StateGraph, END, START, Send } from "@langchain/langgraph";
-import { BaseMessage } from "@langchain/core/messages";
-import { createLLM, type LLMConfig } from "../providers/index.js";
+import { BaseMessage, AIMessage } from "@langchain/core/messages";
+import { createLLM, type LLMConfig, VIDEO_CAPABLE_PROVIDERS } from "../providers/index.js";
 import { loadConfig, type AgentConfig, getProviderLLMConfig } from "../config.js";
 import { MainState, ChapterState } from "../state/schemas.js";
 import { createChapterSubgraph } from "./chapter-subgraph.js";
 import { narrativeAnalysisPrompt } from "../prompts/narrative-analysis.js";
 import { storyCohesionPrompt } from "../prompts/story-cohesion.js";
 import { exportGenerationPrompt } from "../prompts/export-generation.js";
+import { createVideoMessage, type VideoProvider } from "../utils/video-messages.js";
+import type { LLMProviderType } from "../providers/index.js";
 
 interface CreateMainGraphOptions {
   checkpointer: any;
@@ -14,7 +16,7 @@ interface CreateMainGraphOptions {
 
 async function chatNode(state: typeof MainState.State, config: any) {
   const agentConfig = await loadConfig();
-  const llmConfig = getProviderLLMConfig(agentConfig);
+  const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
 
   const llm = createLLM(llmConfig);
 
@@ -39,10 +41,226 @@ async function chatNode(state: typeof MainState.State, config: any) {
   };
 }
 
+async function visualAnalysisNode(state: typeof MainState.State, config: any) {
+  // Find the index of the last human message to track analysis (do this before try block so catch can access it)
+  let lastHumanMessageIndex = -1;
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    if (state.messages[i]._getType() === "human") {
+      lastHumanMessageIndex = i;
+      break;
+    }
+  }
+
+  try {
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 0,
+      message: "Preparing video analysis...",
+    });
+
+    const agentConfig = await loadConfig();
+    const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
+    const llm = createLLM(llmConfig);
+
+    // Get the last human message (not the assistant reply)
+    const lastHumanMessage = getLastHumanMessage(state);
+    const userQuery = lastHumanMessage && typeof lastHumanMessage.content === "string" 
+      ? lastHumanMessage.content 
+      : "Analyze this video chapter";
+
+    // Build the analysis prompt
+    const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
+
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 50,
+      message: "Sending video to AI...",
+    });
+
+    // Defensive validation: ensure provider supports video and proxy path exists
+    if (!state.selectedProvider || !VIDEO_CAPABLE_PROVIDERS.includes(state.selectedProvider)) {
+      throw new Error(
+        `Provider ${state.selectedProvider || "undefined"} does not support video analysis. ` +
+        `Supported providers: ${VIDEO_CAPABLE_PROVIDERS.join(", ")}`
+      );
+    }
+    
+    if (!state.proxyPath) {
+      throw new Error(
+        "No proxy video path available. Please ensure a video chapter is selected and proxy generation is complete."
+      );
+    }
+
+    // Create multimodal message with video
+    const provider = state.selectedProvider as VideoProvider;
+    const videoMessage = await createVideoMessage({
+      provider,
+      videoPath: state.proxyPath,
+      textPrompt: analysisPrompt,
+    });
+
+    // Send to LLM
+    const response = await llm.invoke([videoMessage]);
+    const content = typeof response.content === "string" ? response.content : "";
+
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 100,
+      message: "Analysis complete",
+    });
+
+    // Parse suggestions from response
+    const suggestions = extractSuggestionsFromResponse(content);
+
+    return {
+      messages: [new AIMessage(content)],
+      suggestions: suggestions.length > 0 ? suggestions : undefined,
+      lastAnalyzedMessageIndex: lastHumanMessageIndex,
+    };
+  } catch (error) {
+    console.error("[VisualAnalysis] Error during video analysis:", error);
+    
+    config.writer?.({
+      type: "progress",
+      status: "analyzing_video",
+      nodeName: "visual_analysis",
+      progress: 0,
+      message: `Video analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+    });
+
+    // Return user-visible error message so the graph doesn't crash
+    const errorContent = error instanceof Error 
+      ? `Sorry, video analysis failed: ${error.message}`
+      : "Sorry, video analysis failed. Please try again or check your API keys.";
+
+    return {
+      messages: [new AIMessage(errorContent)],
+      suggestions: undefined,
+      // Set lastAnalyzedMessageIndex even on error to prevent repeated retriggering
+      lastAnalyzedMessageIndex: lastHumanMessageIndex >= 0 ? lastHumanMessageIndex : undefined,
+    };
+  }
+}
+
+function buildVisualAnalysisPrompt(userQuery: string, transcript?: string): string {
+  let prompt = `You are a professional video editor analyzing a video chapter.
+
+User question: ${userQuery}
+
+Watch the video and analyze both visual content and dialogue. Identify:
+1. Sections to KEEP (essential content, key moments, visual interest, dialogue)
+2. Sections to CUT (dead air, repetitive content, off-topic, boring visuals)
+
+For each suggestion, provide:
+- Time range (start → end in seconds)
+- Brief description of what's happening
+- Reasoning (why keep or cut this section)
+
+Format suggestions as JSON:
+SUGGESTION: {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
+
+Be concise and actionable. Focus on the most important cuts.`;
+
+  if (transcript) {
+    prompt += `\n\nTranscript:\n${transcript}\n\nUse the transcript to understand dialogue timing, but also pay attention to visual content (action, gameplay, reactions, etc.).`;
+  }
+
+  return prompt;
+}
+
+function extractSuggestionsFromResponse(content: string): any[] {
+  const suggestions: any[] = [];
+  
+  // Look for SUGGESTION: followed by JSON object
+  // Use a more robust approach: find "SUGGESTION:" and then parse the JSON that follows
+  const suggestionMarker = "SUGGESTION:";
+  let index = content.indexOf(suggestionMarker);
+  
+  while (index !== -1) {
+    // Move past the marker
+    const jsonStart = index + suggestionMarker.length;
+    
+    // Find the JSON object by tracking braces
+    let braceCount = 0;
+    let jsonEnd = jsonStart;
+    let inString = false;
+    let escaped = false;
+    
+    for (let i = jsonStart; i < content.length; i++) {
+      const char = content[i];
+      
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      
+      if (char === '"' && !escaped) {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === "{") {
+          braceCount++;
+          if (braceCount === 1) {
+            jsonEnd = i;
+          }
+        } else if (char === "}") {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEnd = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Extract and parse the JSON
+    if (jsonEnd > jsonStart) {
+      const jsonStr = content.slice(jsonStart, jsonEnd).trim();
+      try {
+        const suggestion = JSON.parse(jsonStr);
+        if (suggestion.in_point !== undefined && suggestion.out_point !== undefined) {
+          suggestions.push(suggestion);
+        }
+      } catch (e) {
+        // Ignore malformed JSON - continue searching
+      }
+    }
+    
+    // Look for next suggestion
+    index = content.indexOf(suggestionMarker, jsonEnd > jsonStart ? jsonEnd : index + 1);
+  }
+  
+  return suggestions;
+}
+
+function getLastHumanMessage(state: typeof MainState.State): BaseMessage | null {
+  // Scan from end to find the most recent human/user message
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i];
+    if (msg._getType() === "human") {
+      return msg;
+    }
+  }
+  return null;
+}
+
 function shouldContinueChat(state: typeof MainState.State): string {
-  const lastMessage = state.messages[state.messages.length - 1];
-  const content = typeof lastMessage.content === "string"
-    ? lastMessage.content.toLowerCase()
+  const lastHumanMessage = getLastHumanMessage(state);
+  const content = lastHumanMessage && typeof lastHumanMessage.content === "string"
+    ? lastHumanMessage.content.toLowerCase()
     : "";
 
   if (
@@ -51,6 +269,34 @@ function shouldContinueChat(state: typeof MainState.State): string {
     content.includes("process chapters")
   ) {
     return "dispatch_chapters";
+  }
+
+  // Check if we should do visual analysis
+  // Requires: active chapter, video-capable provider, video intent
+  if (state.selectedProvider && 
+      VIDEO_CAPABLE_PROVIDERS.includes(state.selectedProvider) &&
+      state.currentChapterId &&
+      state.proxyPath) {
+    const videoIntentKeywords = [
+      "watch", "video", "visual", "see", "look", "analyze video",
+      "what's in the video", "what happens", "show me", "review video"
+    ];
+    
+    if (videoIntentKeywords.some(kw => content.includes(kw))) {
+      // Find the index of the last human message
+      let lastHumanMessageIndex = -1;
+      for (let i = state.messages.length - 1; i >= 0; i--) {
+        if (state.messages[i]._getType() === "human") {
+          lastHumanMessageIndex = i;
+          break;
+        }
+      }
+      
+      // Prevent repeated analysis: only analyze if we haven't analyzed this message yet
+      if (lastHumanMessageIndex !== state.lastAnalyzedMessageIndex) {
+        return "visual_analysis";
+      }
+    }
   }
 
   return "chat_node";
@@ -230,6 +476,7 @@ async function generateExportsNode(
 export async function createMainGraph({ checkpointer }: CreateMainGraphOptions) {
   const workflow = new StateGraph(MainState)
     .addNode("chat_node", chatNode as any)
+    .addNode("visual_analysis", visualAnalysisNode as any)
     .addNode("dispatch_chapters", dispatchChaptersNode as any)
     .addNode("chapter_agent", await createChapterSubgraph())
     .addNode("story_cohesion", storyCohesionNode as any)
@@ -238,7 +485,9 @@ export async function createMainGraph({ checkpointer }: CreateMainGraphOptions) 
     .addConditionalEdges("chat_node", shouldContinueChat, {
       chat_node: "chat_node",
       dispatch_chapters: "dispatch_chapters",
+      visual_analysis: "visual_analysis",
     } as any)
+    .addEdge("visual_analysis", "chat_node")
     .addEdge("chapter_agent", "story_cohesion")
     .addEdge("story_cohesion", "generate_exports")
     .addEdge("generate_exports", END);
