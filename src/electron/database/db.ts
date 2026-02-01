@@ -1378,15 +1378,6 @@ export async function getSuggestionsByProvider(chapterId: number, provider: 'gem
   return results;
 }
 
-export async function applySuggestion(id: number): Promise<boolean> {
-  const database = await getDatabase();
-  const result = database.prepare(
-    "UPDATE suggestions SET status = 'applied', applied_at = ? WHERE id = ?"
-  ).run(new Date().toISOString(), id);
-  
-  return result.changes > 0;
-}
-
 export interface ApplySuggestionResult {
   success: boolean;
   clip?: Clip;
@@ -1430,18 +1421,52 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
       return { success: false, error: 'Asset not found' };
     }
     
-    // Calculate start_time - where to place the clip on the timeline
-    // For now, place it at the in_point (source-relative positioning)
-    const startTime = suggestion.in_point;
+    // Calculate clip timing with collision detection
+    let startTime = suggestion.in_point;
+    let inPoint = suggestion.in_point;
+    const outPoint = suggestion.out_point;
     
-    // Create the clip from the suggestion
+    // Check for overlapping clips on the same track
+    const existingClips = await getClipsByProject(chapter.project_id);
+    const trackClips = existingClips.filter(c => c.track_index === 0);
+    
+    // Find any clip that overlaps with our proposed position
+    const proposedEndTime = startTime + (outPoint - inPoint);
+    const overlappingClips = trackClips.filter(clip => {
+      const clipStart = clip.start_time;
+      const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+      
+      // Overlap if: new clip starts before existing ends AND new clip ends after existing starts
+      return startTime < clipEnd && proposedEndTime > clipStart;
+    });
+    
+    if (overlappingClips.length > 0) {
+      // Find the rightmost (latest ending) overlapping clip
+      const rightmostClip = overlappingClips.reduce((latest, clip) => {
+        const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+        const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
+        return clipEnd > latestEnd ? clip : latest;
+      });
+      
+      // Move start to end of rightmost overlapping clip (no gap)
+      const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
+      startTime = rightmostEnd;
+      
+      // Shift in_point by same amount (duration gets shortened)
+      const shiftAmount = startTime - suggestion.in_point;
+      inPoint = suggestion.in_point + shiftAmount;
+      
+      // outPoint stays the same - duration automatically shortened
+    }
+    
+    // Create the clip from the suggestion (potentially trimmed)
     const clipInput: CreateClipInput = {
       project_id: chapter.project_id,
       asset_id: assetId,
       track_index: 0, // Default to first track
       start_time: startTime,
-      in_point: suggestion.in_point,
-      out_point: suggestion.out_point,
+      in_point: inPoint,
+      out_point: outPoint,
       role: null, // Suggestions don't have roles currently
       description: suggestion.description,
       is_essential: true, // Suggested cuts are typically essential

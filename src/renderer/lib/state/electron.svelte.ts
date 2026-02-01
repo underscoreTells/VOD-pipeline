@@ -222,6 +222,10 @@ declare global {
         applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: { id: number } }; error?: string }>;
         rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
       };
+      settings: {
+        encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+        decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+      };
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string) => Promise<AddAssetResult>;

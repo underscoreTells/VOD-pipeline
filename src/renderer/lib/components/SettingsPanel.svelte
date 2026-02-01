@@ -13,10 +13,6 @@
   } from "../state/settings.svelte";
   
   // Load settings on mount
-  $effect(() => {
-    loadSettings();
-  });
-  
   let testingProvider: LLMProviderType | null = $state(null);
   let testResults = $state<Record<LLMProviderType, { success: boolean; message: string } | null>>({
     gemini: null,
@@ -49,25 +45,25 @@
     }
   }
   
-  function handleApiKeyChange(provider: LLMProviderType, value: string) {
-    updateApiKey(provider, value);
+  async function handleApiKeyChange(provider: LLMProviderType, value: string) {
+    await updateApiKey(provider, value);
     // Clear test result when key changes
     testResults[provider] = null;
   }
   
-  function handleSave() {
-    saveSettings();
+  async function handleSave() {
+    await saveSettings();
     closeSettings();
   }
   
-  function handleReset() {
+  async function handleReset() {
     if (confirm("Are you sure you want to reset all settings to defaults? This will clear all API keys.")) {
-      resetSettings();
+      await resetSettings();
     }
   }
   
   function maskApiKey(key: string): string {
-    if (key.length <= 8) return "•".repeat(key.length);
+    if (key.length <= 8) return key.slice(0, 2) + "•".repeat(key.length - 4) + key.slice(-2);
     return key.slice(0, 4) + "•".repeat(key.length - 8) + key.slice(-4);
   }
 </script>

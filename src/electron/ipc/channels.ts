@@ -70,6 +70,10 @@ export const IPC_CHANNELS = {
   SUGGESTION_APPLY: 'suggestion:apply',
   SUGGESTION_REJECT: 'suggestion:reject',
   SUGGESTION_APPLY_ALL: 'suggestion:apply-all',
+
+  // Settings channels (API key encryption)
+  SETTINGS_ENCRYPT: 'settings:encrypt',
+  SETTINGS_DECRYPT: 'settings:decrypt',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

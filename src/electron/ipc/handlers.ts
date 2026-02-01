@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, safeStorage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1113,6 +1113,44 @@ export function registerIpcHandlers() {
       });
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  // Settings encryption handlers
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_ENCRYPT, async (_, { text }) => {
+    console.log('IPC: settings:encrypt');
+    try {
+      if (!text) {
+        return createErrorResponse('Text to encrypt is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      if (!safeStorage.isEncryptionAvailable()) {
+        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
+      }
+
+      const encrypted = safeStorage.encryptString(text);
+      return createSuccessResponse(encrypted.toString('base64'));
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DECRYPT, async (_, { encrypted }) => {
+    console.log('IPC: settings:decrypt');
+    try {
+      if (!encrypted) {
+        return createErrorResponse('Encrypted text is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      if (!safeStorage.isEncryptionAvailable()) {
+        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
+      }
+
+      const buffer = Buffer.from(encrypted, 'base64');
+      const decrypted = safeStorage.decryptString(buffer);
+      return createSuccessResponse(decrypted);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

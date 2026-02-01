@@ -6,7 +6,7 @@
 export type LLMProviderType = "openai" | "gemini" | "anthropic" | "openrouter" | "kimi";
 
 export interface Settings {
-  // API Keys (stored encrypted)
+  // API Keys (encrypted before storage)
   geminiApiKey: string;
   openaiApiKey: string;
   anthropicApiKey: string;
@@ -59,18 +59,55 @@ export const settingsState = $state<{
 const SETTINGS_STORAGE_KEY = "vod-pipeline-settings";
 
 /**
- * Load settings from localStorage
+ * Load settings from localStorage (with encrypted API keys)
  */
-export function loadSettings(): void {
+export async function loadSettings(): Promise<void> {
   try {
     const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      settingsState.settings = {
-        ...settingsState.settings,
-        ...parsed,
-      };
+    if (!stored) return;
+
+    const parsed = JSON.parse(stored);
+
+    // Load non-encrypted settings
+    if (parsed.defaultVideoProvider) {
+      settingsState.settings.defaultVideoProvider = parsed.defaultVideoProvider;
     }
+    if (parsed.defaultTextProvider) {
+      settingsState.settings.defaultTextProvider = parsed.defaultTextProvider;
+    }
+    if (parsed.autoGenerateProxies !== undefined) {
+      settingsState.settings.autoGenerateProxies = parsed.autoGenerateProxies;
+    }
+    if (parsed.proxyGenerationOnImport !== undefined) {
+      settingsState.settings.proxyGenerationOnImport = parsed.proxyGenerationOnImport;
+    }
+
+    // Decrypt API keys if present
+    if (parsed._encryptedKeys) {
+      const response = await window.electronAPI.settings.decrypt(parsed._encryptedKeys);
+      if (response.success && response.data) {
+        const keys = JSON.parse(response.data);
+        settingsState.settings.geminiApiKey = keys.geminiApiKey || "";
+        settingsState.settings.openaiApiKey = keys.openaiApiKey || "";
+        settingsState.settings.anthropicApiKey = keys.anthropicApiKey || "";
+        settingsState.settings.kimiApiKey = keys.kimiApiKey || "";
+        settingsState.settings.openrouterApiKey = keys.openrouterApiKey || "";
+      } else {
+        throw new Error(response.error || "Failed to decrypt API keys");
+      }
+    }
+    // Backwards compatibility: if no encrypted keys but plaintext keys exist, migrate them
+    else if (parsed.geminiApiKey !== undefined) {
+      settingsState.settings.geminiApiKey = parsed.geminiApiKey || "";
+      settingsState.settings.openaiApiKey = parsed.openaiApiKey || "";
+      settingsState.settings.anthropicApiKey = parsed.anthropicApiKey || "";
+      settingsState.settings.kimiApiKey = parsed.kimiApiKey || "";
+      settingsState.settings.openrouterApiKey = parsed.openrouterApiKey || "";
+      // Migrate to encrypted storage on next save
+      await saveSettings();
+    }
+
+    settingsState.error = null;
   } catch (error) {
     console.error("[Settings] Failed to load settings:", error);
     settingsState.error = "Failed to load settings";
@@ -78,33 +115,56 @@ export function loadSettings(): void {
 }
 
 /**
- * Save settings to localStorage
+ * Save settings to localStorage (with encrypted API keys)
  */
-export function saveSettings(): void {
+export async function saveSettings(): Promise<void> {
   try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settingsState.settings));
+    // Encrypt API keys
+    const keysToEncrypt = {
+      geminiApiKey: settingsState.settings.geminiApiKey,
+      openaiApiKey: settingsState.settings.openaiApiKey,
+      anthropicApiKey: settingsState.settings.anthropicApiKey,
+      kimiApiKey: settingsState.settings.kimiApiKey,
+      openrouterApiKey: settingsState.settings.openrouterApiKey,
+    };
+
+    const response = await window.electronAPI.settings.encrypt(JSON.stringify(keysToEncrypt));
+    if (!response.success) {
+      throw new Error(response.error || "Failed to encrypt API keys");
+    }
+
+    const dataToStore = {
+      defaultVideoProvider: settingsState.settings.defaultVideoProvider,
+      defaultTextProvider: settingsState.settings.defaultTextProvider,
+      autoGenerateProxies: settingsState.settings.autoGenerateProxies,
+      proxyGenerationOnImport: settingsState.settings.proxyGenerationOnImport,
+      _encryptedKeys: response.data,
+    };
+
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(dataToStore));
     settingsState.error = null;
   } catch (error) {
     console.error("[Settings] Failed to save settings:", error);
     settingsState.error = "Failed to save settings";
+    throw error; // Re-throw to allow caller to handle
   }
 }
 
 /**
  * Update a specific setting value
  */
-export function updateSetting<K extends keyof Settings>(
+export async function updateSetting<K extends keyof Settings>(
   key: K,
   value: Settings[K]
-): void {
+): Promise<void> {
   settingsState.settings[key] = value;
-  saveSettings();
+  await saveSettings();
 }
 
 /**
  * Update API key for a provider
  */
-export function updateApiKey(provider: LLMProviderType, apiKey: string): void {
+export async function updateApiKey(provider: LLMProviderType, apiKey: string): Promise<void> {
   // Use switch statement for type-safe assignment
   switch (provider) {
     case "gemini":
@@ -136,7 +196,7 @@ export function updateApiKey(provider: LLMProviderType, apiKey: string): void {
   status.configured = apiKey.length > 0;
   settingsState.providerStatuses.set(provider, status);
   
-  saveSettings();
+  await saveSettings();
 }
 
 /**
@@ -240,9 +300,9 @@ export async function testProvider(provider: LLMProviderType): Promise<boolean> 
 /**
  * Open settings panel
  */
-export function openSettings(): void {
+export async function openSettings(): Promise<void> {
   settingsState.isSettingsOpen = true;
-  loadSettings();
+  await loadSettings();
 }
 
 /**
@@ -255,10 +315,10 @@ export function closeSettings(): void {
 /**
  * Toggle settings panel
  */
-export function toggleSettings(): void {
+export async function toggleSettings(): Promise<void> {
   settingsState.isSettingsOpen = !settingsState.isSettingsOpen;
   if (settingsState.isSettingsOpen) {
-    loadSettings();
+    await loadSettings();
   }
 }
 
@@ -286,7 +346,7 @@ export function supportsVideo(provider: LLMProviderType): boolean {
 /**
  * Reset all settings to defaults
  */
-export function resetSettings(): void {
+export async function resetSettings(): Promise<void> {
   settingsState.settings = {
     geminiApiKey: "",
     openaiApiKey: "",
@@ -299,5 +359,5 @@ export function resetSettings(): void {
     proxyGenerationOnImport: true,
   };
   settingsState.providerStatuses.clear();
-  saveSettings();
+  await saveSettings();
 }
