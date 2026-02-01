@@ -149,7 +149,9 @@ CREATE TABLE IF NOT EXISTS suggestions (
   display_order INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   applied_at DATETIME,
-  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+  clip_id INTEGER, -- Linked clip on timeline when applied
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
 
 -- Indexes for performance

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, safeStorage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -41,6 +41,7 @@ import {
   createSuggestion,
   getSuggestionsByChapter,
   applySuggestion,
+  applySuggestionWithClip,
   rejectSuggestion,
 } from '../database/db.js';
 import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js';
@@ -1049,11 +1050,14 @@ export function registerIpcHandlers() {
         return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const success = await applySuggestion(id);
-      if (success) {
-        return createSuccessResponse({ applied: true });
+      const result = await applySuggestionWithClip(id);
+      if (result.success) {
+        return createSuccessResponse({ 
+          applied: true, 
+          clip: result.clip 
+        });
       } else {
-        return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
+        return createErrorResponse(result.error || 'Failed to apply suggestion', IPC_ERROR_CODES.DATABASE_ERROR);
       }
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -1086,18 +1090,67 @@ export function registerIpcHandlers() {
       }
 
       const pendingSuggestions = await getSuggestionsByChapter(chapterId, 'pending');
-      let appliedCount = 0;
+      const results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }> = [];
 
       for (const suggestion of pendingSuggestions) {
-        const success = await applySuggestion(suggestion.id);
-        if (success) {
-          appliedCount++;
-        }
+        const result = await applySuggestionWithClip(suggestion.id);
+        results.push({
+          suggestionId: suggestion.id,
+          success: result.success,
+          clip: result.clip,
+          error: result.error,
+        });
       }
 
-      return createSuccessResponse({ appliedCount, total: pendingSuggestions.length });
+      const appliedCount = results.filter(r => r.success).length;
+      const createdClips = results.filter(r => r.success && r.clip).map(r => r.clip!);
+
+      return createSuccessResponse({ 
+        appliedCount, 
+        total: pendingSuggestions.length,
+        clips: createdClips,
+        results,
+      });
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  // Settings encryption handlers
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_ENCRYPT, async (_, { text }) => {
+    console.log('IPC: settings:encrypt');
+    try {
+      if (!text) {
+        return createErrorResponse('Text to encrypt is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      if (!safeStorage.isEncryptionAvailable()) {
+        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
+      }
+
+      const encrypted = safeStorage.encryptString(text);
+      return createSuccessResponse(encrypted.toString('base64'));
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DECRYPT, async (_, { encrypted }) => {
+    console.log('IPC: settings:decrypt');
+    try {
+      if (!encrypted) {
+        return createErrorResponse('Encrypted text is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      if (!safeStorage.isEncryptionAvailable()) {
+        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
+      }
+
+      const buffer = Buffer.from(encrypted, 'base64');
+      const decrypted = safeStorage.decryptString(buffer);
+      return createSuccessResponse(decrypted);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

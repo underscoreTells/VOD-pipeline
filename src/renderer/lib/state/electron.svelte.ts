@@ -217,7 +217,14 @@ declare global {
         get: (id: number) => Promise<GetProjectResult>;
       };
       agent: {
-        chat: (projectId: string, message: string, threadId?: string) => Promise<any>;
+        chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<any>;
+        getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
+        applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: { id: number } }; error?: string }>;
+        rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+      };
+      settings: {
+        encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+        decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
       };
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { projects, getSelectedProject, loadProjects, createProject, selectProject } from './lib/state/project.svelte';
+  import { settingsState, openSettings, loadSettings } from './lib/state/settings.svelte';
   import ProjectDetail from './lib/components/ProjectDetail.svelte';
+  import SettingsPanel from './lib/components/SettingsPanel.svelte';
 
   const selectedProject = $derived.by(() => getSelectedProject());
 
@@ -9,6 +11,7 @@
 
   $effect(() => {
     loadProjects();
+    loadSettings();
   });
 
   function handleCreateProject() {
@@ -32,6 +35,13 @@
 <div class="app">
   <header>
     <h1>VOD Pipeline</h1>
+    <button class="settings-btn" onclick={openSettings} title="Settings">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24M6.34 17.66l-4.24 4.24M23 12h-6m-6 0H1m20.24 4.24l-4.24-4.24M6.34 6.34L2.1 2.1"/>
+      </svg>
+      Settings
+    </button>
   </header>
 
   <main class="container">
@@ -107,6 +117,7 @@
           </div>
         </div>
       {/if}
+      
     {:else if selectedProject}
       <!-- Project Detail View with Timeline Editor -->
       <ProjectDetail 
@@ -114,6 +125,9 @@
         onBack={handleBackToProjects}
       />
     {/if}
+    
+    <!-- Settings Panel - rendered outside conditional so it works from any view -->
+    <SettingsPanel />
   </main>
 </div>
 
@@ -126,6 +140,9 @@
   }
 
   header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     background: #1e1e1e;
     color: white;
     padding: 1rem 2rem;
@@ -135,6 +152,26 @@
   header h1 {
     margin: 0;
     font-size: 1.5rem;
+  }
+
+  .settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    color: #ccc;
+    border: 1px solid #444;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+  }
+
+  .settings-btn:hover {
+    background: #333;
+    color: #fff;
+    border-color: #555;
   }
 
   .container {

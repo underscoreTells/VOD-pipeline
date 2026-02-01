@@ -24,7 +24,9 @@
     "src/renderer/**/*.d.ts",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.js",
-    "src/renderer/**/*.svelte"
+    "src/renderer/**/*.svelte",
+    "src/shared/**/*.ts",
+    "src/agent/providers/**/*.ts"
   ],
   "references": [
     { "path": "./tsconfig.node.json" }

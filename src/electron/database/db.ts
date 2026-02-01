@@ -92,6 +92,7 @@ function ensureSchemaColumns(database: Database.Database) {
   const migrations = [
     { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
   ];
 
   const failedMigrations: string[] = [];
@@ -145,6 +146,15 @@ export function closeDatabase() {
     db.close();
     db = null;
   }
+}
+
+/**
+ * Set database instance for testing purposes only.
+ * This allows tests to inject a test database instance.
+ */
+export function setDatabaseForTesting(database: Database.Database | null): void {
+  db = database;
+  initializationPromise = null;
 }
 
 export interface Project {
@@ -1339,13 +1349,14 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
     ...suggestion,
     created_at: new Date().toISOString(),
     applied_at: null,
+    clip_id: null,
   };
 }
 
 export async function getSuggestion(id: number): Promise<Suggestion | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE id = ?'
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE id = ?'
   ).get(id) as Suggestion | undefined;
   
   return result || null;
@@ -1354,7 +1365,7 @@ export async function getSuggestion(id: number): Promise<Suggestion | null> {
 export async function getSuggestionsByChapter(chapterId: number, status?: Suggestion['status']): Promise<Suggestion[]> {
   const database = await getDatabase();
   
-  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ?';
+  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ?';
   const params: unknown[] = [chapterId];
   
   if (status) {
@@ -1371,19 +1382,136 @@ export async function getSuggestionsByChapter(chapterId: number, status?: Sugges
 export async function getSuggestionsByProvider(chapterId: number, provider: 'gemini' | 'kimi'): Promise<Suggestion[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
+    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
   ).all(chapterId, provider) as Suggestion[];
   
   return results;
 }
 
-export async function applySuggestion(id: number): Promise<boolean> {
+export interface ApplySuggestionResult {
+  success: boolean;
+  clip?: Clip;
+  error?: string;
+}
+
+/**
+ * Apply a suggestion and create a corresponding timeline clip
+ * This is the enhanced version that actually creates the cut on the timeline
+ */
+export async function applySuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
   const database = await getDatabase();
-  const result = database.prepare(
-    "UPDATE suggestions SET status = 'applied', applied_at = ? WHERE id = ?"
-  ).run(new Date().toISOString(), id);
   
-  return result.changes > 0;
+  try {
+    // Get the suggestion
+    const suggestion = await getSuggestion(id);
+    if (!suggestion) {
+      return { success: false, error: 'Suggestion not found' };
+    }
+    
+    if (suggestion.status === 'applied') {
+      return { success: false, error: 'Suggestion has already been applied' };
+    }
+    
+    // Get the chapter
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) {
+      return { success: false, error: 'Chapter not found for this suggestion' };
+    }
+    
+    // Get assets for this chapter
+    const assetIds = await getAssetsForChapter(chapter.id);
+    if (assetIds.length === 0) {
+      return { success: false, error: 'No assets found for this chapter' };
+    }
+    
+    // Use the first asset
+    const assetId = assetIds[0];
+    const asset = await getAsset(assetId);
+    if (!asset) {
+      return { success: false, error: 'Asset not found' };
+    }
+    
+    // Calculate clip timing with collision detection
+    let startTime = suggestion.in_point;
+    let inPoint = suggestion.in_point;
+    const outPoint = suggestion.out_point;
+    
+    // Check for overlapping clips on the same track
+    const existingClips = await getClipsByProject(chapter.project_id);
+    const trackClips = existingClips.filter(c => c.track_index === 0);
+    
+    // Find any clip that overlaps with our proposed position
+    const proposedEndTime = startTime + (outPoint - inPoint);
+    const overlappingClips = trackClips.filter(clip => {
+      const clipStart = clip.start_time;
+      const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+      
+      // Overlap if: new clip starts before existing ends AND new clip ends after existing starts
+      return startTime < clipEnd && proposedEndTime > clipStart;
+    });
+    
+    if (overlappingClips.length > 0) {
+      // Find the rightmost (latest ending) overlapping clip
+      const rightmostClip = overlappingClips.reduce((latest, clip) => {
+        const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+        const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
+        return clipEnd > latestEnd ? clip : latest;
+      });
+      
+      // Move start to end of rightmost overlapping clip (no gap)
+      const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
+      startTime = rightmostEnd;
+      
+      // Shift in_point by same amount (duration gets shortened)
+      const shiftAmount = startTime - suggestion.in_point;
+      inPoint = suggestion.in_point + shiftAmount;
+      
+      // outPoint stays the same - duration automatically shortened
+    }
+    
+    // Validate that the clip has positive duration after trimming
+    if (inPoint >= outPoint) {
+      // Mark suggestion as rejected since it would have no duration
+      database.prepare(
+        "UPDATE suggestions SET status = 'rejected' WHERE id = ?"
+      ).run(id);
+      
+      return { 
+        success: false, 
+        error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as rejected.` 
+      };
+    }
+    
+    // Create the clip from the suggestion (potentially trimmed)
+    const clipInput: CreateClipInput = {
+      project_id: chapter.project_id,
+      asset_id: assetId,
+      track_index: 0, // Default to first track
+      start_time: startTime,
+      in_point: inPoint,
+      out_point: outPoint,
+      role: null, // Suggestions don't have roles currently
+      description: suggestion.description,
+      is_essential: true, // Suggested cuts are typically essential
+    };
+    
+    const clip = await createClip(clipInput);
+    
+    // Update the suggestion with the clip_id and status
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ? WHERE id = ?"
+    ).run(new Date().toISOString(), clip.id, id);
+    
+    if (updateResult.changes === 0) {
+      return { success: false, error: 'Failed to update suggestion status' };
+    }
+    
+    return { success: true, clip };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[applySuggestionWithClip] Error applying suggestion ${id}:`, error);
+    return { success: false, error: errorMessage };
+  }
 }
 
 export async function rejectSuggestion(id: number): Promise<boolean> {

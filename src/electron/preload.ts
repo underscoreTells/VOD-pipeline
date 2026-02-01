@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
-import type { Asset, Clip, TimelineState } from '../shared/types/database';
+import type { Asset, Clip, TimelineState, Suggestion } from '../shared/types/database';
+import type { AgentOutputMessage } from '../shared/types/agent-ipc';
 
 // ============================================================================
 // Result Types
@@ -25,7 +26,7 @@ export interface GetProjectResult {
 
 export interface AgentChatResult {
   success: boolean;
-  data?: any;
+  data?: AgentOutputMessage;
   error?: string;
 }
 
@@ -134,9 +135,13 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
-    getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
-    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+    getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
+    applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
     rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+  };
+  settings: {
+    encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+    decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
   };
   assets: {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
@@ -150,7 +155,7 @@ export interface ElectronAPI {
   };
   timeline: {
     loadState: (projectId: number) => Promise<TimelineStateResult>;
-    saveState: (state: any) => Promise<SaveTimelineStateResult>;
+    saveState: (state: TimelineState) => Promise<SaveTimelineStateResult>;
   };
   waveforms: {
     get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
@@ -186,6 +191,26 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
+  },
+  settings: {
+    encrypt: async (text) => {
+      try {
+        return await ipcRenderer.invoke('settings:encrypt', { text });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[Preload] settings.encrypt error:', error);
+        return { success: false, error: message };
+      }
+    },
+    decrypt: async (encrypted) => {
+      try {
+        return await ipcRenderer.invoke('settings:decrypt', { encrypted });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[Preload] settings.decrypt error:', error);
+        return { success: false, error: message };
+      }
+    },
   },
   assets: {
     getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
