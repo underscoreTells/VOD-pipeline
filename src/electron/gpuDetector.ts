@@ -95,7 +95,7 @@ export function hasGPUEncoding(): boolean {
  * Get the FFmpeg path to use for GPU encoding
  * Returns system FFmpeg path if that's where GPU encoder was found
  */
-export function getGPU FFmpegPath(): string | null {
+export function getGPUFFmpegPath(): string | null {
   return cachedEncoder?.source ?? null;
 }
 
