@@ -1,4 +1,4 @@
-import type { Asset, Clip, TimelineState, Suggestion } from "../shared/types/database";
+import type { Asset, Clip, TimelineState, Suggestion, Chapter } from "../shared/types/database";
 
 export interface CreateProjectResult {
     success: boolean;
@@ -132,6 +132,52 @@ export interface ExportResult {
     error?: string;
 }
 
+export interface CreateChapterInput {
+    projectId: number;
+    title: string;
+    startTime: number;
+    endTime: number;
+}
+
+export interface CreateChapterResult {
+    success: boolean;
+    data?: Chapter;
+    error?: string;
+}
+
+export interface GetChaptersResult {
+    success: boolean;
+    data?: Chapter[];
+    error?: string;
+}
+
+export interface UpdateChapterInput {
+    title?: string;
+    startTime?: number;
+    endTime?: number;
+}
+
+export interface UpdateChapterResult {
+    success: boolean;
+    error?: string;
+}
+
+export interface DeleteChapterResult {
+    success: boolean;
+    error?: string;
+}
+
+export interface AddAssetToChapterResult {
+    success: boolean;
+    error?: string;
+}
+
+export interface GetChapterAssetsResult {
+    success: boolean;
+    data?: number[];
+    error?: string;
+}
+
 export interface GetSuggestionsResult {
     success: boolean;
     data?: Suggestion[];
@@ -164,6 +210,14 @@ export interface ElectronAPI {
     assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+    };
+    chapters: {
+        create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
+        getByProject: (projectId: number) => Promise<GetChaptersResult>;
+        update: (id: number, updates: UpdateChapterInput) => Promise<UpdateChapterResult>;
+        delete: (id: number) => Promise<DeleteChapterResult>;
+        addAsset: (chapterId: number, assetId: number) => Promise<AddAssetToChapterResult>;
+        getAssets: (chapterId: number) => Promise<GetChapterAssetsResult>;
     };
     clips: {
         getByProject: (projectId: number) => Promise<GetClipsResult>;

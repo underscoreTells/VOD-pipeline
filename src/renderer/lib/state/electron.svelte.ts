@@ -205,6 +205,34 @@ export async function exportProject(projectId: number, format: string, filePath:
 }
 
 // ============================================================================
+// Transcription Types & Functions
+// ============================================================================
+
+export interface TranscriptionProgress {
+  percent: number;
+  status: string;
+}
+
+export interface TranscriptionResult {
+  success: boolean;
+  data?: {
+    chapterId: number;
+    language: string;
+    duration: number;
+    segmentCount: number;
+  };
+  error?: string;
+}
+
+export async function transcribeChapter(
+  chapterId: number,
+  options?: Record<string, unknown>
+): Promise<TranscriptionResult> {
+  return await (window.electronAPI as any).transcription?.transcribe(chapterId, options) || 
+    { success: false, error: 'Transcription not available' };
+}
+
+// ============================================================================
 // Extend window.electronAPI type
 // ============================================================================
 
@@ -229,6 +257,14 @@ declare global {
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+      };
+      chapters: {
+        create: (input: { projectId: number; title: string; startTime: number; endTime: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
+        getByProject: (projectId: number) => Promise<{ success: boolean; data?: any[]; error?: string }>;
+        update: (id: number, updates: Partial<{ title: string; startTime: number; endTime: number }>) => Promise<{ success: boolean; error?: string }>;
+        delete: (id: number) => Promise<{ success: boolean; error?: string }>;
+        addAsset: (chapterId: number, assetId: number) => Promise<{ success: boolean; error?: string }>;
+        getAssets: (chapterId: number) => Promise<{ success: boolean; data?: number[]; error?: string }>;
       };
       clips: {
         getByProject: (projectId: number) => Promise<GetClipsResult>;

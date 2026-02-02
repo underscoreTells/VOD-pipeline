@@ -189,6 +189,43 @@
             <p class="help-text">If disabled, proxies are generated only when needed for analysis</p>
           </div>
         </section>
+        
+        <!-- Chapter Settings -->
+        <section class="settings-section">
+          <h3>Chapter Settings</h3>
+          
+          <div class="checkbox-group">
+            <label>
+              <input 
+                type="checkbox" 
+                bind:checked={settingsState.settings.autoChapterNamingEnabled}
+              />
+              Auto-generate chapter names from transcripts
+            </label>
+            <p class="help-text">Uses AI to create descriptive titles based on chapter content</p>
+          </div>
+          
+          <div class="select-group">
+            <label for="chapter-naming-model">Chapter Naming Model:</label>
+            <select id="chapter-naming-model" bind:value={settingsState.settings.autoChapterNamingModel}>
+              <option value="gpt-4o-mini">GPT-4o Mini (faster)</option>
+              <option value="gpt-4o">GPT-4o (more accurate)</option>
+              <option value="gemini-1.5-flash">Gemini 1.5 Flash (cheapest)</option>
+            </select>
+            <p class="help-text">AI model used for generating chapter titles</p>
+          </div>
+          
+          <div class="checkbox-group">
+            <label>
+              <input 
+                type="checkbox" 
+                bind:checked={settingsState.settings.autoTranscribeOnImport}
+              />
+              Auto-transcribe chapters on import
+            </label>
+            <p class="help-text">Automatically start transcription when chapters are created</p>
+          </div>
+        </section>
       </div>
       
       <div class="settings-footer">
