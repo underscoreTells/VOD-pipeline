@@ -22,6 +22,7 @@ const FFmpegConfig = {
     },
     downloadUrl: () => 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
     binaryName: 'ffmpeg.exe',
+    ffprobeName: 'ffprobe.exe',
   },
   darwin: {
     name: 'macos',
@@ -48,6 +49,7 @@ const FFmpegConfig = {
       });
     },
     binaryName: 'ffmpeg',
+    ffprobeName: 'ffprobe',
   },
   linux: {
     name: 'linux',
@@ -62,6 +64,7 @@ const FFmpegConfig = {
       return `https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${mappedArch}-static.tar.xz`;
     },
     binaryName: 'ffmpeg',
+    ffprobeName: 'ffprobe',
   },
 };
 
@@ -152,12 +155,23 @@ async function extractTarXz(archivePath, destDir) {
 
   const extractedFiles = fs.readdirSync(extractDir);
   const buildDir = path.join(extractDir, extractedFiles[0]);
+
+  // Copy both ffmpeg and ffprobe
   const ffmpegSrc = path.join(buildDir, 'ffmpeg');
   const ffmpegDest = path.join(destDir, 'ffmpeg');
+  const ffprobeSrc = path.join(buildDir, 'ffprobe');
+  const ffprobeDest = path.join(destDir, 'ffprobe');
 
   if (fs.existsSync(ffmpegSrc)) {
     fs.copyFileSync(ffmpegSrc, ffmpegDest);
     fs.chmodSync(ffmpegDest, 0o755);
+    console.log('Installed: ffmpeg');
+  }
+
+  if (fs.existsSync(ffprobeSrc)) {
+    fs.copyFileSync(ffprobeSrc, ffprobeDest);
+    fs.chmodSync(ffprobeDest, 0o755);
+    console.log('Installed: ffprobe');
   }
 
   fs.rmSync(extractDir, { recursive: true, force: true });
@@ -191,10 +205,18 @@ async function installFFmpeg() {
   }
 
   const binaryPath = path.join(INSTALL_DIR, config.binaryName);
+  const ffprobePath = path.join(INSTALL_DIR, config.ffprobeName);
 
-  if (fs.existsSync(binaryPath)) {
-    console.log(`FFmpeg already installed at: ${binaryPath}`);
+  // Check if both ffmpeg and ffprobe are installed
+  if (fs.existsSync(binaryPath) && fs.existsSync(ffprobePath)) {
+    console.log(`FFmpeg and ffprobe already installed at: ${INSTALL_DIR}`);
     return;
+  }
+
+  // If ffprobe is missing but ffmpeg exists, we need to reinstall
+  if (fs.existsSync(binaryPath) && !fs.existsSync(ffprobePath)) {
+    console.log('FFmpeg is installed but ffprobe is missing. Reinstalling both...');
+    fs.unlinkSync(binaryPath);
   }
 
   fs.mkdirSync(INSTALL_DIR, { recursive: true });
@@ -212,19 +234,33 @@ async function installFFmpeg() {
 
     const binaryRoot = findBinaryRoot(INSTALL_DIR, PLATFORM);
     if (binaryRoot !== INSTALL_DIR) {
+      // Copy ffmpeg
       const srcBinary = path.join(binaryRoot, config.binaryName);
       const destBinary = path.join(INSTALL_DIR, config.binaryName);
 
       if (fs.existsSync(srcBinary)) {
-        console.log(`Moving binary from ${binaryRoot} to ${INSTALL_DIR}`);
+        console.log(`Moving ffmpeg from ${binaryRoot} to ${INSTALL_DIR}`);
         fs.copyFileSync(srcBinary, destBinary);
 
         if (PLATFORM !== 'win32') {
           fs.chmodSync(destBinary, 0o755);
         }
-
-        fs.rmSync(binaryRoot, { recursive: true, force: true });
       }
+
+      // Copy ffprobe (if available in the archive)
+      const srcFfprobe = path.join(binaryRoot, config.ffprobeName);
+      const destFfprobe = path.join(INSTALL_DIR, config.ffprobeName);
+
+      if (fs.existsSync(srcFfprobe)) {
+        console.log(`Moving ffprobe from ${binaryRoot} to ${INSTALL_DIR}`);
+        fs.copyFileSync(srcFfprobe, destFfprobe);
+
+        if (PLATFORM !== 'win32') {
+          fs.chmodSync(destFfprobe, 0o755);
+        }
+      }
+
+      fs.rmSync(binaryRoot, { recursive: true, force: true });
     }
 
     if (fs.existsSync(archivePath)) {

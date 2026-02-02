@@ -444,18 +444,32 @@ function parseFFprobeOutput(data: FFprobeOutput): VideoMetadata {
  */
 export async function isValidVideo(filePath: string): Promise<boolean> {
   try {
+    console.log(`[FFmpeg] Validating video: ${filePath}`);
+
     const stats = fs.statSync(filePath);
-    if (!stats.isFile()) return false;
+    if (!stats.isFile()) {
+      console.log(`[FFmpeg] Validation failed: not a file`);
+      return false;
+    }
+    console.log(`[FFmpeg] File exists, size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     const ext = path.extname(filePath).toLowerCase();
+    console.log(`[FFmpeg] Extension: ${ext}`);
+
     const validExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
 
-    if (!validExtensions.includes(ext)) return false;
+    if (!validExtensions.includes(ext)) {
+      console.log(`[FFmpeg] Validation failed: extension ${ext} not in valid list`);
+      return false;
+    }
 
     // Try to get metadata with short timeout for quick validation
+    console.log(`[FFmpeg] Attempting metadata extraction with 5s timeout...`);
     await getVideoMetadata(filePath, 5000);
+    console.log(`[FFmpeg] Validation successful`);
     return true;
-  } catch {
+  } catch (error) {
+    console.log(`[FFmpeg] Validation failed with error:`, error);
     return false;
   }
 }
