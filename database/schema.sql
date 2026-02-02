@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   title TEXT,
   start_time REAL NOT NULL,
   end_time REAL NOT NULL,
+  display_order INTEGER DEFAULT 0,      -- User-defined display order
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -158,6 +159,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at);
 CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
 CREATE INDEX IF NOT EXISTS idx_chapters_project_id ON chapters(project_id);
+CREATE INDEX IF NOT EXISTS idx_chapters_display_order ON chapters(display_order);
 CREATE INDEX IF NOT EXISTS idx_chapter_assets_chapter_id ON chapter_assets(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_chapter_assets_asset_id ON chapter_assets(asset_id);
 CREATE INDEX IF NOT EXISTS idx_transcripts_chapter_id ON transcripts(chapter_id);

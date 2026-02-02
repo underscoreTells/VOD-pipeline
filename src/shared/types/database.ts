@@ -47,6 +47,7 @@ export interface Chapter {
   title: string;
   start_time: number;
   end_time: number;
+  display_order: number;
   created_at: string;
 }
 
@@ -90,7 +91,7 @@ export interface Conversation {
 // Input types (for creating new records)
 export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
-export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at'>;
+export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order'> & { display_order?: number };
 export type CreateTranscriptInput = Omit<Transcript, 'id'>;
 export type CreateBeatInput = Omit<Beat, 'id'>;
 export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
@@ -134,7 +135,7 @@ export type CreateTimelineStateInput = Omit<TimelineState, 'selected_clip_ids'> 
 // Update types
 export type UpdateProjectInput = Partial<Omit<Project, 'id' | 'created_at'>>;
 export type UpdateAssetInput = Partial<Omit<Asset, 'id' | 'project_id' | 'created_at'>>;
-export type UpdateChapterInput = Partial<Omit<Chapter, 'id' | 'project_id' | 'created_at'>>;
+export type UpdateChapterInput = Partial<Omit<Chapter, 'id' | 'project_id' | 'created_at' | 'display_order'>> & { display_order?: number };
 export type UpdateClipInput = Partial<Omit<Clip, 'id' | 'project_id' | 'created_at'>>;
 export type UpdateTimelineStateInput = Partial<Omit<TimelineState, 'project_id'>>;
 

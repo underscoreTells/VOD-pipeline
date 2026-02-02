@@ -354,14 +354,17 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
   
   const now = new Date().toISOString();
   
+  const display_order = chapter.display_order ?? 0;
+  
   const result = database.prepare(
-    `INSERT INTO chapters (project_id, title, start_time, end_time, created_at)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO chapters (project_id, title, start_time, end_time, display_order, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     chapter.project_id,
     chapter.title,
     chapter.start_time,
     chapter.end_time,
+    display_order,
     now
   );
   
@@ -371,6 +374,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
     title: chapter.title,
     start_time: chapter.start_time,
     end_time: chapter.end_time,
+    display_order,
     created_at: now,
   };
 }
@@ -378,7 +382,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
 export async function getChapter(id: number): Promise<Chapter | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, created_at FROM chapters WHERE id = ?'
+    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE id = ?'
   ).get(id) as Chapter | undefined;
   
   return result || null;
@@ -387,7 +391,7 @@ export async function getChapter(id: number): Promise<Chapter | null> {
 export async function getChaptersByProject(projectId: number): Promise<Chapter[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, created_at FROM chapters WHERE project_id = ? ORDER BY start_time ASC'
+    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE project_id = ? ORDER BY display_order ASC, start_time ASC'
   ).all(projectId) as Chapter[];
   
   return results;
@@ -395,7 +399,7 @@ export async function getChaptersByProject(projectId: number): Promise<Chapter[]
 
 export async function updateChapter(
   id: number,
-  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time'>>
+  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time' | 'display_order'>>
 ): Promise<boolean> {
   const database = await getDatabase();
   
@@ -430,6 +434,10 @@ export async function updateChapter(
   if (updates.end_time !== undefined) {
     fields.push('end_time = ?');
     values.push(updates.end_time);
+  }
+  if (updates.display_order !== undefined) {
+    fields.push('display_order = ?');
+    values.push(updates.display_order);
   }
   
   if (fields.length === 0) {
