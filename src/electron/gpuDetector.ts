@@ -69,12 +69,23 @@ export function hasGPUEncoding(): boolean {
 }
 
 /**
- * Test if an encoder is available in FFmpeg
+ * Test if an encoder is actually working in FFmpeg
+ * Actually tries to encode a few frames to verify the encoder is compiled in
  */
 async function testEncoder(ffmpegPath: string, encoder: string): Promise<boolean> {
   return new Promise((resolve) => {
-    // Test encoder by trying to get its help/info
-    const proc = spawn(ffmpegPath, ['-h', `encoder=${encoder}`], {
+    // Generate 1 second of test video and try to encode it
+    // This verifies the encoder is actually compiled into FFmpeg, not just listed
+    const args = [
+      '-f', 'lavfi',
+      '-i', 'testsrc=duration=1:size=320x240:rate=1',
+      '-c:v', encoder,
+      '-frames:v', '1',
+      '-f', 'null',
+      '-',
+    ];
+
+    const proc = spawn(ffmpegPath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 
@@ -84,8 +95,12 @@ async function testEncoder(ffmpegPath: string, encoder: string): Promise<boolean
     });
 
     proc.on('close', (code) => {
-      // FFmpeg returns 0 if encoder exists, non-zero if not found
-      resolve(code === 0);
+      // Success means encoder works
+      const success = code === 0;
+      if (!success && stderr.includes('Unknown encoder')) {
+        console.log(`[GPU] Encoder ${encoder} not available`);
+      }
+      resolve(success);
     });
 
     proc.on('error', () => {

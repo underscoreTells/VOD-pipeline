@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
+import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
 import { detectGPUEncoders, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
@@ -512,6 +512,52 @@ export async function generateAIProxy(
   // Get source metadata first
   const metadata = await getVideoMetadata(inputPath);
 
+  // Try GPU encoding first if enabled, with fallback to CPU
+  if (useGPU) {
+    try {
+      return await executeProxyGeneration(
+        ffmpegPath,
+        inputPath,
+        outputPath,
+        metadata,
+        onProgress,
+        timeoutMs,
+        true, // useGPU
+        quality
+      );
+    } catch (error) {
+      console.warn('[Proxy] GPU encoding failed, falling back to CPU:', error instanceof Error ? error.message : 'Unknown error');
+      console.log('[Proxy] Retrying with CPU encoding...');
+      // Fall through to CPU encoding
+    }
+  }
+
+  // CPU encoding (either by choice or as fallback)
+  return executeProxyGeneration(
+    ffmpegPath,
+    inputPath,
+    outputPath,
+    metadata,
+    onProgress,
+    timeoutMs,
+    false, // useGPU
+    quality
+  );
+}
+
+/**
+ * Execute proxy generation with specified encoder
+ */
+async function executeProxyGeneration(
+  ffmpegPath: FFmpegPathResult,
+  inputPath: string,
+  outputPath: string,
+  metadata: { duration: number },
+  onProgress?: (percent: number) => void,
+  timeoutMs?: number,
+  useGPU: boolean = false,
+  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   // Get encoder-specific arguments
   const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
 
