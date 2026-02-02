@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc/handlers.js';
 import { initializeDatabase, closeDatabase } from './database/db.js';
 import { getAgentBridge } from './agent-bridge.js';
 import { detectFFmpeg } from './ffmpegDetector.js';
+import { detectAudiowaveform } from './audiowaveformDetector.js';
 import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
 
@@ -80,8 +81,9 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
 
   // Detect external dependencies
-  await initializeFFmpeg();
-  await initializePython();
+    await initializeFFmpeg();
+    await initializeAudiowaveform();
+    await initializePython();
 
   createWindow();
   await startAgentBridge();
@@ -166,6 +168,29 @@ async function initializeFFmpeg() {
     console.error('[Main] FFmpeg detection failed:', error);
     console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
     console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
+  }
+}
+
+async function initializeAudiowaveform() {
+  console.log('[Main] Initializing audiowaveform...');
+
+  try {
+    const result = await detectAudiowaveform();
+    if (result) {
+      console.log(`[Main] Audiowaveform found: ${result.path}`);
+      console.log(`[Main] Audiowaveform version: ${result.version}`);
+      console.log(`[Main] Audiowaveform source: ${result.source}`);
+    } else {
+      console.warn('[Main] Audiowaveform not found. Waveform visualization will be disabled.');
+      console.warn('[Main] Install audiowaveform for waveform generation:');
+      console.warn('[Main]   Ubuntu/Debian: sudo apt install audiowaveform');
+      console.warn('[Main]   Fedora: sudo dnf install audiowaveform');
+      console.warn('[Main]   Arch: yay -S audiowaveform');
+      console.warn('[Main]   macOS: brew install audiowaveform');
+    }
+  } catch (error) {
+    console.error('[Main] Audiowaveform detection failed:', error);
+    console.warn('[Main] Waveform visualization will be disabled.');
   }
 }
 

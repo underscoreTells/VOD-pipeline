@@ -209,7 +209,7 @@ export interface ElectronAPI {
     };
     assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
-        add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+        add: (projectId: number, filePath: string, proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }) => Promise<AddAssetResult>;
     };
     chapters: {
         create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
@@ -241,6 +241,11 @@ export interface ElectronAPI {
     };
     webUtils: {
         getPathForFile: (file: File) => string;
+    };
+    proxy: {
+        onProgress: (callback: (data: { assetId: number; progress: number }) => void) => () => void;
+        onComplete: (callback: (data: { assetId: number; proxyPath: string }) => void) => () => void;
+        onError: (callback: (data: { assetId: number; error: string }) => void) => () => void;
     };
 }
 

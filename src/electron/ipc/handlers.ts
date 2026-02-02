@@ -148,7 +148,13 @@ export function registerIpcHandlers() {
   }
 
   // Background proxy generation
-  async function generateProxyAsync(assetId: number, sourcePath: string, mainWindow: any) {
+  async function generateProxyAsync(
+    assetId: number, 
+    sourcePath: string, 
+    mainWindow: any,
+    encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
+    quality: 'high' | 'balanced' | 'fast' = 'balanced'
+  ) {
     const proxyPath = getProxyPath(assetId);
     let proxyId: number | null = null;
     
@@ -169,14 +175,22 @@ export function registerIpcHandlers() {
       proxyId = proxy.id;
 
       console.log(`[Proxy] Starting generation for asset ${assetId} (proxy ${proxyId})`);
+      console.log(`[Proxy] Encoding mode: ${encodingMode}, Quality: ${quality}`);
       
       // Generate proxy with progress
-      const proxyMetadata = await generateAIProxy(sourcePath, proxyPath, (progress) => {
-        // Send progress to renderer
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('proxy:progress', { assetId, progress });
-        }
-      });
+      const proxyMetadata = await generateAIProxy(
+        sourcePath, 
+        proxyPath, 
+        (progress) => {
+          // Send progress to renderer
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('proxy:progress', { assetId, progress });
+          }
+        },
+        undefined, // timeoutMs
+        encodingMode,
+        quality
+      );
 
       // Update proxy record with metadata using the proxy ID
       await updateProxyMetadata(proxyId, {
@@ -218,7 +232,7 @@ export function registerIpcHandlers() {
   }
 
   // Asset handlers
-  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (event, { projectId, filePath }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (event, { projectId, filePath, proxyOptions }) => {
     console.log('IPC: asset:add', projectId, filePath);
 
     try {
@@ -296,8 +310,11 @@ export function registerIpcHandlers() {
       if (fileType === 'video') {
         const { getMainWindow } = await import('../main.js');
         const mainWindow = getMainWindow();
+        // Extract proxy encoding options from settings
+        const encodingMode = proxyOptions?.encodingMode || 'auto';
+        const quality = proxyOptions?.quality || 'balanced';
         // Don't await - run in background
-        generateProxyAsync(asset.id!, filePath, mainWindow);
+        generateProxyAsync(asset.id!, filePath, mainWindow, encodingMode, quality);
       }
 
       return createSuccessResponse(asset);

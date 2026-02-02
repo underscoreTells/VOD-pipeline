@@ -65,8 +65,12 @@ export async function getAssetsByProject(projectId: number): Promise<GetAssetsRe
   return await window.electronAPI.assets.getByProject(projectId);
 }
 
-export async function addAsset(projectId: number, filePath: string): Promise<AddAssetResult> {
-  return await window.electronAPI.assets.add(projectId, filePath);
+export async function addAsset(
+  projectId: number, 
+  filePath: string, 
+  proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }
+): Promise<AddAssetResult> {
+  return await window.electronAPI.assets.add(projectId, filePath, proxyOptions);
 }
 
 // ============================================================================

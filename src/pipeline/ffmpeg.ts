@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
+import { detectGPUEncoders, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -482,22 +483,42 @@ export async function generateAIProxy(
   inputPath: string,
   outputPath: string,
   onProgress?: (percent: number) => void,
-  timeoutMs?: number
+  timeoutMs?: number,
+  encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
+  quality: 'high' | 'balanced' | 'fast' = 'balanced'
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
     throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
   }
 
+  // Detect GPU encoders if auto mode
+  let useGPU = false;
+  if (encodingMode === 'gpu') {
+    // Force GPU, will fail if not available
+    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
+    useGPU = gpuEncoder !== null;
+  } else if (encodingMode === 'auto') {
+    // Auto-detect GPU
+    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
+    useGPU = gpuEncoder !== null;
+    if (useGPU) {
+      console.log(`[Proxy] Using GPU acceleration: ${gpuEncoder?.name}`);
+    } else {
+      console.log('[Proxy] GPU not available, using CPU encoding');
+    }
+  }
+
   // Get source metadata first
   const metadata = await getVideoMetadata(inputPath);
+
+  // Get encoder-specific arguments
+  const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
 
   const args: string[] = [
     '-i', inputPath,
     '-vf', 'scale=640:-2,fps=5', // 640px width, maintain aspect, 5fps
-    '-c:v', 'libx264',
-    '-preset', 'fast',
-    '-crf', '28', // Good quality, smaller file size
+    ...videoArgs,
     '-c:a', 'aac',
     '-b:a', '64k', // Low bitrate audio is fine for analysis
     '-movflags', '+faststart', // Web-optimized
