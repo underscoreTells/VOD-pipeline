@@ -20,6 +20,11 @@ export interface Settings {
   // Application preferences
   autoGenerateProxies: boolean;
   proxyGenerationOnImport: boolean;
+
+  // Chapter auto-naming preferences
+  autoChapterNamingEnabled: boolean;
+  autoChapterNamingModel: string;
+  autoTranscribeOnImport: boolean;
 }
 
 export interface ProviderStatus {
@@ -49,6 +54,9 @@ export const settingsState = $state<{
     defaultTextProvider: "openai",
     autoGenerateProxies: true,
     proxyGenerationOnImport: true,
+    autoChapterNamingEnabled: true,
+    autoChapterNamingModel: "gpt-4o-mini",
+    autoTranscribeOnImport: true,
   },
   providerStatuses: new Map(),
   isLoading: false,
@@ -80,6 +88,15 @@ export async function loadSettings(): Promise<void> {
     }
     if (parsed.proxyGenerationOnImport !== undefined) {
       settingsState.settings.proxyGenerationOnImport = parsed.proxyGenerationOnImport;
+    }
+    if (parsed.autoChapterNamingEnabled !== undefined) {
+      settingsState.settings.autoChapterNamingEnabled = parsed.autoChapterNamingEnabled;
+    }
+    if (parsed.autoChapterNamingModel) {
+      settingsState.settings.autoChapterNamingModel = parsed.autoChapterNamingModel;
+    }
+    if (parsed.autoTranscribeOnImport !== undefined) {
+      settingsState.settings.autoTranscribeOnImport = parsed.autoTranscribeOnImport;
     }
 
     // Decrypt API keys if present
@@ -140,6 +157,9 @@ export async function saveSettings(): Promise<void> {
       defaultTextProvider: settingsState.settings.defaultTextProvider,
       autoGenerateProxies: settingsState.settings.autoGenerateProxies,
       proxyGenerationOnImport: settingsState.settings.proxyGenerationOnImport,
+      autoChapterNamingEnabled: settingsState.settings.autoChapterNamingEnabled,
+      autoChapterNamingModel: settingsState.settings.autoChapterNamingModel,
+      autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
       _encryptedKeys: response.data,
     };
 
@@ -359,6 +379,9 @@ export async function resetSettings(): Promise<void> {
     defaultTextProvider: "openai",
     autoGenerateProxies: true,
     proxyGenerationOnImport: true,
+    autoChapterNamingEnabled: true,
+    autoChapterNamingModel: "gpt-4o-mini",
+    autoTranscribeOnImport: true,
   };
   settingsState.providerStatuses.clear();
   await saveSettings();

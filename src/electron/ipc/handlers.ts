@@ -248,12 +248,24 @@ export function registerIpcHandlers() {
       let duration: number | null = null;
       
       if (fileType === 'video') {
-        if (!await isValidVideo(filePath)) {
-          return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
+        try {
+          const isValid = await isValidVideo(filePath);
+          if (!isValid) {
+            return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
+          }
+        } catch (error) {
+          if (error instanceof FFmpegError && error.code === 'FFPROBE_TIMEOUT') {
+            return createErrorResponse(
+              'Video validation timed out - file may be too large or corrupted. Try a smaller file or check file integrity.',
+              IPC_ERROR_CODES.TIMEOUT
+            );
+          }
+          return createErrorResponse('Failed to validate video file', IPC_ERROR_CODES.INVALID_FORMAT);
         }
 
         try {
-          const videoMetadata = await getVideoMetadata(filePath);
+          // Use longer timeout for full metadata extraction on large VODs
+          const videoMetadata = await getVideoMetadata(filePath, 60000);
           metadata = {
             width: videoMetadata.width,
             height: videoMetadata.height,
@@ -268,6 +280,7 @@ export function registerIpcHandlers() {
           duration = videoMetadata.duration;
         } catch (error) {
           console.warn('[Asset Add] Failed to extract video metadata:', error);
+          // Don't fail the import if metadata extraction fails - we can still use the file
         }
       }
 

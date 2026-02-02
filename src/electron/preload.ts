@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
-import type { Asset, Clip, TimelineState, Suggestion } from '../shared/types/database';
+import type { Asset, Clip, TimelineState, Suggestion, Chapter } from '../shared/types/database';
 import type { AgentOutputMessage } from '../shared/types/agent-ipc';
 
 // ============================================================================
@@ -123,6 +123,52 @@ export interface ExportResult {
   error?: string;
 }
 
+export interface CreateChapterInput {
+  projectId: number;
+  title: string;
+  startTime: number;
+  endTime: number;
+}
+
+export interface CreateChapterResult {
+  success: boolean;
+  data?: Chapter;
+  error?: string;
+}
+
+export interface GetChaptersResult {
+  success: boolean;
+  data?: Chapter[];
+  error?: string;
+}
+
+export interface UpdateChapterInput {
+  title?: string;
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface UpdateChapterResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface DeleteChapterResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface AddAssetToChapterResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface GetChapterAssetsResult {
+  success: boolean;
+  data?: number[];
+  error?: string;
+}
+
 // ============================================================================
 // Electron API Interface
 // ============================================================================
@@ -146,6 +192,14 @@ export interface ElectronAPI {
   assets: {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
     add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+  };
+  chapters: {
+    create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
+    getByProject: (projectId: number) => Promise<GetChaptersResult>;
+    update: (id: number, updates: UpdateChapterInput) => Promise<UpdateChapterResult>;
+    delete: (id: number) => Promise<DeleteChapterResult>;
+    addAsset: (chapterId: number, assetId: number) => Promise<AddAssetToChapterResult>;
+    getAssets: (chapterId: number) => Promise<GetChapterAssetsResult>;
   };
   clips: {
     getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -215,6 +269,19 @@ const electronAPI: ElectronAPI = {
   assets: {
     getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
     add: (projectId, filePath) => ipcRenderer.invoke('asset:add', { projectId, filePath }),
+  },
+  chapters: {
+    create: (input) => ipcRenderer.invoke('chapter:create', {
+      projectId: input.projectId,
+      title: input.title,
+      startTime: input.startTime,
+      endTime: input.endTime,
+    }),
+    getByProject: (projectId) => ipcRenderer.invoke('chapter:get-by-project', { projectId }),
+    update: (id, updates) => ipcRenderer.invoke('chapter:update', { id, updates }),
+    delete: (id) => ipcRenderer.invoke('chapter:delete', { id }),
+    addAsset: (chapterId, assetId) => ipcRenderer.invoke('chapter:add-asset', { chapterId, assetId }),
+    getAssets: (chapterId) => ipcRenderer.invoke('chapter:get-assets', { chapterId }),
   },
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),

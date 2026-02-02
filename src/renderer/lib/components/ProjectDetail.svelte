@@ -3,6 +3,9 @@
   import Timeline from './Timeline.svelte';
   import TimelineToolbar from './TimelineToolbar.svelte';
   import BeatPanel from './BeatPanel.svelte';
+  import ImportChoice from './ImportChoice.svelte';
+  import ChapterDefinition from './ChapterDefinition.svelte';
+  import ChapterPanel from './ChapterPanel.svelte';
   import { 
     projectDetail, 
     loadProjectDetail, 
@@ -12,9 +15,21 @@
     exportProjectToFile,
     generateAssetWaveform
   } from '../state/project-detail.svelte';
+  import { 
+    chaptersState, 
+    loadChapters, 
+    clearChaptersState,
+    createChapter,
+    linkAssetToChapter,
+    autoCreateChaptersFromFiles,
+    setImportChoice,
+    setIsImporting,
+    selectChapter
+  } from '../state/chapters.svelte';
+  import { settingsState } from '../state/settings.svelte';
   import { timelineState, setError } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
-  import type { Project } from '../../../shared/types/database';
+  import type { Project, Asset } from '$shared/types/database';
   
   interface Props {
     project: Project;
@@ -27,10 +42,13 @@
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
   let cleanupKeyboard: (() => void) | null = null;
+  let showChapterDefinition = $state(false);
+  let vodAssetForDefinition = $state<Asset | null>(null);
   
-  // Load project data on mount
+  // Load project data and chapters on mount
   onMount(() => {
     loadProjectDetail(project.id);
+    loadChapters(project.id);
     cleanupKeyboard = initKeyboardShortcuts();
   });
   
@@ -38,9 +56,106 @@
     if (cleanupKeyboard) cleanupKeyboard();
     saveProjectTimelineState();
     clearProjectDetail();
+    clearChaptersState();
   });
   
-  // Handle drag and drop
+  // Check if project has content (assets or chapters)
+  const hasContent = $derived(() => {
+    return projectDetail.assets.length > 0 || chaptersState.chapters.length > 0;
+  });
+  
+  // Handle VOD import
+  async function handleVODImport(filePath: string) {
+    try {
+      // Create asset for VOD
+      const asset = await addAssetToProject(project.id, filePath);
+      if (asset) {
+        vodAssetForDefinition = asset;
+        showChapterDefinition = true;
+        // Generate waveform for the asset
+        await generateAssetWaveform(asset.id, 0);
+      }
+    } catch (error) {
+      console.error('Failed to import VOD:', error);
+      setError(`Failed to import VOD: ${(error as Error).message}`);
+      setIsImporting(false);
+    }
+  }
+  
+  // Handle files import
+  async function handleFilesImport(filePaths: string[]) {
+    try {
+      const assets: Asset[] = [];
+      
+      // Create assets for all files
+      for (const filePath of filePaths) {
+        const asset = await addAssetToProject(project.id, filePath);
+        if (asset) {
+          assets.push(asset);
+          await generateAssetWaveform(asset.id, 0);
+        }
+      }
+      
+      // Auto-create chapters from files
+      if (assets.length > 0) {
+        await autoCreateChaptersFromFiles(project.id, assets);
+      }
+      
+      setIsImporting(false);
+    } catch (error) {
+      console.error('Failed to import files:', error);
+      setError(`Failed to import files: ${(error as Error).message}`);
+      setIsImporting(false);
+    }
+  }
+  
+  // Handle chapter creation from ChapterDefinition
+  async function handleChaptersDefined(chapterInputs: Array<{ title: string; startTime: number; endTime: number }>) {
+    if (!vodAssetForDefinition) return;
+    
+    try {
+      for (const input of chapterInputs) {
+        // Create chapter
+        const chapter = await createChapter(
+          project.id,
+          input.title,
+          input.startTime,
+          input.endTime
+        );
+        
+        if (chapter) {
+          // Link VOD asset to chapter
+          await linkAssetToChapter(chapter.id, vodAssetForDefinition.id);
+          
+          // Start transcription if enabled
+          if (settingsState.settings.autoTranscribeOnImport) {
+            // Start transcription asynchronously
+            window.electronAPI?.transcription?.transcribe(chapter.id).catch((error: Error) => {
+              console.error('Failed to start transcription:', error);
+            });
+          }
+        }
+      }
+      
+      showChapterDefinition = false;
+      vodAssetForDefinition = null;
+      setIsImporting(false);
+    } catch (error) {
+      console.error('Failed to create chapters:', error);
+      setError(`Failed to create chapters: ${(error as Error).message}`);
+      setIsImporting(false);
+    }
+  }
+  
+  // Handle cancel from ChapterDefinition
+  function handleChapterDefinitionCancel() {
+    showChapterDefinition = false;
+    vodAssetForDefinition = null;
+    setIsImporting(false);
+    // Optionally delete the VOD asset that was created
+  }
+  
+  // Handle drag and drop for additional imports
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     isDragging = true;
@@ -58,44 +173,17 @@
     const files = e.dataTransfer?.files;
     if (!files) return;
     
-    // Use Electron's webUtils to get file paths
-    const webUtils = (window as any).electronAPI?.webUtils;
+    const webUtils = window.electronAPI?.webUtils;
     
     for (const file of files) {
       if (file.type.startsWith('video/')) {
         try {
           const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
           if (filePath) {
+            // Add as individual file chapter
             const asset = await addAssetToProject(project.id, filePath);
             if (asset) {
-              // Auto-generate waveform for the asset
-              await generateAssetWaveform(asset.id, 0);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to import file:', error);
-          setError(`Failed to import ${file.name}: ${(error as Error).message}`);
-        }
-      }
-    }
-  }
-  
-  // Handle file input
-  async function handleFileSelect(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const files = input.files;
-    if (!files) return;
-    
-    // Use Electron's webUtils to get file paths
-    const webUtils = (window as any).electronAPI?.webUtils;
-    
-    for (const file of files) {
-      if (file.type.startsWith('video/')) {
-        try {
-          const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
-          if (filePath) {
-            const asset = await addAssetToProject(project.id, filePath);
-            if (asset) {
+              await autoCreateChaptersFromFiles(project.id, [asset]);
               await generateAssetWaveform(asset.id, 0);
             }
           }
@@ -113,8 +201,7 @@
     if (!format) return;
     
     try {
-      // Use electron's dialog via IPC
-      const result = await (window as any).electronAPI.dialog.showSaveDialog({
+      const result = await window.electronAPI.dialog.showSaveDialog({
         defaultPath: `${project.name}${format.extension}`,
         filters: [{ name: format.name, extensions: [format.extension.replace('.', '')] }]
       });
@@ -132,10 +219,9 @@
     }
   }
   
-  // Get audio URLs for timeline (platform-safe file URLs)
+  // Get audio URLs for timeline
   const audioUrls = $derived.by(() => {
     return projectDetail.assets.map(asset => {
-      // Use URL API to create proper file URLs with encoding
       const fileUrl = new URL(`file://${asset.file_path}`);
       return fileUrl.href;
     });
@@ -156,16 +242,11 @@
       <h2>{project.name}</h2>
     </div>
     <div class="header-actions">
-      <label class="import-btn">
-        <input 
-          type="file" 
-          accept="video/*" 
-          multiple 
-          onchange={handleFileSelect}
-          style="display: none;"
-        />
-        📁 Import Video
-      </label>
+      {#if hasContent()}
+        <button class="import-btn" onclick={() => setIsImporting(true)}>
+          📁 Import More
+        </button>
+      {/if}
       <button class="export-btn" onclick={() => showExportDialog = true}>
         📤 Export
       </button>
@@ -174,29 +255,70 @@
   
   <!-- Main Content -->
   <div class="detail-content">
-    {#if projectDetail.isLoadingAssets || projectDetail.isLoadingClips}
+    {#if projectDetail.isLoadingAssets || projectDetail.isLoadingClips || chaptersState.isLoading}
       <div class="loading">
         <span class="spinner"></span>
         <p>Loading project...</p>
       </div>
-    {:else if projectDetail.assets.length === 0}
-      <div class="empty-state">
-        <p>📹 Drop video files here to get started</p>
-        <p class="hint">or click "Import Video" to browse</p>
-      </div>
+    {:else if showChapterDefinition && vodAssetForDefinition}
+      <!-- Chapter Definition Mode -->
+      <ChapterDefinition
+        asset={vodAssetForDefinition}
+        projectId={project.id}
+        onComplete={handleChaptersDefined}
+        onCancel={handleChapterDefinitionCancel}
+      />
+    {:else if chaptersState.isImporting}
+      <!-- Import Choice Mode -->
+      <ImportChoice
+        projectId={project.id}
+        onVODImport={handleVODImport}
+        onFilesImport={handleFilesImport}
+      />
+    {:else if !hasContent()}
+      <!-- Empty State - Show ImportChoice -->
+      <ImportChoice
+        projectId={project.id}
+        onVODImport={handleVODImport}
+        onFilesImport={handleFilesImport}
+      />
     {:else}
-      <div class="timeline-wrapper">
-        <TimelineToolbar />
-        <div class="timeline-container">
-          <Timeline 
-            projectId={project.id}
-            {audioUrls}
-            clips={timelineState.clips}
+      <!-- Chapters-First Layout -->
+      <div class="project-layout">
+        <!-- Chapter Panel Sidebar -->
+        <aside class="chapters-sidebar">
+          <ChapterPanel
+            projectAssets={projectDetail.assets}
+            onImportClick={() => setIsImporting(true)}
           />
-        </div>
+        </aside>
+        
+        <!-- Main Content Area -->
+        <main class="main-content">
+          {#if chaptersState.selectedChapterId}
+            <!-- Show timeline for selected chapter -->
+            <div class="timeline-wrapper">
+              <TimelineToolbar />
+              <div class="timeline-container">
+                <Timeline 
+                  projectId={project.id}
+                  {audioUrls}
+                  clips={timelineState.clips}
+                />
+              </div>
+            </div>
+            
+            <BeatPanel clips={timelineState.clips} />
+          {:else}
+            <!-- No chapter selected -->
+            <div class="empty-selection">
+              <div class="empty-icon">📖</div>
+              <h3>Select a Chapter</h3>
+              <p>Choose a chapter from the sidebar to view its timeline and beats</p>
+            </div>
+          {/if}
+        </main>
       </div>
-      
-      <BeatPanel clips={timelineState.clips} />
     {/if}
   </div>
   
@@ -276,6 +398,7 @@
     padding: 1rem 1.5rem;
     background: #1e1e1e;
     border-bottom: 1px solid #333;
+    flex-shrink: 0;
   }
   
   .header-left {
@@ -299,12 +422,6 @@
     border-color: #666;
   }
   
-  .detail-header h2 {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 600;
-  }
-  
   .header-actions {
     display: flex;
     gap: 0.75rem;
@@ -312,35 +429,77 @@
   
   .import-btn, .export-btn {
     padding: 0.5rem 1rem;
-    border: none;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.875rem;
     transition: all 0.2s;
+    border: none;
   }
   
   .import-btn {
-    background: #28a745;
-    color: white;
+    background: #333;
+    color: #fff;
   }
   
   .import-btn:hover {
-    background: #218838;
+    background: #444;
   }
   
   .export-btn {
     background: #007bff;
-    color: white;
+    color: #fff;
   }
   
   .export-btn:hover {
     background: #0056b3;
   }
   
-  /* Content */
+  /* Main Content */
   .detail-content {
     flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .loading {
     display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 1rem;
+  }
+  
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid #333;
+    border-top-color: #007bff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  /* Project Layout */
+  .project-layout {
+    display: flex;
+    height: 100%;
+  }
+  
+  .chapters-sidebar {
+    width: 300px;
+    flex-shrink: 0;
+    border-right: 1px solid #333;
+    overflow-y: auto;
+  }
+  
+  .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
   
@@ -353,52 +512,35 @@
   
   .timeline-container {
     flex: 1;
-    overflow: hidden;
-    padding: 0 1rem 1rem;
+    overflow: auto;
   }
   
-  /* Empty State */
-  .empty-state {
-    flex: 1;
+  /* Empty Selection State */
+  .empty-selection {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    height: 100%;
     color: #666;
+    text-align: center;
+    padding: 2rem;
   }
   
-  .empty-state p:first-child {
-    font-size: 1.5rem;
-    margin-bottom: 0.5rem;
-  }
-  
-  .hint {
-    font-size: 0.875rem;
-    color: #888;
-  }
-  
-  /* Loading */
-  .loading {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    color: #888;
-  }
-  
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #333;
-    border-top-color: #007bff;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
+  .empty-icon {
+    font-size: 4rem;
     margin-bottom: 1rem;
+    opacity: 0.5;
   }
   
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  .empty-selection h3 {
+    margin: 0 0 0.5rem 0;
+    color: #888;
+  }
+  
+  .empty-selection p {
+    margin: 0;
+    font-size: 0.875rem;
   }
   
   /* Progress Overlay */
@@ -420,11 +562,9 @@
     padding: 2rem;
     border-radius: 8px;
     min-width: 300px;
-    text-align: center;
   }
   
   .progress-bar {
-    width: 100%;
     height: 8px;
     background: #333;
     border-radius: 4px;
@@ -460,21 +600,19 @@
   
   .dialog {
     background: #1e1e1e;
-    padding: 1.5rem;
+    padding: 2rem;
     border-radius: 8px;
     min-width: 400px;
-    max-width: 500px;
+    max-width: 90vw;
   }
   
   .dialog h3 {
     margin: 0 0 0.5rem 0;
-    font-size: 1.25rem;
   }
   
   .dialog-description {
-    margin: 0 0 1.5rem 0;
     color: #888;
-    font-size: 0.875rem;
+    margin: 0 0 1.5rem 0;
   }
   
   .format-list {
@@ -490,19 +628,14 @@
     gap: 0.75rem;
     padding: 0.75rem;
     background: #252525;
-    border: 2px solid transparent;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background 0.2s;
   }
   
-  .format-option:hover {
-    background: #2a2a2a;
-  }
-  
+  .format-option:hover,
   .format-option.selected {
-    border-color: #007bff;
-    background: #007bff20;
+    background: #333;
   }
   
   .format-info {
@@ -511,8 +644,7 @@
   }
   
   .format-name {
-    font-weight: 600;
-    color: #fff;
+    font-weight: 500;
   }
   
   .format-desc {
@@ -527,31 +659,20 @@
   }
   
   .dialog-actions button {
-    padding: 0.5rem 1.25rem;
-    border: none;
+    padding: 0.5rem 1rem;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 0.875rem;
-    transition: all 0.2s;
+    border: none;
   }
   
   .dialog-actions .secondary {
-    background: transparent;
-    border: 1px solid #555;
-    color: #ccc;
-  }
-  
-  .dialog-actions .secondary:hover {
     background: #333;
+    color: #fff;
   }
   
   .dialog-actions .primary {
     background: #007bff;
-    color: white;
-  }
-  
-  .dialog-actions .primary:hover {
-    background: #0056b3;
+    color: #fff;
   }
   
   /* Error Toast */
@@ -560,27 +681,20 @@
     bottom: 1rem;
     right: 1rem;
     background: #dc3545;
-    color: white;
-    padding: 1rem 1.5rem;
-    border-radius: 6px;
+    color: #fff;
+    padding: 1rem;
+    border-radius: 4px;
     display: flex;
     align-items: center;
     gap: 1rem;
-    z-index: 1001;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
   }
   
   .error-toast button {
     background: none;
     border: none;
-    color: white;
+    color: #fff;
     cursor: pointer;
     font-size: 1.25rem;
-    padding: 0;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
 </style>

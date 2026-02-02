@@ -26,8 +26,13 @@ export class FFmpegError extends Error {
 
 /**
  * Get video metadata using ffprobe
+ * @param filePath Path to video file
+ * @param timeoutMs Timeout in milliseconds (default: 60000 for large VODs)
  */
-export async function getVideoMetadata(filePath: string): Promise<VideoMetadata> {
+export async function getVideoMetadata(
+  filePath: string,
+  timeoutMs: number = 60000
+): Promise<VideoMetadata> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
     throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
@@ -46,6 +51,18 @@ export async function getVideoMetadata(filePath: string): Promise<VideoMetadata>
 
     let output = '';
     let errorOutput = '';
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    // Set timeout for large files
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        proc.kill('SIGTERM');
+        reject(new FFmpegError(
+          `ffprobe timed out after ${timeoutMs}ms - file may be too large or corrupted`,
+          'FFPROBE_TIMEOUT'
+        ));
+      }, timeoutMs);
+    }
 
     proc.stdout.on('data', (data) => {
       output += data.toString();
@@ -56,6 +73,7 @@ export async function getVideoMetadata(filePath: string): Promise<VideoMetadata>
     });
 
     proc.on('error', (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
       reject(new FFmpegError(
         `Failed to run ffprobe: ${error.message}`,
         'FFPROBE_ERROR',
@@ -64,6 +82,8 @@ export async function getVideoMetadata(filePath: string): Promise<VideoMetadata>
     });
 
     proc.on('close', (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+
       if (code !== 0) {
         reject(new FFmpegError(
           `ffprobe failed with code ${code}: ${errorOutput}`,
@@ -420,21 +440,36 @@ function parseFFprobeOutput(data: FFprobeOutput): VideoMetadata {
 
 /**
  * Check if a file is a valid video file
+ * Uses a short timeout (5s) to quickly validate without hanging on large files
  */
 export async function isValidVideo(filePath: string): Promise<boolean> {
   try {
+    console.log(`[FFmpeg] Validating video: ${filePath}`);
+
     const stats = fs.statSync(filePath);
-    if (!stats.isFile()) return false;
+    if (!stats.isFile()) {
+      console.log(`[FFmpeg] Validation failed: not a file`);
+      return false;
+    }
+    console.log(`[FFmpeg] File exists, size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     const ext = path.extname(filePath).toLowerCase();
-    const validExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts'];
+    console.log(`[FFmpeg] Extension: ${ext}`);
 
-    if (!validExtensions.includes(ext)) return false;
+    const validExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
 
-    // Try to get metadata
-    await getVideoMetadata(filePath);
+    if (!validExtensions.includes(ext)) {
+      console.log(`[FFmpeg] Validation failed: extension ${ext} not in valid list`);
+      return false;
+    }
+
+    // Try to get metadata with short timeout for quick validation
+    console.log(`[FFmpeg] Attempting metadata extraction with 5s timeout...`);
+    await getVideoMetadata(filePath, 5000);
+    console.log(`[FFmpeg] Validation successful`);
     return true;
-  } catch {
+  } catch (error) {
+    console.log(`[FFmpeg] Validation failed with error:`, error);
     return false;
   }
 }
