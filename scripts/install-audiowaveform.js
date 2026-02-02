@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import http from 'http';
-import { execSync } from 'child_process';
+import { execSync, execFileSync, spawnSync } from 'child_process';
 import os from 'os';
 
 // Platform detection
@@ -126,7 +126,8 @@ async function extractDeb(debPath, destDir) {
 
   try {
     // Extract .deb package using dpkg-deb
-    execSync(`dpkg-deb -x "${debPath}" "${extractDir}"`, {
+    // Using execFileSync to prevent command injection from path inputs
+    execFileSync('dpkg-deb', ['-x', debPath, extractDir], {
       stdio: 'ignore',
     });
 
@@ -313,10 +314,23 @@ async function extractRpm(rpmPath, destDir) {
   }
 
   try {
-    // Extract RPM using rpm2cpio and cpio
-    execSync(`rpm2cpio "${rpmPath}" | cpio -idmv -D "${extractDir}"`, {
-      stdio: 'ignore',
+    // Extract RPM using rpm2cpio and cpio without shell interpolation
+    const rpmResult = spawnSync('rpm2cpio', [rpmPath], {
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
+
+    if (rpmResult.status !== 0 || !rpmResult.stdout) {
+      throw new Error('rpm2cpio failed to extract RPM package');
+    }
+
+    const cpioResult = spawnSync('cpio', ['-idmv', '-D', extractDir], {
+      input: rpmResult.stdout,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+
+    if (cpioResult.status !== 0) {
+      throw new Error('cpio failed to extract RPM package');
+    }
 
     // Find the binary (usually in usr/bin/)
     const binarySrc = path.join(extractDir, 'usr', 'bin', 'audiowaveform');

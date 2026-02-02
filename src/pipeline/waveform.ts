@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { getAudiowaveformPath } from '../electron/audiowaveformDetector.js';
-import { getFFmpegPath } from '../electron/ffmpegDetector.js';
+import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
 import { saveWaveform } from '../electron/database/db.js';
 import type {
   WaveformPeak,
@@ -50,13 +50,22 @@ export async function generateWaveformTiers(
   const tiers: WaveformGenerationResult['tiers'] = [];
   let waveformInputPath: string = audioPath;
   let tempAudioPath: string | null = null;
+  const maxTier2Peaks = 1_000_000;
 
   try {
     if (onProgress) {
       onProgress({ tier: 1, percent: 0, status: 'Preparing audio for waveform...' });
     }
 
-    const preparedInput = await prepareWaveformInput(audioPath, tempDir);
+    const preparedInput = await prepareWaveformInput(
+      audioPath,
+      tempDir,
+      (percent, status) => {
+        if (onProgress) {
+          onProgress({ tier: 1, percent, status });
+        }
+      }
+    );
     waveformInputPath = preparedInput.path;
     tempAudioPath = preparedInput.tempPath;
 
@@ -88,28 +97,41 @@ export async function generateWaveformTiers(
       await saveWaveform(assetId, trackIndex, 1, tier1Result.peaks, tier1Result.sampleRate, tier1Result.duration);
     }
 
-    // Generate Tier 2 (Standard - 16:1 zoom)
-    if (onProgress) {
-      onProgress({ tier: 2, percent: 70, status: 'Generating standard waveform...' });
-    }
-    
-    const tier2Result = await generateTierWithAudiowaveform(
-      audiowaveformPath.path,
-      waveformInputPath,
-      tempDir,
-      2,
-      16,
-      16
-    );
-    
-    if (tier2Result) {
+    const tier1Ratio = WAVEFORM_TIERS[1].ratio;
+    const tier2Ratio = WAVEFORM_TIERS[2].ratio;
+    const estimatedTier2Peaks = tier1Result
+      ? Math.round(tier1Result.peaks.length * (tier1Ratio / tier2Ratio))
+      : 0;
+    const skipTier2 = estimatedTier2Peaks > maxTier2Peaks;
+
+    // Generate Tier 2 (Standard - 16:1 zoom) for shorter assets
+    if (skipTier2) {
       if (onProgress) {
-        onProgress({ tier: 2, percent: 100, status: 'Standard complete' });
+        onProgress({ tier: 2, percent: 100, status: 'Standard skipped (asset too long)' });
       }
-      tiers.push({ level: 2, ...tier2Result });
+    } else {
+      if (onProgress) {
+        onProgress({ tier: 2, percent: 70, status: 'Generating standard waveform...' });
+      }
       
-      // Save to database
-      await saveWaveform(assetId, trackIndex, 2, tier2Result.peaks, tier2Result.sampleRate, tier2Result.duration);
+      const tier2Result = await generateTierWithAudiowaveform(
+        audiowaveformPath.path,
+        waveformInputPath,
+        tempDir,
+        2,
+        16,
+        16
+      );
+      
+      if (tier2Result) {
+        if (onProgress) {
+          onProgress({ tier: 2, percent: 100, status: 'Standard complete' });
+        }
+        tiers.push({ level: 2, ...tier2Result });
+        
+        // Save to database
+        await saveWaveform(assetId, trackIndex, 2, tier2Result.peaks, tier2Result.sampleRate, tier2Result.duration);
+      }
     }
 
     // Tier 3 is generated on-demand, not cached
@@ -148,7 +170,8 @@ export async function generateWaveformTiers(
 
 async function prepareWaveformInput(
   inputPath: string,
-  tempDir: string
+  tempDir: string,
+  onProgress?: (percent: number, status: string) => void
 ): Promise<{ path: string; tempPath: string | null }> {
   const extension = path.extname(inputPath).toLowerCase();
   const supportedExtensions = new Set([
@@ -174,7 +197,14 @@ async function prepareWaveformInput(
   }
 
   const tempWavPath = path.join(tempDir, `waveform_${Date.now()}.wav`);
-  await transcodeToWaveformAudio(ffmpegPath.path, inputPath, tempWavPath);
+  const durationSeconds = await getMediaDurationSeconds(ffmpegPath.path, inputPath);
+  await transcodeToWaveformAudio(
+    ffmpegPath.path,
+    inputPath,
+    tempWavPath,
+    durationSeconds,
+    onProgress
+  );
 
   return { path: tempWavPath, tempPath: tempWavPath };
 }
@@ -182,7 +212,9 @@ async function prepareWaveformInput(
 async function transcodeToWaveformAudio(
   ffmpegBinaryPath: string,
   inputPath: string,
-  outputPath: string
+  outputPath: string,
+  durationSeconds: number | null,
+  onProgress?: (percent: number, status: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -193,11 +225,65 @@ async function transcodeToWaveformAudio(
       '-ar', '11025',
       '-c:a', 'pcm_s16le',
       '-f', 'wav',
+      '-progress', 'pipe:1',
+      '-nostats',
       outputPath,
     ];
 
-    const proc = spawn(ffmpegBinaryPath, args);
+    const proc = spawn(ffmpegBinaryPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let errorOutput = '';
+    let progressBuffer = '';
+    let lastReportedPercent = -1;
+
+    const reportProgressSeconds = (outTimeSeconds: number) => {
+      if (!durationSeconds || !onProgress) return;
+      const rawPercent = Math.min(100, Math.max(0, (outTimeSeconds / durationSeconds) * 100));
+      const mappedPercent = Math.min(10, Math.max(0, Math.round(rawPercent / 10)));
+      if (mappedPercent !== lastReportedPercent) {
+        lastReportedPercent = mappedPercent;
+        onProgress(mappedPercent, `Preparing audio for waveform... ${Math.round(rawPercent)}%`);
+      }
+    };
+
+    const parseOutTimeSeconds = (value: string): number | null => {
+      const parts = value.trim().split(':');
+      if (parts.length !== 3) return null;
+      const hours = Number.parseFloat(parts[0]);
+      const minutes = Number.parseFloat(parts[1]);
+      const seconds = Number.parseFloat(parts[2]);
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+        return null;
+      }
+      return (hours * 3600) + (minutes * 60) + seconds;
+    };
+
+    proc.stdout.on('data', (data) => {
+      if (!durationSeconds || !onProgress) return;
+      progressBuffer += data.toString();
+      let newlineIndex = progressBuffer.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = progressBuffer.slice(0, newlineIndex).trim();
+        progressBuffer = progressBuffer.slice(newlineIndex + 1);
+        const [key, value] = line.split('=');
+        if (key === 'out_time') {
+          const outTimeSeconds = parseOutTimeSeconds(value);
+          if (outTimeSeconds !== null) {
+            reportProgressSeconds(outTimeSeconds);
+          }
+        } else if (key === 'out_time_ms' || key === 'out_time_us') {
+          const outTimeRaw = Number(value);
+          const outTimeSeconds = Number.isFinite(outTimeRaw)
+            ? outTimeRaw / 1_000_000
+            : null;
+          if (outTimeSeconds !== null) {
+            reportProgressSeconds(outTimeSeconds);
+          }
+        }
+        newlineIndex = progressBuffer.indexOf('\n');
+      }
+    });
 
     proc.stderr.on('data', (data) => {
       errorOutput += data.toString();
@@ -221,7 +307,39 @@ async function transcodeToWaveformAudio(
         return;
       }
 
+      if (onProgress) {
+        onProgress(10, 'Audio preparation complete');
+      }
       resolve();
+    });
+  });
+}
+
+async function getMediaDurationSeconds(ffmpegPath: string, inputPath: string): Promise<number | null> {
+  const ffprobePath = getFFprobePath(ffmpegPath);
+  return new Promise((resolve) => {
+    const args = [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      inputPath,
+    ];
+    const proc = spawn(ffprobePath, args);
+    let output = '';
+
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    proc.on('error', () => resolve(null));
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      const duration = Number.parseFloat(output.trim());
+      resolve(Number.isFinite(duration) ? duration : null);
     });
   });
 }

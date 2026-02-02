@@ -27,16 +27,19 @@ const GPU_ENCODERS: Omit<GPUEncoderInfo, 'source'>[] = [
 ];
 
 let cachedEncoder: GPUEncoderInfo | null = null;
-let detectionComplete = false;
 let cachedFFmpegPath: string | null = null;
 
 /**
  * Detect available GPU encoders by testing them with FFmpeg
  * Also checks system FFmpeg if bundled one doesn't have GPU support
  * Returns the best available encoder (lowest priority number)
+ * 
+ * @param ffmpegPath Path to FFmpeg binary to test
+ * @param force Force re-detection even if cached result exists
  */
-export async function detectGPUEncoders(ffmpegPath: string): Promise<GPUEncoderInfo | null> {
-  if (detectionComplete && cachedFFmpegPath === ffmpegPath) {
+export async function detectGPUEncoders(ffmpegPath: string, force: boolean = false): Promise<GPUEncoderInfo | null> {
+  // Return cached result only if it was successful (not null) and same FFmpeg path
+  if (!force && cachedEncoder && cachedFFmpegPath === ffmpegPath) {
     return cachedEncoder;
   }
 
@@ -47,7 +50,6 @@ export async function detectGPUEncoders(ffmpegPath: string): Promise<GPUEncoderI
   const result = await testEncodersOnPath(ffmpegPath);
   if (result) {
     cachedEncoder = result;
-    detectionComplete = true;
     return result;
   }
 
@@ -57,12 +59,11 @@ export async function detectGPUEncoders(ffmpegPath: string): Promise<GPUEncoderI
   if (systemResult) {
     console.log(`[GPU] Found GPU encoder in system FFmpeg: ${systemResult.name}`);
     cachedEncoder = systemResult;
-    detectionComplete = true;
     return systemResult;
   }
 
   console.log('[GPU] No GPU encoders available, falling back to CPU (libx264)');
-  detectionComplete = true;
+  // Don't cache null - allow re-detection on next call in case drivers are installed
   return null;
 }
 
@@ -103,7 +104,7 @@ export function getGPUFFmpegPath(): string | null {
  * Test if an encoder is actually working in FFmpeg
  * Actually tries to encode a few frames to verify the encoder is compiled in
  */
-async function testEncoder(ffmpegPath: string, encoder: string): Promise<boolean> {
+async function testEncoder(executablePath: string, encoder: string): Promise<boolean> {
   return new Promise((resolve) => {
     // Generate 1 second of test video and try to encode it
     // This verifies the encoder is actually compiled into FFmpeg, not just listed
@@ -116,7 +117,7 @@ async function testEncoder(ffmpegPath: string, encoder: string): Promise<boolean
       '-',
     ];
 
-    const proc = spawn(ffmpegPath, args, {
+    const proc = spawn(executablePath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 

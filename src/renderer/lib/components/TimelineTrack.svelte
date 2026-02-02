@@ -136,6 +136,7 @@
     // Cleanup
     return () => {
       isDestroyed = true;
+      regionsPlugin?.destroy();
       waveSurfer?.destroy();
     };
   });
