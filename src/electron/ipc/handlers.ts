@@ -868,6 +868,14 @@ export function registerIpcHandlers() {
         }
       );
 
+      // Handle case where result is null (audiowaveform not available)
+      if (!result) {
+        return createErrorResponse(
+          'Waveform generation not available. Please install audiowaveform.',
+          IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED
+        );
+      }
+
       // Save the specific tier
       const tier = result.tiers.find(t => t.level === tierLevel);
       if (tier) {

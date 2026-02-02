@@ -2,11 +2,10 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { getFFmpegPath } from '../electron/ffmpegDetector.js';
+import { getAudiowaveformPath } from '../electron/audiowaveformDetector.js';
 import { saveWaveform } from '../electron/database/db.js';
 import type {
   WaveformPeak,
-  WaveformTier,
   WaveformProgress,
   WaveformProgressCallback,
   WaveformGenerationResult,
@@ -16,7 +15,11 @@ import { WAVEFORM_TIERS } from '../shared/types/pipeline.js';
 export class WaveformError extends Error {
   constructor(
     message: string,
-    public code: string,
+    public code: 
+      | 'AUDIOWAVEFORM_NOT_FOUND' 
+      | 'GENERATION_ERROR'
+      | 'JSON_PARSE_ERROR'
+      | 'TIER_GENERATION_ERROR',
     public details?: unknown
   ) {
     super(message);
@@ -25,215 +28,173 @@ export class WaveformError extends Error {
 }
 
 /**
- * Generate all waveform tiers for an audio file
- * Uses FFmpeg to extract PCM audio and calculate min/max peaks
+ * Generate all waveform tiers for an audio file using audiowaveform
+ * Falls back gracefully if audiowaveform is not available
  */
 export async function generateWaveformTiers(
   audioPath: string,
   assetId: number,
   trackIndex: number = 0,
   onProgress?: WaveformProgressCallback
-): Promise<WaveformGenerationResult> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new WaveformError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
+): Promise<WaveformGenerationResult | null> {
+  const audiowaveformPath = getAudiowaveformPath();
+  
+  if (!audiowaveformPath) {
+    console.warn('[Waveform] audiowaveform not found. Waveform generation disabled.');
+    console.warn('[Waveform] Install audiowaveform for waveform visualization.');
+    return null;
   }
 
   const tempDir = os.tmpdir();
-  const tempPcmPath = path.join(tempDir, `waveform_${assetId}_${trackIndex}_${Date.now()}.pcm`);
+  const tiers: WaveformGenerationResult['tiers'] = [];
 
   try {
-    // Extract raw PCM audio first
-    await extractPcmAudio(ffmpegPath.path, audioPath, tempPcmPath, trackIndex);
-
-    const tiers: WaveformGenerationResult['tiers'] = [];
-
-    // Generate Tier 1 (Overview - 256:1)
+    // Generate Tier 1 (Overview - 256:1 zoom)
     if (onProgress) {
       onProgress({ tier: 1, percent: 0, status: 'Generating overview waveform...' });
     }
-    const tier1 = await generateTier(tempPcmPath, 1);
-    if (onProgress) {
-      onProgress({ tier: 1, percent: 100, status: 'Overview complete' });
+    
+    const tier1Result = await generateTierWithAudiowaveform(
+      audiowaveformPath.path,
+      audioPath,
+      tempDir,
+      1,
+      256,
+      8
+    );
+    
+    if (tier1Result) {
+      if (onProgress) {
+        onProgress({ tier: 1, percent: 100, status: 'Overview complete' });
+      }
+      tiers.push({ level: 1, ...tier1Result });
+      
+      // Save to database
+      await saveWaveform(assetId, trackIndex, 1, tier1Result.peaks, tier1Result.sampleRate, tier1Result.duration);
     }
-    tiers.push({ ...tier1, level: 1 });
 
-    // Generate Tier 2 (Standard - 16:1)
+    // Generate Tier 2 (Standard - 16:1 zoom)
     if (onProgress) {
       onProgress({ tier: 2, percent: 0, status: 'Generating standard waveform...' });
     }
-    const tier2 = await generateTier(tempPcmPath, 2);
-    if (onProgress) {
-      onProgress({ tier: 2, percent: 100, status: 'Standard complete' });
+    
+    const tier2Result = await generateTierWithAudiowaveform(
+      audiowaveformPath.path,
+      audioPath,
+      tempDir,
+      2,
+      16,
+      16
+    );
+    
+    if (tier2Result) {
+      if (onProgress) {
+        onProgress({ tier: 2, percent: 100, status: 'Standard complete' });
+      }
+      tiers.push({ level: 2, ...tier2Result });
+      
+      // Save to database
+      await saveWaveform(assetId, trackIndex, 2, tier2Result.peaks, tier2Result.sampleRate, tier2Result.duration);
     }
-    tiers.push({ ...tier2, level: 2 });
 
     // Tier 3 is generated on-demand, not cached
 
-    const result = {
+    return {
       assetId,
       trackIndex,
       tiers,
     };
-
-    // Save generated waveforms to database
-    for (const tier of tiers) {
-      await saveWaveform(assetId, trackIndex, tier.level, tier.peaks, tier.sampleRate, tier.duration);
+  } catch (error) {
+    console.error('[Waveform] Generation failed:', error);
+    
+    // Return partial results if we have any
+    if (tiers.length > 0) {
+      console.warn('[Waveform] Returning partial results');
+      return {
+        assetId,
+        trackIndex,
+        tiers,
+      };
     }
-
-    return result;
-  } finally {
-    // Cleanup temp file
-    try {
-      if (fs.existsSync(tempPcmPath)) {
-        fs.unlinkSync(tempPcmPath);
-      }
-    } catch (error) {
-      console.warn('[Waveform] Failed to cleanup temp file:', error);
-    }
+    
+    return null;
   }
 }
 
 /**
- * Stream PCM data and calculate waveform peaks
- * Processes data incrementally without loading entire file into memory
+ * Generate a single tier using audiowaveform
+ * Uses JSON output format for easy parsing
  */
-async function streamPcmPeaks(
-  pcmPath: string,
-  windowSize: number
-): Promise<{ peaks: WaveformPeak[]; sampleCount: number }> {
-  return new Promise((resolve, reject) => {
-    const stream = fs.createReadStream(pcmPath);
-    const peaks: WaveformPeak[] = [];
-
-    // Buffer to accumulate bytes across chunk boundaries
-    let byteBuffer = Buffer.alloc(0);
-    let sampleCount = 0;
-    let windowMin = 32767;
-    let windowMax = -32768;
-    let windowSampleCount = 0;
-
-    stream.on('data', (chunk: Buffer) => {
-      // Append new chunk to buffer
-      byteBuffer = Buffer.concat([byteBuffer, chunk]);
-
-      // Process complete 16-bit samples (2 bytes each)
-      const samplesToProcess = Math.floor(byteBuffer.length / 2);
-
-      for (let i = 0; i < samplesToProcess; i++) {
-        // Read 16-bit signed integer (little-endian)
-        const sample = byteBuffer.readInt16LE(i * 2);
-        sampleCount++;
-
-        // Update window min/max
-        if (sample < windowMin) windowMin = sample;
-        if (sample > windowMax) windowMax = sample;
-        windowSampleCount++;
-
-        // When window is full, save peak and reset
-        if (windowSampleCount >= windowSize) {
-          peaks.push({
-            min: windowMin / 32768,
-            max: windowMax / 32768,
-          });
-          windowMin = 32767;
-          windowMax = -32768;
-          windowSampleCount = 0;
-        }
-      }
-
-      // Keep remaining bytes (incomplete sample) for next chunk
-      const remainingBytes = byteBuffer.length % 2;
-      if (remainingBytes > 0) {
-        byteBuffer = byteBuffer.subarray(byteBuffer.length - remainingBytes);
-      } else {
-        byteBuffer = Buffer.alloc(0);
-      }
-    });
-
-    stream.on('end', () => {
-      // Process any remaining samples in the buffer
-      const samplesToProcess = Math.floor(byteBuffer.length / 2);
-      for (let i = 0; i < samplesToProcess; i++) {
-        const sample = byteBuffer.readInt16LE(i * 2);
-        sampleCount++;
-
-        if (sample < windowMin) windowMin = sample;
-        if (sample > windowMax) windowMax = sample;
-        windowSampleCount++;
-      }
-
-      // Save final partial window if any
-      if (windowSampleCount > 0) {
-        peaks.push({
-          min: windowMin / 32768,
-          max: windowMax / 32768,
-        });
-      }
-
-      resolve({ peaks, sampleCount });
-    });
-
-    stream.on('error', (error) => {
-      reject(new WaveformError(
-        `Failed to stream PCM data: ${error.message}`,
-        'STREAM_ERROR',
-        error
-      ));
-    });
-  });
-}
-
-/**
- * Generate a single tier of waveform data
- */
-async function generateTier(
-  pcmPath: string,
-  tierLevel: 1 | 2 | 3
-): Promise<{ peaks: WaveformPeak[]; sampleRate: number; duration: number }> {
-  const tier = WAVEFORM_TIERS[tierLevel];
-  const windowSize = tier.ratio;
-
-  // Calculate sample rate based on FFmpeg output (assuming 44.1kHz default)
-  const sampleRate = 44100;
+async function generateTierWithAudiowaveform(
+  binaryPath: string,
+  audioPath: string,
+  tempDir: string,
+  tierLevel: 1 | 2 | 3,
+  zoom: number,
+  bits: 8 | 16
+): Promise<{ peaks: WaveformPeak[]; sampleRate: number; duration: number } | null> {
+  const tempJsonPath = path.join(tempDir, `waveform_${Date.now()}_tier${tierLevel}.json`);
 
   try {
-    // Stream PCM data and calculate peaks
-    const { peaks, sampleCount } = await streamPcmPeaks(pcmPath, windowSize);
-    const duration = sampleCount / sampleRate;
+    // Run audiowaveform with JSON output
+    await executeAudiowaveform(binaryPath, audioPath, tempJsonPath, zoom, bits);
+
+    // Parse JSON output
+    const jsonContent = await fs.promises.readFile(tempJsonPath, 'utf-8');
+    const waveformData = JSON.parse(jsonContent);
+
+    // Convert to our peak format
+    const peaks = convertJsonToPeaks(waveformData, bits);
+    
+    // Calculate duration from sample rate and data length
+    const sampleRate = waveformData.sample_rate || 44100;
+    const samplesPerPixel = waveformData.samples_per_pixel || zoom;
+    const duration = (peaks.length * samplesPerPixel) / sampleRate;
 
     return { peaks, sampleRate, duration };
   } catch (error) {
+    console.error(`[Waveform] Failed to generate tier ${tierLevel}:`, error);
+    
+    if (error instanceof WaveformError) {
+      throw error;
+    }
+    
     throw new WaveformError(
-      `Failed to generate tier ${tierLevel}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      `Tier ${tierLevel} generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'TIER_GENERATION_ERROR',
       error
     );
+  } finally {
+    // Cleanup temp file
+    try {
+      if (fs.existsSync(tempJsonPath)) {
+        fs.unlinkSync(tempJsonPath);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 }
 
 /**
- * Extract raw PCM audio from video/audio file
+ * Execute audiowaveform CLI
  */
-async function extractPcmAudio(
-  ffmpegPath: string,
+async function executeAudiowaveform(
+  binaryPath: string,
   inputPath: string,
   outputPath: string,
-  trackIndex: number = 0
+  zoom: number,
+  bits: 8 | 16
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const args: string[] = [
+    const args = [
       '-i', inputPath,
-      '-vn', // No video
-      '-map', `0:a:${trackIndex}`,
-      '-ar', '44100', // Sample rate
-      '-ac', '1', // Mono
-      '-f', 's16le', // 16-bit signed little-endian PCM
-      '-acodec', 'pcm_s16le',
-      '-y', outputPath,
+      '-o', outputPath,
+      '-z', zoom.toString(),
+      '-b', bits.toString(),
     ];
 
-    const proc = spawn(ffmpegPath, args);
+    const proc = spawn(binaryPath, args);
     let errorOutput = '';
 
     proc.stderr.on('data', (data) => {
@@ -242,8 +203,8 @@ async function extractPcmAudio(
 
     proc.on('error', (error) => {
       reject(new WaveformError(
-        `Failed to extract audio: ${error.message}`,
-        'EXTRACTION_ERROR',
+        `Failed to run audiowaveform: ${error.message}`,
+        'GENERATION_ERROR',
         error
       ));
     });
@@ -251,8 +212,8 @@ async function extractPcmAudio(
     proc.on('close', (code) => {
       if (code !== 0) {
         reject(new WaveformError(
-          `Audio extraction failed with code ${code}`,
-          'EXTRACTION_ERROR',
+          `audiowaveform failed with code ${code}`,
+          'GENERATION_ERROR',
           { code, error: errorOutput }
         ));
         return;
@@ -264,6 +225,55 @@ async function extractPcmAudio(
 }
 
 /**
+ * Convert audiowaveform JSON data to WaveformPeak array
+ * 
+ * audiowaveform JSON format:
+ * {
+ *   "sample_rate": 44100,
+ *   "samples_per_pixel": 256,
+ *   "bits": 8,
+ *   "length": 1234,
+ *   "data": [min1, max1, min2, max2, ...]  // min/max pairs
+ * }
+ */
+function convertJsonToPeaks(
+  waveformData: { data: number[]; bits?: number },
+  bits: number
+): WaveformPeak[] {
+  const peaks: WaveformPeak[] = [];
+  const data = waveformData.data;
+  
+  if (!data || !Array.isArray(data)) {
+    throw new WaveformError(
+      'Invalid JSON data format: missing data array',
+      'JSON_PARSE_ERROR'
+    );
+  }
+
+  // Process min/max pairs
+  for (let i = 0; i < data.length; i += 2) {
+    const min = data[i];
+    const max = data[i + 1];
+    
+    // Normalize to -1.0 to 1.0 range
+    if (bits === 8) {
+      peaks.push({
+        min: min / 128,
+        max: max / 128,
+      });
+    } else {
+      // 16-bit
+      peaks.push({
+        min: min / 32768,
+        max: max / 32768,
+      });
+    }
+  }
+
+  return peaks;
+}
+
+/**
  * Generate Tier 3 (fine detail) on-demand
  * This is not cached and regenerated as needed
  */
@@ -271,27 +281,41 @@ export async function generateTier3OnDemand(
   audioPath: string,
   trackIndex: number = 0,
   startTime: number = 0,
-  duration: number = 60 // Generate 60 seconds at a time
-): Promise<WaveformPeak[]> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new WaveformError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
+  duration: number = 60
+): Promise<WaveformPeak[] | null> {
+  const audiowaveformPath = getAudiowaveformPath();
+  
+  if (!audiowaveformPath) {
+    console.warn('[Waveform] audiowaveform not found. Cannot generate fine detail waveform.');
+    return null;
   }
 
   const tempDir = os.tmpdir();
-  const tempPcmPath = path.join(tempDir, `waveform_tier3_${Date.now()}.pcm`);
+  const tempJsonPath = path.join(tempDir, `waveform_tier3_${Date.now()}.json`);
 
   try {
-    // Extract specific time range
-    await extractPcmAudioSegment(ffmpegPath.path, audioPath, tempPcmPath, trackIndex, startTime, duration);
+    // Run audiowaveform with time range options
+    await executeAudiowaveformWithTimeRange(
+      audiowaveformPath.path,
+      audioPath,
+      tempJsonPath,
+      startTime,
+      duration
+    );
 
-    // Generate Tier 3
-    const result = await generateTier(tempPcmPath, 3);
-    return result.peaks;
+    // Parse JSON output
+    const jsonContent = await fs.promises.readFile(tempJsonPath, 'utf-8');
+    const waveformData = JSON.parse(jsonContent);
+
+    // Convert to peaks
+    return convertJsonToPeaks(waveformData, 16);
+  } catch (error) {
+    console.error('[Waveform] Tier 3 generation failed:', error);
+    return null;
   } finally {
     try {
-      if (fs.existsSync(tempPcmPath)) {
-        fs.unlinkSync(tempPcmPath);
+      if (fs.existsSync(tempJsonPath)) {
+        fs.unlinkSync(tempJsonPath);
       }
     } catch {
       // Ignore cleanup errors
@@ -300,31 +324,27 @@ export async function generateTier3OnDemand(
 }
 
 /**
- * Extract specific segment of PCM audio
+ * Execute audiowaveform with time range options
+ * Note: audiowaveform supports --start and --end flags
  */
-async function extractPcmAudioSegment(
-  ffmpegPath: string,
+async function executeAudiowaveformWithTimeRange(
+  binaryPath: string,
   inputPath: string,
   outputPath: string,
-  trackIndex: number,
   startTime: number,
   duration: number
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const args: string[] = [
-      '-ss', startTime.toString(),
-      '-t', duration.toString(),
+    const args = [
       '-i', inputPath,
-      '-vn',
-      '-map', `0:a:${trackIndex}`,
-      '-ar', '44100',
-      '-ac', '1',
-      '-f', 's16le',
-      '-acodec', 'pcm_s16le',
-      '-y', outputPath,
+      '-o', outputPath,
+      '-z', '4',  // Fine zoom level
+      '-b', '16', // 16-bit for better precision
+      '--start', startTime.toString(),
+      '--end', (startTime + duration).toString(),
     ];
 
-    const proc = spawn(ffmpegPath, args);
+    const proc = spawn(binaryPath, args);
     let errorOutput = '';
 
     proc.stderr.on('data', (data) => {
@@ -333,8 +353,8 @@ async function extractPcmAudioSegment(
 
     proc.on('error', (error) => {
       reject(new WaveformError(
-        `Failed to extract audio segment: ${error.message}`,
-        'EXTRACTION_ERROR',
+        `Failed to run audiowaveform: ${error.message}`,
+        'GENERATION_ERROR',
         error
       ));
     });
@@ -342,8 +362,8 @@ async function extractPcmAudioSegment(
     proc.on('close', (code) => {
       if (code !== 0) {
         reject(new WaveformError(
-          `Audio segment extraction failed with code ${code}`,
-          'EXTRACTION_ERROR',
+          `audiowaveform failed with code ${code}`,
+          'GENERATION_ERROR',
           { code, error: errorOutput }
         ));
         return;
@@ -372,4 +392,11 @@ export function getPixelsPerSecondForTier(tier: 1 | 2 | 3): number {
     case 2: return 200;  // Standard: 200 px/sec
     case 3: return 500;  // Fine: 500 px/sec
   }
+}
+
+/**
+ * Check if waveform generation is available
+ */
+export function isWaveformGenerationAvailable(): boolean {
+  return getAudiowaveformPath() !== null;
 }
