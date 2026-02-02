@@ -58,9 +58,7 @@
   const individualGroups = $derived(() => chapterGroups().filter((g) => !g.isVod));
 
   function getChapterAssetIds(chapterId: number): number[] {
-    // This would ideally be fetched from the backend
-    // For now, we'll infer from the project assets
-    return [];
+    return getAssetsForChapter(chapterId) ?? [];
   }
 
   function toggleGroup(assetId: number) {

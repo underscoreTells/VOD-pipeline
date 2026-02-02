@@ -60,6 +60,7 @@ interface ChaptersState {
   error: string | null;
   isImporting: boolean;
   importChoice: "vod" | "files" | null;
+  chapterAssets: Map<number, number[]>; // chapterId -> assetIds
 }
 
 // Create chapters state
@@ -70,6 +71,7 @@ export const chaptersState = $state<ChaptersState>({
   error: null,
   isImporting: false,
   importChoice: null,
+  chapterAssets: new Map(),
 });
 
 // Keep track of current project ID for context
@@ -212,13 +214,21 @@ export async function linkAssetToChapter(
 }
 
 /**
- * Get assets linked to a chapter
+ * Get assets linked to a chapter (sync from cache)
  */
-export async function getAssetsForChapter(chapterId: number): Promise<number[]> {
+export function getAssetsForChapter(chapterId: number): number[] {
+  return chaptersState.chapterAssets.get(chapterId) ?? [];
+}
+
+/**
+ * Load assets for a chapter and cache them
+ */
+export async function loadAssetsForChapter(chapterId: number): Promise<number[]> {
   try {
     const result: GetChapterAssetsResult = await window.electronAPI.chapters.getAssets(chapterId);
 
     if (result.success && result.data) {
+      chaptersState.chapterAssets.set(chapterId, result.data);
       return result.data;
     } else {
       console.error("[Chapters] Failed to get assets for chapter:", result.error);
