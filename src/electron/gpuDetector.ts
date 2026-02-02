@@ -5,9 +5,10 @@ export interface GPUEncoderInfo {
   name: string;
   platform: 'nvidia' | 'amd' | 'intel' | 'vaapi';
   priority: number; // Lower = higher priority (prefer hardware encoding)
+  source: string; // Which FFmpeg binary has this encoder
 }
 
-const GPU_ENCODERS: GPUEncoderInfo[] = [
+const GPU_ENCODERS: Omit<GPUEncoderInfo, 'source'>[] = [
   // NVIDIA - fastest, best quality
   { encoder: 'h264_nvenc', name: 'NVIDIA NVENC', platform: 'nvidia', priority: 1 },
   { encoder: 'hevc_nvenc', name: 'NVIDIA NVENC HEVC', platform: 'nvidia', priority: 2 },
@@ -27,30 +28,52 @@ const GPU_ENCODERS: GPUEncoderInfo[] = [
 
 let cachedEncoder: GPUEncoderInfo | null = null;
 let detectionComplete = false;
+let cachedFFmpegPath: string | null = null;
 
 /**
  * Detect available GPU encoders by testing them with FFmpeg
+ * Also checks system FFmpeg if bundled one doesn't have GPU support
  * Returns the best available encoder (lowest priority number)
  */
 export async function detectGPUEncoders(ffmpegPath: string): Promise<GPUEncoderInfo | null> {
-  if (detectionComplete) {
+  if (detectionComplete && cachedFFmpegPath === ffmpegPath) {
     return cachedEncoder;
   }
 
   console.log('[GPU] Detecting available GPU encoders...');
+  cachedFFmpegPath = ffmpegPath;
 
-  for (const encoder of GPU_ENCODERS) {
-    const isAvailable = await testEncoder(ffmpegPath, encoder.encoder);
-    if (isAvailable) {
-      console.log(`[GPU] Found encoder: ${encoder.name} (${encoder.encoder})`);
-      cachedEncoder = encoder;
-      detectionComplete = true;
-      return encoder;
-    }
+  // First try the provided FFmpeg path
+  const result = await testEncodersOnPath(ffmpegPath);
+  if (result) {
+    cachedEncoder = result;
+    detectionComplete = true;
+    return result;
+  }
+
+  // If bundled FFmpeg doesn't have GPU support, try system FFmpeg
+  console.log('[GPU] Bundled FFmpeg has no GPU support, checking system FFmpeg...');
+  const systemResult = await testEncodersOnPath('ffmpeg');
+  if (systemResult) {
+    console.log(`[GPU] Found GPU encoder in system FFmpeg: ${systemResult.name}`);
+    cachedEncoder = systemResult;
+    detectionComplete = true;
+    return systemResult;
   }
 
   console.log('[GPU] No GPU encoders available, falling back to CPU (libx264)');
   detectionComplete = true;
+  return null;
+}
+
+async function testEncodersOnPath(ffmpegPath: string): Promise<GPUEncoderInfo | null> {
+  for (const encoder of GPU_ENCODERS) {
+    const isAvailable = await testEncoder(ffmpegPath, encoder.encoder);
+    if (isAvailable) {
+      console.log(`[GPU] Found encoder: ${encoder.name} (${encoder.encoder}) in ${ffmpegPath}`);
+      return { ...encoder, source: ffmpegPath };
+    }
+  }
   return null;
 }
 
@@ -66,6 +89,14 @@ export function getGPUEncoder(): GPUEncoderInfo | null {
  */
 export function hasGPUEncoding(): boolean {
   return cachedEncoder !== null;
+}
+
+/**
+ * Get the FFmpeg path to use for GPU encoding
+ * Returns system FFmpeg path if that's where GPU encoder was found
+ */
+export function getGPU FFmpegPath(): string | null {
+  return cachedEncoder?.source ?? null;
 }
 
 /**

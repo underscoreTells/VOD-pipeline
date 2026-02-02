@@ -130,8 +130,8 @@ export async function getAudiowaveformVersion(executablePath: string): Promise<s
         return;
       }
 
-      // Parse version from output: "audiowaveform version 1.10.2"
-      const match = output.match(/audiowaveform version\s+(\S+)/i);
+      // Parse version from output: "AudioWaveform v1.10.3" or "audiowaveform version 1.10.2"
+      const match = output.match(/audiowaveform\s+v?(\S+)/i);
       resolve(match ? match[1] : null);
     });
   });
