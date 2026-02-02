@@ -86,7 +86,8 @@
     try {
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = "video/*";
+      // Use explicit extensions instead of video/* for better cross-platform support
+      input.accept = ".mp4,.mkv,.mov,.avi,.webm,.m4v,.ts,.m2ts,.mts";
       input.onchange = async (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
@@ -107,7 +108,8 @@
     try {
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = "video/*";
+      // Use explicit extensions instead of video/* for better cross-platform support
+      input.accept = ".mp4,.mkv,.mov,.avi,.webm,.m4v,.ts,.m2ts,.mts";
       input.multiple = true;
       input.onchange = async (e) => {
         const files = (e.target as HTMLInputElement).files;
