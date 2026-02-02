@@ -3,7 +3,7 @@
  * Manages chapters for the dual-path import system
  */
 
-import type { Chapter, Asset } from "../../../shared/types/database";
+import type { Chapter, Asset } from "$shared/types/database";
 
 // Local type definitions (mirrors preload types)
 interface CreateChapterInput {
