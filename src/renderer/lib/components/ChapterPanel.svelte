@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Chapter, Asset } from "$shared/types/database";
   import { chaptersState, selectChapter, deleteChapter, updateChapter, getAssetsForChapter } from "../state/chapters.svelte";
-  import { formatTime } from "@/utils/time";
+  import { formatTime } from "../utils/time";
 
   interface Props {
     projectAssets: Asset[];
@@ -152,6 +152,12 @@
                   class="chapter-item"
                   class:selected={isSelected(chapter.id)}
                   onclick={() => handleSelectChapter(chapter.id)}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleSelectChapter(chapter.id);
+                    }
+                  }}
                   role="button"
                   tabindex="0"
                 >
@@ -165,7 +171,6 @@
                       }}
                       class="edit-input"
                       onclick={(e) => e.stopPropagation()}
-                      autofocus
                     />
                   {:else}
                     <span class="chapter-title">{chapter.title}</span>
@@ -244,6 +249,12 @@
                     class="chapter-item"
                     class:selected={isSelected(chapter.id)}
                     onclick={() => handleSelectChapter(chapter.id)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleSelectChapter(chapter.id);
+                      }
+                    }}
                     role="button"
                     tabindex="0"
                   >
@@ -257,7 +268,6 @@
                         }}
                         class="edit-input"
                         onclick={(e) => e.stopPropagation()}
-                        autofocus
                       />
                     {:else}
                       <span class="chapter-title">{chapter.title}</span>

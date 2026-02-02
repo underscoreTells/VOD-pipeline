@@ -2,7 +2,7 @@
   import type { Asset } from "../../../shared/types/database";
   import { createChapter, linkAssetToChapter, chaptersState } from "../state/chapters.svelte";
   import { settingsState } from "../state/settings.svelte";
-  import { formatTime } from "@/utils/time";
+  import { formatTime } from "../utils/time";
 
   interface Props {
     asset: Asset;
@@ -28,8 +28,8 @@
   let editingChapterId = $state<number | null>(null);
   let editTitle = $state("");
 
-  // Duration in seconds
-  const duration = asset.duration || 0;
+  // Duration in seconds - use $derived to stay reactive
+  const duration = $derived(asset.duration || 0);
 
   function markStart() {
     selectionStart = playheadTime;
@@ -101,6 +101,23 @@
     playheadTime = Math.max(0, Math.min(duration, percentage * duration));
   }
 
+  function handleScrubberKeydown(e: KeyboardEvent) {
+    const step = duration / 100; // 1% of duration per step
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      playheadTime = Math.max(0, playheadTime - step);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      playheadTime = Math.min(duration, playheadTime + step);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      playheadTime = 0;
+    } else if (e.key === "End") {
+      e.preventDefault();
+      playheadTime = duration;
+    }
+  }
+
   function handleCreateAll() {
     if (draftChapters.length === 0) return;
 
@@ -135,7 +152,7 @@
 
   <!-- Timeline Scrubber -->
   <div class="timeline-section">
-    <div class="scrubber-container" onclick={handleScrubberClick} role="slider" tabindex="0" aria-label="Timeline scrubber">
+    <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
       <div class="timeline-bar">
         <!-- Playhead -->
         <div
@@ -218,7 +235,6 @@
                   if (e.key === "Escape") cancelEdit();
                 }}
                 class="edit-input"
-                autofocus
               />
               <button class="icon-btn" onclick={() => saveEdit(chapter.id)}>✓</button>
               <button class="icon-btn" onclick={cancelEdit}>✕</button>

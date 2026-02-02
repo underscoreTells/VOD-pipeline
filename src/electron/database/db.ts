@@ -92,6 +92,7 @@ function ensureSchemaColumns(database: Database.Database) {
   const migrations = [
     { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'chapters', column: 'display_order', definition: 'INTEGER DEFAULT 0' },
     { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
   ];
 
