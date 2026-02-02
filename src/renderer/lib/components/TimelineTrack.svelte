@@ -1,9 +1,11 @@
 <script lang="ts">
-import { onMount } from 'svelte';
-import WaveSurfer from 'wavesurfer.js';
-import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
+  import { onMount } from 'svelte';
+  import WaveSurfer from 'wavesurfer.js';
+  import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
+  import { getWaveform } from '../state/electron.svelte';
   import { timelineState, selectClip, getClipsByTrack, setScroll, getTotalDuration } from '../state/timeline.svelte';
+  import { projectDetail } from '../state/project-detail.svelte';
   import { MoveClipCommand, ResizeClipCommand, executeCommand } from '../state/undo-redo.svelte';
   import { formatTime } from '../state/keyboard.svelte';
   
@@ -20,6 +22,10 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   let regionsPlugin: RegionsPlugin | null = null;
   let isReady = $state(false);
   let isScrolling = false; // Flag to prevent scroll loop
+  let isDestroyed = false;
+
+  const WAVEFORM_TIER_LEVEL = 1;
+  const AUDIO_TRACK_INDEX = 0;
   
   // Role colors for clips
   const ROLE_COLORS: Record<string, string> = {
@@ -38,58 +44,98 @@ import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
     return byTrack.get(trackIndex) || [];
   });
   
+  function buildWaveSurferPeaks(peaks: Array<{ min: number; max: number }>): Float32Array {
+    const values = new Float32Array(peaks.length);
+    for (let i = 0; i < peaks.length; i += 1) {
+      const peak = peaks[i];
+      values[i] = Math.max(Math.abs(peak.min), Math.abs(peak.max));
+    }
+    return values;
+  }
+
+  async function loadWaveformCache() {
+    const asset = projectDetail.assets[trackIndex];
+    if (!asset?.id) return null;
+
+    const result = await getWaveform(asset.id, AUDIO_TRACK_INDEX, WAVEFORM_TIER_LEVEL);
+    if (result.success && result.data) {
+      return result.data;
+    }
+
+    return null;
+  }
+
   // Initialize WaveSurfer
   onMount(() => {
     if (!container) return;
-    
-    // Initialize WaveSurfer with plugins
-    regionsPlugin = RegionsPlugin.create();
-    
-    waveSurfer = WaveSurfer.create({
-      container,
-      waveColor: '#4a5568',
-      progressColor: '#3182ce',
-      cursorColor: '#e53e3e',
-      height,
-      normalize: true,
-      minPxPerSec: timelineState.zoomLevel,
-      plugins: [
-        regionsPlugin,
-      ],
-    });
-    
-    // Load audio
-    waveSurfer.load(audioUrl);
-    
-    // Event handlers
-    waveSurfer.on('ready', () => {
-      isReady = true;
-      createClipRegions();
-    });
-    
-    waveSurfer.on('timeupdate', (time: number) => {
-      // Sync with global playhead
-      if (Math.abs(time - timelineState.playheadTime) > 0.1) {
-        // This would sync the playhead - implement if needed
-      }
-    });
-    
-    waveSurfer.on('scroll', (scrollLeft: number) => {
-      // Prevent feedback loop
-      if (isScrolling) return;
+    isDestroyed = false;
+
+    const init = async () => {
+      const waveformData = await loadWaveformCache();
+      if (isDestroyed || !container) return;
+
+      // Initialize WaveSurfer with plugins
+      regionsPlugin = RegionsPlugin.create();
       
-      // Convert scroll position to seconds
-      if (waveSurfer) {
-        const scrollTime = scrollLeft / timelineState.zoomLevel;
-        isScrolling = true;
-        setScroll(scrollTime);
-        // Reset flag after state update
-        setTimeout(() => { isScrolling = false; }, 0);
+      waveSurfer = WaveSurfer.create({
+        container,
+        waveColor: '#4a5568',
+        progressColor: '#3182ce',
+        cursorColor: '#e53e3e',
+        height,
+        normalize: true,
+        minPxPerSec: timelineState.zoomLevel,
+        plugins: [
+          regionsPlugin,
+        ],
+      });
+
+      // Event handlers
+      waveSurfer.on('ready', () => {
+        isReady = true;
+        createClipRegions();
+      });
+      
+      waveSurfer.on('timeupdate', (time: number) => {
+        // Sync with global playhead
+        if (Math.abs(time - timelineState.playheadTime) > 0.1) {
+          // This would sync the playhead - implement if needed
+        }
+      });
+      
+      waveSurfer.on('scroll', (scrollLeft: number) => {
+        // Prevent feedback loop
+        if (isScrolling) return;
+        
+        // Convert scroll position to seconds
+        if (waveSurfer) {
+          const scrollTime = scrollLeft / timelineState.zoomLevel;
+          isScrolling = true;
+          setScroll(scrollTime);
+          // Reset flag after state update
+          setTimeout(() => { isScrolling = false; }, 0);
+        }
+      });
+
+      const loadPeaks = waveformData ? [buildWaveSurferPeaks(waveformData.peaks)] : undefined;
+      const loadDuration = waveformData?.duration;
+
+      try {
+        if (loadPeaks && loadDuration) {
+          await waveSurfer.load(audioUrl, loadPeaks, loadDuration);
+        } else {
+          await waveSurfer.load(audioUrl);
+        }
+      } catch (error) {
+        console.warn('[TimelineTrack] Failed to load waveform:', error);
       }
-    });
+    };
+
+    init();
     
     // Cleanup
     return () => {
+      isDestroyed = true;
       waveSurfer?.destroy();
     };
   });

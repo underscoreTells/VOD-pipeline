@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
-import { detectGPUEncoders, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
+import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -494,6 +494,7 @@ export async function generateAIProxy(
 
   // Detect GPU encoders if auto mode
   let useGPU = false;
+  let encodingBinaryPath = ffmpegPath.path;
   if (encodingMode === 'gpu') {
     // Force GPU, will fail if not available
     const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
@@ -509,6 +510,14 @@ export async function generateAIProxy(
     }
   }
 
+  if (useGPU) {
+    const gpuFFmpegPath = getGPUFFmpegPath();
+    if (gpuFFmpegPath) {
+      encodingBinaryPath = gpuFFmpegPath;
+      console.log(`[Proxy] Using FFmpeg binary: ${encodingBinaryPath}`);
+    }
+  }
+
   // Get source metadata first
   const metadata = await getVideoMetadata(inputPath);
 
@@ -517,6 +526,7 @@ export async function generateAIProxy(
     try {
       return await executeProxyGeneration(
         ffmpegPath,
+        encodingBinaryPath,
         inputPath,
         outputPath,
         metadata,
@@ -535,6 +545,7 @@ export async function generateAIProxy(
   // CPU encoding (either by choice or as fallback)
   return executeProxyGeneration(
     ffmpegPath,
+    ffmpegPath.path,
     inputPath,
     outputPath,
     metadata,
@@ -550,6 +561,7 @@ export async function generateAIProxy(
  */
 async function executeProxyGeneration(
   ffmpegPath: FFmpegPathResult,
+  ffmpegBinaryPath: string,
   inputPath: string,
   outputPath: string,
   metadata: { duration: number },
@@ -572,7 +584,7 @@ async function executeProxyGeneration(
   ];
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath.path, args);
+    const proc = spawn(ffmpegBinaryPath, args);
     let errorOutput = '';
     let lastProgress = 0;
     let timeoutTimer: NodeJS.Timeout | null = null;

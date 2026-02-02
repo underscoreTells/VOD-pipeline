@@ -122,6 +122,15 @@ export interface WaveformGenerationResult {
     error?: string;
 }
 
+export interface WaveformProgressEvent {
+    assetId: number;
+    progress: {
+        tier: number;
+        percent: number;
+        status: string;
+    };
+}
+
 export interface ExportResult {
     success: boolean;
     data?: {
@@ -232,6 +241,7 @@ export interface ElectronAPI {
     waveforms: {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+        onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
     };
     exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;

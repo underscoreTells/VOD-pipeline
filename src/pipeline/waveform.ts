@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { getAudiowaveformPath } from '../electron/audiowaveformDetector.js';
+import { getFFmpegPath } from '../electron/ffmpegDetector.js';
 import { saveWaveform } from '../electron/database/db.js';
 import type {
   WaveformPeak,
@@ -47,16 +48,30 @@ export async function generateWaveformTiers(
 
   const tempDir = os.tmpdir();
   const tiers: WaveformGenerationResult['tiers'] = [];
+  let waveformInputPath: string = audioPath;
+  let tempAudioPath: string | null = null;
 
   try {
+    if (onProgress) {
+      onProgress({ tier: 1, percent: 0, status: 'Preparing audio for waveform...' });
+    }
+
+    const preparedInput = await prepareWaveformInput(audioPath, tempDir);
+    waveformInputPath = preparedInput.path;
+    tempAudioPath = preparedInput.tempPath;
+
+    if (onProgress) {
+      onProgress({ tier: 1, percent: 10, status: 'Audio preparation complete' });
+    }
+
     // Generate Tier 1 (Overview - 256:1 zoom)
     if (onProgress) {
-      onProgress({ tier: 1, percent: 0, status: 'Generating overview waveform...' });
+      onProgress({ tier: 1, percent: 20, status: 'Generating overview waveform...' });
     }
     
     const tier1Result = await generateTierWithAudiowaveform(
       audiowaveformPath.path,
-      audioPath,
+      waveformInputPath,
       tempDir,
       1,
       256,
@@ -65,7 +80,7 @@ export async function generateWaveformTiers(
     
     if (tier1Result) {
       if (onProgress) {
-        onProgress({ tier: 1, percent: 100, status: 'Overview complete' });
+        onProgress({ tier: 1, percent: 60, status: 'Overview complete' });
       }
       tiers.push({ level: 1, ...tier1Result });
       
@@ -75,12 +90,12 @@ export async function generateWaveformTiers(
 
     // Generate Tier 2 (Standard - 16:1 zoom)
     if (onProgress) {
-      onProgress({ tier: 2, percent: 0, status: 'Generating standard waveform...' });
+      onProgress({ tier: 2, percent: 70, status: 'Generating standard waveform...' });
     }
     
     const tier2Result = await generateTierWithAudiowaveform(
       audiowaveformPath.path,
-      audioPath,
+      waveformInputPath,
       tempDir,
       2,
       16,
@@ -118,7 +133,97 @@ export async function generateWaveformTiers(
     }
     
     return null;
+  } finally {
+    if (tempAudioPath) {
+      try {
+        if (fs.existsSync(tempAudioPath)) {
+          fs.unlinkSync(tempAudioPath);
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
+}
+
+async function prepareWaveformInput(
+  inputPath: string,
+  tempDir: string
+): Promise<{ path: string; tempPath: string | null }> {
+  const extension = path.extname(inputPath).toLowerCase();
+  const supportedExtensions = new Set([
+    '.wav',
+    '.wave',
+    '.flac',
+    '.aiff',
+    '.aif',
+    '.aifc',
+    '.mp3',
+    '.ogg',
+    '.oga',
+    '.opus',
+  ]);
+
+  if (supportedExtensions.has(extension)) {
+    return { path: inputPath, tempPath: null };
+  }
+
+  const ffmpegPath = getFFmpegPath();
+  if (!ffmpegPath) {
+    throw new WaveformError('FFmpeg not found for waveform generation', 'GENERATION_ERROR');
+  }
+
+  const tempWavPath = path.join(tempDir, `waveform_${Date.now()}.wav`);
+  await transcodeToWaveformAudio(ffmpegPath.path, inputPath, tempWavPath);
+
+  return { path: tempWavPath, tempPath: tempWavPath };
+}
+
+async function transcodeToWaveformAudio(
+  ffmpegBinaryPath: string,
+  inputPath: string,
+  outputPath: string
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-y',
+      '-i', inputPath,
+      '-vn',
+      '-ac', '1',
+      '-ar', '11025',
+      '-c:a', 'pcm_s16le',
+      '-f', 'wav',
+      outputPath,
+    ];
+
+    const proc = spawn(ffmpegBinaryPath, args);
+    let errorOutput = '';
+
+    proc.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    proc.on('error', (error) => {
+      reject(new WaveformError(
+        `Failed to run FFmpeg for waveform input: ${error.message}`,
+        'GENERATION_ERROR',
+        error
+      ));
+    });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new WaveformError(
+          `FFmpeg failed to prepare waveform input with code ${code}`,
+          'GENERATION_ERROR',
+          { code, error: errorOutput }
+        ));
+        return;
+      }
+
+      resolve();
+    });
+  });
 }
 
 /**

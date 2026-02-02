@@ -17,6 +17,7 @@ interface ProxyOptions {
 type ProxyProgressCallback = (data: { assetId: number; progress: number }) => void;
 type ProxyCompleteCallback = (data: { assetId: number; proxyPath: string }) => void;
 type ProxyErrorCallback = (data: { assetId: number; error: string }) => void;
+type WaveformProgressCallback = (data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => void;
 
 // ============================================================================
 // Result Types
@@ -235,6 +236,7 @@ export interface ElectronAPI {
   waveforms: {
     get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
     generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+    onProgress: (callback: WaveformProgressCallback) => () => void;
   };
   exports: {
     generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
@@ -329,6 +331,11 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('waveform:get', { assetId, trackIndex, tierLevel }),
     generate: (assetId, trackIndex) => 
       ipcRenderer.invoke('waveform:generate', { assetId, trackIndex }),
+    onProgress: (callback) => {
+      const handler = (_: any, data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => callback(data);
+      ipcRenderer.on('waveform:progress', handler);
+      return () => ipcRenderer.removeListener('waveform:progress', handler);
+    },
   },
   proxy: {
     onProgress: (callback) => {
