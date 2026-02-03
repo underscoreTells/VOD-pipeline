@@ -230,6 +230,8 @@
     border: 1px solid #2a2a2a;
     border-radius: 8px;
     padding: 0.75rem;
+    height: 100%;
+    min-height: 0;
   }
 
   .preview-header {
@@ -260,7 +262,8 @@
     background: #000;
     border-radius: 6px;
     overflow: hidden;
-    aspect-ratio: 16 / 9;
+    flex: 1;
+    min-height: 0;
   }
 
   .video-frame.empty {
@@ -271,6 +274,7 @@
     width: 100%;
     height: 100%;
     display: block;
+    object-fit: contain;
   }
 
   .empty-state {

@@ -36,6 +36,18 @@
   import { settingsState } from '../state/settings.svelte';
   import { timelineState, setError } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
+  import {
+    layoutState,
+    loadLayout,
+    persistLayout,
+    setLeftWidth,
+    setRightWidth,
+    setPreviewHeight,
+    setChatHeight,
+    expandLeft,
+    expandChat,
+    expandBeat,
+  } from '../state/layout.svelte';
   import { buildAssetUrl } from '../utils/media';
   import { onTranscriptionProgress } from '../state/electron.svelte';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
@@ -58,9 +70,22 @@
   let waveformCheckToken = 0;
   const waveformInFlight = new Set<number>();
   let cleanupTranscription: (() => void) | null = null;
+  let editorMainRef = $state<HTMLElement | null>(null);
+  let editorSideRef = $state<HTMLElement | null>(null);
+
+  const RESIZE_HANDLE_SIZE = 6;
+  const MIN_LEFT_WIDTH = 220;
+  const MAX_LEFT_WIDTH = 520;
+  const MIN_RIGHT_WIDTH = 260;
+  const MAX_RIGHT_WIDTH = 560;
+  const MIN_PREVIEW_HEIGHT = 200;
+  const MIN_TIMELINE_HEIGHT = 220;
+  const MIN_CHAT_HEIGHT = 240;
+  const MIN_BEAT_HEIGHT = 220;
   
   // Load project data and chapters on mount
   onMount(() => {
+    loadLayout();
     loadProjectDetail(project.id);
     loadChapters(project.id);
     cleanupKeyboard = initKeyboardShortcuts();
@@ -205,6 +230,8 @@
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
 
+  const rightHidden = $derived(() => layoutState.chatCollapsed && layoutState.beatCollapsed);
+
   async function ensureChapterWaveforms(assetIds: number[]) {
     const token = ++waveformCheckToken;
     for (const assetId of assetIds) {
@@ -313,6 +340,90 @@
     if (selectedChapterAssetIds.length === 0) return [];
     return selectedChapterAssetIds.map((assetId) => buildAssetUrl(assetId));
   });
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function startPointerDrag(
+    event: PointerEvent,
+    cursor: 'col-resize' | 'row-resize',
+    onMove: (moveEvent: PointerEvent) => void,
+    onEnd?: () => void
+  ) {
+    event.preventDefault();
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = 'none';
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      onMove(moveEvent);
+    };
+
+    const handleUp = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      onEnd?.();
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function handleLeftResize(event: PointerEvent) {
+    const startX = event.clientX;
+    const startWidth = layoutState.leftWidth;
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const next = clamp(startWidth + delta, MIN_LEFT_WIDTH, MAX_LEFT_WIDTH);
+      setLeftWidth(next);
+    }, persistLayout);
+  }
+
+  function handleRightResize(event: PointerEvent) {
+    const startX = event.clientX;
+    const startWidth = layoutState.rightWidth;
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const next = clamp(startWidth + delta, MIN_RIGHT_WIDTH, MAX_RIGHT_WIDTH);
+      setRightWidth(next);
+    }, persistLayout);
+  }
+
+  function handlePreviewResize(event: PointerEvent) {
+    if (!editorMainRef) return;
+    const startY = event.clientY;
+    const startHeight = layoutState.previewHeight;
+    const containerHeight = editorMainRef.clientHeight;
+    const maxHeight = Math.max(
+      MIN_PREVIEW_HEIGHT,
+      containerHeight - MIN_TIMELINE_HEIGHT - RESIZE_HANDLE_SIZE
+    );
+    startPointerDrag(event, 'row-resize', (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const next = clamp(startHeight + delta, MIN_PREVIEW_HEIGHT, maxHeight);
+      setPreviewHeight(next);
+    }, persistLayout);
+  }
+
+  function handleChatResize(event: PointerEvent) {
+    if (!editorSideRef) return;
+    const startY = event.clientY;
+    const startHeight = layoutState.chatHeight;
+    const containerHeight = editorSideRef.clientHeight;
+    const maxHeight = Math.max(
+      MIN_CHAT_HEIGHT,
+      containerHeight - MIN_BEAT_HEIGHT - RESIZE_HANDLE_SIZE
+    );
+    startPointerDrag(event, 'row-resize', (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const next = clamp(startHeight + delta, MIN_CHAT_HEIGHT, maxHeight);
+      setChatHeight(next);
+    }, persistLayout);
+  }
 </script>
 
 <div 
@@ -373,49 +484,98 @@
       <!-- Chapters-First Layout -->
       <div class="project-layout">
         <!-- Chapter Panel Sidebar -->
-        <aside class="chapters-sidebar">
-          <ChapterPanel
-            projectAssets={projectDetail.assets}
-            onImportClick={() => setIsImporting(true)}
-          />
-        </aside>
+        {#if !layoutState.leftCollapsed}
+          <aside class="chapters-sidebar" style="width: {layoutState.leftWidth}px">
+            <ChapterPanel
+              projectAssets={projectDetail.assets}
+              onImportClick={() => setIsImporting(true)}
+            />
+          </aside>
+          <div
+            class="resize-handle-vertical"
+            role="separator"
+            aria-orientation="vertical"
+            onpointerdown={handleLeftResize}
+          ></div>
+        {/if}
         
         <!-- Main Content Area -->
         <main class="main-content">
           <div class="editor-layout">
-            <section class="editor-main">
-              <ChapterPreview
-                chapter={selectedChapter}
-                asset={chapterPreviewAsset}
-              />
+            <section class="editor-main" bind:this={editorMainRef}>
+              <div class="editor-top-fixed" style="height: {layoutState.previewHeight}px">
+                <ChapterPreview
+                  chapter={selectedChapter}
+                  asset={chapterPreviewAsset}
+                />
+              </div>
+              <div
+                class="resize-handle-horizontal"
+                role="separator"
+                aria-orientation="horizontal"
+                onpointerdown={handlePreviewResize}
+              ></div>
 
               {#if chaptersState.selectedChapterId}
-                <div class="timeline-wrapper">
-                  <TimelineToolbar />
-                  <div class="timeline-container">
-                    <Timeline 
-                      projectId={project.id}
-                      {audioUrls}
-                      trackAssetIds={selectedChapterAssetIds}
-                      clips={timelineState.clips}
-                    />
+                <div class="editor-bottom-scrollable">
+                  <div class="timeline-wrapper">
+                    <TimelineToolbar />
+                    <div class="timeline-container">
+                      <Timeline 
+                        projectId={project.id}
+                        {audioUrls}
+                        trackAssetIds={selectedChapterAssetIds}
+                        clips={timelineState.clips}
+                      />
+                    </div>
                   </div>
+
+                  <ClipPreview />
                 </div>
               {:else}
-                <div class="empty-selection">
+                <div class="editor-bottom-scrollable empty-selection">
                   <div class="empty-icon">📖</div>
                   <h3>Select a Chapter</h3>
                   <p>Choose a chapter from the sidebar to view its timeline and beats</p>
                 </div>
               {/if}
-
-              <ClipPreview />
             </section>
 
-            <aside class="editor-side">
-              <ChatPanel />
-              <BeatPanel clips={timelineState.clips} />
-            </aside>
+            {#if !rightHidden()}
+              <div
+                class="resize-handle-vertical"
+                role="separator"
+                aria-orientation="vertical"
+                onpointerdown={handleRightResize}
+              ></div>
+              <aside class="editor-side" style="width: {layoutState.rightWidth}px" bind:this={editorSideRef}>
+                {#if !layoutState.chatCollapsed}
+                  <div
+                    class="side-panel chat-panel-wrapper"
+                    style={layoutState.beatCollapsed
+                      ? 'flex: 1 1 auto;'
+                      : `flex: 0 0 ${layoutState.chatHeight}px;`}
+                  >
+                    <ChatPanel />
+                  </div>
+                {/if}
+
+                {#if !layoutState.chatCollapsed && !layoutState.beatCollapsed}
+                  <div
+                    class="resize-handle-horizontal"
+                    role="separator"
+                    aria-orientation="horizontal"
+                    onpointerdown={handleChatResize}
+                  ></div>
+                {/if}
+
+                {#if !layoutState.beatCollapsed}
+                  <div class="side-panel beat-panel-wrapper">
+                    <BeatPanel clips={timelineState.clips} />
+                  </div>
+                {/if}
+              </aside>
+            {/if}
           </div>
         </main>
       </div>
@@ -474,6 +634,23 @@
       <button onclick={() => setError(null)}>✕</button>
     </div>
   {/if}
+
+  {#if layoutState.leftCollapsed}
+    <button class="floating-toggle left" onclick={expandLeft}>
+      Show Chapters
+    </button>
+  {/if}
+
+  {#if layoutState.chatCollapsed}
+    <button class="floating-toggle right chat" onclick={expandChat}>
+      Show Chat
+    </button>
+  {/if}
+  {#if layoutState.beatCollapsed}
+    <button class="floating-toggle right beat" onclick={expandBeat}>
+      Show Beats
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -483,6 +660,7 @@
     height: 100%;
     background: #0f0f0f;
     color: #fff;
+    position: relative;
   }
   
   .project-detail.dragging {
@@ -594,6 +772,7 @@
   .chapters-sidebar {
     width: 300px;
     flex-shrink: 0;
+    flex: 0 0 auto;
     border-right: 1px solid #333;
     overflow-y: auto;
     min-height: 0;
@@ -619,10 +798,29 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
-    padding: 1rem;
     overflow: hidden;
     min-height: 0;
+    min-width: 0;
+  }
+
+  .editor-top-fixed {
+    flex: 0 0 auto;
+    padding: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #2a2a2a;
+    overflow: hidden;
+  }
+
+  .editor-bottom-scrollable {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    padding-top: 0.5rem;
   }
 
   .editor-side {
@@ -632,18 +830,38 @@
     border-left: 1px solid #333;
     overflow: hidden;
     min-height: 0;
+    min-width: 0;
+    flex: 0 0 auto;
+  }
+
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .chat-panel-wrapper {
+    min-height: 240px;
+  }
+
+  .beat-panel-wrapper {
+    flex: 1 1 auto;
+    min-height: 220px;
   }
 
   .editor-side :global(.chat-panel) {
     flex: 1;
     border-left: none;
+    height: 100%;
   }
 
   .editor-side :global(.beat-panel) {
     width: 100%;
     border-left: none;
     border-top: 1px solid #333;
-    flex: 0 0 320px;
+    flex: 1 1 auto;
+    height: 100%;
   }
   
   .timeline-wrapper {
@@ -651,12 +869,38 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    min-height: 280px;
+    min-height: 220px;
   }
   
   .timeline-container {
     flex: 1;
     overflow: auto;
+  }
+
+  .resize-handle-vertical {
+    width: 6px;
+    flex: 0 0 6px;
+    cursor: col-resize;
+    background: #141414;
+    transition: background 0.2s;
+    touch-action: none;
+  }
+
+  .resize-handle-vertical:hover {
+    background: #2a2a2a;
+  }
+
+  .resize-handle-horizontal {
+    height: 6px;
+    flex: 0 0 6px;
+    cursor: row-resize;
+    background: #141414;
+    transition: background 0.2s;
+    touch-action: none;
+  }
+
+  .resize-handle-horizontal:hover {
+    background: #2a2a2a;
   }
   
   /* Empty Selection State */
@@ -685,6 +929,41 @@
   .empty-selection p {
     margin: 0;
     font-size: 0.875rem;
+  }
+
+  .floating-toggle {
+    position: absolute;
+    top: 96px;
+    z-index: 20;
+    background: #1e1e1e;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    white-space: nowrap;
+  }
+
+  .floating-toggle:hover {
+    background: #2a2a2a;
+  }
+
+  .floating-toggle.left {
+    left: 12px;
+  }
+
+  .floating-toggle.right {
+    right: 12px;
+  }
+
+  .floating-toggle.right.chat {
+    top: 96px;
+  }
+
+  .floating-toggle.right.beat {
+    top: 140px;
   }
   
   /* Progress Overlay */

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { timelineState, selectClip, setPlayhead } from '../state/timeline.svelte';
+  import { collapseBeat } from '../state/layout.svelte';
   import type { Clip } from '../../../shared/types/database';
   
   interface Props {
@@ -56,7 +57,12 @@
 <div class="beat-panel">
   <div class="panel-header">
     <h3>Clips</h3>
-    <span class="clip-count">{clips.length} total</span>
+    <div class="header-actions">
+      <span class="clip-count">{clips.length} total</span>
+      <button class="collapse-btn" onclick={collapseBeat}>
+        Hide
+      </button>
+    </div>
   </div>
   
   <div class="clip-groups">
@@ -119,13 +125,14 @@
 
 <style>
   .beat-panel {
-    width: 300px;
+    width: 100%;
     height: 100%;
     background: #1a1a1a;
     border-left: 1px solid #333;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
   
   .panel-header {
@@ -135,6 +142,12 @@
     padding: 1rem;
     border-bottom: 1px solid #333;
     background: #1e1e1e;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   
   .panel-header h3 {
@@ -149,6 +162,21 @@
     background: #333;
     padding: 0.25rem 0.5rem;
     border-radius: 12px;
+  }
+
+  .collapse-btn {
+    padding: 0.25rem 0.5rem;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .collapse-btn:hover {
+    background: #444;
+    color: #fff;
   }
   
   .clip-groups {

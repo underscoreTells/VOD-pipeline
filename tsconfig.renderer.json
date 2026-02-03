@@ -20,9 +20,14 @@
       "$shared/*": ["./src/shared/*"]
     }
   },
+  "files": [
+    "src/renderer/lib/state/layout.svelte.ts"
+  ],
   "include": [
     "src/renderer/**/*.d.ts",
+    "src/renderer/**/*.svelte.ts",
     "src/renderer/**/*.ts",
+    "src/renderer/lib/state/**/*.svelte.ts",
     "src/renderer/lib/utils/media.ts",
     "src/renderer/lib/utils/**/*.ts",
     "src/renderer/**/*.js",
