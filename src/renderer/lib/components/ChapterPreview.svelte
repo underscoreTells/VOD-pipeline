@@ -29,7 +29,7 @@
 
   function handleLoadedMetadata() {
     if (!videoRef || !chapter) return;
-    const duration = videoRef.duration || chapter.end_time;
+    const duration = Number.isFinite(videoRef.duration) ? videoRef.duration : chapter.end_time;
     const start = Math.max(0, Math.min(duration, chapter.start_time));
     videoRef.currentTime = start;
     currentTime = start;
@@ -55,7 +55,7 @@
   $effect(() => {
     if (!videoRef || !chapter) return;
     if (videoRef.readyState >= 1) {
-      const duration = videoRef.duration || chapter.end_time;
+      const duration = Number.isFinite(videoRef.duration) ? videoRef.duration : chapter.end_time;
       const start = Math.max(0, Math.min(duration, chapter.start_time));
       videoRef.currentTime = start;
       currentTime = start;
