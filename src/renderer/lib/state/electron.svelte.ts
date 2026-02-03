@@ -264,6 +264,34 @@ export async function transcribeChapter(
     { success: false, error: 'Transcription not available' };
 }
 
+export interface TranscriptionProgressEvent {
+  chapterId: number;
+  progress: { percent: number; status: string };
+}
+
+const transcriptionProgressSubscribers = new Set<(data: TranscriptionProgressEvent) => void>();
+let transcriptionProgressUnsubscribe: (() => void) | null = null;
+
+export function onTranscriptionProgress(callback: (data: TranscriptionProgressEvent) => void): () => void {
+  transcriptionProgressSubscribers.add(callback);
+
+  if (!transcriptionProgressUnsubscribe) {
+    transcriptionProgressUnsubscribe = (window.electronAPI as any).transcription?.onProgress((event: TranscriptionProgressEvent) => {
+      for (const subscriber of transcriptionProgressSubscribers) {
+        subscriber(event);
+      }
+    });
+  }
+
+  return () => {
+    transcriptionProgressSubscribers.delete(callback);
+    if (transcriptionProgressSubscribers.size === 0 && transcriptionProgressUnsubscribe) {
+      transcriptionProgressUnsubscribe();
+      transcriptionProgressUnsubscribe = null;
+    }
+  };
+}
+
 // ============================================================================
 // Extend window.electronAPI type
 // ============================================================================

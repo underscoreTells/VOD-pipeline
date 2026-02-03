@@ -12,7 +12,7 @@ import {
   timelineState,
   togglePlayback,
   selectAll,
-  clearSelection,
+  clearSelection as clearTimelineSelection,
   zoomIn,
   zoomOut,
   zoomToFit,
@@ -20,6 +20,13 @@ import {
   setPlayhead,
   getTotalDuration,
 } from './timeline.svelte';
+import {
+  clipBuilderState,
+  setInPoint as setClipInPoint,
+  setOutPoint as setClipOutPoint,
+  clearSelection as clearClipSelection,
+  hasCompleteSelection,
+} from './clip-builder.svelte';
 
 // Keyboard shortcuts configuration
 const SHORTCUTS = {
@@ -41,7 +48,7 @@ const SHORTCUTS = {
   'Delete': handleDelete,
   'Backspace': handleDelete,
   'Ctrl+a': selectAll,
-  'Escape': clearSelection,
+  'Escape': clearTimelineSelection,
   
   // Zoom
   'Equal': zoomIn,      // + key
@@ -49,8 +56,9 @@ const SHORTCUTS = {
   'f': zoomToFit,
   
   // Clip editing
-  'i': setInPoint,
-  'o': setOutPoint,
+  'i': markInPoint,
+  'o': markOutPoint,
+  'Ctrl+b': toggleInOut,
 } as const;
 
 // Track if user is in an input field
@@ -72,7 +80,9 @@ function getShortcutKey(event: KeyboardEvent): string {
   if (event.shiftKey) parts.push('Shift');
   if (event.altKey) parts.push('Alt');
   
-  parts.push(event.key);
+  // Use event.code for Space to ensure reliable detection
+  const key = event.code === 'Space' ? 'Space' : event.key;
+  parts.push(key);
   
   return parts.join('+');
 }
@@ -99,16 +109,29 @@ function handleDelete() {
   }
 }
 
-// Set in point on selected clip
-function setInPoint() {
-  // TODO: Implement when clip editing UI is ready
-  console.log('Set in point - not implemented');
+// Set in point using current playhead position
+function markInPoint() {
+  setClipInPoint(timelineState.playheadTime);
 }
 
-// Set out point on selected clip
-function setOutPoint() {
-  // TODO: Implement when clip editing UI is ready
-  console.log('Set out point - not implemented');
+// Set out point using current playhead position
+function markOutPoint() {
+  setClipOutPoint(timelineState.playheadTime);
+}
+
+// Toggle in/out point (Ctrl+B cycles between in and out)
+function toggleInOut() {
+  if (clipBuilderState.inPoint === null) {
+    // No in point set - set it
+    setClipInPoint(timelineState.playheadTime);
+  } else if (clipBuilderState.outPoint === null) {
+    // In point set but no out - set out
+    setClipOutPoint(timelineState.playheadTime);
+  } else {
+    // Both set - clear and start over
+    clearClipSelection();
+    setClipInPoint(timelineState.playheadTime);
+  }
 }
 
 // Handle keyboard event

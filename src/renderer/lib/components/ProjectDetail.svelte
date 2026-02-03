@@ -37,6 +37,9 @@
   import { timelineState, setError } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
   import { buildAssetUrl } from '../utils/media';
+  import { onTranscriptionProgress } from '../state/electron.svelte';
+  import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
+  import { setProjectContext, setChapterContext } from '../state/agent.svelte';
   import type { Project, Asset } from '$shared/types/database';
   
   interface Props {
@@ -54,19 +57,31 @@
   let vodAssetForDefinition = $state<Asset | null>(null);
   let waveformCheckToken = 0;
   const waveformInFlight = new Set<number>();
+  let cleanupTranscription: (() => void) | null = null;
   
   // Load project data and chapters on mount
   onMount(() => {
     loadProjectDetail(project.id);
     loadChapters(project.id);
     cleanupKeyboard = initKeyboardShortcuts();
+    
+    // Set agent project context
+    setProjectContext(String(project.id));
+    
+    // Set up transcription progress listener
+    cleanupTranscription = onTranscriptionProgress((event: { chapterId: number; progress: { percent: number; status: string } }) => {
+      setTranscriptionProgress(event.chapterId, event.progress);
+    });
   });
   
   onDestroy(() => {
     if (cleanupKeyboard) cleanupKeyboard();
+    if (cleanupTranscription) cleanupTranscription();
     saveProjectTimelineState();
     clearProjectDetail();
     clearChaptersState();
+    setProjectContext(null);
+    setChapterContext(null, null);
   });
   
   // Check if project has content (assets or chapters)
@@ -213,6 +228,12 @@
     if (selectedChapter && !hasChapterAssets) {
       void loadAssetsForChapter(selectedChapter.id);
     }
+  });
+
+  // Update agent chapter context when selection changes
+  $effect(() => {
+    const chapterId = selectedChapter?.id ? String(selectedChapter.id) : null;
+    setChapterContext(chapterId, null);
   });
 
   $effect(() => {
@@ -538,6 +559,7 @@
     flex: 1;
     overflow: hidden;
     position: relative;
+    min-height: 0;
   }
   
   .loading {
@@ -566,6 +588,7 @@
   .project-layout {
     display: flex;
     height: 100%;
+    min-height: 0;
   }
   
   .chapters-sidebar {
@@ -573,6 +596,7 @@
     flex-shrink: 0;
     border-right: 1px solid #333;
     overflow-y: auto;
+    min-height: 0;
   }
   
   .main-content {
@@ -580,6 +604,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-layout {
@@ -587,6 +612,7 @@
     display: flex;
     gap: 0;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-main {
@@ -596,6 +622,7 @@
     gap: 1rem;
     padding: 1rem;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-side {
@@ -604,6 +631,7 @@
     flex-direction: column;
     border-left: 1px solid #333;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-side :global(.chat-panel) {

@@ -44,7 +44,7 @@
     </button>
   </header>
 
-  <main class="container">
+  <main class="container" class:project-open={selectedProject !== null}>
     <!-- Projects View -->
     {#if !selectedProject}
       <section class="projects-section">
@@ -178,6 +178,11 @@
     flex: 1;
     overflow: auto;
     padding: 2rem;
+  }
+
+  .container.project-open {
+    padding: 0;
+    overflow: hidden;
   }
 
   .section-header {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import TimelineTrack from './TimelineTrack.svelte';
-  import { timelineState, loadTimeline, setPlaying } from '../state/timeline.svelte';
+  import { timelineState, loadTimeline, setPlaying, setZoom } from '../state/timeline.svelte';
   import type { Clip, TimelineState as TimelineStateType } from '../../../shared/types/database';
   
   interface Props {
@@ -31,9 +31,18 @@
       isLoading = false;
     }
   });
+
+  // Handle wheel for ctrl+scroll zoom
+  function handleWheel(event: WheelEvent) {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const direction = Math.sign(event.deltaY);
+    const multiplier = direction > 0 ? 0.9 : 1.1;
+    setZoom(timelineState.zoomLevel * multiplier);
+  }
 </script>
 
-<div class="timeline">
+<div class="timeline" onwheel={handleWheel}>
   {#if isLoading}
     <div class="loading">
       <span class="loading-spinner"></span>
