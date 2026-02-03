@@ -746,7 +746,13 @@ export function registerIpcHandlers() {
   });
 
   // Timeline state handlers
-  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_SAVE, async (_, { projectId, zoomLevel, scrollPosition, playheadTime, selectedClipIds }) => {
+  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_SAVE, async (_, payload) => {
+    const projectId = payload?.projectId ?? payload?.project_id;
+    const zoomLevel = payload?.zoomLevel ?? payload?.zoom_level;
+    const scrollPosition = payload?.scrollPosition ?? payload?.scroll_position;
+    const playheadTime = payload?.playheadTime ?? payload?.playhead_time;
+    const selectedClipIds = payload?.selectedClipIds ?? payload?.selected_clip_ids;
+
     console.log('IPC: timeline:state-save', projectId);
     try {
       if (!projectId) {
@@ -758,7 +764,7 @@ export function registerIpcHandlers() {
         zoom_level: zoomLevel ?? 100.0,
         scroll_position: scrollPosition ?? 0.0,
         playhead_time: playheadTime ?? 0.0,
-        selected_clip_ids: selectedClipIds ?? [],
+        selected_clip_ids: Array.isArray(selectedClipIds) ? selectedClipIds : [],
       });
 
       return createSuccessResponse(state);

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import dotenv from 'dotenv';
 import { registerIpcHandlers } from './ipc/handlers.js';
 import { initializeDatabase, closeDatabase } from './database/db.js';
+import { registerMediaProtocol, registerMediaProtocolScheme } from './media-protocol.js';
 import { getAgentBridge } from './agent-bridge.js';
 import { detectFFmpeg } from './ffmpegDetector.js';
 import { detectAudiowaveform } from './audiowaveformDetector.js';
@@ -11,10 +12,15 @@ import { detectPython } from './pythonDetector.js';
 import { fileURLToPath } from 'url';
 
 // Load .env file early and check for errors
-const dotenvResult = dotenv.config();
-if (dotenvResult.error) {
-  console.error('[Main] Failed to load .env file:', dotenvResult.error);
+const envPath = path.resolve(process.cwd(), '.env');
+if (fs.existsSync(envPath)) {
+  const dotenvResult = dotenv.config({ path: envPath });
+  if (dotenvResult.error) {
+    console.error('[Main] Failed to load .env file:', dotenvResult.error);
+  }
 }
+
+registerMediaProtocolScheme();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,6 +85,7 @@ app.whenReady().then(async () => {
   // Initialize core systems
   initializeDatabase();
   registerIpcHandlers();
+  registerMediaProtocol();
 
   // Detect external dependencies
     await initializeFFmpeg();

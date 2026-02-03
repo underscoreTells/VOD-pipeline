@@ -1,17 +1,29 @@
 <script lang="ts">
   import { timelineState, getSelectedClips } from '../state/timeline.svelte';
   import { formatTime, formatTimecode } from '../state/keyboard.svelte';
+  import { projectDetail } from '../state/project-detail.svelte';
+  import { buildAssetUrl } from '../utils/media';
   
   // Get selected clip
   const selectedClip = $derived.by(() => {
     const selected = getSelectedClips();
     return selected.length === 1 ? selected[0] : null;
   });
+
+  const selectedAsset = $derived.by(() => {
+    if (!selectedClip) return null;
+    return projectDetail.assets.find((asset) => asset.id === selectedClip.asset_id) ?? null;
+  });
+
+  const videoSrc = $derived.by(() => {
+    return selectedAsset ? buildAssetUrl(selectedAsset.id) : '';
+  });
   
   // Video player state
   let videoRef: HTMLVideoElement | null = $state(null);
   let isLooping = $state(true);
   let currentTime = $state(0);
+  let lastVideoSrc = '';
   
   // Derived values
   const clipDuration = $derived.by(() => {
@@ -41,22 +53,70 @@
   function handleTimeUpdate() {
     if (videoRef) {
       currentTime = videoRef.currentTime;
+      if (selectedClip && videoRef.currentTime >= selectedClip.out_point) {
+        if (isLooping) {
+          videoRef.currentTime = selectedClip.in_point;
+          videoRef.play().catch(() => undefined);
+        } else {
+          videoRef.pause();
+          videoRef.currentTime = selectedClip.out_point;
+        }
+      }
     }
   }
   
   function handleEnded() {
     if (isLooping && videoRef && selectedClip) {
       videoRef.currentTime = selectedClip.in_point;
-      videoRef.play();
+      videoRef.play().catch(() => undefined);
     }
   }
+
+  function handleVideoLoadedMetadata() {
+    if (!videoRef || !selectedClip) return;
+    if (videoRef.currentTime < selectedClip.in_point || videoRef.currentTime > selectedClip.out_point) {
+      videoRef.currentTime = selectedClip.in_point;
+      currentTime = selectedClip.in_point;
+    }
+  }
+
+  function handleVideoError() {
+    const error = videoRef?.error;
+    console.error('[ClipPreview] Video playback error', error);
+  }
+
+  $effect(() => {
+    if (!videoRef) return;
+    if (videoSrc && videoSrc !== lastVideoSrc) {
+      lastVideoSrc = videoSrc;
+      videoRef.load();
+    }
+  });
   
   // Load clip into video player when selection changes
   $effect(() => {
-    if (videoRef && selectedClip) {
-      // Note: In a real implementation, you'd load the actual video file
-      // and seek to the in_point. For now, we'll just log it.
-      console.log('Load clip:', selectedClip.id, 'at', selectedClip.in_point);
+    if (!videoRef) return;
+    if (!selectedClip || !selectedAsset) {
+      videoRef.pause();
+      currentTime = 0;
+      return;
+    }
+
+    const seekToClipStart = () => {
+      if (!videoRef || !selectedClip) return;
+      videoRef.currentTime = selectedClip.in_point;
+      currentTime = selectedClip.in_point;
+    };
+
+    if (videoRef.readyState >= 1) {
+      seekToClipStart();
+    } else {
+      const onLoaded = () => {
+        seekToClipStart();
+        videoRef?.removeEventListener('loadedmetadata', onLoaded);
+      };
+      videoRef.addEventListener('loadedmetadata', onLoaded);
+      return () => videoRef?.removeEventListener('loadedmetadata', onLoaded);
     }
   });
 </script>
@@ -73,10 +133,14 @@
     <div class="video-container">
       <video
         bind:this={videoRef}
+        src={videoSrc}
         ontimeupdate={handleTimeUpdate}
         onended={handleEnded}
+        onloadedmetadata={handleVideoLoadedMetadata}
+        onerror={handleVideoError}
         controls
         class="preview-video"
+        preload="metadata"
       >
         <track kind="captions" />
       </video>

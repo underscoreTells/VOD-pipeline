@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
-import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
+import { detectGPUEncoders, getGPUEncoder, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -572,16 +572,27 @@ async function executeProxyGeneration(
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   // Get encoder-specific arguments
   const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
+  const gpuEncoder = useGPU ? getGPUEncoder() : null;
+  const useCudaDecode = gpuEncoder?.platform === 'nvidia';
+
+  if (useGPU && useCudaDecode) {
+    console.log('[Proxy] Enabling CUDA decode + scale for proxy generation');
+  }
+
+  console.log(`[Proxy] Video codec: ${videoCodec}`);
 
   const args: string[] = [
+    ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
     '-i', inputPath,
-    '-vf', 'scale=640:-2,fps=5', // 640px width, maintain aspect, 5fps
+    ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
     ...videoArgs,
     '-c:a', 'aac',
     '-b:a', '64k', // Low bitrate audio is fine for analysis
     '-movflags', '+faststart', // Web-optimized
     '-y', outputPath,
   ];
+
+  console.log(`[Proxy] FFmpeg args: ${args.join(' ')}`);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegBinaryPath, args);

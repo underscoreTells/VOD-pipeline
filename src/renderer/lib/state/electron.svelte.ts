@@ -195,8 +195,27 @@ export async function generateWaveform(assetId: number, trackIndex: number): Pro
   return await window.electronAPI.waveforms.generate(assetId, trackIndex);
 }
 
+const waveformProgressSubscribers = new Set<(data: WaveformProgressEvent) => void>();
+let waveformProgressUnsubscribe: (() => void) | null = null;
+
 export function onWaveformProgress(callback: (data: WaveformProgressEvent) => void): () => void {
-  return window.electronAPI.waveforms.onProgress(callback);
+  waveformProgressSubscribers.add(callback);
+
+  if (!waveformProgressUnsubscribe) {
+    waveformProgressUnsubscribe = window.electronAPI.waveforms.onProgress((event) => {
+      for (const subscriber of waveformProgressSubscribers) {
+        subscriber(event);
+      }
+    });
+  }
+
+  return () => {
+    waveformProgressSubscribers.delete(callback);
+    if (waveformProgressSubscribers.size === 0 && waveformProgressUnsubscribe) {
+      waveformProgressUnsubscribe();
+      waveformProgressUnsubscribe = null;
+    }
+  };
 }
 
 // ============================================================================

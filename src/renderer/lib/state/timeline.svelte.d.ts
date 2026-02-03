@@ -1,0 +1,38 @@
+import type { Clip, TimelineState } from '../../../shared/types/database';
+export declare const timelineState: {
+    projectId: number | null;
+    clips: Clip[];
+    zoomLevel: number;
+    scrollPosition: number;
+    playheadTime: number;
+    selectedClipIds: Set<number>;
+    isPlaying: boolean;
+    isLoading: boolean;
+    error: string | null;
+};
+export declare function getSelectedClips(): Clip[];
+export declare function getTotalDuration(): number;
+export declare function getClipsByTrack(): Map<number, Clip[]>;
+export declare function getClipById(id: number): Clip | undefined;
+export declare function loadTimeline(projectId: number, clips: Clip[], state?: TimelineState | null): void;
+export declare function setClips(clips: Clip[]): void;
+export declare function createClip(clip: Clip): void;
+export declare function updateClip(id: number, updates: Partial<Clip>): void;
+export declare function deleteClip(id: number): void;
+export declare function selectClip(id: number, multiSelect?: boolean): void;
+export declare function clearSelection(): void;
+export declare function selectAll(): void;
+export declare function setPlayhead(time: number): void;
+export declare function setZoom(level: number): void;
+export declare function setScroll(position: number): void;
+export declare function zoomIn(): void;
+export declare function zoomOut(): void;
+export declare function zoomToFit(): void;
+export declare function togglePlayback(): void;
+export declare function setPlaying(playing: boolean): void;
+export declare function setLoading(loading: boolean): void;
+export declare function setError(error: string | null): void;
+export declare function clearTimeline(): void;
+export declare function getTimelineStateForSave(): Omit<TimelineState, 'selected_clip_ids'> & {
+    selected_clip_ids: number[];
+} | null;

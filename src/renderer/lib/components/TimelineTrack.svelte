@@ -3,19 +3,19 @@
   import WaveSurfer from 'wavesurfer.js';
   import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
-  import { getWaveform } from '../state/electron.svelte';
+  import { getWaveform, onWaveformProgress } from '../state/electron.svelte';
   import { timelineState, selectClip, getClipsByTrack, setScroll, getTotalDuration } from '../state/timeline.svelte';
-  import { projectDetail } from '../state/project-detail.svelte';
   import { MoveClipCommand, ResizeClipCommand, executeCommand } from '../state/undo-redo.svelte';
   import { formatTime } from '../state/keyboard.svelte';
   
   interface Props {
     audioUrl: string;
+    assetId: number | null;
     trackIndex: number;
     height?: number;
   }
   
-  let { audioUrl, trackIndex, height = 100 }: Props = $props();
+  let { audioUrl, assetId, trackIndex, height = 100 }: Props = $props();
   
   let container: HTMLDivElement;
   let waveSurfer: WaveSurfer | null = null;
@@ -23,6 +23,10 @@
   let isReady = $state(false);
   let isScrolling = false; // Flag to prevent scroll loop
   let isDestroyed = false;
+  let loadedAssetId: number | null = null;
+  let hasLoadedPeaks = false;
+  let loadToken = 0;
+  let unsubscribeWaveformProgress: (() => void) | null = null;
 
   const WAVEFORM_TIER_LEVEL = 1;
   const AUDIO_TRACK_INDEX = 0;
@@ -54,15 +58,50 @@
   }
 
   async function loadWaveformCache() {
-    const asset = projectDetail.assets[trackIndex];
-    if (!asset?.id) return null;
+    if (!assetId) return null;
 
-    const result = await getWaveform(asset.id, AUDIO_TRACK_INDEX, WAVEFORM_TIER_LEVEL);
+    const result = await getWaveform(assetId, AUDIO_TRACK_INDEX, WAVEFORM_TIER_LEVEL);
     if (result.success && result.data) {
       return result.data;
     }
 
     return null;
+  }
+
+  async function loadWaveformForAsset(options: { force?: boolean } = {}) {
+    if (!waveSurfer) return;
+    if (!audioUrl) return;
+    if (!assetId) return;
+
+    const token = ++loadToken;
+    const waveformData = await loadWaveformCache();
+
+    if (isDestroyed || token !== loadToken) return;
+
+    if (!waveformData) {
+      hasLoadedPeaks = false;
+      return;
+    }
+
+    const shouldReload =
+      options.force ||
+      loadedAssetId !== assetId ||
+      Boolean(waveformData) !== hasLoadedPeaks;
+
+    if (!shouldReload) return;
+
+    const loadPeaks = [buildWaveSurferPeaks(waveformData.peaks)];
+    const loadDuration = waveformData.duration;
+
+    try {
+      isReady = false;
+      await waveSurfer.load(audioUrl, loadPeaks, loadDuration);
+      loadedAssetId = assetId;
+      hasLoadedPeaks = Boolean(waveformData);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[TimelineTrack] Failed to load waveform for asset ${assetId}: ${message}`, error);
+    }
   }
 
   // Initialize WaveSurfer
@@ -71,14 +110,12 @@
     isDestroyed = false;
 
     const init = async () => {
-      const waveformData = await loadWaveformCache();
-      if (isDestroyed || !container) return;
-
       // Initialize WaveSurfer with plugins
       regionsPlugin = RegionsPlugin.create();
       
       waveSurfer = WaveSurfer.create({
         container,
+        backend: 'MediaElement',
         waveColor: '#4a5568',
         progressColor: '#3182ce',
         cursorColor: '#e53e3e',
@@ -94,6 +131,11 @@
       waveSurfer.on('ready', () => {
         isReady = true;
         createClipRegions();
+      });
+
+      waveSurfer.on('error', (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[TimelineTrack] WaveSurfer error: ${message}`, error);
       });
       
       waveSurfer.on('timeupdate', (time: number) => {
@@ -117,28 +159,42 @@
         }
       });
 
-      const loadPeaks = waveformData ? [buildWaveSurferPeaks(waveformData.peaks)] : undefined;
-      const loadDuration = waveformData?.duration;
-
       try {
-        if (loadPeaks && loadDuration) {
-          await waveSurfer.load(audioUrl, loadPeaks, loadDuration);
-        } else {
-          await waveSurfer.load(audioUrl);
-        }
+        await loadWaveformForAsset({ force: true });
       } catch (error) {
-        console.warn('[TimelineTrack] Failed to load waveform:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[TimelineTrack] Failed to load waveform: ${message}`, error);
       }
     };
 
     init();
+
+    unsubscribeWaveformProgress = onWaveformProgress((event) => {
+      if (!assetId || event.assetId !== assetId) return;
+
+      if (event.progress.tier !== WAVEFORM_TIER_LEVEL || event.progress.percent < 100) {
+        return;
+      }
+
+      void loadWaveformForAsset({ force: true });
+    });
     
     // Cleanup
     return () => {
       isDestroyed = true;
+      unsubscribeWaveformProgress?.();
       regionsPlugin?.destroy();
       waveSurfer?.destroy();
     };
+  });
+
+  $effect(() => {
+    if (!waveSurfer) return;
+    if (!assetId) return;
+    if (loadedAssetId !== assetId) {
+      hasLoadedPeaks = false;
+      void loadWaveformForAsset({ force: true });
+    }
   });
   
   // Update zoom when state changes

@@ -2,6 +2,7 @@
   import type { Asset } from "../../../shared/types/database";
   import { createChapter, linkAssetToChapter, chaptersState } from "../state/chapters.svelte";
   import { settingsState } from "../state/settings.svelte";
+  import { buildAssetUrl } from "../utils/media";
   import { formatTime } from "../utils/time";
 
   interface Props {
@@ -12,6 +13,9 @@
   }
 
   let { asset, projectId, onComplete, onCancel }: Props = $props();
+
+  let videoRef = $state<HTMLVideoElement | null>(null);
+  let isPreviewing = $state(false);
 
   // Draft chapters state
   let draftChapters = $state<
@@ -30,6 +34,53 @@
 
   // Duration in seconds - use $derived to stay reactive
   const duration = $derived(asset.duration || 0);
+
+  function seekVideo(time: number) {
+    if (!videoRef) return;
+    const maxDuration = videoRef.duration || duration;
+    const clampedTime = maxDuration > 0
+      ? Math.max(0, Math.min(maxDuration, time))
+      : Math.max(0, time);
+    videoRef.currentTime = clampedTime;
+  }
+
+  function stopPreview() {
+    if (!videoRef) return;
+    if (!videoRef.paused) {
+      videoRef.pause();
+    }
+    isPreviewing = false;
+  }
+
+  function handleVideoTimeUpdate() {
+    if (!videoRef) return;
+    playheadTime = videoRef.currentTime;
+
+    if (isPreviewing && hasSelection && videoRef.currentTime >= selectionEnd) {
+      videoRef.pause();
+      isPreviewing = false;
+      videoRef.currentTime = selectionEnd;
+      playheadTime = selectionEnd;
+    }
+  }
+
+  function handleVideoLoadedMetadata() {
+    if (!videoRef) return;
+    if (playheadTime > videoRef.duration) {
+      playheadTime = videoRef.duration;
+    }
+  }
+
+  function handleVideoError() {
+    const error = videoRef?.error;
+    console.error('[ChapterDefinition] Video playback error', error);
+  }
+
+  $effect(() => {
+    if (videoRef) {
+      videoRef.load();
+    }
+  });
 
   function markStart() {
     selectionStart = playheadTime;
@@ -99,6 +150,8 @@
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
     playheadTime = Math.max(0, Math.min(duration, percentage * duration));
+    stopPreview();
+    seekVideo(playheadTime);
   }
 
   function handleScrubberKeydown(e: KeyboardEvent) {
@@ -116,6 +169,8 @@
       e.preventDefault();
       playheadTime = duration;
     }
+    stopPreview();
+    seekVideo(playheadTime);
   }
 
   function handleCreateAll() {
@@ -131,11 +186,11 @@
   }
 
   function previewSelection() {
-    // In a real implementation, this would open a video player
-    // For now, just log the selection
-    console.log("Preview selection:", {
-      start: formatTime(selectionStart),
-      end: formatTime(selectionEnd),
+    if (!videoRef || !hasSelection) return;
+    isPreviewing = true;
+    videoRef.currentTime = selectionStart;
+    videoRef.play().catch(() => {
+      isPreviewing = false;
     });
   }
 
@@ -148,6 +203,22 @@
   <div class="header">
     <h2>Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
     <p class="duration">Duration: {formatTime(duration)}</p>
+  </div>
+
+  <div class="video-preview">
+    <video
+      bind:this={videoRef}
+      class="definition-video"
+      src={buildAssetUrl(asset.id)}
+      ontimeupdate={handleVideoTimeUpdate}
+      onloadedmetadata={handleVideoLoadedMetadata}
+      onerror={handleVideoError}
+      controls
+      preload="metadata"
+      playsinline
+    >
+      <track kind="captions" />
+    </video>
   </div>
 
   <!-- Timeline Scrubber -->
@@ -302,6 +373,21 @@
     margin: 0;
     color: #888;
     font-size: 0.875rem;
+  }
+
+  .video-preview {
+    background: #111;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+    aspect-ratio: 16 / 9;
+  }
+
+  .definition-video {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #000;
   }
 
   .timeline-section {
