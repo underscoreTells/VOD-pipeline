@@ -89,6 +89,10 @@ export function registerMediaProtocol() {
           }
         }
 
+        if (end > fileSize - 1) {
+          end = fileSize - 1;
+        }
+
         if (Number.isNaN(start) || Number.isNaN(end) || start >= fileSize || end < start) {
           respondWithError(416, 'Requested range not satisfiable', { 'Content-Range': `bytes */${fileSize}` });
           return;

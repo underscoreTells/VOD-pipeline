@@ -229,7 +229,11 @@ async function installAudiowaveform() {
     console.log('Fedora/RHEL detected. Using RPM package instead of DEB.');
     
     // Override the download URL for RPM
-    const mappedArch = AudiowaveformConfig.linux.arch[ARCH] || 'x86_64';
+    const rpmArchMap = {
+      x64: 'x86_64',
+      arm64: 'aarch64',
+    };
+    const mappedArch = rpmArchMap[ARCH] || 'x86_64';
     const rpmUrl = `https://github.com/bbc/audiowaveform/releases/download/${AUDIOWAVEFORM_VERSION}/audiowaveform-${AUDIOWAVEFORM_VERSION}-1.el8.${mappedArch}.rpm`;
     
     fs.mkdirSync(INSTALL_DIR, { recursive: true });

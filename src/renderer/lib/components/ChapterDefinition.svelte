@@ -16,6 +16,7 @@
 
   let videoRef = $state<HTMLVideoElement | null>(null);
   let isPreviewing = $state(false);
+  let videoDuration = $state(0);
 
   // Draft chapters state
   let draftChapters = $state<
@@ -33,7 +34,12 @@
   let editTitle = $state("");
 
   // Duration in seconds - use $derived to stay reactive
-  const duration = $derived(asset.duration || 0);
+  const duration = $derived(videoDuration || asset.duration || 0);
+  const playheadPercent = $derived(duration > 0 ? (playheadTime / duration) * 100 : 0);
+  const selectionStartPercent = $derived(duration > 0 ? (selectionStart / duration) * 100 : 0);
+  const selectionWidthPercent = $derived(
+    duration > 0 ? ((selectionEnd - selectionStart) / duration) * 100 : 0
+  );
 
   function seekVideo(time: number) {
     if (!videoRef) return;
@@ -66,6 +72,9 @@
 
   function handleVideoLoadedMetadata() {
     if (!videoRef) return;
+    if (Number.isFinite(videoRef.duration) && videoRef.duration > 0) {
+      videoDuration = videoRef.duration;
+    }
     if (playheadTime > videoRef.duration) {
       playheadTime = videoRef.duration;
     }
@@ -146,6 +155,7 @@
   }
 
   function handleScrubberClick(e: MouseEvent) {
+    if (duration <= 0) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
@@ -155,6 +165,7 @@
   }
 
   function handleScrubberKeydown(e: KeyboardEvent) {
+    if (duration <= 0) return;
     const step = duration / 100; // 1% of duration per step
     if (e.key === "ArrowLeft") {
       e.preventDefault();
@@ -226,10 +237,10 @@
     <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
       <div class="timeline-bar">
         <!-- Playhead -->
-        <div
-          class="playhead"
-          style="left: {(playheadTime / duration) * 100}%"
-        >
+          <div
+            class="playhead"
+            style="left: {playheadPercent}%"
+          >
           <div class="playhead-marker">▲</div>
         </div>
 
@@ -237,7 +248,7 @@
         {#if hasSelection}
           <div
             class="selection-highlight"
-            style="left: {(selectionStart / duration) * 100}%; width: {((selectionEnd - selectionStart) / duration) * 100}%"
+            style="left: {selectionStartPercent}%; width: {selectionWidthPercent}%"
           ></div>
         {/if}
 
