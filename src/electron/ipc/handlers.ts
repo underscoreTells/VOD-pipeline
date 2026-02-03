@@ -423,7 +423,27 @@ export function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.CHAPTER_UPDATE, async (_, { id, updates }) => {
     console.log('IPC: chapter:update', id, updates);
     try {
-      const success = await updateChapter(id, updates);
+      const normalizedUpdates: {
+        title?: string;
+        start_time?: number;
+        end_time?: number;
+        display_order?: number;
+      } = {};
+
+      if (updates.title !== undefined) {
+        normalizedUpdates.title = updates.title;
+      }
+      if (updates.startTime !== undefined) {
+        normalizedUpdates.start_time = updates.startTime;
+      }
+      if (updates.endTime !== undefined) {
+        normalizedUpdates.end_time = updates.endTime;
+      }
+      if (updates.display_order !== undefined) {
+        normalizedUpdates.display_order = updates.display_order;
+      }
+
+      const success = await updateChapter(id, normalizedUpdates);
       if (success) {
         return createSuccessResponse(null);
       } else {

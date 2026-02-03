@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import WaveSurfer from 'wavesurfer.js';
   import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
-  import type { Clip } from '../../../shared/types/database';
+  import type { Clip, Chapter } from '../../../shared/types/database';
   import { getWaveform, onWaveformProgress } from '../state/electron.svelte';
-  import { timelineState, selectClip, getClipsByTrack, setScroll, getTotalDuration } from '../state/timeline.svelte';
-  import { MoveClipCommand, ResizeClipCommand, executeCommand } from '../state/undo-redo.svelte';
-  import { formatTime } from '../state/keyboard.svelte';
+  import { timelineState, selectClip, getClipsByTrack, setScroll } from '../state/timeline.svelte';
+  import { createProjectClip, executeMoveClip, executeResizeClip, projectDetail } from '../state/project-detail.svelte';
+  import { chaptersState, selectChapter, updateChapter } from '../state/chapters.svelte';
+  import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   
   interface Props {
     audioUrl: string;
@@ -47,6 +48,22 @@
     const byTrack = getClipsByTrack();
     return byTrack.get(trackIndex) || [];
   });
+
+  const trackChapters = $derived.by(() => {
+    if (!assetId) return [] as Chapter[];
+    return chaptersState.chapters.filter((chapter) => {
+      const chapterAssets = chaptersState.chapterAssets.get(chapter.id);
+      return chapterAssets?.includes(assetId) ?? false;
+    });
+  });
+
+  const selectedChapterId = $derived(() => chaptersState.selectedChapterId);
+
+  const MIN_SELECTION_SECONDS = 0.25;
+  const CHAPTER_COLOR = 'rgba(56, 189, 248, 0.15)';
+  const CHAPTER_SELECTED_COLOR = 'rgba(56, 189, 248, 0.35)';
+
+  let isRenderingRegions = false;
   
   function buildWaveSurferPeaks(peaks: Array<{ min: number; max: number }>): Float32Array {
     const values = new Float32Array(peaks.length);
@@ -104,6 +121,43 @@
     }
   }
 
+  function isKnownRegion(id: string): boolean {
+    if (id.startsWith('chapter-')) return true;
+    if (id.startsWith('clip-')) return true;
+    return false;
+  }
+
+  async function createClipFromRegion(region: { start: number; end: number; remove?: () => void }) {
+    if (!projectDetail.projectId || !assetId) {
+      region.remove?.();
+      return;
+    }
+
+    const selection = normalizeSelection(region.start, region.end, MIN_SELECTION_SECONDS);
+    if (!selection) {
+      region.remove?.();
+      return;
+    }
+
+    const { startTime, inPoint, outPoint } = buildClipTimes(selection);
+
+    try {
+      await createProjectClip(
+        projectDetail.projectId,
+        assetId,
+        trackIndex,
+        startTime,
+        inPoint,
+        outPoint,
+        undefined,
+        undefined,
+        true
+      );
+    } finally {
+      region.remove?.();
+    }
+  }
+
   // Initialize WaveSurfer
   onMount(() => {
     if (!container) return;
@@ -111,7 +165,13 @@
 
     const init = async () => {
       // Initialize WaveSurfer with plugins
-      regionsPlugin = RegionsPlugin.create();
+      const createdRegionsPlugin = (RegionsPlugin as any).create({
+        dragSelection: {
+          slop: 5,
+          color: 'rgba(79, 70, 229, 0.2)',
+        },
+      });
+      regionsPlugin = createdRegionsPlugin;
       
       waveSurfer = WaveSurfer.create({
         container,
@@ -123,14 +183,14 @@
         normalize: true,
         minPxPerSec: timelineState.zoomLevel,
         plugins: [
-          regionsPlugin,
+          createdRegionsPlugin,
         ],
       });
 
       // Event handlers
       waveSurfer.on('ready', () => {
         isReady = true;
-        createClipRegions();
+        renderRegions();
       });
 
       waveSurfer.on('error', (error) => {
@@ -157,6 +217,13 @@
           // Reset flag after state update
           setTimeout(() => { isScrolling = false; }, 0);
         }
+      });
+
+      (regionsPlugin as any)?.on('region-created', (region: any) => {
+        if (isRenderingRegions) return;
+        const regionId = typeof region.id === 'string' ? region.id : '';
+        if (isKnownRegion(regionId)) return;
+        void createClipFromRegion(region);
       });
 
       try {
@@ -211,28 +278,62 @@
     }
   });
   
-  // Create regions for clips
-  function createClipRegions() {
+  function renderRegions() {
     if (!regionsPlugin || !waveSurfer) return;
-    
-    // Clear existing regions
+
+    isRenderingRegions = true;
     regionsPlugin.clearRegions();
-    
-    // Create region for each clip
+
+    const chapters = trackChapters.slice().sort((a, b) => a.start_time - b.start_time);
+    for (const chapter of chapters) {
+      const isSelected = chapter.id === selectedChapterId();
+      const region = regionsPlugin.addRegion({
+        id: `chapter-${chapter.id}`,
+        start: chapter.start_time,
+        end: chapter.end_time,
+        color: isSelected ? CHAPTER_SELECTED_COLOR : CHAPTER_COLOR,
+        drag: isSelected,
+        resize: isSelected,
+      });
+
+      if (region?.element) {
+        region.element.classList.add('chapter-region');
+        if (isSelected) {
+          region.element.classList.add('chapter-region-selected');
+        }
+      }
+
+      region.on('click', (e: Event) => {
+        e.stopPropagation();
+        selectChapter(chapter.id);
+      });
+
+      if (isSelected) {
+        region.on('update-end', () => {
+          const newStart = Math.max(0, region.start);
+          const newEnd = Math.max(newStart + 0.01, region.end);
+          void updateChapter(chapter.id, { startTime: newStart, endTime: newEnd });
+        });
+      }
+    }
+
     for (const clip of trackClips) {
       const duration = clip.out_point - clip.in_point;
       const color = clip.role ? ROLE_COLORS[clip.role] : DEFAULT_COLOR;
-      
+
       const region = regionsPlugin.addRegion({
-        id: String(clip.id),
+        id: `clip-${clip.id}`,
         start: clip.start_time,
         end: clip.start_time + duration,
         color,
         drag: true,
         resize: true,
       });
-      
-      // Handle region update (drag/resize)
+
+      if (region?.element) {
+        region.element.classList.add('clip-region');
+      }
+
       region.on('update-end', () => {
         const newStart = region.start;
         const newEnd = region.end;
@@ -242,60 +343,42 @@
         const durationChanged = Math.abs(newDuration - duration) > EPSILON;
 
         if (!durationChanged) {
-          // Duration unchanged - this is a pure move
-          const command = new MoveClipCommand(
-            'Move clip',
-            clip.id,
-            clip.start_time,
-            newStart
-          );
-          executeCommand(command);
-        } else {
-          // Duration changed - this is a resize
-          const startChanged = Math.abs(newStart - clip.start_time) > EPSILON;
-          const endChanged = Math.abs(newEnd - (clip.start_time + duration)) > EPSILON;
+          void executeMoveClip(clip.id, clip.start_time, newStart);
+          return;
+        }
 
-          let newInPoint = clip.in_point;
-          let newOutPoint = clip.out_point;
+        const startChanged = Math.abs(newStart - clip.start_time) > EPSILON;
+        const endChanged = Math.abs(newEnd - (clip.start_time + duration)) > EPSILON;
 
-          if (startChanged) {
-            // Left edge moved - adjust in_point
-            const startDelta = newStart - clip.start_time;
-            newInPoint = clip.in_point + startDelta;
-          }
+        let newInPoint = clip.in_point;
+        let newOutPoint = clip.out_point;
 
-          if (endChanged) {
-            // Right edge moved - adjust out_point based on new duration
-            newOutPoint = clip.in_point + newDuration;
-          }
+        if (startChanged) {
+          const startDelta = newStart - clip.start_time;
+          newInPoint = clip.in_point + startDelta;
+        }
 
-          // Validate that out_point is still greater than in_point
-          if (newOutPoint > newInPoint) {
-            const command = new ResizeClipCommand(
-              'Resize clip',
-              clip.id,
-              clip.in_point,
-              clip.out_point,
-              newInPoint,
-              newOutPoint
-            );
-            executeCommand(command);
-          }
+        if (endChanged) {
+          newOutPoint = clip.in_point + newDuration;
+        }
+
+        if (newOutPoint > newInPoint) {
+          void executeResizeClip(clip.id, clip.in_point, clip.out_point, newInPoint, newOutPoint);
         }
       });
-      
-      // Handle click to select
+
       region.on('click', (e: Event) => {
         e.stopPropagation();
         selectClip(clip.id, false);
       });
     }
+
+    isRenderingRegions = false;
   }
-  
-  // Update regions when clips change
+
   $effect(() => {
-    if (isReady && trackClips) {
-      createClipRegions();
+    if (isReady) {
+      renderRegions();
     }
   });
   
@@ -356,6 +439,22 @@
   :global(.wavesurfer-region) {
     border-radius: 4px;
     border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  :global(.chapter-region) {
+    border-radius: 6px;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    z-index: 1;
+  }
+
+  :global(.chapter-region-selected) {
+    border-color: rgba(56, 189, 248, 0.9);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+    z-index: 3;
+  }
+
+  :global(.clip-region) {
+    z-index: 2;
   }
   
   :global(.wavesurfer-region:hover) {

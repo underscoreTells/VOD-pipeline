@@ -2,17 +2,24 @@
   import type { Chapter, Asset } from '$shared/types/database';
   import { buildAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
-  import { 
-    clipBuilderState, 
-    setInPoint, 
-    setOutPoint, 
-    clearSelection, 
+  import {
+    clampToChapter,
+    getChapterDuration,
+    toChapterGlobalTime,
+    toChapterLocalTime,
+  } from '../utils/chapter-time';
+  import {
+    timelineState,
+    setPlayhead,
+    setPlaying,
+    togglePlayback,
+  } from '../state/timeline.svelte';
+  import {
+    clipBuilderState,
+    clearSelection,
     hasCompleteSelection,
-    getSelectionDuration 
   } from '../state/clip-builder.svelte';
-  import { timelineState } from '../state/timeline.svelte';
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
-  import { chaptersState } from '../state/chapters.svelte';
 
   interface Props {
     chapter: Chapter | null;
@@ -23,18 +30,18 @@
 
   let videoRef = $state<HTMLVideoElement | null>(null);
   let currentTime = $state(0);
+  let isCreatingFromSelection = $state(false);
+  let lastChapterId = $state<number | null>(null);
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
 
-  function clampToChapter(time: number): number {
-    if (!chapter) return time;
-    return Math.max(chapter.start_time, Math.min(time, chapter.end_time));
-  }
+  const chapterDuration = $derived(() => getChapterDuration(chapter));
+  const localTime = $derived(() => toChapterLocalTime(chapter, currentTime));
 
   function handleSeeking() {
     if (!videoRef || !chapter) return;
-    const next = clampToChapter(videoRef.currentTime);
+    const next = clampToChapter(chapter, videoRef.currentTime);
     if (Math.abs(next - videoRef.currentTime) > 0.01) {
       videoRef.currentTime = next;
     }
@@ -42,19 +49,22 @@
 
   function handleTimeUpdate() {
     if (!videoRef || !chapter) return;
-    const next = clampToChapter(videoRef.currentTime);
+    const next = clampToChapter(chapter, videoRef.currentTime);
     if (next !== videoRef.currentTime) {
       videoRef.pause();
       videoRef.currentTime = next;
+      setPlaying(false);
     }
     currentTime = next;
+    setPlayhead(next);
   }
 
   function handleLoadedMetadata() {
     if (!videoRef || !chapter) return;
-    const start = clampToChapter(chapter.start_time);
+    const start = clampToChapter(chapter, chapter.start_time);
     videoRef.currentTime = start;
     currentTime = start;
+    setPlayhead(start);
   }
 
   function handleVideoError() {
@@ -75,37 +85,80 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter) return;
-    if (videoRef.readyState >= 1) {
-      const start = clampToChapter(chapter.start_time);
-      videoRef.currentTime = start;
-      currentTime = start;
+    const chapterId = chapter?.id ?? null;
+    if (chapterId !== lastChapterId) {
+      clearSelection();
+      lastChapterId = chapterId;
     }
   });
 
-  async function handleCreateClip() {
+  $effect(() => {
+    if (!videoRef || !chapter) return;
+    if (videoRef.readyState >= 1) {
+      const start = clampToChapter(chapter, chapter.start_time);
+      videoRef.currentTime = start;
+      currentTime = start;
+      setPlayhead(start);
+    }
+  });
+
+  $effect(() => {
+    if (!videoRef) return;
+    if (timelineState.isPlaying) {
+      if (videoRef.paused) {
+        void videoRef.play().catch(() => {
+          setPlaying(false);
+        });
+      }
+    } else if (!videoRef.paused) {
+      videoRef.pause();
+    }
+  });
+
+  async function handleSelectionAutoCreate() {
     if (!projectDetail.projectId || !chapter || !asset) return;
     if (!hasCompleteSelection()) return;
+    if (isCreatingFromSelection) return;
 
-    const inPoint = clipBuilderState.inPoint!;
-    const outPoint = clipBuilderState.outPoint!;
-    
-    // Create clip at the current track position (playheadTime)
-    const trackPosition = timelineState.playheadTime;
-    
-    await createProjectClip(
-      projectDetail.projectId,
-      asset.id,
-      0,
-      trackPosition,
-      inPoint,
-      outPoint,
-      undefined,
-      undefined,
-      true
-    );
-    clearSelection();
+    const inPoint = clipBuilderState.inPoint;
+    const outPoint = clipBuilderState.outPoint;
+
+    if (inPoint === null || outPoint === null) return;
+
+    isCreatingFromSelection = true;
+
+    try {
+      await createProjectClip(
+        projectDetail.projectId,
+        asset.id,
+        0,
+        inPoint,
+        inPoint,
+        outPoint,
+        undefined,
+        undefined,
+        true
+      );
+    } finally {
+      clearSelection();
+      isCreatingFromSelection = false;
+    }
   }
+
+  function handleScrubInput(event: Event) {
+    if (!videoRef || !chapter) return;
+    const value = Number((event.target as HTMLInputElement).value);
+    const next = toChapterGlobalTime(chapter, value);
+    videoRef.currentTime = next;
+    currentTime = next;
+    setPlayhead(next);
+  }
+
+  $effect(() => {
+    if (hasCompleteSelection()) {
+      void handleSelectionAutoCreate();
+    }
+  });
 </script>
 
 <div class="chapter-preview">
@@ -122,7 +175,6 @@
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
       onerror={handleVideoError}
-      controls={Boolean(asset)}
       preload="metadata"
       playsinline
     >
@@ -137,58 +189,36 @@
     {/if}
   </div>
 
+  {#if chapter && asset}
+    <div class="preview-controls">
+      <button class="play-toggle" onclick={togglePlayback}>
+        {timelineState.isPlaying ? 'Pause' : 'Play'}
+      </button>
+      <div class="time-display">
+        <span class="time-current">{formatTime(localTime())}</span>
+        <span class="time-divider">/</span>
+        <span class="time-total">{formatTime(chapterDuration())}</span>
+      </div>
+      <input
+        class="scrubber"
+        type="range"
+        min="0"
+        max={chapterDuration()}
+        step="0.01"
+        value={localTime()}
+        oninput={handleScrubInput}
+      />
+    </div>
+  {/if}
+
   <div class="preview-footer">
     {#if chapter}
       <span class="range">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
     {:else}
       <span class="range">No chapter selected</span>
     {/if}
-    <span class="timecode">{formatTime(currentTime)}</span>
+    <span class="timecode">{formatTime(localTime())}</span>
   </div>
-
-  <!-- Clip Builder -->
-  {#if chapter && asset}
-    <div class="clip-builder">
-      <div class="selection-info">
-        {#if hasCompleteSelection()}
-          <span class="selection-range">
-            {formatTime(clipBuilderState.inPoint ?? 0)} - {formatTime(clipBuilderState.outPoint ?? 0)}
-          </span>
-          <span class="selection-duration">({formatTime(getSelectionDuration())})</span>
-        {:else if clipBuilderState.inPoint !== null}
-          <span class="selection-range">In: {formatTime(clipBuilderState.inPoint)}</span>
-          <span class="selection-hint">(Set Out point)</span>
-        {:else}
-          <span class="selection-hint">Mark In/Out to create clip</span>
-        {/if}
-      </div>
-      
-      <div class="clip-builder-controls">
-        <button 
-          class="mark-btn" 
-          class:active={clipBuilderState.inPoint !== null}
-          onclick={() => setInPoint(timelineState.playheadTime)}
-        >
-          Mark In [I]
-        </button>
-        <button 
-          class="mark-btn" 
-          class:active={clipBuilderState.outPoint !== null}
-          onclick={() => setOutPoint(timelineState.playheadTime)}
-        >
-          Mark Out [O]
-        </button>
-        <button class="clear-btn" onclick={clearSelection}>Clear</button>
-        <button 
-          class="create-btn" 
-          disabled={!hasCompleteSelection()}
-          onclick={handleCreateClip}
-        >
-          Create Clip
-        </button>
-      </div>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -273,76 +303,72 @@
     color: #ccc;
   }
 
-  /* Clip Builder */
-  .clip-builder {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid #2a2a2a;
+  .preview-controls {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    padding: 0.5rem 0;
   }
 
-  .selection-info {
+  .play-toggle {
+    grid-row: 1 / span 2;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid #2b2b2b;
+    background: #1e1e1e;
+    color: #fff;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .play-toggle:hover {
+    background: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+
+  .time-display {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.75rem;
     font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.8rem;
+    color: #ccc;
   }
 
-  .selection-range {
-    color: #fff;
-  }
-
-  .selection-duration {
-    color: #4CAF50;
-  }
-
-  .selection-hint {
+  .time-divider {
     color: #666;
   }
 
-  .clip-builder-controls {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .mark-btn, .clear-btn, .create-btn {
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
-    border: 1px solid #444;
+  .scrubber {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
     background: #2a2a2a;
-    color: #ccc;
-    font-size: 0.75rem;
+    border-radius: 999px;
+    outline: none;
+  }
+
+  .scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
     cursor: pointer;
-    transition: all 0.2s;
   }
 
-  .mark-btn:hover, .clear-btn:hover {
-    background: #333;
-    border-color: #555;
-  }
-
-  .mark-btn.active {
-    background: #007bff;
-    border-color: #007bff;
-    color: #fff;
-  }
-
-  .create-btn {
-    background: #28a745;
-    border-color: #28a745;
-    color: #fff;
-    margin-left: auto;
-  }
-
-  .create-btn:hover:not(:disabled) {
-    background: #218838;
-    border-color: #218838;
-  }
-
-  .create-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .scrubber::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
+    cursor: pointer;
   }
 </style>

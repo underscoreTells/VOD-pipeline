@@ -149,19 +149,33 @@ export function selectChapter(chapterId: number | null): void {
 export async function updateChapter(
   chapterId: number,
   updates: UpdateChapterInput
-): Promise<boolean> {
-  try {
-    const result: UpdateChapterResult = await window.electronAPI.chapters.update(chapterId, updates);
+  ): Promise<boolean> {
+    try {
+      const result: UpdateChapterResult = await window.electronAPI.chapters.update(chapterId, updates);
 
-    if (result.success) {
-      chaptersState.chapters = chaptersState.chapters.map((chapter) =>
-        chapter.id === chapterId ? { ...chapter, ...updates } : chapter
-      );
-      return true;
-    } else {
-      console.error("[Chapters] Failed to update chapter:", result.error);
-      return false;
-    }
+      if (result.success) {
+        const stateUpdates: Partial<Chapter> = {};
+        if (updates.title !== undefined) {
+          stateUpdates.title = updates.title;
+        }
+        if (updates.startTime !== undefined) {
+          stateUpdates.start_time = updates.startTime;
+        }
+        if (updates.endTime !== undefined) {
+          stateUpdates.end_time = updates.endTime;
+        }
+        if (updates.display_order !== undefined) {
+          stateUpdates.display_order = updates.display_order;
+        }
+
+        chaptersState.chapters = chaptersState.chapters.map((chapter) =>
+          chapter.id === chapterId ? { ...chapter, ...stateUpdates } : chapter
+        );
+        return true;
+      } else {
+        console.error("[Chapters] Failed to update chapter:", result.error);
+        return false;
+      }
   } catch (error) {
     console.error("[Chapters] Error updating chapter:", error);
     return false;
