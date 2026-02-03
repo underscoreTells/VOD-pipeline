@@ -19,7 +19,7 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "postinstall": "node ./scripts/install-ffmpeg.js"
+    "postinstall": "node ./scripts/install-ffmpeg.js && node ./scripts/install-audiowaveform.js"
   },
   "keywords": [
     "video",

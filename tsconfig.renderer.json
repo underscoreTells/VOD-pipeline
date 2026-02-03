@@ -23,6 +23,8 @@
   "include": [
     "src/renderer/**/*.d.ts",
     "src/renderer/**/*.ts",
+    "src/renderer/lib/utils/media.ts",
+    "src/renderer/lib/utils/**/*.ts",
     "src/renderer/**/*.js",
     "src/renderer/**/*.svelte",
     "src/shared/**/*.ts",

@@ -148,7 +148,13 @@ export function registerIpcHandlers() {
   }
 
   // Background proxy generation
-  async function generateProxyAsync(assetId: number, sourcePath: string, mainWindow: any) {
+  async function generateProxyAsync(
+    assetId: number, 
+    sourcePath: string, 
+    mainWindow: any,
+    encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
+    quality: 'high' | 'balanced' | 'fast' = 'balanced'
+  ) {
     const proxyPath = getProxyPath(assetId);
     let proxyId: number | null = null;
     
@@ -169,14 +175,22 @@ export function registerIpcHandlers() {
       proxyId = proxy.id;
 
       console.log(`[Proxy] Starting generation for asset ${assetId} (proxy ${proxyId})`);
+      console.log(`[Proxy] Encoding mode: ${encodingMode}, Quality: ${quality}`);
       
       // Generate proxy with progress
-      const proxyMetadata = await generateAIProxy(sourcePath, proxyPath, (progress) => {
-        // Send progress to renderer
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('proxy:progress', { assetId, progress });
-        }
-      });
+      const proxyMetadata = await generateAIProxy(
+        sourcePath, 
+        proxyPath, 
+        (progress) => {
+          // Send progress to renderer
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('proxy:progress', { assetId, progress });
+          }
+        },
+        undefined, // timeoutMs
+        encodingMode,
+        quality
+      );
 
       // Update proxy record with metadata using the proxy ID
       await updateProxyMetadata(proxyId, {
@@ -218,7 +232,7 @@ export function registerIpcHandlers() {
   }
 
   // Asset handlers
-  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (event, { projectId, filePath }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (event, { projectId, filePath, proxyOptions }) => {
     console.log('IPC: asset:add', projectId, filePath);
 
     try {
@@ -296,8 +310,11 @@ export function registerIpcHandlers() {
       if (fileType === 'video') {
         const { getMainWindow } = await import('../main.js');
         const mainWindow = getMainWindow();
+        // Extract proxy encoding options from settings
+        const encodingMode = proxyOptions?.encodingMode || 'auto';
+        const quality = proxyOptions?.quality || 'balanced';
         // Don't await - run in background
-        generateProxyAsync(asset.id!, filePath, mainWindow);
+        generateProxyAsync(asset.id!, filePath, mainWindow, encodingMode, quality);
       }
 
       return createSuccessResponse(asset);
@@ -729,7 +746,13 @@ export function registerIpcHandlers() {
   });
 
   // Timeline state handlers
-  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_SAVE, async (_, { projectId, zoomLevel, scrollPosition, playheadTime, selectedClipIds }) => {
+  ipcMain.handle(IPC_CHANNELS.TIMELINE_STATE_SAVE, async (_, payload) => {
+    const projectId = payload?.projectId ?? payload?.project_id;
+    const zoomLevel = payload?.zoomLevel ?? payload?.zoom_level;
+    const scrollPosition = payload?.scrollPosition ?? payload?.scroll_position;
+    const playheadTime = payload?.playheadTime ?? payload?.playhead_time;
+    const selectedClipIds = payload?.selectedClipIds ?? payload?.selected_clip_ids;
+
     console.log('IPC: timeline:state-save', projectId);
     try {
       if (!projectId) {
@@ -741,7 +764,7 @@ export function registerIpcHandlers() {
         zoom_level: zoomLevel ?? 100.0,
         scroll_position: scrollPosition ?? 0.0,
         playhead_time: playheadTime ?? 0.0,
-        selected_clip_ids: selectedClipIds ?? [],
+        selected_clip_ids: Array.isArray(selectedClipIds) ? selectedClipIds : [],
       });
 
       return createSuccessResponse(state);
@@ -867,6 +890,14 @@ export function registerIpcHandlers() {
           event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, { assetId, tierLevel, progress });
         }
       );
+
+      // Handle case where result is null (audiowaveform not available)
+      if (!result) {
+        return createErrorResponse(
+          'Waveform generation not available. Please install audiowaveform.',
+          IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED
+        );
+      }
 
       // Save the specific tier
       const tier = result.tiers.find(t => t.level === tierLevel);

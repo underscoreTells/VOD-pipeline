@@ -65,8 +65,12 @@ export async function getAssetsByProject(projectId: number): Promise<GetAssetsRe
   return await window.electronAPI.assets.getByProject(projectId);
 }
 
-export async function addAsset(projectId: number, filePath: string): Promise<AddAssetResult> {
-  return await window.electronAPI.assets.add(projectId, filePath);
+export async function addAsset(
+  projectId: number, 
+  filePath: string, 
+  proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }
+): Promise<AddAssetResult> {
+  return await window.electronAPI.assets.add(projectId, filePath, proxyOptions);
 }
 
 // ============================================================================
@@ -178,12 +182,40 @@ export interface WaveformGenerationResult {
   error?: string;
 }
 
+export interface WaveformProgressEvent {
+  assetId: number;
+  progress: { tier: number; percent: number; status: string };
+}
+
 export async function getWaveform(assetId: number, trackIndex: number, tierLevel: number): Promise<WaveformResult> {
   return await window.electronAPI.waveforms.get(assetId, trackIndex, tierLevel);
 }
 
 export async function generateWaveform(assetId: number, trackIndex: number): Promise<WaveformGenerationResult> {
   return await window.electronAPI.waveforms.generate(assetId, trackIndex);
+}
+
+const waveformProgressSubscribers = new Set<(data: WaveformProgressEvent) => void>();
+let waveformProgressUnsubscribe: (() => void) | null = null;
+
+export function onWaveformProgress(callback: (data: WaveformProgressEvent) => void): () => void {
+  waveformProgressSubscribers.add(callback);
+
+  if (!waveformProgressUnsubscribe) {
+    waveformProgressUnsubscribe = window.electronAPI.waveforms.onProgress((event) => {
+      for (const subscriber of waveformProgressSubscribers) {
+        subscriber(event);
+      }
+    });
+  }
+
+  return () => {
+    waveformProgressSubscribers.delete(callback);
+    if (waveformProgressSubscribers.size === 0 && waveformProgressUnsubscribe) {
+      waveformProgressUnsubscribe();
+      waveformProgressUnsubscribe = null;
+    }
+  };
 }
 
 // ============================================================================
@@ -256,7 +288,7 @@ declare global {
       };
       assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
-        add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+        add: (projectId: number, filePath: string, proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }) => Promise<AddAssetResult>;
       };
       chapters: {
         create: (input: { projectId: number; title: string; startTime: number; endTime: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
@@ -279,6 +311,7 @@ declare global {
       waveforms: {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+        onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
       };
       exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;

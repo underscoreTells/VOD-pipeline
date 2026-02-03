@@ -3,6 +3,23 @@ import type { Asset, Clip, TimelineState, Suggestion, Chapter } from '../shared/
 import type { AgentOutputMessage } from '../shared/types/agent-ipc';
 
 // ============================================================================
+// Type Definitions
+// ============================================================================
+
+type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
+type ProxyQuality = 'high' | 'balanced' | 'fast';
+
+interface ProxyOptions {
+  encodingMode?: ProxyEncodingMode;
+  quality?: ProxyQuality;
+}
+
+type ProxyProgressCallback = (data: { assetId: number; progress: number }) => void;
+type ProxyCompleteCallback = (data: { assetId: number; proxyPath: string }) => void;
+type ProxyErrorCallback = (data: { assetId: number; error: string }) => void;
+type WaveformProgressCallback = (data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => void;
+
+// ============================================================================
 // Result Types
 // ============================================================================
 
@@ -191,7 +208,12 @@ export interface ElectronAPI {
   };
   assets: {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
-    add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+    add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => Promise<AddAssetResult>;
+  };
+  proxy: {
+    onProgress: (callback: ProxyProgressCallback) => () => void;
+    onComplete: (callback: ProxyCompleteCallback) => () => void;
+    onError: (callback: ProxyErrorCallback) => () => void;
   };
   chapters: {
     create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
@@ -214,6 +236,7 @@ export interface ElectronAPI {
   waveforms: {
     get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
     generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+    onProgress: (callback: WaveformProgressCallback) => () => void;
   };
   exports: {
     generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
@@ -267,8 +290,8 @@ const electronAPI: ElectronAPI = {
     },
   },
   assets: {
-    getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
-    add: (projectId, filePath) => ipcRenderer.invoke('asset:add', { projectId, filePath }),
+    getByProject: (projectId: number) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
+    add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => ipcRenderer.invoke('asset:add', { projectId, filePath, proxyOptions }),
   },
   chapters: {
     create: (input) => ipcRenderer.invoke('chapter:create', {
@@ -308,6 +331,28 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('waveform:get', { assetId, trackIndex, tierLevel }),
     generate: (assetId, trackIndex) => 
       ipcRenderer.invoke('waveform:generate', { assetId, trackIndex }),
+    onProgress: (callback) => {
+      const handler = (_: any, data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => callback(data);
+      ipcRenderer.on('waveform:progress', handler);
+      return () => ipcRenderer.removeListener('waveform:progress', handler);
+    },
+  },
+  proxy: {
+    onProgress: (callback) => {
+      const handler = (_: any, data: { assetId: number; progress: number }) => callback(data);
+      ipcRenderer.on('proxy:progress', handler);
+      return () => ipcRenderer.removeListener('proxy:progress', handler);
+    },
+    onComplete: (callback) => {
+      const handler = (_: any, data: { assetId: number; proxyPath: string }) => callback(data);
+      ipcRenderer.on('proxy:complete', handler);
+      return () => ipcRenderer.removeListener('proxy:complete', handler);
+    },
+    onError: (callback) => {
+      const handler = (_: any, data: { assetId: number; error: string }) => callback(data);
+      ipcRenderer.on('proxy:error', handler);
+      return () => ipcRenderer.removeListener('proxy:error', handler);
+    },
   },
   exports: {
     generate: (projectId, format, filePath) => 

@@ -20,6 +20,8 @@ export interface Settings {
   // Application preferences
   autoGenerateProxies: boolean;
   proxyGenerationOnImport: boolean;
+  proxyEncodingMode: 'cpu' | 'gpu' | 'auto'; // CPU quality, GPU speed, or auto-detect
+  proxyQuality: 'high' | 'balanced' | 'fast'; // Quality vs speed tradeoff
 
   // Chapter auto-naming preferences
   autoChapterNamingEnabled: boolean;
@@ -54,6 +56,8 @@ export const settingsState = $state<{
     defaultTextProvider: "openai",
     autoGenerateProxies: true,
     proxyGenerationOnImport: true,
+    proxyEncodingMode: 'auto', // Auto-detect GPU, fallback to CPU
+    proxyQuality: 'balanced', // Balanced quality/speed
     autoChapterNamingEnabled: true,
     autoChapterNamingModel: "gpt-4o-mini",
     autoTranscribeOnImport: true,
@@ -88,6 +92,12 @@ export async function loadSettings(): Promise<void> {
     }
     if (parsed.proxyGenerationOnImport !== undefined) {
       settingsState.settings.proxyGenerationOnImport = parsed.proxyGenerationOnImport;
+    }
+    if (parsed.proxyEncodingMode !== undefined) {
+      settingsState.settings.proxyEncodingMode = parsed.proxyEncodingMode;
+    }
+    if (parsed.proxyQuality !== undefined) {
+      settingsState.settings.proxyQuality = parsed.proxyQuality;
     }
     if (parsed.autoChapterNamingEnabled !== undefined) {
       settingsState.settings.autoChapterNamingEnabled = parsed.autoChapterNamingEnabled;
@@ -157,6 +167,8 @@ export async function saveSettings(): Promise<void> {
       defaultTextProvider: settingsState.settings.defaultTextProvider,
       autoGenerateProxies: settingsState.settings.autoGenerateProxies,
       proxyGenerationOnImport: settingsState.settings.proxyGenerationOnImport,
+      proxyEncodingMode: settingsState.settings.proxyEncodingMode,
+      proxyQuality: settingsState.settings.proxyQuality,
       autoChapterNamingEnabled: settingsState.settings.autoChapterNamingEnabled,
       autoChapterNamingModel: settingsState.settings.autoChapterNamingModel,
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
@@ -379,6 +391,8 @@ export async function resetSettings(): Promise<void> {
     defaultTextProvider: "openai",
     autoGenerateProxies: true,
     proxyGenerationOnImport: true,
+    proxyEncodingMode: 'auto',
+    proxyQuality: 'balanced',
     autoChapterNamingEnabled: true,
     autoChapterNamingModel: "gpt-4o-mini",
     autoTranscribeOnImport: true,

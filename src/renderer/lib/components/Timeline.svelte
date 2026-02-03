@@ -7,11 +7,12 @@
   interface Props {
     projectId: number;
     audioUrls: string[]; // Array of audio URLs, one per track
+    trackAssetIds: number[];
     clips: Clip[];
     initialState?: TimelineStateType | null;
   }
   
-  let { projectId, audioUrls, clips, initialState = null }: Props = $props();
+  let { projectId, audioUrls, trackAssetIds, clips, initialState = null }: Props = $props();
   
   let isLoading = $state(true);
   let error = $state<string | null>(null);
@@ -47,6 +48,7 @@
       {#each audioUrls as audioUrl, index (index)}
         <TimelineTrack 
           {audioUrl} 
+          assetId={trackAssetIds[index]}
           trackIndex={index} 
           height={100}
         />

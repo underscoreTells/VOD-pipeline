@@ -122,6 +122,15 @@ export interface WaveformGenerationResult {
     error?: string;
 }
 
+export interface WaveformProgressEvent {
+    assetId: number;
+    progress: {
+        tier: number;
+        percent: number;
+        status: string;
+    };
+}
+
 export interface ExportResult {
     success: boolean;
     data?: {
@@ -209,7 +218,7 @@ export interface ElectronAPI {
     };
     assets: {
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
-        add: (projectId: number, filePath: string) => Promise<AddAssetResult>;
+        add: (projectId: number, filePath: string, proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }) => Promise<AddAssetResult>;
     };
     chapters: {
         create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
@@ -232,6 +241,7 @@ export interface ElectronAPI {
     waveforms: {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+        onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
     };
     exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
@@ -241,6 +251,11 @@ export interface ElectronAPI {
     };
     webUtils: {
         getPathForFile: (file: File) => string;
+    };
+    proxy: {
+        onProgress: (callback: (data: { assetId: number; progress: number }) => void) => () => void;
+        onComplete: (callback: (data: { assetId: number; proxyPath: string }) => void) => () => void;
+        onError: (callback: (data: { assetId: number; error: string }) => void) => () => void;
     };
 }
 

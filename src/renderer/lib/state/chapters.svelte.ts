@@ -90,6 +90,9 @@ export async function loadChapters(projectId: number): Promise<void> {
 
     if (result.success && result.data) {
       chaptersState.chapters = result.data;
+      for (const chapter of result.data) {
+        void loadAssetsForChapter(chapter.id);
+      }
     } else {
       chaptersState.error = result.error || "Failed to load chapters";
     }
@@ -177,6 +180,8 @@ export async function deleteChapter(chapterId: number): Promise<boolean> {
       if (chaptersState.selectedChapterId === chapterId) {
         chaptersState.selectedChapterId = null;
       }
+      chaptersState.chapterAssets.delete(chapterId);
+      chaptersState.chapterAssets = new Map(chaptersState.chapterAssets);
       return true;
     } else {
       console.error("[Chapters] Failed to delete chapter:", result.error);
@@ -202,6 +207,11 @@ export async function linkAssetToChapter(
     );
 
     if (result.success) {
+      const existing = chaptersState.chapterAssets.get(chapterId) ?? [];
+      if (!existing.includes(assetId)) {
+        chaptersState.chapterAssets.set(chapterId, [...existing, assetId]);
+        chaptersState.chapterAssets = new Map(chaptersState.chapterAssets);
+      }
       return true;
     } else {
       console.error("[Chapters] Failed to link asset to chapter:", result.error);
@@ -229,6 +239,7 @@ export async function loadAssetsForChapter(chapterId: number): Promise<number[]>
 
     if (result.success && result.data) {
       chaptersState.chapterAssets.set(chapterId, result.data);
+      chaptersState.chapterAssets = new Map(chaptersState.chapterAssets);
       return result.data;
     } else {
       console.error("[Chapters] Failed to get assets for chapter:", result.error);
@@ -355,6 +366,7 @@ export function clearChaptersState(): void {
   chaptersState.error = null;
   chaptersState.isImporting = false;
   chaptersState.importChoice = null;
+  chaptersState.chapterAssets = new Map();
   currentProjectId = null;
 }
 

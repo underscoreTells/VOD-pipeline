@@ -1,7 +1,8 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
+import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
+import { detectGPUEncoders, getGPUEncoder, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -482,30 +483,119 @@ export async function generateAIProxy(
   inputPath: string,
   outputPath: string,
   onProgress?: (percent: number) => void,
-  timeoutMs?: number
+  timeoutMs?: number,
+  encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
+  quality: 'high' | 'balanced' | 'fast' = 'balanced'
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
     throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
   }
 
+  // Detect GPU encoders if auto mode
+  let useGPU = false;
+  let encodingBinaryPath = ffmpegPath.path;
+  if (encodingMode === 'gpu') {
+    // Force GPU, will fail if not available
+    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
+    useGPU = gpuEncoder !== null;
+  } else if (encodingMode === 'auto') {
+    // Auto-detect GPU
+    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
+    useGPU = gpuEncoder !== null;
+    if (useGPU) {
+      console.log(`[Proxy] Using GPU acceleration: ${gpuEncoder?.name}`);
+    } else {
+      console.log('[Proxy] GPU not available, using CPU encoding');
+    }
+  }
+
+  if (useGPU) {
+    const gpuFFmpegPath = getGPUFFmpegPath();
+    if (gpuFFmpegPath) {
+      encodingBinaryPath = gpuFFmpegPath;
+      console.log(`[Proxy] Using FFmpeg binary: ${encodingBinaryPath}`);
+    }
+  }
+
   // Get source metadata first
   const metadata = await getVideoMetadata(inputPath);
 
+  // Try GPU encoding first if enabled, with fallback to CPU
+  if (useGPU) {
+    try {
+      return await executeProxyGeneration(
+        ffmpegPath,
+        encodingBinaryPath,
+        inputPath,
+        outputPath,
+        metadata,
+        onProgress,
+        timeoutMs,
+        true, // useGPU
+        quality
+      );
+    } catch (error) {
+      console.warn('[Proxy] GPU encoding failed, falling back to CPU:', error instanceof Error ? error.message : 'Unknown error');
+      console.log('[Proxy] Retrying with CPU encoding...');
+      // Fall through to CPU encoding
+    }
+  }
+
+  // CPU encoding (either by choice or as fallback)
+  return executeProxyGeneration(
+    ffmpegPath,
+    ffmpegPath.path,
+    inputPath,
+    outputPath,
+    metadata,
+    onProgress,
+    timeoutMs,
+    false, // useGPU
+    quality
+  );
+}
+
+/**
+ * Execute proxy generation with specified encoder
+ */
+async function executeProxyGeneration(
+  ffmpegPath: FFmpegPathResult,
+  ffmpegBinaryPath: string,
+  inputPath: string,
+  outputPath: string,
+  metadata: { duration: number },
+  onProgress?: (percent: number) => void,
+  timeoutMs?: number,
+  useGPU: boolean = false,
+  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
+  // Get encoder-specific arguments
+  const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
+  const gpuEncoder = useGPU ? getGPUEncoder() : null;
+  const useCudaDecode = gpuEncoder?.platform === 'nvidia';
+
+  if (useGPU && useCudaDecode) {
+    console.log('[Proxy] Enabling CUDA decode + scale for proxy generation');
+  }
+
+  console.log(`[Proxy] Video codec: ${videoCodec}`);
+
   const args: string[] = [
+    ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
     '-i', inputPath,
-    '-vf', 'scale=640:-2,fps=5', // 640px width, maintain aspect, 5fps
-    '-c:v', 'libx264',
-    '-preset', 'fast',
-    '-crf', '28', // Good quality, smaller file size
+    ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
+    ...videoArgs,
     '-c:a', 'aac',
     '-b:a', '64k', // Low bitrate audio is fine for analysis
     '-movflags', '+faststart', // Web-optimized
     '-y', outputPath,
   ];
 
+  console.log(`[Proxy] FFmpeg args: ${args.join(' ')}`);
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath.path, args);
+    const proc = spawn(ffmpegBinaryPath, args);
     let errorOutput = '';
     let lastProgress = 0;
     let timeoutTimer: NodeJS.Timeout | null = null;

@@ -6,6 +6,9 @@
   import ImportChoice from './ImportChoice.svelte';
   import ChapterDefinition from './ChapterDefinition.svelte';
   import ChapterPanel from './ChapterPanel.svelte';
+  import ChatPanel from './ChatPanel.svelte';
+  import ClipPreview from './ClipPreview.svelte';
+  import ChapterPreview from './ChapterPreview.svelte';
   import { 
     projectDetail, 
     loadProjectDetail, 
@@ -13,7 +16,8 @@
     clearProjectDetail,
     saveProjectTimelineState,
     exportProjectToFile,
-    generateAssetWaveform
+    generateAssetWaveform,
+    getAssetWaveform
   } from '../state/project-detail.svelte';
   import { 
     chaptersState, 
@@ -24,11 +28,15 @@
     autoCreateChaptersFromFiles,
     setImportChoice,
     setIsImporting,
-    selectChapter
+    selectChapter,
+    loadAssetsForChapter,
+    getSelectedChapter,
+    getAssetsForChapter
   } from '../state/chapters.svelte';
   import { settingsState } from '../state/settings.svelte';
   import { timelineState, setError } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
+  import { buildAssetUrl } from '../utils/media';
   import type { Project, Asset } from '$shared/types/database';
   
   interface Props {
@@ -44,6 +52,8 @@
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
+  let waveformCheckToken = 0;
+  const waveformInFlight = new Set<number>();
   
   // Load project data and chapters on mount
   onMount(() => {
@@ -72,8 +82,6 @@
       if (asset) {
         vodAssetForDefinition = asset;
         showChapterDefinition = true;
-        // Generate waveform for the asset
-        await generateAssetWaveform(asset.id, 0);
       }
     } catch (error) {
       console.error('Failed to import VOD:', error);
@@ -92,13 +100,15 @@
         const asset = await addAssetToProject(project.id, filePath);
         if (asset) {
           assets.push(asset);
-          await generateAssetWaveform(asset.id, 0);
         }
       }
       
       // Auto-create chapters from files
       if (assets.length > 0) {
-        await autoCreateChaptersFromFiles(project.id, assets);
+        const created = await autoCreateChaptersFromFiles(project.id, assets);
+        if (created.length > 0) {
+          selectChapter(created[0].id);
+        }
       }
       
       setIsImporting(false);
@@ -112,7 +122,7 @@
   // Handle chapter creation from ChapterDefinition
   async function handleChaptersDefined(chapterInputs: Array<{ title: string; startTime: number; endTime: number }>) {
     if (!vodAssetForDefinition) return;
-    
+    let firstChapterId: number | null = null;
     try {
       for (const input of chapterInputs) {
         // Create chapter
@@ -124,13 +134,16 @@
         );
         
         if (chapter) {
+          if (!firstChapterId) {
+            firstChapterId = chapter.id;
+          }
           // Link VOD asset to chapter
           await linkAssetToChapter(chapter.id, vodAssetForDefinition.id);
           
           // Start transcription if enabled
           if (settingsState.settings.autoTranscribeOnImport) {
             // Start transcription asynchronously
-            window.electronAPI?.transcription?.transcribe(chapter.id).catch((error: Error) => {
+            (window.electronAPI as any)?.transcription?.transcribe(chapter.id).catch((error: Error) => {
               console.error('Failed to start transcription:', error);
             });
           }
@@ -140,6 +153,9 @@
       showChapterDefinition = false;
       vodAssetForDefinition = null;
       setIsImporting(false);
+      if (firstChapterId) {
+        selectChapter(firstChapterId);
+      }
     } catch (error) {
       console.error('Failed to create chapters:', error);
       setError(`Failed to create chapters: ${(error as Error).message}`);
@@ -154,6 +170,56 @@
     setIsImporting(false);
     // Optionally delete the VOD asset that was created
   }
+
+  const selectedChapter = $derived.by(() => getSelectedChapter());
+
+  const selectedChapterAssetIds = $derived.by(() => {
+    if (!selectedChapter) return [];
+    return getAssetsForChapter(selectedChapter.id) ?? [];
+  });
+
+  const selectedChapterAssets = $derived.by(() => {
+    if (!selectedChapterAssetIds.length) return [];
+    return selectedChapterAssetIds
+      .map((assetId) => projectDetail.assets.find((asset) => asset.id === assetId))
+      .filter((asset): asset is Asset => Boolean(asset));
+  });
+
+  const chapterPreviewAsset = $derived.by(() => selectedChapterAssets[0] ?? null);
+  const hasChapterAssets = $derived.by(() =>
+    selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
+  );
+
+  async function ensureChapterWaveforms(assetIds: number[]) {
+    const token = ++waveformCheckToken;
+    for (const assetId of assetIds) {
+      if (token !== waveformCheckToken) return;
+      if (waveformInFlight.has(assetId)) continue;
+
+      const cached = await getAssetWaveform(assetId, 0, 1);
+      if (token !== waveformCheckToken) return;
+      if (cached) continue;
+
+      waveformInFlight.add(assetId);
+      try {
+        await generateAssetWaveform(assetId, 0);
+      } finally {
+        waveformInFlight.delete(assetId);
+      }
+    }
+  }
+
+  $effect(() => {
+    if (selectedChapter && !hasChapterAssets) {
+      void loadAssetsForChapter(selectedChapter.id);
+    }
+  });
+
+  $effect(() => {
+    if (selectedChapterAssetIds.length > 0) {
+      void ensureChapterWaveforms([...selectedChapterAssetIds]);
+    }
+  });
   
   // Handle drag and drop for additional imports
   function handleDragOver(e: DragEvent) {
@@ -183,8 +249,10 @@
             // Add as individual file chapter
             const asset = await addAssetToProject(project.id, filePath);
             if (asset) {
-              await autoCreateChaptersFromFiles(project.id, [asset]);
-              await generateAssetWaveform(asset.id, 0);
+              const created = await autoCreateChaptersFromFiles(project.id, [asset]);
+              if (created.length > 0) {
+                selectChapter(created[0].id);
+              }
             }
           }
         } catch (error) {
@@ -221,10 +289,8 @@
   
   // Get audio URLs for timeline
   const audioUrls = $derived.by(() => {
-    return projectDetail.assets.map(asset => {
-      const fileUrl = new URL(`file://${asset.file_path}`);
-      return fileUrl.href;
-    });
+    if (selectedChapterAssetIds.length === 0) return [];
+    return selectedChapterAssetIds.map((assetId) => buildAssetUrl(assetId));
   });
 </script>
 
@@ -295,28 +361,41 @@
         
         <!-- Main Content Area -->
         <main class="main-content">
-          {#if chaptersState.selectedChapterId}
-            <!-- Show timeline for selected chapter -->
-            <div class="timeline-wrapper">
-              <TimelineToolbar />
-              <div class="timeline-container">
-                <Timeline 
-                  projectId={project.id}
-                  {audioUrls}
-                  clips={timelineState.clips}
-                />
-              </div>
-            </div>
-            
-            <BeatPanel clips={timelineState.clips} />
-          {:else}
-            <!-- No chapter selected -->
-            <div class="empty-selection">
-              <div class="empty-icon">📖</div>
-              <h3>Select a Chapter</h3>
-              <p>Choose a chapter from the sidebar to view its timeline and beats</p>
-            </div>
-          {/if}
+          <div class="editor-layout">
+            <section class="editor-main">
+              <ChapterPreview
+                chapter={selectedChapter}
+                asset={chapterPreviewAsset}
+              />
+
+              {#if chaptersState.selectedChapterId}
+                <div class="timeline-wrapper">
+                  <TimelineToolbar />
+                  <div class="timeline-container">
+                    <Timeline 
+                      projectId={project.id}
+                      {audioUrls}
+                      trackAssetIds={selectedChapterAssetIds}
+                      clips={timelineState.clips}
+                    />
+                  </div>
+                </div>
+              {:else}
+                <div class="empty-selection">
+                  <div class="empty-icon">📖</div>
+                  <h3>Select a Chapter</h3>
+                  <p>Choose a chapter from the sidebar to view its timeline and beats</p>
+                </div>
+              {/if}
+
+              <ClipPreview />
+            </section>
+
+            <aside class="editor-side">
+              <ChatPanel />
+              <BeatPanel clips={timelineState.clips} />
+            </aside>
+          </div>
         </main>
       </div>
     {/if}
@@ -502,12 +581,49 @@
     flex-direction: column;
     overflow: hidden;
   }
+
+  .editor-layout {
+    flex: 1;
+    display: flex;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .editor-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    overflow: hidden;
+  }
+
+  .editor-side {
+    width: 360px;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid #333;
+    overflow: hidden;
+  }
+
+  .editor-side :global(.chat-panel) {
+    flex: 1;
+    border-left: none;
+  }
+
+  .editor-side :global(.beat-panel) {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #333;
+    flex: 0 0 320px;
+  }
   
   .timeline-wrapper {
     flex: 1;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 280px;
   }
   
   .timeline-container {

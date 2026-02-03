@@ -10,6 +10,7 @@ import {
   exportProject as ipcExportProject, 
   generateWaveform as ipcGenerateWaveform, 
   getWaveform as ipcGetWaveform,
+  onWaveformProgress,
   type WaveformGenerationResult,
   type GetAssetsResult, 
   type AddAssetResult, 
@@ -238,6 +239,15 @@ export async function saveProjectTimelineState() {
 export async function generateAssetWaveform(assetId: number, trackIndex: number = 0) {
   projectDetail.isGeneratingWaveform = true;
   projectDetail.waveformProgress = { assetId, tier: 0, percent: 0, status: 'Starting...' };
+  const unsubscribe = onWaveformProgress((event) => {
+    if (event.assetId !== assetId) return;
+    projectDetail.waveformProgress = {
+      assetId: event.assetId,
+      tier: event.progress.tier,
+      percent: event.progress.percent,
+      status: event.progress.status,
+    };
+  });
   
   try {
     // Start generation
@@ -251,6 +261,7 @@ export async function generateAssetWaveform(assetId: number, trackIndex: number 
   } catch (error) {
     setError((error as Error).message);
   } finally {
+    unsubscribe();
     projectDetail.isGeneratingWaveform = false;
   }
 }
