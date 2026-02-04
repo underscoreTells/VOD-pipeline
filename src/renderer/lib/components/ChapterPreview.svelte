@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Chapter, Asset } from '$shared/types/database';
+  import type { Chapter, Asset, Clip } from '$shared/types/database';
   import { buildAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
@@ -24,9 +24,10 @@
   interface Props {
     chapter: Chapter | null;
     asset: Asset | null;
+    clips?: Clip[];
   }
 
-  let { chapter, asset }: Props = $props();
+  let { chapter, asset, clips = timelineState.clips }: Props = $props();
 
   let videoRef = $state<HTMLVideoElement | null>(null);
   let currentTime = $state(0);
@@ -39,6 +40,38 @@
   const chapterDuration = $derived(() => getChapterDuration(chapter));
   const localTime = $derived(() => toChapterLocalTime(chapter, currentTime));
 
+  const clipRanges = $derived.by(() => {
+    if (!chapter || !asset) return [] as Array<{ start: number; end: number }>;
+    const ranges: Array<{ start: number; end: number }> = [];
+    for (const clip of clips) {
+      if (clip.asset_id !== asset.id) continue;
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) continue;
+      const start = clampToChapter(chapter, clip.start_time);
+      const end = clampToChapter(chapter, clip.start_time + duration);
+      if (end <= start) continue;
+      ranges.push({ start, end });
+    }
+
+    ranges.sort((a, b) => a.start - b.start);
+    const merged: Array<{ start: number; end: number }> = [];
+    const mergeEpsilon = 0.02;
+    for (const range of ranges) {
+      const last = merged[merged.length - 1];
+      if (!last) {
+        merged.push({ ...range });
+        continue;
+      }
+      if (range.start <= last.end + mergeEpsilon) {
+        last.end = Math.max(last.end, range.end);
+      } else {
+        merged.push({ ...range });
+      }
+    }
+
+    return merged;
+  });
+
   function handleSeeking() {
     if (!videoRef || !chapter) return;
     const next = clampToChapter(chapter, videoRef.currentTime);
@@ -49,12 +82,27 @@
 
   function handleTimeUpdate() {
     if (!videoRef || !chapter) return;
-    const next = clampToChapter(chapter, videoRef.currentTime);
+    let next = clampToChapter(chapter, videoRef.currentTime);
     if (next !== videoRef.currentTime) {
       videoRef.pause();
       videoRef.currentTime = next;
       setPlaying(false);
     }
+
+    if (timelineState.excludeCutContent && timelineState.isPlaying) {
+      const skip = getExcludeCutJump(next);
+      if (skip) {
+        if (Math.abs(skip.time - next) > 0.01) {
+          videoRef.currentTime = skip.time;
+          next = skip.time;
+        }
+        if (skip.shouldPause) {
+          videoRef.pause();
+          setPlaying(false);
+        }
+      }
+    }
+
     currentTime = next;
     setPlayhead(next);
   }
@@ -70,6 +118,36 @@
   function handleVideoError() {
     const error = videoRef?.error;
     console.error('[ChapterPreview] Video playback error', error);
+  }
+
+  function getExcludeCutJump(time: number): { time: number; shouldPause: boolean } | null {
+    const ranges = clipRanges;
+    if (!ranges.length) return null;
+    const epsilon = 0.03;
+
+    if (time < ranges[0].start - epsilon) {
+      return { time: ranges[0].start, shouldPause: false };
+    }
+
+    for (let i = 0; i < ranges.length; i += 1) {
+      const range = ranges[i];
+      if (time < range.start - epsilon) {
+        return { time: range.start, shouldPause: false };
+      }
+      if (time >= range.start - epsilon && time <= range.end + epsilon) {
+        if (time >= range.end - epsilon) {
+          const nextRange = ranges[i + 1];
+          if (nextRange) {
+            return { time: nextRange.start, shouldPause: false };
+          }
+          return { time: range.end, shouldPause: true };
+        }
+        return null;
+      }
+    }
+
+    const lastRange = ranges[ranges.length - 1];
+    return lastRange ? { time: lastRange.end, shouldPause: true } : null;
   }
 
   $effect(() => {
@@ -113,6 +191,14 @@
     } else if (!videoRef.paused) {
       videoRef.pause();
     }
+  });
+
+  $effect(() => {
+    if (!videoRef || !chapter) return;
+    const target = clampToChapter(chapter, timelineState.playheadTime);
+    if (Math.abs(target - videoRef.currentTime) < 0.05) return;
+    videoRef.currentTime = target;
+    currentTime = target;
   });
 
   async function handleSelectionAutoCreate() {
@@ -232,6 +318,7 @@
     padding: 0.75rem;
     height: 100%;
     min-height: 0;
+    box-sizing: border-box;
   }
 
   .preview-header {

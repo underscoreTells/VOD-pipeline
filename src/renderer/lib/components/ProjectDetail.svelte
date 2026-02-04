@@ -341,6 +341,24 @@
     return selectedChapterAssetIds.map((assetId) => buildAssetUrl(assetId));
   });
 
+  const selectedChapterClips = $derived.by(() => {
+    if (!selectedChapter) return [];
+    if (selectedChapterAssetIds.length === 0) return [];
+    const assetIds = new Set(selectedChapterAssetIds);
+    const chapterStart = selectedChapter.start_time;
+    const chapterEnd = selectedChapter.end_time;
+    if (!Number.isFinite(chapterEnd) || chapterEnd <= chapterStart) return [];
+
+    return timelineState.clips.filter((clip) => {
+      if (!assetIds.has(clip.asset_id)) return false;
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) return false;
+      const clipStart = clip.start_time;
+      const clipEnd = clip.start_time + duration;
+      return clipEnd > chapterStart && clipStart < chapterEnd;
+    });
+  });
+
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
   }
@@ -507,6 +525,7 @@
                 <ChapterPreview
                   chapter={selectedChapter}
                   asset={chapterPreviewAsset}
+                  clips={selectedChapterClips}
                 />
               </div>
               <div
@@ -526,6 +545,7 @@
                         {audioUrls}
                         trackAssetIds={selectedChapterAssetIds}
                         clips={timelineState.clips}
+                        displayClips={selectedChapterClips}
                       />
                     </div>
                   </div>
@@ -571,7 +591,7 @@
 
                 {#if !layoutState.beatCollapsed}
                   <div class="side-panel beat-panel-wrapper">
-                    <BeatPanel clips={timelineState.clips} />
+                    <BeatPanel clips={selectedChapterClips} />
                   </div>
                 {/if}
               </aside>
@@ -809,6 +829,7 @@
     padding-bottom: 0.5rem;
     border-bottom: 1px solid #2a2a2a;
     overflow: hidden;
+    box-sizing: border-box;
   }
 
   .editor-bottom-scrollable {

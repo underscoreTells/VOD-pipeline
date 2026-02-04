@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { timelineState, togglePlayback, zoomIn, zoomOut, zoomToFit, setZoom, getTotalDuration } from '../state/timeline.svelte';
+  import {
+    timelineState,
+    togglePlayback,
+    toggleExcludeCutContent,
+    zoomIn,
+    zoomOut,
+    zoomToFit,
+    setZoom,
+    getTotalDuration,
+  } from '../state/timeline.svelte';
   import { undo, redo, canUndo, canRedo, getLastCommandDescription, getNextRedoDescription } from '../state/undo-redo.svelte';
   import { formatTimecode } from '../state/keyboard.svelte';
   
@@ -73,6 +82,18 @@
       title={redoDesc ? `Redo: ${redoDesc}` : 'Redo (Ctrl+Shift+Z)'}
     >
       Redo
+    </button>
+  </div>
+
+  <div class="toolbar-section toggle">
+    <button
+      class="text-btn toggle-btn"
+      class:active={timelineState.excludeCutContent}
+      onclick={toggleExcludeCutContent}
+      title="Exclude cut content (skip gaps while playing)"
+      aria-pressed={timelineState.excludeCutContent}
+    >
+      Exclude cut content
     </button>
   </div>
   
@@ -165,6 +186,12 @@
   .text-btn:hover:not(:disabled) {
     background: #333;
     border-color: #555;
+  }
+
+  .toggle-btn.active {
+    background: #1f2a1f;
+    border-color: #2f4a2f;
+    color: #b7f7c2;
   }
   
   .text-btn:disabled {

@@ -1,13 +1,4 @@
-import {
-  undo,
-  redo,
-  canUndo,
-  canRedo,
-  executeCommand,
-  MoveClipCommand,
-  ResizeClipCommand,
-  DeleteClipCommand,
-} from './undo-redo.svelte';
+import { undo, redo } from './undo-redo.svelte';
 import {
   timelineState,
   togglePlayback,
@@ -16,16 +7,14 @@ import {
   zoomIn,
   zoomOut,
   zoomToFit,
-  deleteClip,
   setPlayhead,
-  getTotalDuration,
 } from './timeline.svelte';
+import { executeDeleteClip } from './project-detail.svelte';
 import {
   clipBuilderState,
   setInPoint as setClipInPoint,
   setOutPoint as setClipOutPoint,
   clearSelection as clearClipSelection,
-  hasCompleteSelection,
 } from './clip-builder.svelte';
 
 // Keyboard shortcuts configuration
@@ -104,8 +93,7 @@ function handleDelete() {
   
   // Execute commands through undo-redo system
   for (const clipId of selectedIds) {
-    const command = new DeleteClipCommand('Delete clip', clipId);
-    executeCommand(command);
+    void executeDeleteClip(clipId);
   }
 }
 

@@ -139,6 +139,15 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   }
 
+  :global(*) {
+    scrollbar-width: none;
+  }
+
+  :global(*::-webkit-scrollbar) {
+    width: 0;
+    height: 0;
+  }
+
   header {
     display: flex;
     justify-content: space-between;

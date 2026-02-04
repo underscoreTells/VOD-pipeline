@@ -1,7 +1,20 @@
 import type { Clip, TimelineState } from '../../../shared/types/database';
 
+interface TimelineStateStore {
+  projectId: number | null;
+  clips: Clip[];
+  zoomLevel: number;
+  scrollPosition: number;
+  playheadTime: number;
+  selectedClipIds: Set<number>;
+  isPlaying: boolean;
+  excludeCutContent: boolean;
+  isLoading: boolean;
+  error: string | null;
+}
+
 // Timeline state using Svelte 5 runes
-export const timelineState = $state({
+export const timelineState = $state<TimelineStateStore>({
   projectId: null as number | null,
   clips: [] as Clip[],
   zoomLevel: 100,        // pixels per second
@@ -9,6 +22,7 @@ export const timelineState = $state({
   playheadTime: 0,       // current position
   selectedClipIds: new Set<number>(),
   isPlaying: false,
+  excludeCutContent: false,
   isLoading: false,
   error: null as string | null,
 });
@@ -41,6 +55,7 @@ export function getClipById(id: number): Clip | undefined {
 export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineState | null) {
   timelineState.projectId = projectId;
   timelineState.clips = clips;
+  timelineState.excludeCutContent = false;
 
   if (state) {
     timelineState.zoomLevel = state.zoom_level;
@@ -133,6 +148,14 @@ export function setPlaying(playing: boolean) {
   timelineState.isPlaying = playing;
 }
 
+export function setExcludeCutContent(enabled: boolean) {
+  timelineState.excludeCutContent = enabled;
+}
+
+export function toggleExcludeCutContent() {
+  timelineState.excludeCutContent = !timelineState.excludeCutContent;
+}
+
 export function setLoading(loading: boolean) {
   timelineState.isLoading = loading;
 }
@@ -149,6 +172,7 @@ export function clearTimeline() {
   timelineState.playheadTime = 0;
   timelineState.selectedClipIds.clear();
   timelineState.isPlaying = false;
+  timelineState.excludeCutContent = false;
   timelineState.isLoading = false;
   timelineState.error = null;
 }

@@ -9,17 +9,26 @@
     audioUrls: string[]; // Array of audio URLs, one per track
     trackAssetIds: number[];
     clips: Clip[];
+    displayClips?: Clip[];
     initialState?: TimelineStateType | null;
   }
   
-  let { projectId, audioUrls, trackAssetIds, clips, initialState = null }: Props = $props();
+  let { projectId, audioUrls, trackAssetIds, clips, displayClips, initialState = null }: Props = $props();
   
   let isLoading = $state(true);
   let error = $state<string | null>(null);
+  let lastProjectId = $state<number | null>(null);
   
   // Load timeline data
   $effect(() => {
-    if (projectId && clips) {
+    if (!projectId || !clips) return;
+    if (timelineState.projectId === projectId) {
+      lastProjectId = projectId;
+      isLoading = false;
+      return;
+    }
+    if (projectId !== lastProjectId) {
+      lastProjectId = projectId;
       loadTimeline(projectId, clips, initialState);
       isLoading = false;
     }
@@ -60,6 +69,7 @@
           assetId={trackAssetIds[index]}
           trackIndex={index} 
           height={100}
+          clips={displayClips ?? clips}
         />
       {/each}
     </div>

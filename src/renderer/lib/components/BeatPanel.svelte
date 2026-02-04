@@ -1,5 +1,6 @@
 <script lang="ts">
   import { timelineState, selectClip, setPlayhead } from '../state/timeline.svelte';
+  import { executeDeleteClip } from '../state/project-detail.svelte';
   import { collapseBeat } from '../state/layout.svelte';
   import type { Clip } from '../../../shared/types/database';
   
@@ -44,6 +45,69 @@
     selectClip(clip.id, false);
     setPlayhead(clip.start_time);
   }
+
+  let contextMenu = $state({
+    open: false,
+    x: 0,
+    y: 0,
+    clip: null as Clip | null,
+  });
+
+  function closeContextMenu() {
+    contextMenu.open = false;
+    contextMenu.clip = null;
+  }
+
+  function openContextMenu(event: MouseEvent, clip: Clip) {
+    event.preventDefault();
+    event.stopPropagation();
+    handleClipClick(clip);
+
+    const padding = 8;
+    const menuWidth = 180;
+    const menuHeight = 44;
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth - padding) {
+      x = Math.max(padding, window.innerWidth - menuWidth - padding);
+    }
+    if (y + menuHeight > window.innerHeight - padding) {
+      y = Math.max(padding, window.innerHeight - menuHeight - padding);
+    }
+
+    contextMenu.open = true;
+    contextMenu.x = x;
+    contextMenu.y = y;
+    contextMenu.clip = clip;
+  }
+
+  function handleContextDelete() {
+    if (!contextMenu.clip) return;
+    const clipId = contextMenu.clip.id;
+    closeContextMenu();
+    void executeDeleteClip(clipId);
+  }
+
+  $effect(() => {
+    if (!contextMenu.open) return;
+    const handleWindowClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.clip-context-menu')) return;
+      closeContextMenu();
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeContextMenu();
+    };
+    window.addEventListener('click', handleWindowClick);
+    window.addEventListener('contextmenu', handleWindowClick);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('click', handleWindowClick);
+      window.removeEventListener('contextmenu', handleWindowClick);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  });
   
   // Format duration
   function formatDuration(seconds: number): string {
@@ -84,9 +148,11 @@
               class:selected={timelineState.selectedClipIds.has(clip.id)}
               class:discarded={!clip.is_essential}
               onclick={() => handleClipClick(clip)}
+              oncontextmenu={(event) => openContextMenu(event, clip)}
               onkeydown={(e) => e.key === 'Enter' && handleClipClick(clip)}
               role="button"
               tabindex="0"
+              aria-haspopup="menu"
             >
               <div class="clip-time">
                 <span class="time-start">{formatDuration(clip.start_time)}</span>
@@ -121,6 +187,20 @@
       </div>
     {/if}
   </div>
+
+  {#if contextMenu.open}
+    <div
+      class="clip-context-menu"
+      style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
+      role="menu"
+      onclick={(event) => event.stopPropagation()}
+      oncontextmenu={(event) => event.preventDefault()}
+    >
+      <button class="context-item destructive" role="menuitem" onclick={handleContextDelete}>
+        Delete clip
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -241,6 +321,38 @@
   .clip-item.selected {
     background: #3b82f620;
     border-color: #3b82f6;
+  }
+
+  .clip-context-menu {
+    position: fixed;
+    z-index: 50;
+    min-width: 160px;
+    padding: 0.25rem;
+    background: #1f1f1f;
+    border: 1px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+
+  .context-item {
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: #ddd;
+    font-size: 0.875rem;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .context-item:hover {
+    background: #2a2a2a;
+    color: #fff;
+  }
+
+  .context-item.destructive {
+    color: #f87171;
   }
   
   .clip-item.discarded {
