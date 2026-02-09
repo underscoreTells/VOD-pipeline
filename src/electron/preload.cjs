@@ -83,6 +83,15 @@ const electronAPI = {
       return () => ipcRenderer.removeListener('waveform:progress', handler);
     },
   },
+  transcription: {
+    transcribe: (chapterId, options) =>
+      ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
+    onProgress: (callback) => {
+      const handler = (_, data) => callback(data);
+      ipcRenderer.on('transcribe:progress', handler);
+      return () => ipcRenderer.removeListener('transcribe:progress', handler);
+    },
+  },
   proxy: {
     onProgress: (callback) => {
       const handler = (_, data) => callback(data);

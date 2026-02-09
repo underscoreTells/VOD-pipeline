@@ -34,7 +34,7 @@
     getAssetsForChapter
   } from '../state/chapters.svelte';
   import { settingsState } from '../state/settings.svelte';
-  import { timelineState, setError } from '../state/timeline.svelte';
+  import { timelineState, setError, clearSelection as clearTimelineSelection } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
   import {
     layoutState,
@@ -50,7 +50,7 @@
     expandBeat,
   } from '../state/layout.svelte';
   import { buildAssetUrl } from '../utils/media';
-  import { onTranscriptionProgress } from '../state/electron.svelte';
+  import { onTranscriptionProgress, transcribeChapter as startChapterTranscription } from '../state/electron.svelte';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
   import { setProjectContext, setChapterContext } from '../state/agent.svelte';
   import type { Project, Asset } from '$shared/types/database';
@@ -75,6 +75,7 @@
   let editorMainRef = $state<HTMLElement | null>(null);
   let editorSideRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
+  let previousSelectedChapterId: number | null = null;
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -188,9 +189,18 @@
           // Start transcription if enabled
           if (settingsState.settings.autoTranscribeOnImport) {
             // Start transcription asynchronously
-            (window.electronAPI as any)?.transcription?.transcribe(chapter.id).catch((error: Error) => {
-              console.error('Failed to start transcription:', error);
-            });
+            void startChapterTranscription(chapter.id)
+              .then((result) => {
+                if (result.success) return;
+                const message = result.error || 'Failed to start transcription';
+                console.error('Failed to start transcription:', message);
+                setTranscriptionError(chapter.id, message);
+              })
+              .catch((error: Error) => {
+                const message = error.message || 'Failed to start transcription';
+                console.error('Failed to start transcription:', error);
+                setTranscriptionError(chapter.id, message);
+              });
           }
         }
       }
@@ -217,6 +227,13 @@
   }
 
   const selectedChapter = $derived.by(() => getSelectedChapter());
+
+  $effect(() => {
+    const chapterId = selectedChapter?.id ?? null;
+    if (chapterId === previousSelectedChapterId) return;
+    clearTimelineSelection();
+    previousSelectedChapterId = chapterId;
+  });
 
   const selectedChapterAssetIds = $derived.by(() => {
     if (!selectedChapter) return [];

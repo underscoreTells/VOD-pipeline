@@ -141,6 +141,25 @@ export interface WaveformProgressEvent {
     };
 }
 
+export interface TranscriptionResult {
+    success: boolean;
+    data?: {
+        chapterId: number;
+        language: string;
+        duration: number;
+        segmentCount: number;
+    };
+    error?: string;
+}
+
+export interface TranscriptionProgressEvent {
+    chapterId: number;
+    progress: {
+        percent: number;
+        status: string;
+    };
+}
+
 export interface ExportResult {
     success: boolean;
     data?: {
@@ -253,6 +272,10 @@ export interface ElectronAPI {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
+    };
+    transcription: {
+        transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
+        onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
     };
     exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
