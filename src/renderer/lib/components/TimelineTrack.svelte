@@ -419,28 +419,6 @@
     dragClickClipId = clipId;
   }
 
-  function startMoveDrag(event: PointerEvent, clipId: number, pointerTime: number) {
-    if (!chapterRange) return;
-    const clip = getClipByIdLocal(clipId);
-    if (!clip) return;
-    const duration = clip.out_point - clip.in_point;
-    if (!Number.isFinite(duration) || duration <= 0) return;
-
-    beginDrag(event, 'move');
-    selectClip(clipId, false);
-    dragClipId = clipId;
-    dragClipDuration = duration;
-    dragClipLocalStart = clip.start_time - chapterRange.start;
-    dragClipLocalEnd = dragClipLocalStart + duration;
-    dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
-    dragLastLocalStart = dragClipLocalStart;
-    dragLastLocalEnd = dragClipLocalEnd;
-    dragOriginalStart = clip.start_time;
-    dragOriginalIn = clip.in_point;
-    dragOriginalOut = clip.out_point;
-    document.body.style.cursor = 'grabbing';
-  }
-
   function startResizeDrag(event: PointerEvent, clipId: number, edge: 'start' | 'end', pointerTime: number) {
     if (!chapterRange) return;
     const clip = getClipByIdLocal(clipId);
@@ -469,9 +447,44 @@
     if (dragMode === 'click') {
       const deltaX = event.clientX - dragStartX;
       const deltaY = event.clientY - dragStartY;
-      if (Math.hypot(deltaX, deltaY) > CLICK_DRAG_THRESHOLD) {
-        dragDidMove = true;
-      }
+      if (Math.hypot(deltaX, deltaY) <= CLICK_DRAG_THRESHOLD) return;
+
+      dragDidMove = true;
+
+      if (dragClickClipId === null) return;
+      if (!chapterRange) return;
+
+      const pointerTime = getPointerTime(event);
+      if (pointerTime === null) return;
+
+      const clip = getClipByIdLocal(dragClickClipId);
+      if (!clip) return;
+
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) return;
+
+      dragMode = 'move';
+      selectClip(dragClickClipId, false);
+      dragClipId = dragClickClipId;
+      dragClipDuration = duration;
+      dragClipLocalStart = clip.start_time - chapterRange.start;
+      dragClipLocalEnd = dragClipLocalStart + duration;
+      dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
+      dragLastLocalStart = dragClipLocalStart;
+      dragLastLocalEnd = dragClipLocalEnd;
+      dragOriginalStart = clip.start_time;
+      dragOriginalIn = clip.in_point;
+      dragOriginalOut = clip.out_point;
+      dragClickTime = null;
+      dragClickClipId = null;
+      document.body.style.cursor = 'grabbing';
+
+      const maxStart = Math.max(0, chapterRange.duration - dragClipDuration);
+      const nextStart = clamp(pointerTime - dragClipOffset, 0, maxStart);
+      const nextEnd = nextStart + dragClipDuration;
+      dragLastLocalStart = nextStart;
+      dragLastLocalEnd = nextEnd;
+      updateRegionVisual(dragClipId, nextStart, nextEnd);
       return;
     }
 
@@ -627,11 +640,7 @@
     if (event.button === 1) {
       event.preventDefault();
       event.stopPropagation();
-      if (clipId !== null) {
-        startMoveDrag(event, clipId, pointerTime);
-      } else {
-        startPanDrag(event);
-      }
+      startPanDrag(event);
       return;
     }
 
