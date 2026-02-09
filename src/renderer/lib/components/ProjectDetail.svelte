@@ -44,6 +44,7 @@
     setRightWidth,
     setPreviewHeight,
     setChatHeight,
+    setClipPreviewWidth,
     expandLeft,
     expandChat,
     expandBeat,
@@ -73,6 +74,7 @@
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
   let editorSideRef = $state<HTMLElement | null>(null);
+  let previewTopLayoutRef = $state<HTMLElement | null>(null);
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -83,6 +85,8 @@
   const MIN_TIMELINE_HEIGHT = 220;
   const MIN_CHAT_HEIGHT = 240;
   const MIN_BEAT_HEIGHT = 220;
+  const MIN_CLIP_PREVIEW_WIDTH = 240;
+  const MIN_CHAPTER_PREVIEW_WIDTH = 360;
   
   // Load project data and chapters on mount
   onMount(() => {
@@ -443,6 +447,55 @@
       setChatHeight(next);
     }, persistLayout);
   }
+
+  function getMaxClipPreviewWidth(): number {
+    if (!previewTopLayoutRef) {
+      return Math.max(MIN_CLIP_PREVIEW_WIDTH, layoutState.clipPreviewWidth);
+    }
+
+    const availableWidth = previewTopLayoutRef.clientWidth;
+    const max = availableWidth - MIN_CHAPTER_PREVIEW_WIDTH - RESIZE_HANDLE_SIZE;
+    return Math.max(MIN_CLIP_PREVIEW_WIDTH, max);
+  }
+
+  function clampClipPreviewWidth() {
+    const maxWidth = getMaxClipPreviewWidth();
+    const nextWidth = clamp(layoutState.clipPreviewWidth, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
+    if (nextWidth !== layoutState.clipPreviewWidth) {
+      setClipPreviewWidth(nextWidth);
+      persistLayout();
+    }
+  }
+
+  function handleClipPreviewResize(event: PointerEvent) {
+    if (!previewTopLayoutRef) return;
+    const startX = event.clientX;
+    const startWidth = layoutState.clipPreviewWidth;
+
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const maxWidth = getMaxClipPreviewWidth();
+      const next = clamp(startWidth + delta, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
+      setClipPreviewWidth(next);
+    }, persistLayout);
+  }
+
+  $effect(() => {
+    if (!showClipPreviewPanel || !previewTopLayoutRef) return;
+
+    clampClipPreviewWidth();
+
+    const observer = new ResizeObserver(() => {
+      if (!showClipPreviewPanel) return;
+      clampClipPreviewWidth();
+    });
+
+    observer.observe(previewTopLayoutRef);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
 </script>
 
 <div 
@@ -531,11 +584,18 @@
                     {showClipPreviewPanel ? 'Hide Clip Player' : 'Show Clip Player'}
                   </button>
                 </div>
-                <div class="preview-top-layout">
+                <div class="preview-top-layout" bind:this={previewTopLayoutRef}>
                   {#if showClipPreviewPanel}
-                    <div class="clip-preview-pane">
+                    <div class="clip-preview-pane" style="width: {layoutState.clipPreviewWidth}px">
                       <ClipPreview />
                     </div>
+
+                    <div
+                      class="resize-handle-vertical clip-preview-resize"
+                      role="separator"
+                      aria-orientation="vertical"
+                      onpointerdown={handleClipPreviewResize}
+                    ></div>
                   {/if}
 
                   <div class="chapter-preview-pane">
@@ -880,20 +940,26 @@
     flex: 1;
     min-height: 0;
     display: flex;
-    gap: 0.75rem;
+    gap: 0;
+    align-items: stretch;
   }
 
   .clip-preview-pane {
-    flex: 0 0 36%;
-    min-width: 280px;
+    flex: 0 0 auto;
+    min-width: 220px;
     min-height: 0;
     overflow: hidden;
+  }
+
+  .clip-preview-resize {
+    align-self: stretch;
   }
 
   .chapter-preview-pane {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
+    padding-left: 0.75rem;
   }
 
   .preview-top-layout :global(.clip-preview),
@@ -902,25 +968,25 @@
     min-height: 0;
   }
 
-  @media (max-width: 1280px) {
-    .clip-preview-pane {
-      flex-basis: 40%;
-      min-width: 240px;
-    }
-  }
-
   @media (max-width: 980px) {
     .preview-top-layout {
       flex-direction: column;
+      gap: 0.75rem;
     }
 
     .clip-preview-pane {
       flex: 1 1 45%;
       min-width: 0;
+      width: auto !important;
+    }
+
+    .clip-preview-resize {
+      display: none;
     }
 
     .chapter-preview-pane {
       flex: 1 1 55%;
+      padding-left: 0;
     }
   }
 
