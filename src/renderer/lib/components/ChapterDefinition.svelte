@@ -17,6 +17,12 @@
   let videoRef = $state<HTMLVideoElement | null>(null);
   let isPreviewing = $state(false);
   let videoDuration = $state(0);
+  let definitionContainer = $state<HTMLElement | null>(null);
+  let definitionTopHeight = $state(320);
+
+  const RESIZE_HANDLE_SIZE = 6;
+  const MIN_DEFINITION_TOP = 220;
+  const MIN_DEFINITION_BOTTOM = 240;
 
   // Draft chapters state
   let draftChapters = $state<
@@ -208,32 +214,84 @@
   // Calculate selection width for visual feedback
   const selectionDuration = $derived(selectionEnd - selectionStart);
   const hasSelection = $derived(selectionDuration > 0);
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function startPointerDrag(event: PointerEvent, onMove: (moveEvent: PointerEvent) => void) {
+    event.preventDefault();
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      onMove(moveEvent);
+    };
+
+    const handleUp = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function handleDefinitionResize(event: PointerEvent) {
+    if (!definitionContainer) return;
+    const startY = event.clientY;
+    const startHeight = definitionTopHeight;
+    const containerHeight = definitionContainer.clientHeight;
+    const maxHeight = Math.max(
+      MIN_DEFINITION_TOP,
+      containerHeight - MIN_DEFINITION_BOTTOM - RESIZE_HANDLE_SIZE
+    );
+
+    startPointerDrag(event, (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const next = clamp(startHeight + delta, MIN_DEFINITION_TOP, maxHeight);
+      definitionTopHeight = next;
+    });
+  }
 </script>
 
-<div class="chapter-definition">
-  <div class="header">
-    <h2>Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
-    <p class="duration">Duration: {formatTime(duration)}</p>
+<div class="chapter-definition" bind:this={definitionContainer}>
+  <div class="definition-top-fixed" style="height: {definitionTopHeight}px">
+    <div class="header">
+      <h2>Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
+      <p class="duration">Duration: {formatTime(duration)}</p>
+    </div>
+
+    <div class="video-preview">
+      <video
+        bind:this={videoRef}
+        class="definition-video"
+        src={buildAssetUrl(asset.id)}
+        ontimeupdate={handleVideoTimeUpdate}
+        onloadedmetadata={handleVideoLoadedMetadata}
+        onerror={handleVideoError}
+        controls
+        preload="metadata"
+        playsinline
+      >
+        <track kind="captions" />
+      </video>
+    </div>
   </div>
 
-  <div class="video-preview">
-    <video
-      bind:this={videoRef}
-      class="definition-video"
-      src={buildAssetUrl(asset.id)}
-      ontimeupdate={handleVideoTimeUpdate}
-      onloadedmetadata={handleVideoLoadedMetadata}
-      onerror={handleVideoError}
-      controls
-      preload="metadata"
-      playsinline
-    >
-      <track kind="captions" />
-    </video>
-  </div>
-
-  <!-- Timeline Scrubber -->
-  <div class="timeline-section">
+  <div
+    class="definition-resize-handle"
+    role="separator"
+    aria-orientation="horizontal"
+    onpointerdown={handleDefinitionResize}
+  ></div>
+  <div class="definition-scroll">
+    <!-- Timeline Scrubber -->
+    <div class="timeline-section">
     <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
       <div class="timeline-bar">
         <!-- Playhead -->
@@ -294,10 +352,10 @@
         <span class="no-selection">No selection made. Mark start and end points.</span>
       {/if}
     </div>
-  </div>
+    </div>
 
-  <!-- Draft Chapters List -->
-  <div class="chapters-list">
+    <!-- Draft Chapters List -->
+    <div class="chapters-list">
     <h3>Defined Chapters ({draftChapters.length})</h3>
     
     {#if draftChapters.length === 0}
@@ -344,20 +402,21 @@
         {/each}
       </div>
     {/if}
-  </div>
+    </div>
 
-  <!-- Footer Actions -->
-  <div class="footer">
-    <button class="back-btn" onclick={onCancel}>
-      Back
-    </button>
-    <button
-      class="create-btn"
-      onclick={handleCreateAll}
-      disabled={draftChapters.length === 0}
-    >
-      Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} →
-    </button>
+    <!-- Footer Actions -->
+    <div class="footer">
+      <button class="back-btn" onclick={onCancel}>
+        Back
+      </button>
+      <button
+        class="create-btn"
+        onclick={handleCreateAll}
+        disabled={draftChapters.length === 0}
+      >
+        Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} →
+      </button>
+    </div>
   </div>
 </div>
 
@@ -366,12 +425,44 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 1.5rem;
     background: #1e1e1e;
+    overflow: hidden;
+  }
+
+  .definition-top-fixed {
+    flex: 0 0 auto;
+    padding: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow: hidden;
+  }
+
+  .definition-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1.5rem;
+    padding-top: 1rem;
+  }
+
+  .definition-resize-handle {
+    height: 6px;
+    flex: 0 0 6px;
+    cursor: row-resize;
+    background: #141414;
+    transition: background 0.2s;
+    touch-action: none;
+  }
+
+  .definition-resize-handle:hover {
+    background: #2a2a2a;
   }
 
   .header {
-    margin-bottom: 1.5rem;
+    margin-bottom: 0;
   }
 
   .header h2 {
@@ -390,8 +481,8 @@
     background: #111;
     border-radius: 8px;
     overflow: hidden;
-    margin-bottom: 1.5rem;
-    aspect-ratio: 16 / 9;
+    flex: 1;
+    min-height: 0;
   }
 
   .definition-video {
@@ -399,6 +490,7 @@
     height: 100%;
     display: block;
     background: #000;
+    object-fit: contain;
   }
 
   .timeline-section {
@@ -548,8 +640,6 @@
   }
 
   .chapters-list {
-    flex: 1;
-    overflow-y: auto;
     margin-bottom: 1.5rem;
   }
 

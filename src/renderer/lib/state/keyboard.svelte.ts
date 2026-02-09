@@ -1,28 +1,26 @@
-import {
-  undo,
-  redo,
-  canUndo,
-  canRedo,
-  executeCommand,
-  MoveClipCommand,
-  ResizeClipCommand,
-  DeleteClipCommand,
-} from './undo-redo.svelte';
+import { undo, redo } from './undo-redo.svelte';
 import {
   timelineState,
   togglePlayback,
   selectAll,
-  clearSelection,
+  clearSelection as clearTimelineSelection,
   zoomIn,
   zoomOut,
   zoomToFit,
-  deleteClip,
   setPlayhead,
-  getTotalDuration,
 } from './timeline.svelte';
+import { executeDeleteClip } from './project-detail.svelte';
+import {
+  clipBuilderState,
+  setInPoint as setClipInPoint,
+  setOutPoint as setClipOutPoint,
+  clearSelection as clearClipSelection,
+} from './clip-builder.svelte';
+
+type ShortcutHandler = () => void | Promise<unknown>;
 
 // Keyboard shortcuts configuration
-const SHORTCUTS = {
+const SHORTCUTS: Record<string, ShortcutHandler> = {
   // Playback
   'Space': togglePlayback,
   
@@ -41,7 +39,7 @@ const SHORTCUTS = {
   'Delete': handleDelete,
   'Backspace': handleDelete,
   'Ctrl+a': selectAll,
-  'Escape': clearSelection,
+  'Escape': clearTimelineSelection,
   
   // Zoom
   'Equal': zoomIn,      // + key
@@ -49,9 +47,10 @@ const SHORTCUTS = {
   'f': zoomToFit,
   
   // Clip editing
-  'i': setInPoint,
-  'o': setOutPoint,
-} as const;
+  'i': markInPoint,
+  'o': markOutPoint,
+  'Ctrl+b': toggleInOut,
+};
 
 // Track if user is in an input field
 function isInputFieldActive(): boolean {
@@ -72,7 +71,9 @@ function getShortcutKey(event: KeyboardEvent): string {
   if (event.shiftKey) parts.push('Shift');
   if (event.altKey) parts.push('Alt');
   
-  parts.push(event.key);
+  // Use event.code for Space to ensure reliable detection
+  const key = event.code === 'Space' ? 'Space' : event.key;
+  parts.push(key);
   
   return parts.join('+');
 }
@@ -86,29 +87,40 @@ function nudgePlayhead(frames: number) {
 }
 
 // Handle delete key
-function handleDelete() {
+async function handleDelete() {
   if (timelineState.selectedClipIds.size === 0) return;
   
   // Create delete commands for all selected clips
   const selectedIds = Array.from(timelineState.selectedClipIds);
   
-  // Execute commands through undo-redo system
   for (const clipId of selectedIds) {
-    const command = new DeleteClipCommand('Delete clip', clipId);
-    executeCommand(command);
+    await executeDeleteClip(clipId);
   }
 }
 
-// Set in point on selected clip
-function setInPoint() {
-  // TODO: Implement when clip editing UI is ready
-  console.log('Set in point - not implemented');
+// Set in point using current playhead position
+function markInPoint() {
+  setClipInPoint(timelineState.playheadTime);
 }
 
-// Set out point on selected clip
-function setOutPoint() {
-  // TODO: Implement when clip editing UI is ready
-  console.log('Set out point - not implemented');
+// Set out point using current playhead position
+function markOutPoint() {
+  setClipOutPoint(timelineState.playheadTime);
+}
+
+// Toggle in/out point (Ctrl+B cycles between in and out)
+function toggleInOut() {
+  if (clipBuilderState.inPoint === null) {
+    // No in point set - set it
+    setClipInPoint(timelineState.playheadTime);
+  } else if (clipBuilderState.outPoint === null) {
+    // In point set but no out - set out
+    setClipOutPoint(timelineState.playheadTime);
+  } else {
+    // Both set - clear and start over
+    clearClipSelection();
+    setClipInPoint(timelineState.playheadTime);
+  }
 }
 
 // Handle keyboard event
@@ -123,7 +135,12 @@ export function handleKeyDown(event: KeyboardEvent): boolean {
   
   if (handler) {
     event.preventDefault();
-    handler();
+    const result = handler();
+    if (result instanceof Promise) {
+      void result.catch((error) => {
+        console.error('Keyboard shortcut failed:', error);
+      });
+    }
     return true;
   }
   

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { agentState, sendChatMessage, setProvider, applySuggestion, rejectSuggestion, clearSuggestions } from "../state/agent.svelte";
+  import { collapseChat } from "../state/layout.svelte";
   
   let message = $state("");
   let chatContainer: HTMLDivElement;
@@ -51,15 +52,20 @@
 <div class="chat-panel">
   <div class="chat-header">
     <h3>Chat</h3>
-    <select 
-      value={agentState.selectedProvider}
-      onchange={(e) => setProvider(e.currentTarget.value as any)}
-      class="provider-select"
-    >
-      {#each providers as provider}
-        <option value={provider.value}>{provider.label}</option>
-      {/each}
-    </select>
+    <div class="header-actions">
+      <select 
+        value={agentState.selectedProvider}
+        onchange={(e) => setProvider(e.currentTarget.value as any)}
+        class="provider-select"
+      >
+        {#each providers as provider}
+          <option value={provider.value}>{provider.label}</option>
+        {/each}
+      </select>
+      <button class="collapse-btn" onclick={collapseChat}>
+        Hide
+      </button>
+    </div>
   </div>
   
   <div class="chat-messages" bind:this={chatContainer}>
@@ -151,6 +157,7 @@
     height: 100%;
     background: #1e1e1e;
     border-left: 1px solid #333;
+    min-height: 0;
   }
   
   .chat-header {
@@ -160,6 +167,12 @@
     padding: 12px 16px;
     border-bottom: 1px solid #333;
     background: #252525;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   
   .chat-header h3 {
@@ -175,6 +188,21 @@
     border-radius: 4px;
     color: #fff;
     font-size: 12px;
+  }
+
+  .collapse-btn {
+    padding: 4px 8px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .collapse-btn:hover {
+    background: #444;
+    color: #fff;
   }
   
   .chat-messages {

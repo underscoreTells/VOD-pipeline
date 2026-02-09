@@ -202,17 +202,24 @@
 
 <style>
   .clip-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
     background: #1a1a1a;
-    border-top: 1px solid #333;
-    padding: 1rem;
-    min-height: 300px;
+    border: 1px solid #2f2f2f;
+    border-radius: 8px;
+    padding: 0.75rem;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
   
   .preview-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
   }
   
   .preview-header h4 {
@@ -243,7 +250,7 @@
     background: #000;
     border-radius: 4px;
     overflow: hidden;
-    margin-bottom: 1rem;
+    flex: 0 0 auto;
     aspect-ratio: 16/9;
   }
   
@@ -270,7 +277,6 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    margin-bottom: 1rem;
   }
   
   .trim-controls {
@@ -378,8 +384,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 100%;
-    min-height: 200px;
+    flex: 1;
+    min-height: 0;
     color: #666;
     font-size: 0.875rem;
   }

@@ -1,7 +1,20 @@
 import type { Clip, TimelineState } from '../../../shared/types/database';
 
+interface TimelineStateStore {
+  projectId: number | null;
+  clips: Clip[];
+  zoomLevel: number;
+  scrollPosition: number;
+  playheadTime: number;
+  selectedClipIds: Set<number>;
+  isPlaying: boolean;
+  excludeCutContent: boolean;
+  isLoading: boolean;
+  error: string | null;
+}
+
 // Timeline state using Svelte 5 runes
-export const timelineState = $state({
+export const timelineState = $state<TimelineStateStore>({
   projectId: null as number | null,
   clips: [] as Clip[],
   zoomLevel: 100,        // pixels per second
@@ -9,6 +22,7 @@ export const timelineState = $state({
   playheadTime: 0,       // current position
   selectedClipIds: new Set<number>(),
   isPlaying: false,
+  excludeCutContent: false,
   isLoading: false,
   error: null as string | null,
 });
@@ -41,6 +55,7 @@ export function getClipById(id: number): Clip | undefined {
 export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineState | null) {
   timelineState.projectId = projectId;
   timelineState.clips = clips;
+  timelineState.excludeCutContent = false;
 
   if (state) {
     timelineState.zoomLevel = state.zoom_level;
@@ -72,24 +87,33 @@ export function updateClip(id: number, updates: Partial<Clip>) {
 
 export function deleteClip(id: number) {
   timelineState.clips = timelineState.clips.filter(clip => clip.id !== id);
-  timelineState.selectedClipIds.delete(id);
-}
-
-export function selectClip(id: number, multiSelect: boolean = false) {
-  if (multiSelect) {
-    if (timelineState.selectedClipIds.has(id)) {
-      timelineState.selectedClipIds.delete(id);
-    } else {
-      timelineState.selectedClipIds.add(id);
-    }
-  } else {
-    timelineState.selectedClipIds.clear();
-    timelineState.selectedClipIds.add(id);
+  if (timelineState.selectedClipIds.has(id)) {
+    const nextSelectedIds = new Set(timelineState.selectedClipIds);
+    nextSelectedIds.delete(id);
+    timelineState.selectedClipIds = nextSelectedIds;
   }
 }
 
+export function selectClip(id: number, multiSelect: boolean = false) {
+  const nextSelectedIds = new Set(timelineState.selectedClipIds);
+
+  if (multiSelect) {
+    if (nextSelectedIds.has(id)) {
+      nextSelectedIds.delete(id);
+    } else {
+      nextSelectedIds.add(id);
+    }
+  } else {
+    nextSelectedIds.clear();
+    nextSelectedIds.add(id);
+  }
+
+  timelineState.selectedClipIds = nextSelectedIds;
+}
+
 export function clearSelection() {
-  timelineState.selectedClipIds.clear();
+  if (timelineState.selectedClipIds.size === 0) return;
+  timelineState.selectedClipIds = new Set();
 }
 
 export function selectAll() {
@@ -133,6 +157,14 @@ export function setPlaying(playing: boolean) {
   timelineState.isPlaying = playing;
 }
 
+export function setExcludeCutContent(enabled: boolean) {
+  timelineState.excludeCutContent = enabled;
+}
+
+export function toggleExcludeCutContent() {
+  timelineState.excludeCutContent = !timelineState.excludeCutContent;
+}
+
 export function setLoading(loading: boolean) {
   timelineState.isLoading = loading;
 }
@@ -147,8 +179,9 @@ export function clearTimeline() {
   timelineState.zoomLevel = 100;
   timelineState.scrollPosition = 0;
   timelineState.playheadTime = 0;
-  timelineState.selectedClipIds.clear();
+  timelineState.selectedClipIds = new Set();
   timelineState.isPlaying = false;
+  timelineState.excludeCutContent = false;
   timelineState.isLoading = false;
   timelineState.error = null;
 }

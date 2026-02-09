@@ -52,6 +52,8 @@ const electronAPI = {
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
     create: (input) => ipcRenderer.invoke('clip:create', {
+      id: input.id,
+      createdAt: input.createdAt,
       projectId: input.projectId,
       assetId: input.assetId,
       trackIndex: input.trackIndex,
@@ -64,6 +66,7 @@ const electronAPI = {
     }),
     update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
+    batchUpdate: (updates) => ipcRenderer.invoke('clip:batch-update', { updates }),
   },
   timeline: {
     loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),
@@ -78,6 +81,15 @@ const electronAPI = {
       const handler = (_, data) => callback(data);
       ipcRenderer.on('waveform:progress', handler);
       return () => ipcRenderer.removeListener('waveform:progress', handler);
+    },
+  },
+  transcription: {
+    transcribe: (chapterId, options) =>
+      ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
+    onProgress: (callback) => {
+      const handler = (_, data) => callback(data);
+      ipcRenderer.on('transcribe:progress', handler);
+      return () => ipcRenderer.removeListener('transcribe:progress', handler);
     },
   },
   proxy: {

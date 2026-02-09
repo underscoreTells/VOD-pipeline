@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import TimelineTrack from './TimelineTrack.svelte';
-  import { timelineState, loadTimeline, setPlaying } from '../state/timeline.svelte';
+  import { timelineState, loadTimeline, setPlaying, setZoom } from '../state/timeline.svelte';
   import type { Clip, TimelineState as TimelineStateType } from '../../../shared/types/database';
   
   interface Props {
@@ -9,17 +9,26 @@
     audioUrls: string[]; // Array of audio URLs, one per track
     trackAssetIds: number[];
     clips: Clip[];
+    displayClips?: Clip[];
     initialState?: TimelineStateType | null;
   }
   
-  let { projectId, audioUrls, trackAssetIds, clips, initialState = null }: Props = $props();
+  let { projectId, audioUrls, trackAssetIds, clips, displayClips, initialState = null }: Props = $props();
   
   let isLoading = $state(true);
   let error = $state<string | null>(null);
+  let lastProjectId = $state<number | null>(null);
   
   // Load timeline data
   $effect(() => {
-    if (projectId && clips) {
+    if (!projectId || !clips) return;
+    if (timelineState.projectId === projectId) {
+      lastProjectId = projectId;
+      isLoading = false;
+      return;
+    }
+    if (projectId !== lastProjectId) {
+      lastProjectId = projectId;
       loadTimeline(projectId, clips, initialState);
       isLoading = false;
     }
@@ -31,9 +40,18 @@
       isLoading = false;
     }
   });
+
+  // Handle wheel for ctrl+scroll zoom
+  function handleWheel(event: WheelEvent) {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const direction = Math.sign(event.deltaY);
+    const multiplier = direction > 0 ? 0.9 : 1.1;
+    setZoom(timelineState.zoomLevel * multiplier);
+  }
 </script>
 
-<div class="timeline">
+<div class="timeline" onwheel={handleWheel}>
   {#if isLoading}
     <div class="loading">
       <span class="loading-spinner"></span>
@@ -51,6 +69,7 @@
           assetId={trackAssetIds[index]}
           trackIndex={index} 
           height={100}
+          clips={displayClips ?? clips}
         />
       {/each}
     </div>

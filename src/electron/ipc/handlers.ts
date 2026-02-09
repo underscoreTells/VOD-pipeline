@@ -423,7 +423,27 @@ export function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.CHAPTER_UPDATE, async (_, { id, updates }) => {
     console.log('IPC: chapter:update', id, updates);
     try {
-      const success = await updateChapter(id, updates);
+      const normalizedUpdates: {
+        title?: string;
+        start_time?: number;
+        end_time?: number;
+        display_order?: number;
+      } = {};
+
+      if (updates.title !== undefined) {
+        normalizedUpdates.title = updates.title;
+      }
+      if (updates.startTime !== undefined) {
+        normalizedUpdates.start_time = updates.startTime;
+      }
+      if (updates.endTime !== undefined) {
+        normalizedUpdates.end_time = updates.endTime;
+      }
+      if (updates.display_order !== undefined) {
+        normalizedUpdates.display_order = updates.display_order;
+      }
+
+      const success = await updateChapter(id, normalizedUpdates);
       if (success) {
         return createSuccessResponse(null);
       } else {
@@ -626,11 +646,14 @@ export function registerIpcHandlers() {
   });
 
   // Clip handlers
-  ipcMain.handle(IPC_CHANNELS.CLIP_CREATE, async (_, { projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
-    console.log('IPC: clip:create', projectId, assetId);
+  ipcMain.handle(IPC_CHANNELS.CLIP_CREATE, async (_, { id, createdAt, projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
+    console.log('IPC: clip:create', id ?? 'auto', projectId, assetId);
     try {
       if (!projectId || !assetId) {
         return createErrorResponse('Project ID and Asset ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (id !== undefined && (!Number.isInteger(id) || id <= 0)) {
+        return createErrorResponse('Clip ID must be a positive integer when provided', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
       if (startTime < 0) {
         return createErrorResponse('Start time must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -643,6 +666,8 @@ export function registerIpcHandlers() {
       }
 
       const clip = await createClip({
+        id,
+        created_at: createdAt,
         project_id: projectId,
         asset_id: assetId,
         track_index: trackIndex ?? 0,

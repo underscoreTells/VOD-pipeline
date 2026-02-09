@@ -34,9 +34,25 @@
     getAssetsForChapter
   } from '../state/chapters.svelte';
   import { settingsState } from '../state/settings.svelte';
-  import { timelineState, setError } from '../state/timeline.svelte';
+  import { timelineState, setError, clearSelection as clearTimelineSelection } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
+  import {
+    layoutState,
+    loadLayout,
+    persistLayout,
+    setLeftWidth,
+    setRightWidth,
+    setPreviewHeight,
+    setChatHeight,
+    setClipPreviewWidth,
+    expandLeft,
+    expandChat,
+    expandBeat,
+  } from '../state/layout.svelte';
   import { buildAssetUrl } from '../utils/media';
+  import { onTranscriptionProgress, transcribeChapter as startChapterTranscription } from '../state/electron.svelte';
+  import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
+  import { setProjectContext, setChapterContext } from '../state/agent.svelte';
   import type { Project, Asset } from '$shared/types/database';
   
   interface Props {
@@ -49,24 +65,54 @@
   let isDragging = $state(false);
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
+  let showClipPreviewPanel = $state(true);
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
   let waveformCheckToken = 0;
   const waveformInFlight = new Set<number>();
+  let cleanupTranscription: (() => void) | null = null;
+  let editorMainRef = $state<HTMLElement | null>(null);
+  let editorSideRef = $state<HTMLElement | null>(null);
+  let previewTopLayoutRef = $state<HTMLElement | null>(null);
+  let previousSelectedChapterId: number | null = null;
+
+  const RESIZE_HANDLE_SIZE = 6;
+  const MIN_LEFT_WIDTH = 220;
+  const MAX_LEFT_WIDTH = 520;
+  const MIN_RIGHT_WIDTH = 260;
+  const MAX_RIGHT_WIDTH = 560;
+  const MIN_PREVIEW_HEIGHT = 200;
+  const MIN_TIMELINE_HEIGHT = 220;
+  const MIN_CHAT_HEIGHT = 240;
+  const MIN_BEAT_HEIGHT = 220;
+  const MIN_CLIP_PREVIEW_WIDTH = 240;
+  const MIN_CHAPTER_PREVIEW_WIDTH = 360;
   
   // Load project data and chapters on mount
   onMount(() => {
+    loadLayout();
     loadProjectDetail(project.id);
     loadChapters(project.id);
     cleanupKeyboard = initKeyboardShortcuts();
+    
+    // Set agent project context
+    setProjectContext(String(project.id));
+    
+    // Set up transcription progress listener
+    cleanupTranscription = onTranscriptionProgress((event: { chapterId: number; progress: { percent: number; status: string } }) => {
+      setTranscriptionProgress(event.chapterId, event.progress);
+    });
   });
   
   onDestroy(() => {
     if (cleanupKeyboard) cleanupKeyboard();
+    if (cleanupTranscription) cleanupTranscription();
     saveProjectTimelineState();
     clearProjectDetail();
     clearChaptersState();
+    setProjectContext(null);
+    setChapterContext(null, null);
   });
   
   // Check if project has content (assets or chapters)
@@ -143,9 +189,18 @@
           // Start transcription if enabled
           if (settingsState.settings.autoTranscribeOnImport) {
             // Start transcription asynchronously
-            (window.electronAPI as any)?.transcription?.transcribe(chapter.id).catch((error: Error) => {
-              console.error('Failed to start transcription:', error);
-            });
+            void startChapterTranscription(chapter.id)
+              .then((result) => {
+                if (result.success) return;
+                const message = result.error || 'Failed to start transcription';
+                console.error('Failed to start transcription:', message);
+                setTranscriptionError(chapter.id, message);
+              })
+              .catch((error: Error) => {
+                const message = error.message || 'Failed to start transcription';
+                console.error('Failed to start transcription:', error);
+                setTranscriptionError(chapter.id, message);
+              });
           }
         }
       }
@@ -173,6 +228,13 @@
 
   const selectedChapter = $derived.by(() => getSelectedChapter());
 
+  $effect(() => {
+    const chapterId = selectedChapter?.id ?? null;
+    if (chapterId === previousSelectedChapterId) return;
+    clearTimelineSelection();
+    previousSelectedChapterId = chapterId;
+  });
+
   const selectedChapterAssetIds = $derived.by(() => {
     if (!selectedChapter) return [];
     return getAssetsForChapter(selectedChapter.id) ?? [];
@@ -189,6 +251,8 @@
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
+
+  const rightHidden = $derived(() => layoutState.chatCollapsed && layoutState.beatCollapsed);
 
   async function ensureChapterWaveforms(assetIds: number[]) {
     const token = ++waveformCheckToken;
@@ -213,6 +277,12 @@
     if (selectedChapter && !hasChapterAssets) {
       void loadAssetsForChapter(selectedChapter.id);
     }
+  });
+
+  // Update agent chapter context when selection changes
+  $effect(() => {
+    const chapterId = selectedChapter?.id ? String(selectedChapter.id) : null;
+    setChapterContext(chapterId, null);
   });
 
   $effect(() => {
@@ -292,6 +362,157 @@
     if (selectedChapterAssetIds.length === 0) return [];
     return selectedChapterAssetIds.map((assetId) => buildAssetUrl(assetId));
   });
+
+  const selectedChapterClips = $derived.by(() => {
+    if (!selectedChapter) return [];
+    if (selectedChapterAssetIds.length === 0) return [];
+    const assetIds = new Set(selectedChapterAssetIds);
+    const chapterStart = selectedChapter.start_time;
+    const chapterEnd = selectedChapter.end_time;
+    if (!Number.isFinite(chapterEnd) || chapterEnd <= chapterStart) return [];
+
+    return timelineState.clips.filter((clip) => {
+      if (!assetIds.has(clip.asset_id)) return false;
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) return false;
+      const clipStart = clip.start_time;
+      const clipEnd = clip.start_time + duration;
+      return clipEnd > chapterStart && clipStart < chapterEnd;
+    });
+  });
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function startPointerDrag(
+    event: PointerEvent,
+    cursor: 'col-resize' | 'row-resize',
+    onMove: (moveEvent: PointerEvent) => void,
+    onEnd?: () => void
+  ) {
+    event.preventDefault();
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = 'none';
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      onMove(moveEvent);
+    };
+
+    const handleUp = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      onEnd?.();
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function handleLeftResize(event: PointerEvent) {
+    const startX = event.clientX;
+    const startWidth = layoutState.leftWidth;
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const next = clamp(startWidth + delta, MIN_LEFT_WIDTH, MAX_LEFT_WIDTH);
+      setLeftWidth(next);
+    }, persistLayout);
+  }
+
+  function handleRightResize(event: PointerEvent) {
+    const startX = event.clientX;
+    const startWidth = layoutState.rightWidth;
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const next = clamp(startWidth + delta, MIN_RIGHT_WIDTH, MAX_RIGHT_WIDTH);
+      setRightWidth(next);
+    }, persistLayout);
+  }
+
+  function handlePreviewResize(event: PointerEvent) {
+    if (!editorMainRef) return;
+    const startY = event.clientY;
+    const startHeight = layoutState.previewHeight;
+    const containerHeight = editorMainRef.clientHeight;
+    const maxHeight = Math.max(
+      MIN_PREVIEW_HEIGHT,
+      containerHeight - MIN_TIMELINE_HEIGHT - RESIZE_HANDLE_SIZE
+    );
+    startPointerDrag(event, 'row-resize', (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const next = clamp(startHeight + delta, MIN_PREVIEW_HEIGHT, maxHeight);
+      setPreviewHeight(next);
+    }, persistLayout);
+  }
+
+  function handleChatResize(event: PointerEvent) {
+    if (!editorSideRef) return;
+    const startY = event.clientY;
+    const startHeight = layoutState.chatHeight;
+    const containerHeight = editorSideRef.clientHeight;
+    const maxHeight = Math.max(
+      MIN_CHAT_HEIGHT,
+      containerHeight - MIN_BEAT_HEIGHT - RESIZE_HANDLE_SIZE
+    );
+    startPointerDrag(event, 'row-resize', (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const next = clamp(startHeight + delta, MIN_CHAT_HEIGHT, maxHeight);
+      setChatHeight(next);
+    }, persistLayout);
+  }
+
+  function getMaxClipPreviewWidth(): number {
+    if (!previewTopLayoutRef) {
+      return Math.max(MIN_CLIP_PREVIEW_WIDTH, layoutState.clipPreviewWidth);
+    }
+
+    const availableWidth = previewTopLayoutRef.clientWidth;
+    const max = availableWidth - MIN_CHAPTER_PREVIEW_WIDTH - RESIZE_HANDLE_SIZE;
+    return Math.max(MIN_CLIP_PREVIEW_WIDTH, max);
+  }
+
+  function clampClipPreviewWidth() {
+    const maxWidth = getMaxClipPreviewWidth();
+    const nextWidth = clamp(layoutState.clipPreviewWidth, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
+    if (nextWidth !== layoutState.clipPreviewWidth) {
+      setClipPreviewWidth(nextWidth);
+      persistLayout();
+    }
+  }
+
+  function handleClipPreviewResize(event: PointerEvent) {
+    if (!previewTopLayoutRef) return;
+    const startX = event.clientX;
+    const startWidth = layoutState.clipPreviewWidth;
+
+    startPointerDrag(event, 'col-resize', (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const maxWidth = getMaxClipPreviewWidth();
+      const next = clamp(startWidth + delta, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
+      setClipPreviewWidth(next);
+    }, persistLayout);
+  }
+
+  $effect(() => {
+    if (!showClipPreviewPanel || !previewTopLayoutRef) return;
+
+    clampClipPreviewWidth();
+
+    const observer = new ResizeObserver(() => {
+      if (!showClipPreviewPanel) return;
+      clampClipPreviewWidth();
+    });
+
+    observer.observe(previewTopLayoutRef);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
 </script>
 
 <div 
@@ -352,49 +573,123 @@
       <!-- Chapters-First Layout -->
       <div class="project-layout">
         <!-- Chapter Panel Sidebar -->
-        <aside class="chapters-sidebar">
-          <ChapterPanel
-            projectAssets={projectDetail.assets}
-            onImportClick={() => setIsImporting(true)}
-          />
-        </aside>
+        {#if !layoutState.leftCollapsed}
+          <aside class="chapters-sidebar" style="width: {layoutState.leftWidth}px">
+            <ChapterPanel
+              projectAssets={projectDetail.assets}
+              onImportClick={() => setIsImporting(true)}
+            />
+          </aside>
+          <div
+            class="resize-handle-vertical"
+            role="separator"
+            aria-orientation="vertical"
+            onpointerdown={handleLeftResize}
+          ></div>
+        {/if}
         
         <!-- Main Content Area -->
         <main class="main-content">
           <div class="editor-layout">
-            <section class="editor-main">
-              <ChapterPreview
-                chapter={selectedChapter}
-                asset={chapterPreviewAsset}
-              />
+            <section class="editor-main" bind:this={editorMainRef}>
+              <div class="editor-top-fixed" style="height: {layoutState.previewHeight}px">
+                <div class="preview-top-toolbar">
+                  <button
+                    class="preview-toggle-btn"
+                    onclick={() => showClipPreviewPanel = !showClipPreviewPanel}
+                  >
+                    {showClipPreviewPanel ? 'Hide Clip Player' : 'Show Clip Player'}
+                  </button>
+                </div>
+                <div class="preview-top-layout" bind:this={previewTopLayoutRef}>
+                  {#if showClipPreviewPanel}
+                    <div class="clip-preview-pane" style="width: {layoutState.clipPreviewWidth}px">
+                      <ClipPreview />
+                    </div>
 
-              {#if chaptersState.selectedChapterId}
-                <div class="timeline-wrapper">
-                  <TimelineToolbar />
-                  <div class="timeline-container">
-                    <Timeline 
-                      projectId={project.id}
-                      {audioUrls}
-                      trackAssetIds={selectedChapterAssetIds}
-                      clips={timelineState.clips}
+                    <div
+                      class="resize-handle-vertical clip-preview-resize"
+                      role="separator"
+                      aria-orientation="vertical"
+                      onpointerdown={handleClipPreviewResize}
+                    ></div>
+                  {/if}
+
+                  <div class="chapter-preview-pane">
+                    <ChapterPreview
+                      chapter={selectedChapter}
+                      asset={chapterPreviewAsset}
+                      clips={selectedChapterClips}
                     />
                   </div>
                 </div>
+              </div>
+              <div
+                class="resize-handle-horizontal"
+                role="separator"
+                aria-orientation="horizontal"
+                onpointerdown={handlePreviewResize}
+              ></div>
+
+              {#if chaptersState.selectedChapterId}
+                <div class="editor-bottom-scrollable">
+                  <div class="timeline-wrapper">
+                    <TimelineToolbar />
+                    <div class="timeline-container">
+                      <Timeline 
+                        projectId={project.id}
+                        {audioUrls}
+                        trackAssetIds={selectedChapterAssetIds}
+                        clips={timelineState.clips}
+                        displayClips={selectedChapterClips}
+                      />
+                    </div>
+                  </div>
+                </div>
               {:else}
-                <div class="empty-selection">
+                <div class="editor-bottom-scrollable empty-selection">
                   <div class="empty-icon">📖</div>
                   <h3>Select a Chapter</h3>
                   <p>Choose a chapter from the sidebar to view its timeline and beats</p>
                 </div>
               {/if}
-
-              <ClipPreview />
             </section>
 
-            <aside class="editor-side">
-              <ChatPanel />
-              <BeatPanel clips={timelineState.clips} />
-            </aside>
+            {#if !rightHidden()}
+              <div
+                class="resize-handle-vertical"
+                role="separator"
+                aria-orientation="vertical"
+                onpointerdown={handleRightResize}
+              ></div>
+              <aside class="editor-side" style="width: {layoutState.rightWidth}px" bind:this={editorSideRef}>
+                {#if !layoutState.chatCollapsed}
+                  <div
+                    class="side-panel chat-panel-wrapper"
+                    style={layoutState.beatCollapsed
+                      ? 'flex: 1 1 auto;'
+                      : `flex: 0 0 ${layoutState.chatHeight}px;`}
+                  >
+                    <ChatPanel />
+                  </div>
+                {/if}
+
+                {#if !layoutState.chatCollapsed && !layoutState.beatCollapsed}
+                  <div
+                    class="resize-handle-horizontal"
+                    role="separator"
+                    aria-orientation="horizontal"
+                    onpointerdown={handleChatResize}
+                  ></div>
+                {/if}
+
+                {#if !layoutState.beatCollapsed}
+                  <div class="side-panel beat-panel-wrapper">
+                    <BeatPanel clips={selectedChapterClips} />
+                  </div>
+                {/if}
+              </aside>
+            {/if}
           </div>
         </main>
       </div>
@@ -453,6 +748,23 @@
       <button onclick={() => setError(null)}>✕</button>
     </div>
   {/if}
+
+  {#if layoutState.leftCollapsed}
+    <button class="floating-toggle left" onclick={expandLeft}>
+      Show Chapters
+    </button>
+  {/if}
+
+  {#if layoutState.chatCollapsed}
+    <button class="floating-toggle right chat" onclick={expandChat}>
+      Show Chat
+    </button>
+  {/if}
+  {#if layoutState.beatCollapsed}
+    <button class="floating-toggle right beat" onclick={expandBeat}>
+      Show Beats
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -462,6 +774,7 @@
     height: 100%;
     background: #0f0f0f;
     color: #fff;
+    position: relative;
   }
   
   .project-detail.dragging {
@@ -538,6 +851,7 @@
     flex: 1;
     overflow: hidden;
     position: relative;
+    min-height: 0;
   }
   
   .loading {
@@ -566,13 +880,16 @@
   .project-layout {
     display: flex;
     height: 100%;
+    min-height: 0;
   }
   
   .chapters-sidebar {
     width: 300px;
     flex-shrink: 0;
+    flex: 0 0 auto;
     border-right: 1px solid #333;
     overflow-y: auto;
+    min-height: 0;
   }
   
   .main-content {
@@ -580,6 +897,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-layout {
@@ -587,15 +905,118 @@
     display: flex;
     gap: 0;
     overflow: hidden;
+    min-height: 0;
   }
 
   .editor-main {
     flex: 1;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .editor-top-fixed {
+    flex: 0 0 auto;
+    padding: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #2a2a2a;
+    overflow: hidden;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .preview-top-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+
+  .preview-toggle-btn {
+    padding: 0.35rem 0.75rem;
+    background: #232323;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #d0d0d0;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .preview-toggle-btn:hover {
+    background: #2d2d2d;
+    border-color: #4a4a4a;
+    color: #fff;
+  }
+
+  .preview-top-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+  }
+
+  .clip-preview-pane {
+    flex: 0 0 auto;
+    min-width: 220px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .clip-preview-resize {
+    align-self: stretch;
+  }
+
+  .chapter-preview-pane {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    padding-left: 0.75rem;
+  }
+
+  .preview-top-layout :global(.clip-preview),
+  .preview-top-layout :global(.chapter-preview) {
+    height: 100%;
+    min-height: 0;
+  }
+
+  @media (max-width: 980px) {
+    .preview-top-layout {
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .clip-preview-pane {
+      flex: 1 1 45%;
+      min-width: 0;
+      width: auto !important;
+    }
+
+    .clip-preview-resize {
+      display: none;
+    }
+
+    .chapter-preview-pane {
+      flex: 1 1 55%;
+      padding-left: 0;
+    }
+  }
+
+  .editor-bottom-scrollable {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
     gap: 1rem;
     padding: 1rem;
-    overflow: hidden;
+    padding-top: 0.5rem;
   }
 
   .editor-side {
@@ -604,18 +1025,39 @@
     flex-direction: column;
     border-left: 1px solid #333;
     overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+    flex: 0 0 auto;
+  }
+
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .chat-panel-wrapper {
+    min-height: 240px;
+  }
+
+  .beat-panel-wrapper {
+    flex: 1 1 auto;
+    min-height: 220px;
   }
 
   .editor-side :global(.chat-panel) {
     flex: 1;
     border-left: none;
+    height: 100%;
   }
 
   .editor-side :global(.beat-panel) {
     width: 100%;
     border-left: none;
     border-top: 1px solid #333;
-    flex: 0 0 320px;
+    flex: 1 1 auto;
+    height: 100%;
   }
   
   .timeline-wrapper {
@@ -623,12 +1065,38 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    min-height: 280px;
+    min-height: 220px;
   }
   
   .timeline-container {
     flex: 1;
     overflow: auto;
+  }
+
+  .resize-handle-vertical {
+    width: 6px;
+    flex: 0 0 6px;
+    cursor: col-resize;
+    background: #141414;
+    transition: background 0.2s;
+    touch-action: none;
+  }
+
+  .resize-handle-vertical:hover {
+    background: #2a2a2a;
+  }
+
+  .resize-handle-horizontal {
+    height: 6px;
+    flex: 0 0 6px;
+    cursor: row-resize;
+    background: #141414;
+    transition: background 0.2s;
+    touch-action: none;
+  }
+
+  .resize-handle-horizontal:hover {
+    background: #2a2a2a;
   }
   
   /* Empty Selection State */
@@ -657,6 +1125,41 @@
   .empty-selection p {
     margin: 0;
     font-size: 0.875rem;
+  }
+
+  .floating-toggle {
+    position: absolute;
+    top: 96px;
+    z-index: 20;
+    background: #1e1e1e;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    white-space: nowrap;
+  }
+
+  .floating-toggle:hover {
+    background: #2a2a2a;
+  }
+
+  .floating-toggle.left {
+    left: 12px;
+  }
+
+  .floating-toggle.right {
+    right: 12px;
+  }
+
+  .floating-toggle.right.chat {
+    top: 96px;
+  }
+
+  .floating-toggle.right.beat {
+    top: 140px;
   }
   
   /* Progress Overlay */

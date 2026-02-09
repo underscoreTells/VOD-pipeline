@@ -627,7 +627,12 @@ const VALID_CLIP_ROLES: Array<'setup' | 'escalation' | 'twist' | 'payoff' | 'tra
   'setup', 'escalation', 'twist', 'payoff', 'transition'
 ];
 
-export async function createClip(clip: CreateClipInput): Promise<Clip> {
+type CreateClipHistoryInput = CreateClipInput & {
+  id?: number;
+  created_at?: string;
+};
+
+export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
   const database = await getDatabase();
   
   // Validate project exists
@@ -652,32 +657,55 @@ export async function createClip(clip: CreateClipInput): Promise<Clip> {
   if (clip.out_point <= clip.in_point) {
     throw new Error('Out point must be greater than in point');
   }
+  if (clip.id !== undefined && (!Number.isInteger(clip.id) || clip.id <= 0)) {
+    throw new Error('Clip ID must be a positive integer when provided');
+  }
   
   // Validate role if provided
   if (clip.role !== null && !VALID_CLIP_ROLES.includes(clip.role)) {
     throw new Error(`Invalid role: ${clip.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
   }
   
-  const now = new Date().toISOString();
-  
-  const result = database.prepare(
-    `INSERT INTO clips (project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    clip.project_id,
-    clip.asset_id,
-    clip.track_index,
-    clip.start_time,
-    clip.in_point,
-    clip.out_point,
-    clip.role,
-    clip.description,
-    clip.is_essential ? 1 : 0,
-    now
-  );
+  const createdAt = clip.created_at ?? new Date().toISOString();
+
+  let result: Database.RunResult;
+  if (clip.id !== undefined) {
+    result = database.prepare(
+      `INSERT INTO clips (id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      clip.id,
+      clip.project_id,
+      clip.asset_id,
+      clip.track_index,
+      clip.start_time,
+      clip.in_point,
+      clip.out_point,
+      clip.role,
+      clip.description,
+      clip.is_essential ? 1 : 0,
+      createdAt
+    );
+  } else {
+    result = database.prepare(
+      `INSERT INTO clips (project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      clip.project_id,
+      clip.asset_id,
+      clip.track_index,
+      clip.start_time,
+      clip.in_point,
+      clip.out_point,
+      clip.role,
+      clip.description,
+      clip.is_essential ? 1 : 0,
+      createdAt
+    );
+  }
   
   return {
-    id: result.lastInsertRowid as number,
+    id: clip.id ?? (result.lastInsertRowid as number),
     project_id: clip.project_id,
     asset_id: clip.asset_id,
     track_index: clip.track_index,
@@ -687,7 +715,7 @@ export async function createClip(clip: CreateClipInput): Promise<Clip> {
     role: clip.role,
     description: clip.description,
     is_essential: clip.is_essential,
-    created_at: now,
+    created_at: createdAt,
   };
 }
 

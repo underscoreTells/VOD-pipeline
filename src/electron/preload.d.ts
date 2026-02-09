@@ -58,6 +58,8 @@ export interface GetClipsResult {
 }
 
 export interface CreateClipInput {
+    id?: number;
+    createdAt?: string;
     projectId: number;
     assetId: number;
     trackIndex: number;
@@ -82,6 +84,14 @@ export interface UpdateClipResult {
 
 export interface DeleteClipResult {
     success: boolean;
+    error?: string;
+}
+
+export interface BatchUpdateClipsResult {
+    success: boolean;
+    data?: {
+        updatedCount: number;
+    };
     error?: string;
 }
 
@@ -126,6 +136,25 @@ export interface WaveformProgressEvent {
     assetId: number;
     progress: {
         tier: number;
+        percent: number;
+        status: string;
+    };
+}
+
+export interface TranscriptionResult {
+    success: boolean;
+    data?: {
+        chapterId: number;
+        language: string;
+        duration: number;
+        segmentCount: number;
+    };
+    error?: string;
+}
+
+export interface TranscriptionProgressEvent {
+    chapterId: number;
+    progress: {
         percent: number;
         status: string;
     };
@@ -233,6 +262,7 @@ export interface ElectronAPI {
         create: (input: CreateClipInput) => Promise<CreateClipResult>;
         update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
         delete: (id: number) => Promise<DeleteClipResult>;
+        batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
     };
     timeline: {
         loadState: (projectId: number) => Promise<TimelineStateResult>;
@@ -242,6 +272,10 @@ export interface ElectronAPI {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
+    };
+    transcription: {
+        transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
+        onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
     };
     exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;

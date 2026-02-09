@@ -18,6 +18,7 @@ type ProxyProgressCallback = (data: { assetId: number; progress: number }) => vo
 type ProxyCompleteCallback = (data: { assetId: number; proxyPath: string }) => void;
 type ProxyErrorCallback = (data: { assetId: number; error: string }) => void;
 type WaveformProgressCallback = (data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => void;
+type TranscriptionProgressCallback = (data: { chapterId: number; progress: { percent: number; status: string } }) => void;
 
 // ============================================================================
 // Result Types
@@ -66,6 +67,8 @@ export interface GetClipsResult {
 }
 
 export interface CreateClipInput {
+  id?: number;
+  createdAt?: string;
   projectId: number;
   assetId: number;
   trackIndex: number;
@@ -90,6 +93,14 @@ export interface UpdateClipResult {
 
 export interface DeleteClipResult {
   success: boolean;
+  error?: string;
+}
+
+export interface BatchUpdateClipsResult {
+  success: boolean;
+  data?: {
+    updatedCount: number;
+  };
   error?: string;
 }
 
@@ -186,6 +197,17 @@ export interface GetChapterAssetsResult {
   error?: string;
 }
 
+export interface TranscriptionResult {
+  success: boolean;
+  data?: {
+    chapterId: number;
+    language: string;
+    duration: number;
+    segmentCount: number;
+  };
+  error?: string;
+}
+
 // ============================================================================
 // Electron API Interface
 // ============================================================================
@@ -228,6 +250,7 @@ export interface ElectronAPI {
     create: (input: CreateClipInput) => Promise<CreateClipResult>;
     update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
     delete: (id: number) => Promise<DeleteClipResult>;
+    batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
   };
   timeline: {
     loadState: (projectId: number) => Promise<TimelineStateResult>;
@@ -237,6 +260,10 @@ export interface ElectronAPI {
     get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
     generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
     onProgress: (callback: WaveformProgressCallback) => () => void;
+  };
+  transcription: {
+    transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
+    onProgress: (callback: TranscriptionProgressCallback) => () => void;
   };
   exports: {
     generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
@@ -309,6 +336,8 @@ const electronAPI: ElectronAPI = {
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
     create: (input) => ipcRenderer.invoke('clip:create', {
+      id: input.id,
+      createdAt: input.createdAt,
       projectId: input.projectId,
       assetId: input.assetId,
       trackIndex: input.trackIndex,
@@ -321,6 +350,7 @@ const electronAPI: ElectronAPI = {
     }),
     update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
+    batchUpdate: (updates) => ipcRenderer.invoke('clip:batch-update', { updates }),
   },
   timeline: {
     loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),
@@ -335,6 +365,15 @@ const electronAPI: ElectronAPI = {
       const handler = (_: any, data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => callback(data);
       ipcRenderer.on('waveform:progress', handler);
       return () => ipcRenderer.removeListener('waveform:progress', handler);
+    },
+  },
+  transcription: {
+    transcribe: (chapterId, options) =>
+      ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
+    onProgress: (callback) => {
+      const handler = (_: any, data: { chapterId: number; progress: { percent: number; status: string } }) => callback(data);
+      ipcRenderer.on('transcribe:progress', handler);
+      return () => ipcRenderer.removeListener('transcribe:progress', handler);
     },
   },
   proxy: {

@@ -44,7 +44,7 @@
     </button>
   </header>
 
-  <main class="container">
+  <main class="container" class:project-open={selectedProject !== null}>
     <!-- Projects View -->
     {#if !selectedProject}
       <section class="projects-section">
@@ -132,11 +132,30 @@
 </div>
 
 <style>
+  :global(html),
+  :global(body),
+  :global(#app) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: #0f0f0f;
+  }
+
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+
+  :global(*) {
+    scrollbar-width: none;
+  }
+
+  :global(*::-webkit-scrollbar) {
+    width: 0;
+    height: 0;
   }
 
   header {
@@ -178,6 +197,11 @@
     flex: 1;
     overflow: auto;
     padding: 2rem;
+  }
+
+  .container.project-open {
+    padding: 0;
+    overflow: hidden;
   }
 
   .section-header {

@@ -1,43 +1,160 @@
 <script lang="ts">
-  import type { Chapter, Asset } from '$shared/types/database';
+  import type { Chapter, Asset, Clip } from '$shared/types/database';
   import { buildAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
+  import {
+    clampToChapter,
+    getChapterDuration,
+    toChapterGlobalTime,
+    toChapterLocalTime,
+  } from '../utils/chapter-time';
+  import {
+    timelineState,
+    setPlayhead,
+    setPlaying,
+    togglePlayback,
+  } from '../state/timeline.svelte';
+  import {
+    clipBuilderState,
+    clearSelection,
+    hasCompleteSelection,
+  } from '../state/clip-builder.svelte';
+  import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
 
   interface Props {
     chapter: Chapter | null;
     asset: Asset | null;
+    clips?: Clip[];
   }
 
-  let { chapter, asset }: Props = $props();
+  let { chapter, asset, clips = timelineState.clips }: Props = $props();
 
   let videoRef = $state<HTMLVideoElement | null>(null);
   let currentTime = $state(0);
+  let isCreatingFromSelection = $state(false);
+  let lastChapterId = $state<number | null>(null);
+  let isProgrammaticPlayheadSeek = $state(false);
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
 
-  function handleTimeUpdate() {
-    if (!videoRef) return;
-    currentTime = videoRef.currentTime;
+  const chapterDuration = $derived(() => getChapterDuration(chapter));
+  const localTime = $derived(() => toChapterLocalTime(chapter, currentTime));
 
-    if (chapter && videoRef.currentTime >= chapter.end_time) {
-      videoRef.pause();
-      videoRef.currentTime = chapter.end_time;
-      currentTime = chapter.end_time;
+  const clipRanges = $derived.by(() => {
+    if (!chapter || !asset) return [] as Array<{ start: number; end: number }>;
+    const ranges: Array<{ start: number; end: number }> = [];
+    for (const clip of clips) {
+      if (clip.asset_id !== asset.id) continue;
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) continue;
+      const start = clampToChapter(chapter, clip.start_time);
+      const end = clampToChapter(chapter, clip.start_time + duration);
+      if (end <= start) continue;
+      ranges.push({ start, end });
     }
+
+    ranges.sort((a, b) => a.start - b.start);
+    const merged: Array<{ start: number; end: number }> = [];
+    const mergeEpsilon = 0.02;
+    for (const range of ranges) {
+      const last = merged[merged.length - 1];
+      if (!last) {
+        merged.push({ ...range });
+        continue;
+      }
+      if (range.start <= last.end + mergeEpsilon) {
+        last.end = Math.max(last.end, range.end);
+      } else {
+        merged.push({ ...range });
+      }
+    }
+
+    return merged;
+  });
+
+  function handleSeeking() {
+    if (!videoRef || !chapter) return;
+    const next = clampToChapter(chapter, videoRef.currentTime);
+    if (Math.abs(next - videoRef.currentTime) > 0.01) {
+      videoRef.currentTime = next;
+    }
+  }
+
+  function handleTimeUpdate() {
+    if (!videoRef || !chapter) return;
+    let next = clampToChapter(chapter, videoRef.currentTime);
+    if (next !== videoRef.currentTime) {
+      videoRef.pause();
+      videoRef.currentTime = next;
+      setPlaying(false);
+    }
+
+    if (timelineState.excludeCutContent && timelineState.isPlaying) {
+      const skip = getExcludeCutJump(next);
+      if (skip) {
+        if (Math.abs(skip.time - next) > 0.01) {
+          videoRef.currentTime = skip.time;
+          next = skip.time;
+        }
+        if (skip.shouldPause) {
+          videoRef.pause();
+          setPlaying(false);
+        }
+      }
+    }
+
+    currentTime = next;
+    if (!(isProgrammaticPlayheadSeek && !timelineState.isPlaying)) {
+      setPlayhead(next);
+    }
+  }
+
+  function handleSeeked() {
+    isProgrammaticPlayheadSeek = false;
   }
 
   function handleLoadedMetadata() {
     if (!videoRef || !chapter) return;
-    const duration = Number.isFinite(videoRef.duration) ? videoRef.duration : chapter.end_time;
-    const start = Math.max(0, Math.min(duration, chapter.start_time));
+    const start = clampToChapter(chapter, chapter.start_time);
     videoRef.currentTime = start;
     currentTime = start;
+    setPlayhead(start);
   }
 
   function handleVideoError() {
     const error = videoRef?.error;
     console.error('[ChapterPreview] Video playback error', error);
+  }
+
+  function getExcludeCutJump(time: number): { time: number; shouldPause: boolean } | null {
+    const ranges = clipRanges;
+    if (!ranges.length) return null;
+    const epsilon = 0.03;
+
+    if (time < ranges[0].start - epsilon) {
+      return { time: ranges[0].start, shouldPause: false };
+    }
+
+    for (let i = 0; i < ranges.length; i += 1) {
+      const range = ranges[i];
+      if (time < range.start - epsilon) {
+        return { time: range.start, shouldPause: false };
+      }
+      if (time >= range.start - epsilon && time <= range.end + epsilon) {
+        if (time >= range.end - epsilon) {
+          const nextRange = ranges[i + 1];
+          if (nextRange) {
+            return { time: nextRange.start, shouldPause: false };
+          }
+          return { time: range.end, shouldPause: true };
+        }
+        return null;
+      }
+    }
+
+    const lastRange = ranges[ranges.length - 1];
+    return lastRange ? { time: lastRange.end, shouldPause: true } : null;
   }
 
   $effect(() => {
@@ -53,12 +170,87 @@
   });
 
   $effect(() => {
+    const chapterId = chapter?.id ?? null;
+    if (chapterId !== lastChapterId) {
+      clearSelection();
+      lastChapterId = chapterId;
+    }
+  });
+
+  $effect(() => {
     if (!videoRef || !chapter) return;
     if (videoRef.readyState >= 1) {
-      const duration = Number.isFinite(videoRef.duration) ? videoRef.duration : chapter.end_time;
-      const start = Math.max(0, Math.min(duration, chapter.start_time));
+      const start = clampToChapter(chapter, chapter.start_time);
       videoRef.currentTime = start;
       currentTime = start;
+      setPlayhead(start);
+    }
+  });
+
+  $effect(() => {
+    if (!videoRef) return;
+    if (timelineState.isPlaying) {
+      if (videoRef.paused) {
+        void videoRef.play().catch(() => {
+          setPlaying(false);
+        });
+      }
+    } else if (!videoRef.paused) {
+      videoRef.pause();
+    }
+  });
+
+  $effect(() => {
+    if (!videoRef || !chapter) return;
+    const target = clampToChapter(chapter, timelineState.playheadTime);
+    if (Math.abs(target - videoRef.currentTime) < 0.05) return;
+    isProgrammaticPlayheadSeek = true;
+    videoRef.currentTime = target;
+    currentTime = target;
+  });
+
+  async function handleSelectionAutoCreate() {
+    if (!projectDetail.projectId || !chapter || !asset) return;
+    if (!hasCompleteSelection()) return;
+    if (isCreatingFromSelection) return;
+
+    const inPoint = clipBuilderState.inPoint;
+    const outPoint = clipBuilderState.outPoint;
+
+    if (inPoint === null || outPoint === null) return;
+
+    isCreatingFromSelection = true;
+
+    try {
+      await createProjectClip(
+        projectDetail.projectId,
+        asset.id,
+        0,
+        inPoint,
+        inPoint,
+        outPoint,
+        undefined,
+        undefined,
+        true
+      );
+    } finally {
+      clearSelection();
+      isCreatingFromSelection = false;
+    }
+  }
+
+  function handleScrubInput(event: Event) {
+    if (!videoRef || !chapter) return;
+    const value = Number((event.target as HTMLInputElement).value);
+    const next = toChapterGlobalTime(chapter, value);
+    videoRef.currentTime = next;
+    currentTime = next;
+    setPlayhead(next);
+  }
+
+  $effect(() => {
+    if (hasCompleteSelection()) {
+      void handleSelectionAutoCreate();
     }
   });
 </script>
@@ -66,17 +258,18 @@
 <div class="chapter-preview">
   <div class="preview-header">
     <h3>Chapter Preview</h3>
-    <span class="chapter-title">{previewTitle}</span>
+    <span class="chapter-title">{previewTitle()}</span>
   </div>
 
   <div class="video-frame" class:empty={!hasPreview()}>
     <video
       bind:this={videoRef}
       class="preview-video"
+      onseeking={handleSeeking}
+      onseeked={handleSeeked}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
       onerror={handleVideoError}
-      controls={Boolean(asset)}
       preload="metadata"
       playsinline
     >
@@ -91,13 +284,35 @@
     {/if}
   </div>
 
+  {#if chapter && asset}
+    <div class="preview-controls">
+      <button class="play-toggle" onclick={togglePlayback}>
+        {timelineState.isPlaying ? 'Pause' : 'Play'}
+      </button>
+      <div class="time-display">
+        <span class="time-current">{formatTime(localTime())}</span>
+        <span class="time-divider">/</span>
+        <span class="time-total">{formatTime(chapterDuration())}</span>
+      </div>
+      <input
+        class="scrubber"
+        type="range"
+        min="0"
+        max={chapterDuration()}
+        step="0.01"
+        value={localTime()}
+        oninput={handleScrubInput}
+      />
+    </div>
+  {/if}
+
   <div class="preview-footer">
     {#if chapter}
       <span class="range">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
     {:else}
       <span class="range">No chapter selected</span>
     {/if}
-    <span class="timecode">{formatTime(currentTime)}</span>
+    <span class="timecode">{formatTime(localTime())}</span>
   </div>
 </div>
 
@@ -110,6 +325,9 @@
     border: 1px solid #2a2a2a;
     border-radius: 8px;
     padding: 0.75rem;
+    height: 100%;
+    min-height: 0;
+    box-sizing: border-box;
   }
 
   .preview-header {
@@ -140,7 +358,8 @@
     background: #000;
     border-radius: 6px;
     overflow: hidden;
-    aspect-ratio: 16 / 9;
+    flex: 1;
+    min-height: 0;
   }
 
   .video-frame.empty {
@@ -151,6 +370,7 @@
     width: 100%;
     height: 100%;
     display: block;
+    object-fit: contain;
   }
 
   .empty-state {
@@ -181,5 +401,74 @@
 
   .timecode {
     color: #ccc;
+  }
+
+  .preview-controls {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    padding: 0.5rem 0;
+  }
+
+  .play-toggle {
+    grid-row: 1 / span 2;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid #2b2b2b;
+    background: #1e1e1e;
+    color: #fff;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+
+  .play-toggle:hover {
+    background: #2a2a2a;
+    border-color: #3a3a3a;
+  }
+
+  .time-display {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.8rem;
+    color: #ccc;
+  }
+
+  .time-divider {
+    color: #666;
+  }
+
+  .scrubber {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #2a2a2a;
+    border-radius: 999px;
+    outline: none;
+  }
+
+  .scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
+    cursor: pointer;
+  }
+
+  .scrubber::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
+    cursor: pointer;
   }
 </style>

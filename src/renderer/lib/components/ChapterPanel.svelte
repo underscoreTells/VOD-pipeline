@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Chapter, Asset } from "$shared/types/database";
   import { chaptersState, selectChapter, deleteChapter, updateChapter, getAssetsForChapter } from "../state/chapters.svelte";
+  import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
 
   interface Props {
@@ -114,9 +115,14 @@
 <div class="chapter-panel">
   <div class="panel-header">
     <h3>Chapters</h3>
-    <button class="import-btn" onclick={onImportClick}>
-      + Import
-    </button>
+    <div class="header-actions">
+      <button class="import-btn" onclick={onImportClick}>
+        + Import
+      </button>
+      <button class="collapse-btn" onclick={collapseLeft}>
+        Hide
+      </button>
+    </div>
   </div>
 
   {#if chaptersState.isLoading}
@@ -344,6 +350,12 @@
     border-bottom: 1px solid #333;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .panel-header h3 {
     margin: 0;
     color: #fff;
@@ -363,6 +375,21 @@
 
   .import-btn:hover {
     background: #1d4ed8;
+  }
+
+  .collapse-btn {
+    background: #333;
+    color: #ccc;
+    border: 1px solid #444;
+    padding: 0.375rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+
+  .collapse-btn:hover {
+    background: #444;
+    color: #fff;
   }
 
   .loading {
