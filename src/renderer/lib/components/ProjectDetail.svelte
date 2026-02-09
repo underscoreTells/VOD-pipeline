@@ -64,6 +64,7 @@
   let isDragging = $state(false);
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
+  let showClipPreviewPanel = $state(true);
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
@@ -522,11 +523,29 @@
           <div class="editor-layout">
             <section class="editor-main" bind:this={editorMainRef}>
               <div class="editor-top-fixed" style="height: {layoutState.previewHeight}px">
-                <ChapterPreview
-                  chapter={selectedChapter}
-                  asset={chapterPreviewAsset}
-                  clips={selectedChapterClips}
-                />
+                <div class="preview-top-toolbar">
+                  <button
+                    class="preview-toggle-btn"
+                    onclick={() => showClipPreviewPanel = !showClipPreviewPanel}
+                  >
+                    {showClipPreviewPanel ? 'Hide Clip Player' : 'Show Clip Player'}
+                  </button>
+                </div>
+                <div class="preview-top-layout">
+                  {#if showClipPreviewPanel}
+                    <div class="clip-preview-pane">
+                      <ClipPreview />
+                    </div>
+                  {/if}
+
+                  <div class="chapter-preview-pane">
+                    <ChapterPreview
+                      chapter={selectedChapter}
+                      asset={chapterPreviewAsset}
+                      clips={selectedChapterClips}
+                    />
+                  </div>
+                </div>
               </div>
               <div
                 class="resize-handle-horizontal"
@@ -549,8 +568,6 @@
                       />
                     </div>
                   </div>
-
-                  <ClipPreview />
                 </div>
               {:else}
                 <div class="editor-bottom-scrollable empty-selection">
@@ -830,6 +847,81 @@
     border-bottom: 1px solid #2a2a2a;
     overflow: hidden;
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .preview-top-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+
+  .preview-toggle-btn {
+    padding: 0.35rem 0.75rem;
+    background: #232323;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #d0d0d0;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .preview-toggle-btn:hover {
+    background: #2d2d2d;
+    border-color: #4a4a4a;
+    color: #fff;
+  }
+
+  .preview-top-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .clip-preview-pane {
+    flex: 0 0 36%;
+    min-width: 280px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .chapter-preview-pane {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .preview-top-layout :global(.clip-preview),
+  .preview-top-layout :global(.chapter-preview) {
+    height: 100%;
+    min-height: 0;
+  }
+
+  @media (max-width: 1280px) {
+    .clip-preview-pane {
+      flex-basis: 40%;
+      min-width: 240px;
+    }
+  }
+
+  @media (max-width: 980px) {
+    .preview-top-layout {
+      flex-direction: column;
+    }
+
+    .clip-preview-pane {
+      flex: 1 1 45%;
+      min-width: 0;
+    }
+
+    .chapter-preview-pane {
+      flex: 1 1 55%;
+    }
   }
 
   .editor-bottom-scrollable {

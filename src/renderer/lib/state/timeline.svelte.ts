@@ -87,24 +87,33 @@ export function updateClip(id: number, updates: Partial<Clip>) {
 
 export function deleteClip(id: number) {
   timelineState.clips = timelineState.clips.filter(clip => clip.id !== id);
-  timelineState.selectedClipIds.delete(id);
-}
-
-export function selectClip(id: number, multiSelect: boolean = false) {
-  if (multiSelect) {
-    if (timelineState.selectedClipIds.has(id)) {
-      timelineState.selectedClipIds.delete(id);
-    } else {
-      timelineState.selectedClipIds.add(id);
-    }
-  } else {
-    timelineState.selectedClipIds.clear();
-    timelineState.selectedClipIds.add(id);
+  if (timelineState.selectedClipIds.has(id)) {
+    const nextSelectedIds = new Set(timelineState.selectedClipIds);
+    nextSelectedIds.delete(id);
+    timelineState.selectedClipIds = nextSelectedIds;
   }
 }
 
+export function selectClip(id: number, multiSelect: boolean = false) {
+  const nextSelectedIds = new Set(timelineState.selectedClipIds);
+
+  if (multiSelect) {
+    if (nextSelectedIds.has(id)) {
+      nextSelectedIds.delete(id);
+    } else {
+      nextSelectedIds.add(id);
+    }
+  } else {
+    nextSelectedIds.clear();
+    nextSelectedIds.add(id);
+  }
+
+  timelineState.selectedClipIds = nextSelectedIds;
+}
+
 export function clearSelection() {
-  timelineState.selectedClipIds.clear();
+  if (timelineState.selectedClipIds.size === 0) return;
+  timelineState.selectedClipIds = new Set();
 }
 
 export function selectAll() {
@@ -170,7 +179,7 @@ export function clearTimeline() {
   timelineState.zoomLevel = 100;
   timelineState.scrollPosition = 0;
   timelineState.playheadTime = 0;
-  timelineState.selectedClipIds.clear();
+  timelineState.selectedClipIds = new Set();
   timelineState.isPlaying = false;
   timelineState.excludeCutContent = false;
   timelineState.isLoading = false;

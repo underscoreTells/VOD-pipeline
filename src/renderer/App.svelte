@@ -132,6 +132,16 @@
 </div>
 
 <style>
+  :global(html),
+  :global(body),
+  :global(#app) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: #0f0f0f;
+  }
+
   .app {
     display: flex;
     flex-direction: column;

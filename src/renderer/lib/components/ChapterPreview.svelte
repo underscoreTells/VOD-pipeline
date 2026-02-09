@@ -258,7 +258,7 @@
 <div class="chapter-preview">
   <div class="preview-header">
     <h3>Chapter Preview</h3>
-    <span class="chapter-title">{previewTitle}</span>
+    <span class="chapter-title">{previewTitle()}</span>
   </div>
 
   <div class="video-frame" class:empty={!hasPreview()}>
