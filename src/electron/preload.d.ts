@@ -58,6 +58,8 @@ export interface GetClipsResult {
 }
 
 export interface CreateClipInput {
+    id?: number;
+    createdAt?: string;
     projectId: number;
     assetId: number;
     trackIndex: number;
@@ -82,6 +84,14 @@ export interface UpdateClipResult {
 
 export interface DeleteClipResult {
     success: boolean;
+    error?: string;
+}
+
+export interface BatchUpdateClipsResult {
+    success: boolean;
+    data?: {
+        updatedCount: number;
+    };
     error?: string;
 }
 
@@ -233,6 +243,7 @@ export interface ElectronAPI {
         create: (input: CreateClipInput) => Promise<CreateClipResult>;
         update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
         delete: (id: number) => Promise<DeleteClipResult>;
+        batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
     };
     timeline: {
         loadState: (projectId: number) => Promise<TimelineStateResult>;
