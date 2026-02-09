@@ -646,11 +646,14 @@ export function registerIpcHandlers() {
   });
 
   // Clip handlers
-  ipcMain.handle(IPC_CHANNELS.CLIP_CREATE, async (_, { projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
-    console.log('IPC: clip:create', projectId, assetId);
+  ipcMain.handle(IPC_CHANNELS.CLIP_CREATE, async (_, { id, createdAt, projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
+    console.log('IPC: clip:create', id ?? 'auto', projectId, assetId);
     try {
       if (!projectId || !assetId) {
         return createErrorResponse('Project ID and Asset ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (id !== undefined && (!Number.isInteger(id) || id <= 0)) {
+        return createErrorResponse('Clip ID must be a positive integer when provided', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
       if (startTime < 0) {
         return createErrorResponse('Start time must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -663,6 +666,8 @@ export function registerIpcHandlers() {
       }
 
       const clip = await createClip({
+        id,
+        created_at: createdAt,
         project_id: projectId,
         asset_id: assetId,
         track_index: trackIndex ?? 0,

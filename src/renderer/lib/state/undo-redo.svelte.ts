@@ -1,10 +1,17 @@
-import { timelineState, updateClip } from './timeline.svelte';
+import {
+  batchUpdateClips as ipcBatchUpdateClips,
+  createClip as ipcCreateClip,
+  deleteClip as ipcDeleteClip,
+  updateClip as ipcUpdateClip,
+} from './electron.svelte';
+import { timelineState, updateClip as updateTimelineClip } from './timeline.svelte';
+import type { Clip } from '../../../shared/types/database';
 
 // Command pattern for undo/redo
 export interface Command {
   description: string;
-  execute(): void;
-  undo(): void;
+  execute(): void | Promise<void>;
+  undo(): void | Promise<void>;
 }
 
 // Undo/Redo state
@@ -14,6 +21,17 @@ const undoRedoState = $state({
   undoStack: [] as Command[],
   redoStack: [] as Command[],
 });
+
+let historyQueue: Promise<void> = Promise.resolve();
+
+function enqueueHistoryOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = historyQueue.then(operation, operation);
+  historyQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
 
 // Derived state
 export function canUndo(): boolean {
@@ -35,58 +53,176 @@ export function getNextRedoDescription(): string | null {
 }
 
 // Execute a command and add to undo stack
-export function executeCommand(command: Command) {
-  command.execute();
-  
-  undoRedoState.undoStack.push(command);
-  
-  // Limit undo stack size
-  if (undoRedoState.undoStack.length > MAX_HISTORY) {
-    undoRedoState.undoStack.shift();
-  }
-  
-  // Clear redo stack on new action
-  undoRedoState.redoStack = [];
+export function executeCommand(command: Command): Promise<boolean> {
+  return enqueueHistoryOperation(async () => {
+    try {
+      await command.execute();
+
+      undoRedoState.undoStack.push(command);
+
+      // Limit undo stack size
+      if (undoRedoState.undoStack.length > MAX_HISTORY) {
+        undoRedoState.undoStack.shift();
+      }
+
+      // Clear redo stack on new action
+      undoRedoState.redoStack = [];
+      return true;
+    } catch (error) {
+      console.error('Execute command failed:', error);
+      return false;
+    }
+  });
 }
 
 // Undo last command
-export function undo(): boolean {
-  if (undoRedoState.undoStack.length === 0) return false;
+export function undo(): Promise<boolean> {
+  return enqueueHistoryOperation(async () => {
+    if (undoRedoState.undoStack.length === 0) return false;
 
-  const command = undoRedoState.undoStack.pop()!;
-  try {
-    command.undo();
-    undoRedoState.redoStack.push(command);
-    return true;
-  } catch (error) {
-    // Restore command to undo stack on failure
-    undoRedoState.undoStack.push(command);
-    console.error('Undo failed:', error);
-    return false;
-  }
+    const command = undoRedoState.undoStack.pop()!;
+    try {
+      await command.undo();
+      undoRedoState.redoStack.push(command);
+      return true;
+    } catch (error) {
+      // Restore command to undo stack on failure
+      undoRedoState.undoStack.push(command);
+      console.error('Undo failed:', error);
+      return false;
+    }
+  });
 }
 
 // Redo last undone command
-export function redo(): boolean {
-  if (undoRedoState.redoStack.length === 0) return false;
+export function redo(): Promise<boolean> {
+  return enqueueHistoryOperation(async () => {
+    if (undoRedoState.redoStack.length === 0) return false;
 
-  const command = undoRedoState.redoStack.pop()!;
-  try {
-    command.execute();
-    undoRedoState.undoStack.push(command);
-    return true;
-  } catch (error) {
-    // Restore command to redo stack on failure
-    undoRedoState.redoStack.push(command);
-    console.error('Redo failed:', error);
-    return false;
-  }
+    const command = undoRedoState.redoStack.pop()!;
+    try {
+      await command.execute();
+      undoRedoState.undoStack.push(command);
+      return true;
+    } catch (error) {
+      // Restore command to redo stack on failure
+      undoRedoState.redoStack.push(command);
+      console.error('Redo failed:', error);
+      return false;
+    }
+  });
 }
 
 // Clear all history
 export function clearHistory() {
   undoRedoState.undoStack = [];
   undoRedoState.redoStack = [];
+}
+
+function cloneClipForHistory(clip: Clip): Clip {
+  return {
+    id: clip.id,
+    project_id: clip.project_id,
+    asset_id: clip.asset_id,
+    track_index: clip.track_index,
+    start_time: clip.start_time,
+    in_point: clip.in_point,
+    out_point: clip.out_point,
+    role: clip.role,
+    description: clip.description,
+    is_essential: clip.is_essential,
+    created_at: clip.created_at,
+  };
+}
+
+type DeleteClipIpcResult = {
+  success: boolean;
+  error?: unknown;
+  code?: unknown;
+};
+
+function normalizeErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  if (error == null) return '';
+  return String(error);
+}
+
+function isNotFoundCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  const normalized = code.toLowerCase();
+  return normalized === 'not_found' || normalized.includes('not_found') || normalized.includes('notfound');
+}
+
+function isNotFoundMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('clip not found') ||
+    normalized.includes('not found') ||
+    normalized.includes('no such clip') ||
+    normalized.includes('not_found')
+  );
+}
+
+function isAlreadyMissingDeleteResult(result: DeleteClipIpcResult): boolean {
+  return isNotFoundCode(result.code) || isNotFoundMessage(normalizeErrorMessage(result.error));
+}
+
+function isAlreadyMissingDeleteError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (isNotFoundCode(code)) return true;
+  }
+  return isNotFoundMessage(normalizeErrorMessage(error));
+}
+
+async function persistClipUpdate(clipId: number, updates: Partial<Clip>): Promise<void> {
+  const result = await ipcUpdateClip(clipId, updates);
+  if (!result.success) {
+    throw new Error(result.error || `Failed to update clip ${clipId}`);
+  }
+}
+
+async function persistClipDelete(clipId: number): Promise<'deleted' | 'already-missing'> {
+  const result = (await ipcDeleteClip(clipId)) as DeleteClipIpcResult;
+  if (result.success) {
+    return 'deleted';
+  }
+
+  if (isAlreadyMissingDeleteResult(result)) {
+    return 'already-missing';
+  }
+
+  const errorMessage = normalizeErrorMessage(result.error);
+  throw new Error(errorMessage || `Failed to delete clip ${clipId}`);
+}
+
+async function persistClipRestore(clip: Clip): Promise<void> {
+  const result = await ipcCreateClip({
+    id: clip.id,
+    createdAt: clip.created_at,
+    projectId: clip.project_id,
+    assetId: clip.asset_id,
+    trackIndex: clip.track_index,
+    startTime: clip.start_time,
+    inPoint: clip.in_point,
+    outPoint: clip.out_point,
+    role: clip.role ?? undefined,
+    description: clip.description ?? undefined,
+    isEssential: clip.is_essential,
+  });
+
+  if (!result.success || !result.data) {
+    throw new Error(result.error || `Failed to restore clip ${clip.id}`);
+  }
+
+  if (result.data.id !== clip.id) {
+    throw new Error(`Clip restore returned unexpected id ${result.data.id} (expected ${clip.id})`);
+  }
 }
 
 // =============================================================================
@@ -101,12 +237,14 @@ export class MoveClipCommand implements Command {
     private newStartTime: number
   ) {}
 
-  execute() {
-    updateClip(this.clipId, { start_time: this.newStartTime });
+  async execute() {
+    await persistClipUpdate(this.clipId, { start_time: this.newStartTime });
+    updateTimelineClip(this.clipId, { start_time: this.newStartTime });
   }
 
-  undo() {
-    updateClip(this.clipId, { start_time: this.oldStartTime });
+  async undo() {
+    await persistClipUpdate(this.clipId, { start_time: this.oldStartTime });
+    updateTimelineClip(this.clipId, { start_time: this.oldStartTime });
   }
 }
 
@@ -120,15 +258,23 @@ export class ResizeClipCommand implements Command {
     private newOutPoint: number
   ) {}
 
-  execute() {
-    updateClip(this.clipId, {
+  async execute() {
+    await persistClipUpdate(this.clipId, {
+      in_point: this.newInPoint,
+      out_point: this.newOutPoint,
+    });
+    updateTimelineClip(this.clipId, {
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
   }
 
-  undo() {
-    updateClip(this.clipId, {
+  async undo() {
+    await persistClipUpdate(this.clipId, {
+      in_point: this.oldInPoint,
+      out_point: this.oldOutPoint,
+    });
+    updateTimelineClip(this.clipId, {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
@@ -136,7 +282,35 @@ export class ResizeClipCommand implements Command {
 }
 
 export class DeleteClipCommand implements Command {
-  private clipData: { id: number; index: number; clip: typeof timelineState.clips[0] } | null = null;
+  private clipData: { id: number; index: number; clip: Clip } | null = null;
+
+  private removeFromTimelineState() {
+    timelineState.clips = timelineState.clips.filter((clip) => clip.id !== this.clipId);
+    if (timelineState.selectedClipIds.has(this.clipId)) {
+      const nextSelectedIds = new Set(timelineState.selectedClipIds);
+      nextSelectedIds.delete(this.clipId);
+      timelineState.selectedClipIds = nextSelectedIds;
+    }
+  }
+
+  private restoreToTimelineState() {
+    const clipData = this.clipData;
+    if (!clipData) return;
+
+    const existingIndex = timelineState.clips.findIndex((clip) => clip.id === this.clipId);
+    if (existingIndex !== -1) {
+      timelineState.clips = timelineState.clips.map((clip) =>
+        clip.id === this.clipId ? clipData.clip : clip
+      );
+      return;
+    }
+
+    const { index, clip } = clipData;
+    const newClips = [...timelineState.clips];
+    const insertIndex = Math.min(Math.max(index, 0), newClips.length);
+    newClips.splice(insertIndex, 0, clip);
+    timelineState.clips = newClips;
+  }
 
   constructor(
     public description: string,
@@ -148,36 +322,42 @@ export class DeleteClipCommand implements Command {
       this.clipData = {
         id: this.clipId,
         index,
-        clip: structuredClone(timelineState.clips[index]),
+        clip: cloneClipForHistory(timelineState.clips[index]),
       };
     }
   }
 
-  execute() {
-    if (!this.clipData) {
-      // First execution - store the data
-      const index = timelineState.clips.findIndex(c => c.id === this.clipId);
-      if (index !== -1) {
-        this.clipData = {
-          id: this.clipId,
-          index,
-          clip: structuredClone(timelineState.clips[index]),
-        };
-      }
+  async execute() {
+    const currentIndex = timelineState.clips.findIndex((clip) => clip.id === this.clipId);
+    if (currentIndex !== -1) {
+      this.clipData = {
+        id: this.clipId,
+        index: currentIndex,
+        clip: cloneClipForHistory(timelineState.clips[currentIndex]),
+      };
     }
-    
-    // Remove clip from state
-    timelineState.clips = timelineState.clips.filter(c => c.id !== this.clipId);
-    timelineState.selectedClipIds.delete(this.clipId);
+
+    if (!this.clipData) {
+      throw new Error(`Clip ${this.clipId} not found in timeline state`);
+    }
+
+    this.removeFromTimelineState();
+
+    try {
+      await persistClipDelete(this.clipId);
+    } catch (error) {
+      if (isAlreadyMissingDeleteError(error)) {
+        return;
+      }
+      this.restoreToTimelineState();
+      throw error;
+    }
   }
 
-  undo() {
+  async undo() {
     if (this.clipData) {
-      // Restore clip at original position
-      const { index, clip } = this.clipData;
-      const newClips = [...timelineState.clips];
-      newClips.splice(index, 0, clip);
-      timelineState.clips = newClips;
+      await persistClipRestore(this.clipData.clip);
+      this.restoreToTimelineState();
     }
   }
 }
@@ -192,15 +372,35 @@ export class MultiMoveCommand implements Command {
     }>
   ) {}
 
-  execute() {
+  async execute() {
+    const updates = this.moves.map((move) => ({
+      id: move.clipId,
+      start_time: move.newStartTime,
+    }));
+
+    const result = await ipcBatchUpdateClips(updates);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to batch move clips');
+    }
+
     for (const move of this.moves) {
-      updateClip(move.clipId, { start_time: move.newStartTime });
+      updateTimelineClip(move.clipId, { start_time: move.newStartTime });
     }
   }
 
-  undo() {
+  async undo() {
+    const updates = this.moves.map((move) => ({
+      id: move.clipId,
+      start_time: move.oldStartTime,
+    }));
+
+    const result = await ipcBatchUpdateClips(updates);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to batch undo clip move');
+    }
+
     for (const move of this.moves) {
-      updateClip(move.clipId, { start_time: move.oldStartTime });
+      updateTimelineClip(move.clipId, { start_time: move.oldStartTime });
     }
   }
 }

@@ -21,7 +21,7 @@ import {
   type WaveformResult 
 } from './electron.svelte';
 import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
-import { timelineState, loadTimeline, setClips, createClip, updateClip, deleteClip, setLoading, setError, clearTimeline, getClipById } from './timeline.svelte';
+import { timelineState, loadTimeline, setClips, createClip, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
 import { executeCommand, MoveClipCommand, ResizeClipCommand, DeleteClipCommand, clearHistory } from './undo-redo.svelte';
 
 // Project detail state
@@ -38,6 +38,25 @@ export const projectDetail = $state({
     { id: 'edl', name: 'EDL', description: 'Edit Decision List', extension: '.edl' },
   ] as Array<{ id: string; name: string; description: string; extension: string }>,
 });
+
+const deletingClipIds = new Set<number>();
+
+async function reloadProjectClipsFromBackend(): Promise<boolean> {
+  const projectId = projectDetail.projectId;
+  if (!projectId) return false;
+
+  try {
+    const clipsResult: GetClipsResult = await ipcGetClips(projectId);
+    if (clipsResult.success && clipsResult.data) {
+      setClips(clipsResult.data);
+      return true;
+    }
+  } catch (error) {
+    console.warn('Failed to reload clips after delete failure:', error);
+  }
+
+  return false;
+}
 
 // Load project data (assets, clips, timeline state)
 export async function loadProjectDetail(projectId: number) {
@@ -170,13 +189,10 @@ export async function deleteProjectClip(id: number): Promise<boolean> {
 
 // Execute move command and save to backend
 export async function executeMoveClip(clipId: number, oldStartTime: number, newStartTime: number) {
-  // Save to backend first
-  const success = await updateProjectClip(clipId, { start_time: newStartTime });
-  
-  if (success) {
-    // Only update UI/undo stack if backend save succeeded
-    const command = new MoveClipCommand('Move clip', clipId, oldStartTime, newStartTime);
-    executeCommand(command);
+  const command = new MoveClipCommand('Move clip', clipId, oldStartTime, newStartTime);
+  const success = await executeCommand(command);
+  if (!success) {
+    setError('Failed to move clip');
   }
 }
 
@@ -188,31 +204,51 @@ export async function executeResizeClip(
   newInPoint: number,
   newOutPoint: number
 ) {
-  // Save to backend first
-  const success = await updateProjectClip(clipId, { in_point: newInPoint, out_point: newOutPoint });
-  
-  if (success) {
-    // Only update UI/undo stack if backend save succeeded
-    const command = new ResizeClipCommand('Resize clip', clipId, oldInPoint, oldOutPoint, newInPoint, newOutPoint);
-    executeCommand(command);
+  const command = new ResizeClipCommand('Resize clip', clipId, oldInPoint, oldOutPoint, newInPoint, newOutPoint);
+  const success = await executeCommand(command);
+  if (!success) {
+    setError('Failed to resize clip');
   }
 }
 
 // Execute delete command and save to backend
 export async function executeDeleteClip(clipId: number) {
+  if (deletingClipIds.has(clipId)) return;
+
   // Capture clip data BEFORE deletion
   const clip = getClipById(clipId);
   if (!clip) return;
-  
-  // Create command with captured snapshot
-  const command = new DeleteClipCommand('Delete clip', clipId);
-  
-  // Save to backend
-  const success = await deleteProjectClip(clipId);
-  
-  if (success) {
-    // Execute command to update local state and add to undo stack
-    executeCommand(command);
+
+  deletingClipIds.add(clipId);
+
+  try {
+    let command: DeleteClipCommand;
+    try {
+      // Create command with captured snapshot
+      command = new DeleteClipCommand('Delete clip', clipId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setError(`Failed to prepare clip deletion: ${message}`);
+      return;
+    }
+
+    const success = await executeCommand(command);
+    if (success) {
+      if (getClipById(clipId)) {
+        const reloaded = await reloadProjectClipsFromBackend();
+        if (!reloaded) {
+          setError('Deleted clip but failed to refresh timeline');
+        }
+      }
+      return;
+    }
+
+    const reloaded = await reloadProjectClipsFromBackend();
+    if (!reloaded) {
+      setError('Failed to delete clip');
+    }
+  } finally {
+    deletingClipIds.delete(clipId);
   }
 }
 

@@ -67,6 +67,8 @@ export interface GetClipsResult {
 }
 
 export interface CreateClipInput {
+  id?: number;
+  createdAt?: string;
   projectId: number;
   assetId: number;
   trackIndex: number;
@@ -91,6 +93,14 @@ export interface UpdateClipResult {
 
 export interface DeleteClipResult {
   success: boolean;
+  error?: string;
+}
+
+export interface BatchUpdateClipsResult {
+  success: boolean;
+  data?: {
+    updatedCount: number;
+  };
   error?: string;
 }
 
@@ -240,6 +250,7 @@ export interface ElectronAPI {
     create: (input: CreateClipInput) => Promise<CreateClipResult>;
     update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
     delete: (id: number) => Promise<DeleteClipResult>;
+    batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
   };
   timeline: {
     loadState: (projectId: number) => Promise<TimelineStateResult>;
@@ -325,6 +336,8 @@ const electronAPI: ElectronAPI = {
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
     create: (input) => ipcRenderer.invoke('clip:create', {
+      id: input.id,
+      createdAt: input.createdAt,
       projectId: input.projectId,
       assetId: input.assetId,
       trackIndex: input.trackIndex,
@@ -337,6 +350,7 @@ const electronAPI: ElectronAPI = {
     }),
     update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
+    batchUpdate: (updates) => ipcRenderer.invoke('clip:batch-update', { updates }),
   },
   timeline: {
     loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),

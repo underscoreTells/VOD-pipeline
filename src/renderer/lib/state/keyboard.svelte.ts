@@ -17,8 +17,10 @@ import {
   clearSelection as clearClipSelection,
 } from './clip-builder.svelte';
 
+type ShortcutHandler = () => void | Promise<unknown>;
+
 // Keyboard shortcuts configuration
-const SHORTCUTS = {
+const SHORTCUTS: Record<string, ShortcutHandler> = {
   // Playback
   'Space': togglePlayback,
   
@@ -48,7 +50,7 @@ const SHORTCUTS = {
   'i': markInPoint,
   'o': markOutPoint,
   'Ctrl+b': toggleInOut,
-} as const;
+};
 
 // Track if user is in an input field
 function isInputFieldActive(): boolean {
@@ -85,15 +87,14 @@ function nudgePlayhead(frames: number) {
 }
 
 // Handle delete key
-function handleDelete() {
+async function handleDelete() {
   if (timelineState.selectedClipIds.size === 0) return;
   
   // Create delete commands for all selected clips
   const selectedIds = Array.from(timelineState.selectedClipIds);
   
-  // Execute commands through undo-redo system
   for (const clipId of selectedIds) {
-    void executeDeleteClip(clipId);
+    await executeDeleteClip(clipId);
   }
 }
 
@@ -134,7 +135,12 @@ export function handleKeyDown(event: KeyboardEvent): boolean {
   
   if (handler) {
     event.preventDefault();
-    handler();
+    const result = handler();
+    if (result instanceof Promise) {
+      void result.catch((error) => {
+        console.error('Keyboard shortcut failed:', error);
+      });
+    }
     return true;
   }
   

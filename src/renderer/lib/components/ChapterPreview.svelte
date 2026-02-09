@@ -33,6 +33,7 @@
   let currentTime = $state(0);
   let isCreatingFromSelection = $state(false);
   let lastChapterId = $state<number | null>(null);
+  let isProgrammaticPlayheadSeek = $state(false);
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
@@ -104,7 +105,13 @@
     }
 
     currentTime = next;
-    setPlayhead(next);
+    if (!(isProgrammaticPlayheadSeek && !timelineState.isPlaying)) {
+      setPlayhead(next);
+    }
+  }
+
+  function handleSeeked() {
+    isProgrammaticPlayheadSeek = false;
   }
 
   function handleLoadedMetadata() {
@@ -197,6 +204,7 @@
     if (!videoRef || !chapter) return;
     const target = clampToChapter(chapter, timelineState.playheadTime);
     if (Math.abs(target - videoRef.currentTime) < 0.05) return;
+    isProgrammaticPlayheadSeek = true;
     videoRef.currentTime = target;
     currentTime = target;
   });
@@ -258,6 +266,7 @@
       bind:this={videoRef}
       class="preview-video"
       onseeking={handleSeeking}
+      onseeked={handleSeeked}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
       onerror={handleVideoError}

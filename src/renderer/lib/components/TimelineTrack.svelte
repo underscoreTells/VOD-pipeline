@@ -5,7 +5,7 @@
   import type { Clip } from '../../../shared/types/database';
   import { getWaveform, onWaveformProgress } from '../state/electron.svelte';
   import { timelineState, selectClip, setPlayhead, setScroll } from '../state/timeline.svelte';
-  import { createProjectClip, executeMoveClip, executeResizeClip, projectDetail } from '../state/project-detail.svelte';
+  import { createProjectClip, executeDeleteClip, executeMoveClip, executeResizeClip, projectDetail } from '../state/project-detail.svelte';
   import { chaptersState } from '../state/chapters.svelte';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   
@@ -33,6 +33,12 @@
   let scrollContainer: HTMLElement | null = null;
   let cleanupRenderListener: (() => void) | null = null;
   const clipRegions = new Map<number, any>();
+  let clipContextMenu = $state({
+    open: false,
+    x: 0,
+    y: 0,
+    clipId: null as number | null,
+  });
 
   const WAVEFORM_TIER_LEVEL = 1;
   const AUDIO_TRACK_INDEX = 0;
@@ -99,6 +105,8 @@
   let isSelecting = $state(false);
   let selectionStartTime = 0;
   let selectionCurrentTime = 0;
+  let selectionStartPointerTime: number | null = null;
+  let selectionEndPointerTime: number | null = null;
   let selectionRegion: any | null = null;
   let dragPointerId: number | null = null;
   let dragMode: 'pan' | 'select' | 'click' | 'move' | 'resize' | null = null;
@@ -153,6 +161,7 @@
     if (scrollContainer === nextScrollContainer) return;
     if (scrollContainer) {
       scrollContainer.removeEventListener('pointerdown', handleWaveformPointerDown, true);
+      scrollContainer.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer.removeEventListener('scroll', handleScrollContainerScroll);
       scrollContainer.classList.remove('waveform-scroll-container');
     }
@@ -173,6 +182,7 @@
       }
       scrollContainer.classList.add('waveform-scroll-container');
       scrollContainer.addEventListener('pointerdown', handleWaveformPointerDown, { capture: true });
+      scrollContainer.addEventListener('contextmenu', handleWaveformContextMenu, { capture: true });
       scrollContainer.addEventListener('scroll', handleScrollContainerScroll, { passive: true });
     }
   }
@@ -190,27 +200,45 @@
   }
 
   function getPointerTime(event: PointerEvent): number | null {
-    if (!scrollContainer) return null;
     if (!chapterRange) return null;
     if (!waveSurfer) return null;
-    const rect = scrollContainer.getBoundingClientRect();
-    const localX = clamp(event.clientX - rect.left, 0, rect.width);
-    const scrollLeft = scrollContainer.scrollLeft;
-    const pixelsPerSecond = getPixelsPerSecond();
-    const time = (scrollLeft + localX) / pixelsPerSecond;
-    return clamp(time, 0, chapterRange.duration);
+    const wrapper = waveSurfer.getWrapper();
+    if (!wrapper) return null;
+    const rect = wrapper.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+
+    const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    return clamp(ratio * chapterRange.duration, 0, chapterRange.duration);
+  }
+
+  function toWaveSurferRegionTime(localTime: number): number {
+    if (!chapterRange) return localTime;
+
+    const chapterDuration = Math.max(0.01, chapterRange.duration);
+    const clampedLocal = clamp(localTime, 0, chapterDuration);
+    const progress = clampedLocal / chapterDuration;
+
+    const rawDuration = waveSurfer?.getDuration() ?? 0;
+    const waveSurferDuration =
+      Number.isFinite(rawDuration) && rawDuration > 0
+        ? rawDuration
+        : chapterDuration;
+
+    return clamp(progress * waveSurferDuration, 0, waveSurferDuration);
   }
 
   function updateSelectionRegion(start: number, end: number) {
     if (!regionsPlugin) return;
     const rangeStart = Math.min(start, end);
     const rangeEnd = Math.max(start, end);
+    const regionStart = toWaveSurferRegionTime(rangeStart);
+    const regionEnd = toWaveSurferRegionTime(rangeEnd);
 
     if (!selectionRegion) {
       selectionRegion = regionsPlugin.addRegion({
         id: 'selection-temp',
-        start: rangeStart,
-        end: rangeEnd,
+        start: regionStart,
+        end: regionEnd,
         color: SELECTION_COLOR,
         drag: false,
         resize: false,
@@ -219,20 +247,20 @@
     }
 
     if (typeof selectionRegion.setOptions === 'function') {
-      selectionRegion.setOptions({ start: rangeStart, end: rangeEnd });
+      selectionRegion.setOptions({ start: regionStart, end: regionEnd });
       return;
     }
 
     if (typeof selectionRegion.update === 'function') {
-      selectionRegion.update({ start: rangeStart, end: rangeEnd });
+      selectionRegion.update({ start: regionStart, end: regionEnd });
       return;
     }
 
     selectionRegion.remove?.();
     selectionRegion = regionsPlugin.addRegion({
       id: 'selection-temp',
-      start: rangeStart,
-      end: rangeEnd,
+      start: regionStart,
+      end: regionEnd,
       color: SELECTION_COLOR,
       drag: false,
       resize: false,
@@ -249,7 +277,7 @@
     return source.find((clip) => clip.id === clipId) ?? null;
   }
 
-  function getPointerTargets(event: PointerEvent): { clipId: number | null; handle: 'start' | 'end' | null } {
+  function getPointerTargets(event: PointerEvent | MouseEvent): { clipId: number | null; handle: 'start' | 'end' | null } {
     const path = event.composedPath();
     let clipId: number | null = null;
     let handle: 'start' | 'end' | null = null;
@@ -268,11 +296,45 @@
     return { clipId, handle };
   }
 
+  function closeClipContextMenu() {
+    clipContextMenu.open = false;
+    clipContextMenu.clipId = null;
+  }
+
+  function openClipContextMenu(event: MouseEvent, clipId: number) {
+    const padding = 8;
+    const menuWidth = 180;
+    const menuHeight = 44;
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth - padding) {
+      x = Math.max(padding, window.innerWidth - menuWidth - padding);
+    }
+    if (y + menuHeight > window.innerHeight - padding) {
+      y = Math.max(padding, window.innerHeight - menuHeight - padding);
+    }
+
+    clipContextMenu.open = true;
+    clipContextMenu.x = x;
+    clipContextMenu.y = y;
+    clipContextMenu.clipId = clipId;
+  }
+
+  function handleClipContextDelete() {
+    if (clipContextMenu.clipId === null) return;
+    const clipId = clipContextMenu.clipId;
+    closeClipContextMenu();
+    void executeDeleteClip(clipId);
+  }
+
   function updateRegionVisual(clipId: number, localStart: number, localEnd: number) {
     const region = clipRegions.get(clipId);
     if (!region || !chapterRange) return;
-    const regionStart = clamp(localStart, 0, chapterRange.duration);
-    const regionEnd = clamp(localEnd, 0, chapterRange.duration);
+    const localRegionStart = clamp(localStart, 0, chapterRange.duration);
+    const localRegionEnd = clamp(localEnd, 0, chapterRange.duration);
+    const regionStart = toWaveSurferRegionTime(localRegionStart);
+    const regionEnd = toWaveSurferRegionTime(localRegionEnd);
 
     if (typeof region.setOptions === 'function') {
       region.setOptions({ start: regionStart, end: regionEnd });
@@ -345,6 +407,8 @@
     isSelecting = true;
     selectionStartTime = startTime;
     selectionCurrentTime = startTime;
+    selectionStartPointerTime = startTime;
+    selectionEndPointerTime = startTime;
     updateSelectionRegion(selectionStartTime, selectionCurrentTime);
     document.body.style.cursor = 'crosshair';
   }
@@ -431,6 +495,7 @@
       const currentTime = getPointerTime(event);
       if (currentTime === null) return;
       selectionCurrentTime = currentTime;
+      selectionEndPointerTime = currentTime;
       updateSelectionRegion(selectionStartTime, selectionCurrentTime);
       return;
     }
@@ -470,14 +535,14 @@
   function handleDragEnd(event: PointerEvent) {
     if (dragPointerId !== event.pointerId) return;
     if (dragMode === 'select') {
-      const start = selectionStartTime;
-      const end = selectionCurrentTime;
+      const start = selectionStartPointerTime ?? selectionStartTime;
+      const end = getPointerTime(event) ?? selectionEndPointerTime ?? selectionCurrentTime;
       clearSelectionRegion();
       void createClipFromSelection(start, end);
     }
 
     if (dragMode === 'click' && !dragDidMove && chapterRange) {
-      const pointerTime = getPointerTime(event) ?? dragClickTime;
+      const pointerTime = dragClickTime ?? getPointerTime(event);
       if (pointerTime !== null) {
         const globalTime = chapterRange.start + pointerTime;
         setPlayhead(globalTime);
@@ -536,6 +601,8 @@
     dragMode = null;
     dragClickTime = null;
     dragClickClipId = null;
+    selectionStartPointerTime = null;
+    selectionEndPointerTime = null;
     dragClipId = null;
     dragResizeEdge = null;
     dragDidMove = false;
@@ -549,6 +616,9 @@
   function handleWaveformPointerDown(event: PointerEvent) {
     if (!scrollContainer || !isReady) return;
     if (!chapterRange) return;
+    if (clipContextMenu.open && event.button !== 2) {
+      closeClipContextMenu();
+    }
     const pointerTime = getPointerTime(event);
     if (pointerTime === null) return;
 
@@ -584,6 +654,20 @@
     event.preventDefault();
     event.stopPropagation();
     startClickDrag(event, pointerTime, clipId);
+  }
+
+  function handleWaveformContextMenu(event: MouseEvent) {
+    if (!scrollContainer || !isReady) return;
+    const { clipId } = getPointerTargets(event);
+    if (clipId === null) {
+      closeClipContextMenu();
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    selectClip(clipId, false);
+    openClipContextMenu(event, clipId);
   }
 
   async function loadWaveformCache() {
@@ -782,11 +866,35 @@
       cleanupRenderListener?.();
       cleanupRenderListener = null;
       scrollContainer?.removeEventListener('pointerdown', handleWaveformPointerDown, true);
+      scrollContainer?.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer?.removeEventListener('scroll', handleScrollContainerScroll);
       scrollContainer?.classList.remove('waveform-scroll-container');
       scrollContainer = null;
       regionsPlugin?.destroy();
       waveSurfer?.destroy();
+    };
+  });
+
+  $effect(() => {
+    if (!clipContextMenu.open) return;
+
+    const handleWindowClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.timeline-clip-context-menu')) return;
+      closeClipContextMenu();
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeClipContextMenu();
+    };
+
+    window.addEventListener('click', handleWindowClick);
+    window.addEventListener('contextmenu', handleWindowClick);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('click', handleWindowClick);
+      window.removeEventListener('contextmenu', handleWindowClick);
+      window.removeEventListener('keydown', handleEscape);
     };
   });
 
@@ -812,7 +920,8 @@
   $effect(() => {
     if (waveSurfer && isReady && chapterRange) {
       const localTime = clamp(timelineState.playheadTime - chapterRange.start, 0, chapterRange.duration);
-      waveSurfer.setTime(localTime);
+      const progress = chapterRange.duration > 0 ? clamp(localTime / chapterRange.duration, 0, 1) : 0;
+      waveSurfer.seekTo(progress);
     }
   });
   
@@ -841,8 +950,10 @@
         continue;
       }
 
-      const regionStart = clamp(localStart, 0, chapterDuration);
-      const regionEnd = clamp(localEnd, 0, chapterDuration);
+      const localRegionStart = clamp(localStart, 0, chapterDuration);
+      const localRegionEnd = clamp(localEnd, 0, chapterDuration);
+      const regionStart = toWaveSurferRegionTime(localRegionStart);
+      const regionEnd = toWaveSurferRegionTime(localRegionEnd);
       const region = regionsPlugin.addRegion({
         id: `clip-${clip.id}`,
         start: regionStart,
@@ -898,6 +1009,20 @@
     class:selecting={isSelecting}
     bind:this={container}
   ></div>
+
+  {#if clipContextMenu.open}
+    <div
+      class="timeline-clip-context-menu"
+      style={`top: ${clipContextMenu.y}px; left: ${clipContextMenu.x}px;`}
+      role="menu"
+      onclick={(event) => event.stopPropagation()}
+      oncontextmenu={(event) => event.preventDefault()}
+    >
+      <button class="timeline-context-item destructive" role="menuitem" onclick={handleClipContextDelete}>
+        Delete clip
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -951,6 +1076,38 @@
 
   .waveform-container.selecting {
     cursor: crosshair;
+  }
+
+  .timeline-clip-context-menu {
+    position: fixed;
+    z-index: 80;
+    min-width: 160px;
+    padding: 0.25rem;
+    background: #1f1f1f;
+    border: 1px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+
+  .timeline-context-item {
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: #ddd;
+    font-size: 0.875rem;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .timeline-context-item:hover {
+    background: #2a2a2a;
+    color: #fff;
+  }
+
+  .timeline-context-item.destructive {
+    color: #f87171;
   }
   
   :global(.wavesurfer-region) {

@@ -84,6 +84,8 @@ export interface GetClipsResult {
 }
 
 export interface CreateClipInput {
+  id?: number;
+  createdAt?: string;
   projectId: number;
   assetId: number;
   trackIndex: number;
@@ -111,6 +113,14 @@ export interface DeleteClipResult {
   error?: string;
 }
 
+export interface BatchUpdateClipsResult {
+  success: boolean;
+  data?: {
+    updatedCount: number;
+  };
+  error?: string;
+}
+
 export async function getClipsByProject(projectId: number): Promise<GetClipsResult> {
   return await window.electronAPI.clips.getByProject(projectId);
 }
@@ -125,6 +135,10 @@ export async function updateClip(id: number, updates: Partial<Clip>): Promise<Up
 
 export async function deleteClip(id: number): Promise<DeleteClipResult> {
   return await window.electronAPI.clips.delete(id);
+}
+
+export async function batchUpdateClips(updates: Array<{ id: number } & Partial<Clip>>): Promise<BatchUpdateClipsResult> {
+  return await window.electronAPI.clips.batchUpdate(updates);
 }
 
 // ============================================================================
@@ -331,6 +345,7 @@ declare global {
         create: (input: CreateClipInput) => Promise<CreateClipResult>;
         update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
         delete: (id: number) => Promise<DeleteClipResult>;
+        batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
       };
       timeline: {
         loadState: (projectId: number) => Promise<TimelineStateResult>;
