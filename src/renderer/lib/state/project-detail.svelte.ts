@@ -22,7 +22,14 @@ import {
 } from './electron.svelte';
 import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
 import { timelineState, loadTimeline, setClips, createClip, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
-import { executeCommand, MoveClipCommand, ResizeClipCommand, DeleteClipCommand, clearHistory } from './undo-redo.svelte';
+import {
+  executeCommand,
+  MoveClipCommand,
+  ResizeClipCommand,
+  UpdateClipTimingCommand,
+  DeleteClipCommand,
+  clearHistory,
+} from './undo-redo.svelte';
 
 // Project detail state
 export const projectDetail = $state({
@@ -208,6 +215,31 @@ export async function executeResizeClip(
   const success = await executeCommand(command);
   if (!success) {
     setError('Failed to resize clip');
+  }
+}
+
+export async function executeUpdateClipTiming(
+  clipId: number,
+  oldStartTime: number,
+  oldInPoint: number,
+  oldOutPoint: number,
+  newStartTime: number,
+  newInPoint: number,
+  newOutPoint: number
+) {
+  const command = new UpdateClipTimingCommand(
+    'Adjust clip timing',
+    clipId,
+    oldStartTime,
+    oldInPoint,
+    oldOutPoint,
+    newStartTime,
+    newInPoint,
+    newOutPoint
+  );
+  const success = await executeCommand(command);
+  if (!success) {
+    setError('Failed to adjust clip timing');
   }
 }
 

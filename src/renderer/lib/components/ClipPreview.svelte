@@ -1,8 +1,16 @@
 <script lang="ts">
-  import { timelineState, getSelectedClips } from '../state/timeline.svelte';
+  import type { Clip } from '$shared/types/database';
+  import { getSelectedClips, getClipById } from '../state/timeline.svelte';
+  import { chaptersState } from '../state/chapters.svelte';
   import { formatTime, formatTimecode } from '../state/keyboard.svelte';
-  import { projectDetail } from '../state/project-detail.svelte';
+  import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
+  import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildAssetUrl } from '../utils/media';
+
+  const CLIP_END_EPSILON = 0.01;
+  const NUDGE_FPS = 30;
+  const MIN_CLIP_DURATION = 1 / NUDGE_FPS;
+  const NUDGE_EPSILON = 0.0001;
   
   // Get selected clip
   const selectedClip = $derived.by(() => {
@@ -15,6 +23,12 @@
     return projectDetail.assets.find((asset) => asset.id === selectedClip.asset_id) ?? null;
   });
 
+  const selectedChapter = $derived.by(() => {
+    const chapterId = chaptersState.selectedChapterId;
+    if (!chapterId) return null;
+    return chaptersState.chapters.find((chapter) => chapter.id === chapterId) ?? null;
+  });
+
   const videoSrc = $derived.by(() => {
     return selectedAsset ? buildAssetUrl(selectedAsset.id) : '';
   });
@@ -22,54 +36,195 @@
   // Video player state
   let videoRef: HTMLVideoElement | null = $state(null);
   let isLooping = $state(true);
+  let isPlaying = $state(false);
   let currentTime = $state(0);
   let lastVideoSrc = '';
+  let nudgeQueue: Promise<void> = Promise.resolve();
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function getAssetDuration(assetId: number): number | null {
+    const asset = projectDetail.assets.find((item) => item.id === assetId);
+    if (!asset) return null;
+    const duration = asset.duration;
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
+      return null;
+    }
+    return duration;
+  }
+
+  function queueNudge(
+    clipId: number,
+    computeNext: (clip: Clip) => { startTime?: number; inPoint: number; outPoint: number }
+  ) {
+    nudgeQueue = nudgeQueue
+      .then(async () => {
+        const clip = getClipById(clipId);
+        if (!clip) return;
+
+        const next = computeNext(clip);
+        const nextStartTime = next.startTime ?? clip.start_time;
+        const nextInPoint = next.inPoint;
+        const nextOutPoint = next.outPoint;
+        const startChanged = Math.abs(nextStartTime - clip.start_time) > NUDGE_EPSILON;
+        const inChanged = Math.abs(nextInPoint - clip.in_point) > NUDGE_EPSILON;
+        const outChanged = Math.abs(nextOutPoint - clip.out_point) > NUDGE_EPSILON;
+        if (!startChanged && !inChanged && !outChanged) return;
+
+        if (startChanged) {
+          await executeUpdateClipTiming(
+            clip.id,
+            clip.start_time,
+            clip.in_point,
+            clip.out_point,
+            nextStartTime,
+            nextInPoint,
+            nextOutPoint
+          );
+          return;
+        }
+
+        await executeResizeClip(
+          clip.id,
+          clip.in_point,
+          clip.out_point,
+          nextInPoint,
+          nextOutPoint
+        );
+      })
+      .catch((error) => {
+        console.error('[ClipPreview] Failed to nudge clip points', error);
+      });
+  }
+
+  function clampToClip(time: number): number {
+    if (!selectedClip) return time;
+    return clamp(time, selectedClip.in_point, selectedClip.out_point);
+  }
   
   // Derived values
   const clipDuration = $derived.by(() => {
     if (!selectedClip) return 0;
-    return selectedClip.out_point - selectedClip.in_point;
+    return Math.max(0, selectedClip.out_point - selectedClip.in_point);
+  });
+
+  const clipLocalTime = $derived.by(() => {
+    if (!selectedClip) return 0;
+    return clamp(currentTime - selectedClip.in_point, 0, clipDuration);
+  });
+
+  const timelineCurrentTime = $derived.by(() => {
+    if (!selectedClip) return 0;
+    const timelineTime = selectedClip.start_time + clipLocalTime;
+    return toChapterLocalTime(selectedChapter, timelineTime);
+  });
+
+  const timelineInTime = $derived.by(() => {
+    if (!selectedClip) return 0;
+    return toChapterLocalTime(selectedChapter, selectedClip.start_time);
+  });
+
+  const timelineOutTime = $derived.by(() => {
+    if (!selectedClip) return 0;
+    const timelineOut = selectedClip.start_time + clipDuration;
+    return toChapterLocalTime(selectedChapter, timelineOut);
   });
   
   // Handle nudge buttons
   function nudgeInPoint(delta: number) {
     if (!selectedClip) return;
-    const fps = 30;
-    const frameDuration = 1 / fps;
-    const newInPoint = Math.max(0, selectedClip.in_point + (delta * frameDuration));
-    // This would need to update the clip via IPC
-    console.log('Nudge in point:', newInPoint);
+    const clipId = selectedClip.id;
+    const frameDuration = 1 / NUDGE_FPS;
+
+    queueNudge(clipId, (clip) => {
+      const minIn = 0;
+      const maxIn = Math.max(minIn, clip.out_point - MIN_CLIP_DURATION);
+      const proposedIn = clamp(clip.in_point + (delta * frameDuration), minIn, maxIn);
+      const requestedDelta = proposedIn - clip.in_point;
+      const boundedDelta = Math.max(-clip.start_time, requestedDelta);
+      const inPoint = clip.in_point + boundedDelta;
+      const startTime = clip.start_time + boundedDelta;
+      return {
+        startTime,
+        inPoint,
+        outPoint: clip.out_point,
+      };
+    });
   }
   
   function nudgeOutPoint(delta: number) {
     if (!selectedClip) return;
-    const fps = 30;
-    const frameDuration = 1 / fps;
-    const newOutPoint = Math.max(selectedClip.in_point + frameDuration, selectedClip.out_point + (delta * frameDuration));
-    console.log('Nudge out point:', newOutPoint);
+    const clipId = selectedClip.id;
+    const frameDuration = 1 / NUDGE_FPS;
+
+    queueNudge(clipId, (clip) => {
+      const minOut = clip.in_point + MIN_CLIP_DURATION;
+      const assetDuration = getAssetDuration(clip.asset_id);
+      const maxOut = assetDuration !== null
+        ? Math.max(minOut, assetDuration)
+        : Number.POSITIVE_INFINITY;
+      const outPoint = clamp(clip.out_point + (delta * frameDuration), minOut, maxOut);
+      return {
+        inPoint: clip.in_point,
+        outPoint,
+      };
+    });
   }
   
   // Video event handlers
   function handleTimeUpdate() {
-    if (videoRef) {
+    if (!videoRef) return;
+
+    if (!selectedClip) {
       currentTime = videoRef.currentTime;
-      if (selectedClip && videoRef.currentTime >= selectedClip.out_point) {
-        if (isLooping) {
-          videoRef.currentTime = selectedClip.in_point;
-          videoRef.play().catch(() => undefined);
-        } else {
-          videoRef.pause();
-          videoRef.currentTime = selectedClip.out_point;
-        }
-      }
+      return;
     }
+
+    const clipEnd = selectedClip.out_point;
+    if (videoRef.currentTime >= clipEnd - CLIP_END_EPSILON) {
+      if (isLooping) {
+        videoRef.currentTime = selectedClip.in_point;
+        currentTime = selectedClip.in_point;
+        void videoRef.play().catch(() => undefined);
+      } else {
+        videoRef.pause();
+        videoRef.currentTime = clipEnd;
+        currentTime = clipEnd;
+        isPlaying = false;
+      }
+      return;
+    }
+
+    currentTime = clampToClip(videoRef.currentTime);
   }
-  
+
   function handleEnded() {
     if (isLooping && videoRef && selectedClip) {
       videoRef.currentTime = selectedClip.in_point;
-      videoRef.play().catch(() => undefined);
+      currentTime = selectedClip.in_point;
+      void videoRef.play().catch(() => undefined);
+    } else {
+      isPlaying = false;
     }
+  }
+
+  function handleSeeking() {
+    if (!videoRef || !selectedClip) return;
+    const next = clampToClip(videoRef.currentTime);
+    if (Math.abs(next - videoRef.currentTime) > CLIP_END_EPSILON) {
+      videoRef.currentTime = next;
+    }
+    currentTime = next;
+  }
+
+  function handlePlay() {
+    isPlaying = true;
+  }
+
+  function handlePause() {
+    isPlaying = false;
   }
 
   function handleVideoLoadedMetadata() {
@@ -78,6 +233,27 @@
       videoRef.currentTime = selectedClip.in_point;
       currentTime = selectedClip.in_point;
     }
+  }
+
+  function togglePlayback() {
+    if (!videoRef || !selectedClip) return;
+    if (videoRef.paused) {
+      if (videoRef.currentTime >= selectedClip.out_point - CLIP_END_EPSILON) {
+        videoRef.currentTime = selectedClip.in_point;
+      }
+      void videoRef.play().catch(() => undefined);
+      return;
+    }
+    videoRef.pause();
+  }
+
+  function handleScrubInput(event: Event) {
+    if (!videoRef || !selectedClip) return;
+    const value = Number((event.target as HTMLInputElement).value);
+    const local = clamp(value, 0, clipDuration);
+    const nextTime = selectedClip.in_point + local;
+    videoRef.currentTime = nextTime;
+    currentTime = nextTime;
   }
 
   function handleVideoError() {
@@ -99,6 +275,7 @@
     if (!selectedClip || !selectedAsset) {
       videoRef.pause();
       currentTime = 0;
+      isPlaying = false;
       return;
     }
 
@@ -106,6 +283,7 @@
       if (!videoRef || !selectedClip) return;
       videoRef.currentTime = selectedClip.in_point;
       currentTime = selectedClip.in_point;
+      isPlaying = false;
     };
 
     if (videoRef.readyState >= 1) {
@@ -134,36 +312,35 @@
       <video
         bind:this={videoRef}
         src={videoSrc}
+        onseeking={handleSeeking}
         ontimeupdate={handleTimeUpdate}
         onended={handleEnded}
+        onplay={handlePlay}
+        onpause={handlePause}
         onloadedmetadata={handleVideoLoadedMetadata}
         onerror={handleVideoError}
-        controls
         class="preview-video"
         preload="metadata"
+        playsinline
       >
         <track kind="captions" />
       </video>
-      
-      <div class="video-overlay">
-        <span class="time-display">{formatTimecode(currentTime)}</span>
-      </div>
     </div>
     
     <div class="clip-controls">
       <div class="trim-controls">
         <div class="trim-row">
           <span class="trim-label">In:</span>
-          <span class="trim-time">{formatTimecode(selectedClip.in_point)}</span>
+          <span class="trim-time">{formatTimecode(timelineInTime)}</span>
           <div class="trim-buttons">
             <button onclick={() => nudgeInPoint(-1)} title="-1 frame">◀</button>
             <button onclick={() => nudgeInPoint(1)} title="+1 frame">▶</button>
           </div>
         </div>
-        
+
         <div class="trim-row">
           <span class="trim-label">Out:</span>
-          <span class="trim-time">{formatTimecode(selectedClip.out_point)}</span>
+          <span class="trim-time">{formatTimecode(timelineOutTime)}</span>
           <div class="trim-buttons">
             <button onclick={() => nudgeOutPoint(-1)} title="-1 frame">◀</button>
             <button onclick={() => nudgeOutPoint(1)} title="+1 frame">▶</button>
@@ -172,11 +349,29 @@
       </div>
       
       <div class="playback-controls">
-        <label class="loop-toggle">
-          <input type="checkbox" bind:checked={isLooping} />
-          <span>Loop</span>
-        </label>
-        <span class="duration">Duration: {formatTime(clipDuration)}</span>
+        <div class="playback-top-row">
+          <button class="play-toggle" onclick={togglePlayback}>
+            {isPlaying ? 'Pause' : 'Play'}
+          </button>
+          <span class="playback-time">{formatTimecode(timelineCurrentTime)} / {formatTimecode(timelineOutTime)}</span>
+        </div>
+        <input
+          class="clip-scrubber"
+          type="range"
+          min="0"
+          max={Math.max(0.01, clipDuration)}
+          step="0.01"
+          value={clipLocalTime}
+          disabled={clipDuration <= 0}
+          oninput={handleScrubInput}
+        />
+        <div class="playback-meta-row">
+          <label class="loop-toggle">
+            <input type="checkbox" bind:checked={isLooping} />
+            <span>Loop</span>
+          </label>
+          <span class="duration">Duration: {formatTime(clipDuration)}</span>
+        </div>
       </div>
     </div>
     
@@ -260,19 +455,6 @@
     display: block;
   }
   
-  .video-overlay {
-    position: absolute;
-    bottom: 0.5rem;
-    left: 0.5rem;
-    background: rgba(0, 0, 0, 0.7);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.875rem;
-    color: #fff;
-    pointer-events: none;
-  }
-  
   .clip-controls {
     display: flex;
     flex-direction: column;
@@ -330,10 +512,77 @@
   
   .playback-controls {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: 0.5rem;
     padding-top: 0.5rem;
     border-top: 1px solid #333;
+  }
+
+  .playback-top-row,
+  .playback-meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .play-toggle {
+    padding: 0.35rem 0.75rem;
+    border: 1px solid #444;
+    border-radius: 4px;
+    background: #2a2a2a;
+    color: #ddd;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .play-toggle:hover {
+    background: #333;
+    border-color: #555;
+    color: #fff;
+  }
+
+  .playback-time {
+    color: #bbb;
+    font-size: 0.8rem;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .clip-scrubber {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #2a2a2a;
+    border-radius: 999px;
+    outline: none;
+  }
+
+  .clip-scrubber:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .clip-scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
+    cursor: pointer;
+  }
+
+  .clip-scrubber::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4f46e5;
+    border: 2px solid #0f0f0f;
+    cursor: pointer;
   }
   
   .loop-toggle {

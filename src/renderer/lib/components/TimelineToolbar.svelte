@@ -11,6 +11,8 @@
   } from '../state/timeline.svelte';
   import { undo, redo, canUndo, canRedo, getLastCommandDescription, getNextRedoDescription } from '../state/undo-redo.svelte';
   import { formatTimecode } from '../state/keyboard.svelte';
+
+  const MAX_ZOOM_LEVEL = 1000;
   
   // Play/Pause icon
   function getPlayIcon() {
@@ -20,14 +22,20 @@
   // Zoom slider logarithmic scale
   function handleZoomChange(event: Event) {
     const value = parseFloat((event.target as HTMLInputElement).value);
-    // Logarithmic scale: 10-1000
-    const logValue = 10 * Math.pow(100, value / 100);
+    const minZoom = Math.max(0.05, timelineState.minZoomLevel);
+    const zoomRatio = MAX_ZOOM_LEVEL / minZoom;
+    const logValue = minZoom * Math.pow(zoomRatio, value / 100);
     setZoom(logValue);
   }
-  
+
   // Convert current zoom to slider value
   function getZoomSliderValue(): number {
-    return (Math.log(timelineState.zoomLevel / 10) / Math.log(100)) * 100;
+    const minZoom = Math.max(0.05, timelineState.minZoomLevel);
+    const zoomRatio = MAX_ZOOM_LEVEL / minZoom;
+    if (!Number.isFinite(zoomRatio) || zoomRatio <= 1) {
+      return 0;
+    }
+    return (Math.log(timelineState.zoomLevel / minZoom) / Math.log(zoomRatio)) * 100;
   }
   
   // Selection info

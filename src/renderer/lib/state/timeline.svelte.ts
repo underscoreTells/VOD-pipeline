@@ -3,6 +3,7 @@ import type { Clip, TimelineState } from '../../../shared/types/database';
 interface TimelineStateStore {
   projectId: number | null;
   clips: Clip[];
+  minZoomLevel: number;
   zoomLevel: number;
   scrollPosition: number;
   playheadTime: number;
@@ -13,10 +14,14 @@ interface TimelineStateStore {
   error: string | null;
 }
 
+const MIN_ALLOWED_ZOOM = 0.05;
+const MAX_ALLOWED_ZOOM = 1000;
+
 // Timeline state using Svelte 5 runes
 export const timelineState = $state<TimelineStateStore>({
   projectId: null as number | null,
   clips: [] as Clip[],
+  minZoomLevel: 10,
   zoomLevel: 100,        // pixels per second
   scrollPosition: 0,     // seconds from start
   playheadTime: 0,       // current position
@@ -58,7 +63,7 @@ export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineS
   timelineState.excludeCutContent = false;
 
   if (state) {
-    timelineState.zoomLevel = state.zoom_level;
+    timelineState.zoomLevel = Math.max(timelineState.minZoomLevel, Math.min(MAX_ALLOWED_ZOOM, state.zoom_level));
     timelineState.scrollPosition = state.scroll_position;
     timelineState.playheadTime = state.playhead_time;
     timelineState.selectedClipIds = new Set(state.selected_clip_ids);
@@ -124,8 +129,17 @@ export function setPlayhead(time: number) {
   timelineState.playheadTime = time;
 }
 
+export function setMinZoom(level: number) {
+  if (!Number.isFinite(level)) return;
+  const nextMinZoom = Math.max(MIN_ALLOWED_ZOOM, Math.min(MAX_ALLOWED_ZOOM, level));
+  timelineState.minZoomLevel = nextMinZoom;
+  if (timelineState.zoomLevel < nextMinZoom) {
+    timelineState.zoomLevel = nextMinZoom;
+  }
+}
+
 export function setZoom(level: number) {
-  timelineState.zoomLevel = Math.max(10, Math.min(1000, level));
+  timelineState.zoomLevel = Math.max(timelineState.minZoomLevel, Math.min(MAX_ALLOWED_ZOOM, level));
 }
 
 export function setScroll(position: number) {
@@ -176,6 +190,7 @@ export function setError(error: string | null) {
 export function clearTimeline() {
   timelineState.projectId = null;
   timelineState.clips = [];
+  timelineState.minZoomLevel = 10;
   timelineState.zoomLevel = 100;
   timelineState.scrollPosition = 0;
   timelineState.playheadTime = 0;

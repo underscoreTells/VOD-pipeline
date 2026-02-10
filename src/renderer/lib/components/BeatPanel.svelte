@@ -6,9 +6,11 @@
   
   interface Props {
     clips?: Clip[];
+    chapterStartTime?: number;
+    chapterDuration?: number | null;
   }
   
-  let { clips = timelineState.clips }: Props = $props();
+  let { clips = timelineState.clips, chapterStartTime = 0, chapterDuration = null }: Props = $props();
   
   // Role configuration with colors and labels
   const ROLE_CONFIG: Record<string, { color: string; label: string; icon: string }> = {
@@ -22,8 +24,14 @@
   // Group clips by role
   const clipsByRole = $derived.by(() => {
     const grouped = new Map<string, Clip[]>();
+    const sortedClips = [...clips].sort((a, b) => {
+      if (Math.abs(a.start_time - b.start_time) > 0.0001) {
+        return a.start_time - b.start_time;
+      }
+      return a.id - b.id;
+    });
     
-    for (const clip of clips) {
+    for (const clip of sortedClips) {
       const role = clip.role || 'unassigned';
       const existing = grouped.get(role) || [];
       existing.push(clip);
@@ -35,9 +43,17 @@
   
   // Get sorted role keys
   const sortedRoles = $derived.by(() => {
-    return ['setup', 'escalation', 'twist', 'payoff', 'transition', 'unassigned'].filter(
-      role => clipsByRole.has(role) && (clipsByRole.get(role)?.length || 0) > 0
-    );
+    return Array.from(clipsByRole.entries())
+      .filter(([, roleClips]) => roleClips.length > 0)
+      .sort((a, b) => {
+        const aStart = a[1][0]?.start_time ?? Number.POSITIVE_INFINITY;
+        const bStart = b[1][0]?.start_time ?? Number.POSITIVE_INFINITY;
+        if (Math.abs(aStart - bStart) > 0.0001) {
+          return aStart - bStart;
+        }
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([role]) => role);
   });
   
   // Handle clip click
@@ -116,6 +132,16 @@
     const secs = Math.round(seconds % 60);
     return `${mins}m ${secs}s`;
   }
+
+  function toChapterLocal(seconds: number): number {
+    const local = Math.max(0, seconds - chapterStartTime);
+    if (chapterDuration === null || !Number.isFinite(chapterDuration)) {
+      return local;
+    }
+
+    const maxDuration = Math.max(0, chapterDuration);
+    return Math.min(local, maxDuration);
+  }
 </script>
 
 <div class="beat-panel">
@@ -143,6 +169,11 @@
         
         <div class="clip-list">
           {#each roleClips as clip (clip.id)}
+            {@const clipDuration = Math.max(0, clip.out_point - clip.in_point)}
+            {@const localStart = toChapterLocal(clip.start_time)}
+            {@const localEnd = chapterDuration !== null
+              ? Math.min(localStart + clipDuration, Math.max(0, chapterDuration))
+              : localStart + clipDuration}
             <div 
               class="clip-item"
               class:selected={timelineState.selectedClipIds.has(clip.id)}
@@ -155,9 +186,9 @@
               aria-haspopup="menu"
             >
               <div class="clip-time">
-                <span class="time-start">{formatDuration(clip.start_time)}</span>
+                <span class="time-start">{formatDuration(localStart)}</span>
                 <span class="time-separator">→</span>
-                <span class="time-end">{formatDuration(clip.start_time + (clip.out_point - clip.in_point))}</span>
+                <span class="time-end">{formatDuration(localEnd)}</span>
               </div>
               
               <div class="clip-info">

@@ -281,6 +281,45 @@ export class ResizeClipCommand implements Command {
   }
 }
 
+export class UpdateClipTimingCommand implements Command {
+  constructor(
+    public description: string,
+    private clipId: number,
+    private oldStartTime: number,
+    private oldInPoint: number,
+    private oldOutPoint: number,
+    private newStartTime: number,
+    private newInPoint: number,
+    private newOutPoint: number
+  ) {}
+
+  async execute() {
+    await persistClipUpdate(this.clipId, {
+      start_time: this.newStartTime,
+      in_point: this.newInPoint,
+      out_point: this.newOutPoint,
+    });
+    updateTimelineClip(this.clipId, {
+      start_time: this.newStartTime,
+      in_point: this.newInPoint,
+      out_point: this.newOutPoint,
+    });
+  }
+
+  async undo() {
+    await persistClipUpdate(this.clipId, {
+      start_time: this.oldStartTime,
+      in_point: this.oldInPoint,
+      out_point: this.oldOutPoint,
+    });
+    updateTimelineClip(this.clipId, {
+      start_time: this.oldStartTime,
+      in_point: this.oldInPoint,
+      out_point: this.oldOutPoint,
+    });
+  }
+}
+
 export class DeleteClipCommand implements Command {
   private clipData: { id: number; index: number; clip: Clip } | null = null;
 
