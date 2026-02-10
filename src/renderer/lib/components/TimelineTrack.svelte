@@ -5,19 +5,44 @@
   import type { Clip } from '../../../shared/types/database';
   import { getWaveform, onWaveformProgress } from '../state/electron.svelte';
   import { timelineState, selectClip, setPlayhead, setScroll } from '../state/timeline.svelte';
-  import { createProjectClip, executeDeleteClip, executeMoveClip, executeResizeClip, projectDetail } from '../state/project-detail.svelte';
+  import {
+    createProjectClip,
+    executeDeleteClip,
+    executeResizeClip,
+    executeUpdateClipTiming,
+    projectDetail,
+  } from '../state/project-detail.svelte';
   import { chaptersState } from '../state/chapters.svelte';
+  import {
+    clampMoveStartWithCollision,
+    type ClipCollisionInterval,
+    type CollisionDragDirection,
+  } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   
   interface Props {
     audioUrl: string;
     assetId: number | null;
-    trackIndex: number;
+    laneLabel: string;
+    editable?: boolean;
+    clipTrackIndex: number;
+    waveformTrackIndex: number;
+    createTrackIndex?: number;
     height?: number;
     clips?: Clip[];
   }
   
-  let { audioUrl, assetId, trackIndex, height = 100, clips }: Props = $props();
+  let {
+    audioUrl,
+    assetId,
+    laneLabel,
+    editable = true,
+    clipTrackIndex,
+    waveformTrackIndex,
+    createTrackIndex = 0,
+    height = 100,
+    clips,
+  }: Props = $props();
   
   let container: HTMLDivElement;
   let waveSurfer: WaveSurfer | null = null;
@@ -41,7 +66,6 @@
   });
 
   const WAVEFORM_TIER_LEVEL = 1;
-  const AUDIO_TRACK_INDEX = 0;
   
   // Role colors for clips
   const ROLE_COLORS: Record<string, string> = {
@@ -57,8 +81,12 @@
   
   // Get clips for this track
   const trackClips = $derived.by(() => {
+    if (!editable) return [];
     const source = clips ?? timelineState.clips;
-    return source.filter((clip) => clip.track_index === trackIndex);
+    if (clipTrackIndex < 0) {
+      return source;
+    }
+    return source.filter((clip) => clip.track_index === clipTrackIndex);
   });
 
   const assetDuration = $derived.by(() => {
@@ -99,6 +127,7 @@
   const MIN_SELECTION_SECONDS = 0.25;
   const MIN_CLIP_DURATION = 0.05;
   const CLICK_DRAG_THRESHOLD = 4;
+  const DRAG_DIRECTION_EPSILON = 0.0001;
 
   let isRenderingRegions = false;
   let isPanning = $state(false);
@@ -114,6 +143,7 @@
   let dragStartY = 0;
   let dragClickTime: number | null = null;
   let dragClickClipId: number | null = null;
+  let dragMoveModifierActive = false;
   let dragClipId: number | null = null;
   let dragClipOffset = 0;
   let dragClipDuration = 0;
@@ -417,9 +447,52 @@
     beginDrag(event, 'click');
     dragClickTime = clickTime;
     dragClickClipId = clipId;
+    dragMoveModifierActive = editable && clipId !== null && (event.ctrlKey || event.metaKey);
+  }
+
+  function getTrackCollisionIntervals(excludeClipId: number): ClipCollisionInterval[] {
+    if (!chapterRange) return [];
+
+    return trackClips
+      .filter((clip) => clip.id !== excludeClipId)
+      .map((clip) => {
+        const duration = clip.out_point - clip.in_point;
+        if (!Number.isFinite(duration) || duration <= 0) return null;
+        const start = clip.start_time - chapterRange.start;
+        const end = start + duration;
+        return { start, end };
+      })
+      .filter((interval): interval is ClipCollisionInterval => interval !== null);
+  }
+
+  function getDragDirection(candidateStart: number): CollisionDragDirection {
+    const delta = candidateStart - dragLastLocalStart;
+    if (delta > DRAG_DIRECTION_EPSILON) return 'right';
+    if (delta < -DRAG_DIRECTION_EPSILON) return 'left';
+    return 'none';
+  }
+
+  function clampMoveStartForDrag(candidateStart: number): number {
+    if (!chapterRange) return candidateStart;
+
+    const chapterDuration = chapterRange.duration;
+    const maxStart = Math.max(0, chapterDuration - dragClipDuration);
+    const boundedCandidate = clamp(candidateStart, 0, maxStart);
+    if (dragClipId === null) return boundedCandidate;
+
+    return clampMoveStartWithCollision({
+      candidateStart: boundedCandidate,
+      duration: dragClipDuration,
+      chapterDuration,
+      currentStart: dragLastLocalStart,
+      currentEnd: dragLastLocalEnd,
+      direction: getDragDirection(boundedCandidate),
+      otherIntervals: getTrackCollisionIntervals(dragClipId),
+    });
   }
 
   function startResizeDrag(event: PointerEvent, clipId: number, edge: 'start' | 'end', pointerTime: number) {
+    if (!editable) return;
     if (!chapterRange) return;
     const clip = getClipByIdLocal(clipId);
     if (!clip) return;
@@ -448,6 +521,8 @@
       const deltaX = event.clientX - dragStartX;
       const deltaY = event.clientY - dragStartY;
       if (Math.hypot(deltaX, deltaY) <= CLICK_DRAG_THRESHOLD) return;
+
+      if (!dragMoveModifierActive) return;
 
       dragDidMove = true;
 
@@ -479,8 +554,8 @@
       dragClickClipId = null;
       document.body.style.cursor = 'grabbing';
 
-      const maxStart = Math.max(0, chapterRange.duration - dragClipDuration);
-      const nextStart = clamp(pointerTime - dragClipOffset, 0, maxStart);
+      const candidateStart = pointerTime - dragClipOffset;
+      const nextStart = clampMoveStartForDrag(candidateStart);
       const nextEnd = nextStart + dragClipDuration;
       dragLastLocalStart = nextStart;
       dragLastLocalEnd = nextEnd;
@@ -517,8 +592,8 @@
       if (!chapterRange || dragClipId === null) return;
       const currentTime = getPointerTime(event);
       if (currentTime === null) return;
-      const maxStart = Math.max(0, chapterRange.duration - dragClipDuration);
-      const nextStart = clamp(currentTime - dragClipOffset, 0, maxStart);
+      const candidateStart = currentTime - dragClipOffset;
+      const nextStart = clampMoveStartForDrag(candidateStart);
       const nextEnd = nextStart + dragClipDuration;
       dragLastLocalStart = nextStart;
       dragLastLocalEnd = nextEnd;
@@ -547,7 +622,7 @@
 
   function handleDragEnd(event: PointerEvent) {
     if (dragPointerId !== event.pointerId) return;
-    if (dragMode === 'select') {
+    if (dragMode === 'select' && editable) {
       const start = selectionStartPointerTime ?? selectionStartTime;
       const end = getPointerTime(event) ?? selectionEndPointerTime ?? selectionCurrentTime;
       clearSelectionRegion();
@@ -569,41 +644,48 @@
       const newStart = chapterRange.start + dragLastLocalStart;
       const EPSILON = 0.01;
       if (Math.abs(newStart - dragOriginalStart) > EPSILON) {
-        void executeMoveClip(dragClipId, dragOriginalStart, newStart);
+        const duration = dragOriginalOut - dragOriginalIn;
+        const newInPoint = newStart;
+        const newOutPoint = newInPoint + duration;
+        void executeUpdateClipTiming(
+          dragClipId,
+          dragOriginalStart,
+          dragOriginalIn,
+          dragOriginalOut,
+          newStart,
+          newInPoint,
+          newOutPoint
+        );
       }
     }
 
-    if (dragMode === 'resize' && chapterRange && dragClipId !== null) {
-      const duration = dragOriginalOut - dragOriginalIn;
+    if (dragMode === 'resize' && chapterRange && dragClipId !== null && dragResizeEdge) {
+      const EPSILON = 0.01;
       const newStart = chapterRange.start + dragLastLocalStart;
       const newEnd = chapterRange.start + dragLastLocalEnd;
-      const newDuration = newEnd - newStart;
 
-      const EPSILON = 0.01;
-      const durationChanged = Math.abs(newDuration - duration) > EPSILON;
+      if (dragResizeEdge === 'start') {
+        const startDelta = newStart - dragOriginalStart;
+        const newInPoint = dragOriginalIn + startDelta;
+        const startChanged = Math.abs(newStart - dragOriginalStart) > EPSILON;
+        const inChanged = Math.abs(newInPoint - dragOriginalIn) > EPSILON;
 
-      if (!durationChanged) {
-        if (Math.abs(newStart - dragOriginalStart) > EPSILON) {
-          void executeMoveClip(dragClipId, dragOriginalStart, newStart);
+        if (startChanged || inChanged) {
+          void executeUpdateClipTiming(
+            dragClipId,
+            dragOriginalStart,
+            dragOriginalIn,
+            dragOriginalOut,
+            newStart,
+            newInPoint,
+            dragOriginalOut
+          );
         }
       } else {
-        const startChanged = Math.abs(newStart - dragOriginalStart) > EPSILON;
-        const endChanged = Math.abs(newEnd - (dragOriginalStart + duration)) > EPSILON;
-
-        let newInPoint = dragOriginalIn;
-        let newOutPoint = dragOriginalOut;
-
-        if (startChanged) {
-          const startDelta = newStart - dragOriginalStart;
-          newInPoint = dragOriginalIn + startDelta;
-        }
-
-        if (endChanged) {
-          newOutPoint = dragOriginalIn + newDuration;
-        }
-
-        if (newOutPoint > newInPoint) {
-          void executeResizeClip(dragClipId, dragOriginalIn, dragOriginalOut, newInPoint, newOutPoint);
+        const newDuration = newEnd - newStart;
+        const newOutPoint = dragOriginalIn + newDuration;
+        if (Math.abs(newOutPoint - dragOriginalOut) > EPSILON) {
+          void executeResizeClip(dragClipId, dragOriginalIn, dragOriginalOut, dragOriginalIn, newOutPoint);
         }
       }
     }
@@ -614,6 +696,7 @@
     dragMode = null;
     dragClickTime = null;
     dragClickClipId = null;
+    dragMoveModifierActive = false;
     selectionStartPointerTime = null;
     selectionEndPointerTime = null;
     dragClipId = null;
@@ -646,14 +729,14 @@
 
     if (event.button !== 0) return;
 
-    if (event.shiftKey) {
+    if (editable && event.shiftKey) {
       event.preventDefault();
       event.stopPropagation();
       startSelectionDrag(event, pointerTime);
       return;
     }
 
-    if (event.ctrlKey && clipId !== null && handle) {
+    if (editable && (event.ctrlKey || event.metaKey) && clipId !== null && handle) {
       event.preventDefault();
       event.stopPropagation();
       startResizeDrag(event, clipId, handle, pointerTime);
@@ -666,6 +749,7 @@
   }
 
   function handleWaveformContextMenu(event: MouseEvent) {
+    if (!editable) return;
     if (!scrollContainer || !isReady) return;
     const { clipId } = getPointerTargets(event);
     if (clipId === null) {
@@ -682,7 +766,7 @@
   async function loadWaveformCache() {
     if (!assetId) return null;
 
-    const result = await getWaveform(assetId, AUDIO_TRACK_INDEX, WAVEFORM_TIER_LEVEL);
+    const result = await getWaveform(assetId, waveformTrackIndex, WAVEFORM_TIER_LEVEL);
     if (result.success && result.data) {
       return result.data;
     }
@@ -737,7 +821,7 @@
 
     waveformDuration = waveformData.duration;
 
-    const chapterKey = `${assetId}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
+    const chapterKey = `${assetId}:${waveformTrackIndex}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
     const shouldReload =
       options.force ||
       loadedAssetId !== assetId ||
@@ -773,6 +857,7 @@
   }
 
   async function createClipFromSelection(start: number, end: number) {
+    if (!editable) return;
     if (!projectDetail.projectId || !assetId) return;
     if (!chapterRange) return;
 
@@ -787,7 +872,7 @@
     await createProjectClip(
       projectDetail.projectId,
       assetId,
-      trackIndex,
+      createTrackIndex,
       globalStart,
       globalIn,
       globalOut,
@@ -911,7 +996,7 @@
     if (!waveSurfer) return;
     if (!assetId) return;
     if (!chapterRange) return;
-    const chapterKey = `${assetId}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
+    const chapterKey = `${assetId}:${waveformTrackIndex}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
     if (loadedAssetId !== assetId || loadedChapterKey !== chapterKey) {
       hasLoadedPeaks = false;
       void loadWaveformForAsset({ force: true });
@@ -936,6 +1021,13 @@
   
   function renderRegions() {
     if (!regionsPlugin || !waveSurfer) return;
+
+    if (!editable) {
+      regionsPlugin.clearRegions();
+      clipRegions.clear();
+      isRenderingRegions = false;
+      return;
+    }
 
     isRenderingRegions = true;
     regionsPlugin.clearRegions();
@@ -1009,17 +1101,18 @@
 
 <div class="track-container">
   <div class="track-header">
-    <span class="track-label">Track {trackIndex + 1}</span>
-    <span class="track-info">{trackClips.length} clips</span>
+    <span class="track-label">{laneLabel}</span>
+    <span class="track-info">{editable ? `${trackClips.length} clips` : 'visual only'}</span>
   </div>
   <div
     class="waveform-container"
+    class:visual-only={!editable}
     class:panning={isPanning}
     class:selecting={isSelecting}
     bind:this={container}
   ></div>
 
-  {#if clipContextMenu.open}
+  {#if editable && clipContextMenu.open}
     <div
       class="timeline-clip-context-menu"
       style={`top: ${clipContextMenu.y}px; left: ${clipContextMenu.x}px;`}
@@ -1067,6 +1160,10 @@
     width: 100%;
     min-height: 100px;
     cursor: pointer;
+  }
+
+  .waveform-container.visual-only {
+    cursor: default;
   }
 
   :global(.waveform-scroll-container) {

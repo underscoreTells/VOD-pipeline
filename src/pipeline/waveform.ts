@@ -28,6 +28,8 @@ export class WaveformError extends Error {
   }
 }
 
+const MIX_WAVEFORM_TRACK_INDEX = -1;
+
 /**
  * Generate all waveform tiers for an audio file using audiowaveform
  * Falls back gracefully if audiowaveform is not available
@@ -60,6 +62,7 @@ export async function generateWaveformTiers(
     const preparedInput = await prepareWaveformInput(
       audioPath,
       tempDir,
+      trackIndex,
       (percent, status) => {
         if (onProgress) {
           onProgress({ tier: 1, percent, status });
@@ -171,6 +174,7 @@ export async function generateWaveformTiers(
 async function prepareWaveformInput(
   inputPath: string,
   tempDir: string,
+  trackIndex: number,
   onProgress?: (percent: number, status: string) => void
 ): Promise<{ path: string; tempPath: string | null }> {
   const extension = path.extname(inputPath).toLowerCase();
@@ -200,8 +204,10 @@ async function prepareWaveformInput(
   const durationSeconds = await getMediaDurationSeconds(ffmpegPath.path, inputPath);
   await transcodeToWaveformAudio(
     ffmpegPath.path,
+    getFFprobePath(ffmpegPath.path),
     inputPath,
     tempWavPath,
+    trackIndex,
     durationSeconds,
     onProgress
   );
@@ -211,78 +217,157 @@ async function prepareWaveformInput(
 
 async function transcodeToWaveformAudio(
   ffmpegBinaryPath: string,
+  ffprobeBinaryPath: string,
   inputPath: string,
   outputPath: string,
+  trackIndex: number,
   durationSeconds: number | null,
   onProgress?: (percent: number, status: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    void (async () => {
+      const audioStreamCount = await getAudioStreamCount(ffprobeBinaryPath, inputPath);
+      const args = [
+        '-y',
+        '-i', inputPath,
+        ...buildTrackSelectionArgs(trackIndex, audioStreamCount),
+        '-vn',
+        '-ac', '1',
+        '-ar', '11025',
+        '-c:a', 'pcm_s16le',
+        '-f', 'wav',
+        '-progress', 'pipe:1',
+        '-nostats',
+        outputPath,
+      ];
+
+      const proc = spawn(ffmpegBinaryPath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let errorOutput = '';
+      let progressBuffer = '';
+      let lastReportedPercent = -1;
+
+      const reportProgressSeconds = (outTimeSeconds: number) => {
+        if (!durationSeconds || !onProgress) return;
+        const rawPercent = Math.min(100, Math.max(0, (outTimeSeconds / durationSeconds) * 100));
+        const mappedPercent = Math.min(10, Math.max(0, Math.round(rawPercent / 10)));
+        if (mappedPercent !== lastReportedPercent) {
+          lastReportedPercent = mappedPercent;
+          onProgress(mappedPercent, `Preparing audio for waveform... ${Math.round(rawPercent)}%`);
+        }
+      };
+
+      const parseOutTimeSeconds = (value: string): number | null => {
+        const parts = value.trim().split(':');
+        if (parts.length !== 3) return null;
+        const hours = Number.parseFloat(parts[0]);
+        const minutes = Number.parseFloat(parts[1]);
+        const seconds = Number.parseFloat(parts[2]);
+        if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+          return null;
+        }
+        return (hours * 3600) + (minutes * 60) + seconds;
+      };
+
+      proc.stdout.on('data', (data) => {
+        if (!durationSeconds || !onProgress) return;
+        progressBuffer += data.toString();
+        let newlineIndex = progressBuffer.indexOf('\n');
+        while (newlineIndex !== -1) {
+          const line = progressBuffer.slice(0, newlineIndex).trim();
+          progressBuffer = progressBuffer.slice(newlineIndex + 1);
+          const [key, value] = line.split('=');
+          if (key === 'out_time') {
+            const outTimeSeconds = parseOutTimeSeconds(value);
+            if (outTimeSeconds !== null) {
+              reportProgressSeconds(outTimeSeconds);
+            }
+          } else if (key === 'out_time_ms' || key === 'out_time_us') {
+            const outTimeRaw = Number(value);
+            const outTimeSeconds = Number.isFinite(outTimeRaw)
+              ? outTimeRaw / 1_000_000
+              : null;
+            if (outTimeSeconds !== null) {
+              reportProgressSeconds(outTimeSeconds);
+            }
+          }
+          newlineIndex = progressBuffer.indexOf('\n');
+        }
+      });
+
+      proc.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      proc.on('error', (error) => {
+        reject(new WaveformError(
+          `Failed to run FFmpeg for waveform input: ${error.message}`,
+          'GENERATION_ERROR',
+          error
+        ));
+      });
+
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new WaveformError(
+            `FFmpeg failed to prepare waveform input with code ${code}`,
+            'GENERATION_ERROR',
+            { code, error: errorOutput }
+          ));
+          return;
+        }
+
+        if (onProgress) {
+          onProgress(10, 'Audio preparation complete');
+        }
+        resolve();
+      });
+    })().catch((error) => {
+      reject(new WaveformError(
+        `Failed to prepare waveform input: ${error instanceof Error ? error.message : String(error)}`,
+        'GENERATION_ERROR',
+        error
+      ));
+    });
+  });
+}
+
+function buildTrackSelectionArgs(trackIndex: number, audioStreamCount: number): string[] {
+  if (audioStreamCount <= 0) {
+    return [];
+  }
+
+  if (trackIndex === MIX_WAVEFORM_TRACK_INDEX && audioStreamCount > 1) {
+    const labels = Array.from({ length: audioStreamCount }, (_, index) => `[0:a:${index}]`).join('');
+    const filter = `${labels}amix=inputs=${audioStreamCount}:dropout_transition=0:normalize=0[aout]`;
+    return ['-filter_complex', filter, '-map', '[aout]'];
+  }
+
+  const normalizedTrackIndex =
+    Number.isInteger(trackIndex) && trackIndex >= 0 && trackIndex < audioStreamCount
+      ? trackIndex
+      : 0;
+
+  return ['-map', `0:a:${normalizedTrackIndex}`];
+}
+
+async function getAudioStreamCount(ffprobePath: string, inputPath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
     const args = [
-      '-y',
-      '-i', inputPath,
-      '-vn',
-      '-ac', '1',
-      '-ar', '11025',
-      '-c:a', 'pcm_s16le',
-      '-f', 'wav',
-      '-progress', 'pipe:1',
-      '-nostats',
-      outputPath,
+      '-v', 'error',
+      '-select_streams', 'a',
+      '-show_entries', 'stream=index',
+      '-of', 'csv=p=0',
+      inputPath,
     ];
 
-    const proc = spawn(ffmpegBinaryPath, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const proc = spawn(ffprobePath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
     let errorOutput = '';
-    let progressBuffer = '';
-    let lastReportedPercent = -1;
-
-    const reportProgressSeconds = (outTimeSeconds: number) => {
-      if (!durationSeconds || !onProgress) return;
-      const rawPercent = Math.min(100, Math.max(0, (outTimeSeconds / durationSeconds) * 100));
-      const mappedPercent = Math.min(10, Math.max(0, Math.round(rawPercent / 10)));
-      if (mappedPercent !== lastReportedPercent) {
-        lastReportedPercent = mappedPercent;
-        onProgress(mappedPercent, `Preparing audio for waveform... ${Math.round(rawPercent)}%`);
-      }
-    };
-
-    const parseOutTimeSeconds = (value: string): number | null => {
-      const parts = value.trim().split(':');
-      if (parts.length !== 3) return null;
-      const hours = Number.parseFloat(parts[0]);
-      const minutes = Number.parseFloat(parts[1]);
-      const seconds = Number.parseFloat(parts[2]);
-      if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) {
-        return null;
-      }
-      return (hours * 3600) + (minutes * 60) + seconds;
-    };
 
     proc.stdout.on('data', (data) => {
-      if (!durationSeconds || !onProgress) return;
-      progressBuffer += data.toString();
-      let newlineIndex = progressBuffer.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const line = progressBuffer.slice(0, newlineIndex).trim();
-        progressBuffer = progressBuffer.slice(newlineIndex + 1);
-        const [key, value] = line.split('=');
-        if (key === 'out_time') {
-          const outTimeSeconds = parseOutTimeSeconds(value);
-          if (outTimeSeconds !== null) {
-            reportProgressSeconds(outTimeSeconds);
-          }
-        } else if (key === 'out_time_ms' || key === 'out_time_us') {
-          const outTimeRaw = Number(value);
-          const outTimeSeconds = Number.isFinite(outTimeRaw)
-            ? outTimeRaw / 1_000_000
-            : null;
-          if (outTimeSeconds !== null) {
-            reportProgressSeconds(outTimeSeconds);
-          }
-        }
-        newlineIndex = progressBuffer.indexOf('\n');
-      }
+      output += data.toString();
     });
 
     proc.stderr.on('data', (data) => {
@@ -290,27 +375,22 @@ async function transcodeToWaveformAudio(
     });
 
     proc.on('error', (error) => {
-      reject(new WaveformError(
-        `Failed to run FFmpeg for waveform input: ${error.message}`,
-        'GENERATION_ERROR',
-        error
-      ));
+      reject(new Error(`Failed to run ffprobe: ${error.message}`));
     });
 
     proc.on('close', (code) => {
       if (code !== 0) {
-        reject(new WaveformError(
-          `FFmpeg failed to prepare waveform input with code ${code}`,
-          'GENERATION_ERROR',
-          { code, error: errorOutput }
-        ));
+        reject(new Error(`ffprobe failed with code ${code}: ${errorOutput}`));
         return;
       }
 
-      if (onProgress) {
-        onProgress(10, 'Audio preparation complete');
-      }
-      resolve();
+      const count = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .length;
+
+      resolve(count);
     });
   });
 }

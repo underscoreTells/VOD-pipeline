@@ -1,23 +1,75 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import TimelineTrack from './TimelineTrack.svelte';
-  import { timelineState, loadTimeline, setPlaying, setZoom } from '../state/timeline.svelte';
+  import { timelineState, loadTimeline, setMinZoom, setZoom } from '../state/timeline.svelte';
   import type { Clip, TimelineState as TimelineStateType } from '../../../shared/types/database';
+
+  const DEFAULT_MIN_ZOOM_LEVEL = 10;
+
+  interface TimelineLane {
+    id: string;
+    label: string;
+    audioUrl: string;
+    assetId: number | null;
+    editable: boolean;
+    clipTrackIndex: number;
+    waveformTrackIndex: number;
+    createTrackIndex?: number;
+  }
   
   interface Props {
     projectId: number;
-    audioUrls: string[]; // Array of audio URLs, one per track
-    trackAssetIds: number[];
+    lanes: TimelineLane[];
     clips: Clip[];
     displayClips?: Clip[];
     initialState?: TimelineStateType | null;
+    chapterDuration?: number | null;
   }
-  
-  let { projectId, audioUrls, trackAssetIds, clips, displayClips, initialState = null }: Props = $props();
-  
+
+  let {
+    projectId,
+    lanes,
+    clips,
+    displayClips,
+    initialState = null,
+    chapterDuration = null,
+  }: Props = $props();
+
   let isLoading = $state(true);
   let error = $state<string | null>(null);
   let lastProjectId = $state<number | null>(null);
+  let timelineRef: HTMLDivElement | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+
+  function updateMinZoomToFitChapter() {
+    if (!timelineRef || !chapterDuration || chapterDuration <= 0) {
+      setMinZoom(DEFAULT_MIN_ZOOM_LEVEL);
+      return;
+    }
+
+    const width = timelineRef.clientWidth;
+    if (!width) return;
+
+    const fitZoom = Math.max(0.05, (width - 1) / chapterDuration);
+    setMinZoom(fitZoom);
+  }
+
+  onMount(() => {
+    updateMinZoomToFitChapter();
+
+    if (timelineRef) {
+      resizeObserver = new ResizeObserver(() => {
+        updateMinZoomToFitChapter();
+      });
+      resizeObserver.observe(timelineRef);
+    }
+  });
+
+  onDestroy(() => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    setMinZoom(DEFAULT_MIN_ZOOM_LEVEL);
+  });
   
   // Load timeline data
   $effect(() => {
@@ -41,6 +93,12 @@
     }
   });
 
+  $effect(() => {
+    const _chapterDuration = chapterDuration;
+    void _chapterDuration;
+    updateMinZoomToFitChapter();
+  });
+
   // Handle wheel for ctrl+scroll zoom
   function handleWheel(event: WheelEvent) {
     if (!event.ctrlKey) return;
@@ -51,30 +109,34 @@
   }
 </script>
 
-<div class="timeline" onwheel={handleWheel}>
-  {#if isLoading}
-    <div class="loading">
-      <span class="loading-spinner"></span>
-      <p>Loading timeline...</p>
-    </div>
+<div class="timeline" onwheel={handleWheel} bind:this={timelineRef}>
+    {#if isLoading}
+      <div class="loading">
+        <span class="loading-spinner"></span>
+        <p>Loading timeline...</p>
+      </div>
   {:else if error}
     <div class="error">
       <p>Error: {error}</p>
     </div>
   {:else}
     <div class="tracks-container">
-      {#each audioUrls as audioUrl, index (index)}
+      {#each lanes as lane (lane.id)}
         <TimelineTrack 
-          {audioUrl} 
-          assetId={trackAssetIds[index]}
-          trackIndex={index} 
+          audioUrl={lane.audioUrl}
+          assetId={lane.assetId}
+          laneLabel={lane.label}
+          editable={lane.editable}
+          clipTrackIndex={lane.clipTrackIndex}
+          waveformTrackIndex={lane.waveformTrackIndex}
+          createTrackIndex={lane.createTrackIndex ?? 0}
           height={100}
           clips={displayClips ?? clips}
         />
       {/each}
     </div>
     
-    {#if audioUrls.length === 0}
+    {#if lanes.length === 0}
       <div class="empty">
         <p>No audio tracks loaded</p>
         <p class="hint">Import a video to see the timeline</p>

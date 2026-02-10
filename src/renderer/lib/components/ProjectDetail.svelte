@@ -59,6 +59,17 @@
     project: Project;
     onBack: () => void;
   }
+
+  interface TimelineLane {
+    id: string;
+    label: string;
+    audioUrl: string;
+    assetId: number | null;
+    editable: boolean;
+    clipTrackIndex: number;
+    waveformTrackIndex: number;
+    createTrackIndex?: number;
+  }
   
   let { project, onBack }: Props = $props();
   
@@ -70,7 +81,7 @@
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
   let waveformCheckToken = 0;
-  const waveformInFlight = new Set<number>();
+  const waveformInFlight = new Set<string>();
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
   let editorSideRef = $state<HTMLElement | null>(null);
@@ -88,6 +99,8 @@
   const MIN_BEAT_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
+  const MIX_TRACK_INDEX = 0;
+  const MIX_WAVEFORM_TRACK_INDEX = -1;
   
   // Load project data and chapters on mount
   onMount(() => {
@@ -247,7 +260,25 @@
       .filter((asset): asset is Asset => Boolean(asset));
   });
 
+  function getAssetAudioTrackCount(asset: Asset | null): number {
+    const trackCount = asset?.metadata?.audioTracks?.length;
+    if (typeof trackCount === 'number' && Number.isInteger(trackCount) && trackCount > 0) {
+      return trackCount;
+    }
+    return 1;
+  }
+
+  function getWaveformTrackIndices(asset: Asset | null): number[] {
+    const count = getAssetAudioTrackCount(asset);
+    const sourceTracks = Array.from({ length: count }, (_, index) => index);
+    return [MIX_WAVEFORM_TRACK_INDEX, ...sourceTracks];
+  }
+
   const chapterPreviewAsset = $derived.by(() => selectedChapterAssets[0] ?? null);
+  const timelineWaveformAssetIds = $derived.by(() => {
+    const primaryAsset = selectedChapterAssets[0] ?? null;
+    return primaryAsset ? [primaryAsset.id] : [];
+  });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
@@ -258,17 +289,24 @@
     const token = ++waveformCheckToken;
     for (const assetId of assetIds) {
       if (token !== waveformCheckToken) return;
-      if (waveformInFlight.has(assetId)) continue;
+      const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
+      const trackIndices = getWaveformTrackIndices(asset);
 
-      const cached = await getAssetWaveform(assetId, 0, 1);
-      if (token !== waveformCheckToken) return;
-      if (cached) continue;
+      for (const trackIndex of trackIndices) {
+        if (token !== waveformCheckToken) return;
+        const key = `${assetId}:${trackIndex}`;
+        if (waveformInFlight.has(key)) continue;
 
-      waveformInFlight.add(assetId);
-      try {
-        await generateAssetWaveform(assetId, 0);
-      } finally {
-        waveformInFlight.delete(assetId);
+        const cached = await getAssetWaveform(assetId, trackIndex, 1);
+        if (token !== waveformCheckToken) return;
+        if (cached) continue;
+
+        waveformInFlight.add(key);
+        try {
+          await generateAssetWaveform(assetId, trackIndex);
+        } finally {
+          waveformInFlight.delete(key);
+        }
       }
     }
   }
@@ -286,8 +324,8 @@
   });
 
   $effect(() => {
-    if (selectedChapterAssetIds.length > 0) {
-      void ensureChapterWaveforms([...selectedChapterAssetIds]);
+    if (timelineWaveformAssetIds.length > 0) {
+      void ensureChapterWaveforms([...timelineWaveformAssetIds]);
     }
   });
   
@@ -357,10 +395,38 @@
     }
   }
   
-  // Get audio URLs for timeline
-  const audioUrls = $derived.by(() => {
-    if (selectedChapterAssetIds.length === 0) return [];
-    return selectedChapterAssetIds.map((assetId) => buildAssetUrl(assetId));
+  const timelineLanes = $derived.by(() => {
+    const primaryAsset = selectedChapterAssets[0] ?? null;
+    if (!primaryAsset) return [] as TimelineLane[];
+
+    const sourceTrackCount = getAssetAudioTrackCount(primaryAsset);
+    const lanes: TimelineLane[] = [
+      {
+        id: `mix-${primaryAsset.id}`,
+        label: 'Mix',
+        audioUrl: buildAssetUrl(primaryAsset.id),
+        assetId: primaryAsset.id,
+        editable: true,
+        clipTrackIndex: -1,
+        waveformTrackIndex: MIX_WAVEFORM_TRACK_INDEX,
+        createTrackIndex: MIX_TRACK_INDEX,
+      },
+    ];
+
+    for (let index = 0; index < sourceTrackCount; index += 1) {
+      lanes.push({
+        id: `a${index + 1}-${primaryAsset.id}`,
+        label: `A${index + 1}`,
+        audioUrl: buildAssetUrl(primaryAsset.id),
+        assetId: primaryAsset.id,
+        editable: false,
+        clipTrackIndex: -1,
+        waveformTrackIndex: index,
+        createTrackIndex: MIX_TRACK_INDEX,
+      });
+    }
+
+    return lanes;
   });
 
   const selectedChapterClips = $derived.by(() => {
@@ -379,6 +445,11 @@
       const clipEnd = clip.start_time + duration;
       return clipEnd > chapterStart && clipStart < chapterEnd;
     });
+  });
+
+  const selectedChapterDuration = $derived.by(() => {
+    if (!selectedChapter) return null;
+    return Math.max(0.01, selectedChapter.end_time - selectedChapter.start_time);
   });
 
   function clamp(value: number, min: number, max: number): number {
@@ -638,10 +709,10 @@
                     <div class="timeline-container">
                       <Timeline 
                         projectId={project.id}
-                        {audioUrls}
-                        trackAssetIds={selectedChapterAssetIds}
+                        lanes={timelineLanes}
                         clips={timelineState.clips}
                         displayClips={selectedChapterClips}
+                        chapterDuration={selectedChapterDuration}
                       />
                     </div>
                   </div>
@@ -685,7 +756,11 @@
 
                 {#if !layoutState.beatCollapsed}
                   <div class="side-panel beat-panel-wrapper">
-                    <BeatPanel clips={selectedChapterClips} />
+                    <BeatPanel
+                      clips={selectedChapterClips}
+                      chapterStartTime={selectedChapter?.start_time ?? 0}
+                      chapterDuration={selectedChapterDuration}
+                    />
                   </div>
                 {/if}
               </aside>
