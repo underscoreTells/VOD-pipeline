@@ -8,6 +8,7 @@
   import {
     createProjectClip,
     executeDeleteClip,
+    executeMoveClip,
     executeResizeClip,
     executeUpdateClipTiming,
     projectDetail,
@@ -83,10 +84,13 @@
   const trackClips = $derived.by(() => {
     if (!editable) return [];
     const source = clips ?? timelineState.clips;
+    const assetScopedClips = assetId !== null
+      ? source.filter((clip) => clip.asset_id === assetId)
+      : source;
     if (clipTrackIndex < 0) {
-      return source;
+      return assetScopedClips;
     }
-    return source.filter((clip) => clip.track_index === clipTrackIndex);
+    return assetScopedClips.filter((clip) => clip.track_index === clipTrackIndex);
   });
 
   const assetDuration = $derived.by(() => {
@@ -644,18 +648,7 @@
       const newStart = chapterRange.start + dragLastLocalStart;
       const EPSILON = 0.01;
       if (Math.abs(newStart - dragOriginalStart) > EPSILON) {
-        const duration = dragOriginalOut - dragOriginalIn;
-        const newInPoint = newStart;
-        const newOutPoint = newInPoint + duration;
-        void executeUpdateClipTiming(
-          dragClipId,
-          dragOriginalStart,
-          dragOriginalIn,
-          dragOriginalOut,
-          newStart,
-          newInPoint,
-          newOutPoint
-        );
+        void executeMoveClip(dragClipId, dragOriginalStart, newStart);
       }
     }
 

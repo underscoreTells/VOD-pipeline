@@ -273,6 +273,11 @@
     return Boolean(asset?.file_path?.toLowerCase().endsWith('.mkv'));
   }
 
+  function getAssetDisplayName(asset: Asset): string {
+    const segments = asset.file_path.split(/[\/\\]/);
+    return segments[segments.length - 1] || `Asset ${asset.id}`;
+  }
+
   function getWaveformTrackIndices(asset: Asset | null, includeSourceTracks: boolean): number[] {
     const count = getAssetAudioTrackCount(asset);
     if (!includeSourceTracks || count <= 1) {
@@ -285,12 +290,10 @@
 
   const chapterPreviewAsset = $derived.by(() => selectedChapterAssets[0] ?? null);
   const timelineWaveformAssetIds = $derived.by(() => {
-    const primaryAsset = selectedChapterAssets[0] ?? null;
-    return primaryAsset ? [primaryAsset.id] : [];
+    return selectedChapterAssets.map((asset) => asset.id);
   });
   const canShowSourceTracks = $derived.by(() => {
-    const primaryAsset = selectedChapterAssets[0] ?? null;
-    return getAssetAudioTrackCount(primaryAsset) > 1;
+    return selectedChapterAssets.some((asset) => getAssetAudioTrackCount(asset) > 1);
   });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
@@ -454,35 +457,41 @@
   }
   
   const timelineLanes = $derived.by(() => {
-    const primaryAsset = selectedChapterAssets[0] ?? null;
-    if (!primaryAsset) return [] as TimelineLane[];
+    if (selectedChapterAssets.length === 0) {
+      return [] as TimelineLane[];
+    }
 
-    const sourceTrackCount = getAssetAudioTrackCount(primaryAsset);
-    const lanes: TimelineLane[] = [
-      {
-        id: `mix-${primaryAsset.id}`,
-        label: 'Mix',
-        audioUrl: buildAssetUrl(primaryAsset.id),
-        assetId: primaryAsset.id,
+    const includeAssetNames = selectedChapterAssets.length > 1;
+    const lanes: TimelineLane[] = [];
+
+    for (const asset of selectedChapterAssets) {
+      const sourceTrackCount = getAssetAudioTrackCount(asset);
+      const assetLabelSuffix = includeAssetNames ? ` - ${getAssetDisplayName(asset)}` : '';
+
+      lanes.push({
+        id: `mix-${asset.id}`,
+        label: `Mix${assetLabelSuffix}`,
+        audioUrl: buildAssetUrl(asset.id),
+        assetId: asset.id,
         editable: true,
         clipTrackIndex: -1,
         waveformTrackIndex: MIX_WAVEFORM_TRACK_INDEX,
         createTrackIndex: MIX_TRACK_INDEX,
-      },
-    ];
+      });
 
-    if (showSourceTracks && sourceTrackCount > 1) {
-      for (let index = 0; index < sourceTrackCount; index += 1) {
-        lanes.push({
-          id: `a${index + 1}-${primaryAsset.id}`,
-          label: `A${index + 1}`,
-          audioUrl: buildAssetUrl(primaryAsset.id),
-          assetId: primaryAsset.id,
-          editable: false,
-          clipTrackIndex: -1,
-          waveformTrackIndex: index,
-          createTrackIndex: MIX_TRACK_INDEX,
-        });
+      if (showSourceTracks && sourceTrackCount > 1) {
+        for (let index = 0; index < sourceTrackCount; index += 1) {
+          lanes.push({
+            id: `a${index + 1}-${asset.id}`,
+            label: `A${index + 1}${assetLabelSuffix}`,
+            audioUrl: buildAssetUrl(asset.id),
+            assetId: asset.id,
+            editable: false,
+            clipTrackIndex: -1,
+            waveformTrackIndex: index,
+            createTrackIndex: MIX_TRACK_INDEX,
+          });
+        }
       }
     }
 
