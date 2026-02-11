@@ -43,7 +43,7 @@ import {
   applySuggestionWithClip,
   rejectSuggestion,
 } from '../database/db.js';
-import { generateWaveformTiers, WaveformError } from '../../pipeline/waveform.js';
+import { generateWaveformTiers, generateWaveformTiersForMkvTracks, WaveformError } from '../../pipeline/waveform.js';
 import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError, generateAIProxy } from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError } from '../../pipeline/whisper.js';
@@ -831,8 +831,13 @@ export function registerIpcHandlers() {
   });
 
   // Waveform handlers
-  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, { assetId, trackIndex }) => {
-    console.log('IPC: waveform:generate', assetId, trackIndex);
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, {
+    assetId,
+    trackIndex,
+    includeSourceTracks,
+    playbackActive,
+  }) => {
+    console.log('IPC: waveform:generate', assetId, trackIndex, { includeSourceTracks, playbackActive });
     try {
       if (!assetId) {
         return createErrorResponse('Asset ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -847,12 +852,53 @@ export function registerIpcHandlers() {
         return createErrorResponse('Asset file not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
       }
 
+      const requestedTrackIndex = typeof trackIndex === 'number' ? trackIndex : 0;
+      const includeAllSourceTracks = Boolean(includeSourceTracks);
+      const isMkvMixRequest =
+        requestedTrackIndex === -1 &&
+        path.extname(asset.file_path).toLowerCase() === '.mkv';
+
+      if (isMkvMixRequest) {
+        const mkvResults = await generateWaveformTiersForMkvTracks(
+          asset.file_path,
+          assetId,
+          (progress) => {
+            event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, {
+              assetId,
+              trackIndex: progress.trackIndex ?? requestedTrackIndex,
+              progress,
+            });
+          },
+          {
+            includeTier2: false,
+            playbackActive: Boolean(playbackActive),
+            trackIndices: includeAllSourceTracks ? undefined : [requestedTrackIndex],
+          }
+        );
+
+        if (mkvResults && mkvResults.length > 0) {
+          const requestedResult = mkvResults.find((result) => result.trackIndex === requestedTrackIndex) ?? {
+            assetId,
+            trackIndex: requestedTrackIndex,
+            tiers: [],
+          };
+          return createSuccessResponse(requestedResult);
+        }
+      }
+
       const result = await generateWaveformTiers(
         asset.file_path,
         assetId,
-        trackIndex ?? 0,
+        requestedTrackIndex,
         (progress) => {
-          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, { assetId, progress });
+          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, {
+            assetId,
+            trackIndex: progress.trackIndex ?? requestedTrackIndex,
+            progress,
+          });
+        },
+        {
+          includeTier2: false,
         }
       );
 
@@ -912,7 +958,15 @@ export function registerIpcHandlers() {
         assetId,
         trackIndex ?? 0,
         (progress) => {
-          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, { assetId, tierLevel, progress });
+          event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, {
+            assetId,
+            trackIndex: progress.trackIndex ?? (trackIndex ?? 0),
+            tierLevel,
+            progress,
+          });
+        },
+        {
+          includeTier2: tierLevel === 2,
         }
       );
 

@@ -77,6 +77,7 @@
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
   let showClipPreviewPanel = $state(true);
+  let showSourceTracks = $state(false);
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
@@ -268,8 +269,16 @@
     return 1;
   }
 
-  function getWaveformTrackIndices(asset: Asset | null): number[] {
+  function isMkvAsset(asset: Asset | null): boolean {
+    return Boolean(asset?.file_path?.toLowerCase().endsWith('.mkv'));
+  }
+
+  function getWaveformTrackIndices(asset: Asset | null, includeSourceTracks: boolean): number[] {
     const count = getAssetAudioTrackCount(asset);
+    if (!includeSourceTracks || count <= 1) {
+      return [MIX_WAVEFORM_TRACK_INDEX];
+    }
+
     const sourceTracks = Array.from({ length: count }, (_, index) => index);
     return [MIX_WAVEFORM_TRACK_INDEX, ...sourceTracks];
   }
@@ -279,18 +288,63 @@
     const primaryAsset = selectedChapterAssets[0] ?? null;
     return primaryAsset ? [primaryAsset.id] : [];
   });
+  const canShowSourceTracks = $derived.by(() => {
+    const primaryAsset = selectedChapterAssets[0] ?? null;
+    return getAssetAudioTrackCount(primaryAsset) > 1;
+  });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
 
   const rightHidden = $derived(() => layoutState.chatCollapsed && layoutState.beatCollapsed);
 
-  async function ensureChapterWaveforms(assetIds: number[]) {
+  $effect(() => {
+    if (!canShowSourceTracks && showSourceTracks) {
+      showSourceTracks = false;
+    }
+  });
+
+  async function ensureChapterWaveforms(assetIds: number[], includeSourceTracks: boolean) {
     const token = ++waveformCheckToken;
     for (const assetId of assetIds) {
       if (token !== waveformCheckToken) return;
       const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
-      const trackIndices = getWaveformTrackIndices(asset);
+      const sourceTrackCount = getAssetAudioTrackCount(asset);
+      const trackIndices = getWaveformTrackIndices(asset, includeSourceTracks);
+
+      const shouldBatchGenerateMkvTracks =
+        includeSourceTracks &&
+        sourceTrackCount > 1 &&
+        isMkvAsset(asset);
+
+      if (shouldBatchGenerateMkvTracks) {
+        const batchKey = `${assetId}:${MIX_WAVEFORM_TRACK_INDEX}:batch`;
+        if (waveformInFlight.has(batchKey)) continue;
+
+        let hasMissingTrack = false;
+        for (const trackIndex of trackIndices) {
+          const cached = await getAssetWaveform(assetId, trackIndex, 1);
+          if (token !== waveformCheckToken) return;
+          if (!cached) {
+            hasMissingTrack = true;
+            break;
+          }
+        }
+
+        if (!hasMissingTrack) continue;
+
+        waveformInFlight.add(batchKey);
+        try {
+          await generateAssetWaveform(assetId, MIX_WAVEFORM_TRACK_INDEX, {
+            includeSourceTracks: true,
+            playbackActive: timelineState.isPlaying,
+          });
+        } finally {
+          waveformInFlight.delete(batchKey);
+        }
+
+        continue;
+      }
 
       for (const trackIndex of trackIndices) {
         if (token !== waveformCheckToken) return;
@@ -303,7 +357,10 @@
 
         waveformInFlight.add(key);
         try {
-          await generateAssetWaveform(assetId, trackIndex);
+          await generateAssetWaveform(assetId, trackIndex, {
+            includeSourceTracks: false,
+            playbackActive: timelineState.isPlaying,
+          });
         } finally {
           waveformInFlight.delete(key);
         }
@@ -324,8 +381,9 @@
   });
 
   $effect(() => {
+    const includeSourceTracks = showSourceTracks && canShowSourceTracks;
     if (timelineWaveformAssetIds.length > 0) {
-      void ensureChapterWaveforms([...timelineWaveformAssetIds]);
+      void ensureChapterWaveforms([...timelineWaveformAssetIds], includeSourceTracks);
     }
   });
   
@@ -413,17 +471,19 @@
       },
     ];
 
-    for (let index = 0; index < sourceTrackCount; index += 1) {
-      lanes.push({
-        id: `a${index + 1}-${primaryAsset.id}`,
-        label: `A${index + 1}`,
-        audioUrl: buildAssetUrl(primaryAsset.id),
-        assetId: primaryAsset.id,
-        editable: false,
-        clipTrackIndex: -1,
-        waveformTrackIndex: index,
-        createTrackIndex: MIX_TRACK_INDEX,
-      });
+    if (showSourceTracks && sourceTrackCount > 1) {
+      for (let index = 0; index < sourceTrackCount; index += 1) {
+        lanes.push({
+          id: `a${index + 1}-${primaryAsset.id}`,
+          label: `A${index + 1}`,
+          audioUrl: buildAssetUrl(primaryAsset.id),
+          assetId: primaryAsset.id,
+          editable: false,
+          clipTrackIndex: -1,
+          waveformTrackIndex: index,
+          createTrackIndex: MIX_TRACK_INDEX,
+        });
+      }
     }
 
     return lanes;
@@ -705,7 +765,20 @@
               {#if chaptersState.selectedChapterId}
                 <div class="editor-bottom-scrollable">
                   <div class="timeline-wrapper">
-                    <TimelineToolbar />
+                    <div class="timeline-toolbar-row">
+                      <div class="timeline-toolbar-main">
+                        <TimelineToolbar />
+                      </div>
+                      {#if canShowSourceTracks}
+                        <button
+                          class="source-tracks-toggle"
+                          class:active={showSourceTracks}
+                          onclick={() => showSourceTracks = !showSourceTracks}
+                        >
+                          {showSourceTracks ? 'Hide Source Tracks' : 'Show Source Tracks'}
+                        </button>
+                      {/if}
+                    </div>
                     <div class="timeline-container">
                       <Timeline 
                         projectId={project.id}
@@ -775,7 +848,7 @@
   {#if projectDetail.isGeneratingWaveform}
     <div class="progress-overlay">
       <div class="progress-dialog">
-        <p>Generating waveforms...</p>
+        <p class="progress-title">Generating waveforms... {Math.round(projectDetail.waveformProgress.percent)}%</p>
         <div class="progress-bar">
           <div class="progress-fill" style="width: {projectDetail.waveformProgress.percent}%"></div>
         </div>
@@ -1142,6 +1215,39 @@
     overflow: hidden;
     min-height: 220px;
   }
+
+  .timeline-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .timeline-toolbar-main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .source-tracks-toggle {
+    flex: 0 0 auto;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    background: #1f1f1f;
+    color: #d0d0d0;
+    font-size: 0.75rem;
+    line-height: 1.2;
+  }
+
+  .source-tracks-toggle:hover {
+    background: #2a2a2a;
+    border-color: #4a4a4a;
+  }
+
+  .source-tracks-toggle.active {
+    background: #153a63;
+    border-color: #1b4f8a;
+    color: #d6ebff;
+  }
   
   .timeline-container {
     flex: 1;
@@ -1257,6 +1363,10 @@
     border-radius: 8px;
     min-width: 300px;
   }
+
+  .progress-title {
+    margin: 0;
+  }
   
   .progress-bar {
     height: 8px;
@@ -1269,7 +1379,6 @@
   .progress-fill {
     height: 100%;
     background: #007bff;
-    transition: width 0.3s;
   }
   
   .progress-status {

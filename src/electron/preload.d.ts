@@ -33,6 +33,11 @@ export interface GetProjectResult {
     error?: string;
 }
 
+export interface DeleteProjectResult {
+    success: boolean;
+    error?: string;
+}
+
 export interface AgentChatResult {
     success: boolean;
     data?: any;
@@ -132,12 +137,19 @@ export interface WaveformGenerationResult {
     error?: string;
 }
 
+export interface WaveformGenerateOptions {
+    includeSourceTracks?: boolean;
+    playbackActive?: boolean;
+}
+
 export interface WaveformProgressEvent {
     assetId: number;
+    trackIndex?: number;
     progress: {
         tier: number;
         percent: number;
         status: string;
+        trackIndex?: number;
     };
 }
 
@@ -232,6 +244,7 @@ export interface ElectronAPI {
         create: (name: string) => Promise<CreateProjectResult>;
         getAll: () => Promise<GetProjectsResult>;
         get: (id: number) => Promise<GetProjectResult>;
+        delete: (id: number) => Promise<DeleteProjectResult>;
     };
     agent: {
         chat: (params: { 
@@ -270,7 +283,7 @@ export interface ElectronAPI {
     };
     waveforms: {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
-        generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+        generate: (assetId: number, trackIndex: number, options?: WaveformGenerateOptions) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
     };
     transcription: {

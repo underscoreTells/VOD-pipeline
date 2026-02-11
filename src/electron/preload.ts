@@ -14,10 +14,19 @@ interface ProxyOptions {
   quality?: ProxyQuality;
 }
 
+interface WaveformGenerateOptions {
+  includeSourceTracks?: boolean;
+  playbackActive?: boolean;
+}
+
 type ProxyProgressCallback = (data: { assetId: number; progress: number }) => void;
 type ProxyCompleteCallback = (data: { assetId: number; proxyPath: string }) => void;
 type ProxyErrorCallback = (data: { assetId: number; error: string }) => void;
-type WaveformProgressCallback = (data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => void;
+type WaveformProgressCallback = (data: {
+  assetId: number;
+  trackIndex?: number;
+  progress: { tier: number; percent: number; status: string; trackIndex?: number };
+}) => void;
 type TranscriptionProgressCallback = (data: { chapterId: number; progress: { percent: number; status: string } }) => void;
 
 // ============================================================================
@@ -39,6 +48,11 @@ export interface GetProjectsResult {
 export interface GetProjectResult {
   success: boolean;
   data?: { id: number; name: string; created_at: string; updated_at: string };
+  error?: string;
+}
+
+export interface DeleteProjectResult {
+  success: boolean;
   error?: string;
 }
 
@@ -217,6 +231,7 @@ export interface ElectronAPI {
     create: (name: string) => Promise<CreateProjectResult>;
     getAll: () => Promise<GetProjectsResult>;
     get: (id: number) => Promise<GetProjectResult>;
+    delete: (id: number) => Promise<DeleteProjectResult>;
   };
   agent: {
     chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
@@ -258,7 +273,7 @@ export interface ElectronAPI {
   };
   waveforms: {
     get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
-    generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+    generate: (assetId: number, trackIndex: number, options?: WaveformGenerateOptions) => Promise<WaveformGenerationResult>;
     onProgress: (callback: WaveformProgressCallback) => () => void;
   };
   transcription: {
@@ -285,6 +300,7 @@ const electronAPI: ElectronAPI = {
     create: (name) => ipcRenderer.invoke('project:create', { name }),
     getAll: () => ipcRenderer.invoke('project:get-all'),
     get: (id) => ipcRenderer.invoke('project:get', { id }),
+    delete: (id) => ipcRenderer.invoke('project:delete', { id }),
   },
   agent: {
     chat: (params) =>
@@ -359,10 +375,17 @@ const electronAPI: ElectronAPI = {
   waveforms: {
     get: (assetId, trackIndex, tierLevel) => 
       ipcRenderer.invoke('waveform:get', { assetId, trackIndex, tierLevel }),
-    generate: (assetId, trackIndex) => 
-      ipcRenderer.invoke('waveform:generate', { assetId, trackIndex }),
+    generate: (assetId, trackIndex, options) => 
+      ipcRenderer.invoke('waveform:generate', { assetId, trackIndex, ...(options ?? {}) }),
     onProgress: (callback) => {
-      const handler = (_: any, data: { assetId: number; progress: { tier: number; percent: number; status: string } }) => callback(data);
+      const handler = (
+        _: any,
+        data: {
+          assetId: number;
+          trackIndex?: number;
+          progress: { tier: number; percent: number; status: string; trackIndex?: number };
+        }
+      ) => callback(data);
       ipcRenderer.on('waveform:progress', handler);
       return () => ipcRenderer.removeListener('waveform:progress', handler);
     },

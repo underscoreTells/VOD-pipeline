@@ -33,6 +33,11 @@ export interface GetProjectResult {
   error?: string;
 }
 
+export interface DeleteProjectResult {
+  success: boolean;
+  error?: string;
+}
+
 export async function createProject(name: string): Promise<CreateProjectResult> {
   return await window.electronAPI.projects.create(name);
 }
@@ -43,6 +48,10 @@ export async function getProjects(): Promise<GetProjectsResult> {
 
 export async function getProject(id: number): Promise<GetProjectResult> {
   return await window.electronAPI.projects.get(id);
+}
+
+export async function deleteProject(id: number): Promise<DeleteProjectResult> {
+  return await window.electronAPI.projects.delete(id);
 }
 
 // ============================================================================
@@ -198,15 +207,25 @@ export interface WaveformGenerationResult {
 
 export interface WaveformProgressEvent {
   assetId: number;
-  progress: { tier: number; percent: number; status: string };
+  trackIndex?: number;
+  progress: { tier: number; percent: number; status: string; trackIndex?: number };
+}
+
+export interface WaveformGenerateOptions {
+  includeSourceTracks?: boolean;
+  playbackActive?: boolean;
 }
 
 export async function getWaveform(assetId: number, trackIndex: number, tierLevel: number): Promise<WaveformResult> {
   return await window.electronAPI.waveforms.get(assetId, trackIndex, tierLevel);
 }
 
-export async function generateWaveform(assetId: number, trackIndex: number): Promise<WaveformGenerationResult> {
-  return await window.electronAPI.waveforms.generate(assetId, trackIndex);
+export async function generateWaveform(
+  assetId: number,
+  trackIndex: number,
+  options?: WaveformGenerateOptions
+): Promise<WaveformGenerationResult> {
+  return await window.electronAPI.waveforms.generate(assetId, trackIndex, options);
 }
 
 const waveformProgressSubscribers = new Set<(data: WaveformProgressEvent) => void>();
@@ -317,6 +336,7 @@ declare global {
         create: (name: string) => Promise<CreateProjectResult>;
         getAll: () => Promise<GetProjectsResult>;
         get: (id: number) => Promise<GetProjectResult>;
+        delete: (id: number) => Promise<DeleteProjectResult>;
       };
       agent: {
         chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<any>;
@@ -353,7 +373,7 @@ declare global {
       };
       waveforms: {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
-        generate: (assetId: number, trackIndex: number) => Promise<WaveformGenerationResult>;
+        generate: (assetId: number, trackIndex: number, options?: WaveformGenerateOptions) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
       };
       exports: {

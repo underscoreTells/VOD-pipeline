@@ -945,6 +945,8 @@
 
     unsubscribeWaveformProgress = onWaveformProgress((event) => {
       if (!assetId || event.assetId !== assetId) return;
+      const eventTrackIndex = event.trackIndex ?? event.progress.trackIndex;
+      if (eventTrackIndex !== undefined && eventTrackIndex !== waveformTrackIndex) return;
 
       if (event.progress.tier !== WAVEFORM_TIER_LEVEL || event.progress.percent < 100) {
         return;

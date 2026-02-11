@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects, getSelectedProject, loadProjects, createProject, selectProject } from './lib/state/project.svelte';
+  import { projects, getSelectedProject, loadProjects, createProject, deleteProject, selectProject } from './lib/state/project.svelte';
   import { settingsState, openSettings, loadSettings } from './lib/state/settings.svelte';
   import ProjectDetail from './lib/components/ProjectDetail.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
@@ -8,6 +8,14 @@
 
   let newProjectName = $state('');
   let showCreateDialog = $state(false);
+  let deletingProjectId = $state<number | null>(null);
+  let projectContextMenu = $state({
+    open: false,
+    x: 0,
+    y: 0,
+    projectId: null as number | null,
+    projectName: '',
+  });
 
   $effect(() => {
     loadProjects();
@@ -30,6 +38,91 @@
   function handleBackToProjects() {
     selectProject(null);
   }
+
+  async function handleDeleteProject(projectId: number, projectName: string) {
+    if (deletingProjectId === projectId) return;
+
+    const confirmed = window.confirm(
+      `Delete project "${projectName}"?\n\nThis permanently deletes the project and all related chapters, clips, transcripts, and waveform data.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    deletingProjectId = projectId;
+    try {
+      await deleteProject(projectId);
+    } catch (error) {
+      console.error('Failed to delete project:', error);
+    } finally {
+      deletingProjectId = null;
+    }
+  }
+
+  function closeProjectContextMenu() {
+    projectContextMenu.open = false;
+    projectContextMenu.projectId = null;
+    projectContextMenu.projectName = '';
+  }
+
+  function openProjectContextMenu(event: MouseEvent, projectId: number, projectName: string) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const menuWidth = 220;
+    const menuHeight = 52;
+    const maxX = window.innerWidth - menuWidth - 8;
+    const maxY = window.innerHeight - menuHeight - 8;
+
+    projectContextMenu.x = Math.max(8, Math.min(event.clientX, maxX));
+    projectContextMenu.y = Math.max(8, Math.min(event.clientY, maxY));
+    projectContextMenu.projectId = projectId;
+    projectContextMenu.projectName = projectName;
+    projectContextMenu.open = true;
+  }
+
+  function handleContextDelete() {
+    const projectId = projectContextMenu.projectId;
+    const projectName = projectContextMenu.projectName;
+    closeProjectContextMenu();
+
+    if (projectId === null) {
+      return;
+    }
+
+    void handleDeleteProject(projectId, projectName);
+  }
+
+  $effect(() => {
+    if (!projectContextMenu.open) return;
+
+    const handleWindowPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.project-context-menu')) return;
+      closeProjectContextMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeProjectContextMenu();
+      }
+    };
+
+    const handleResize = () => {
+      closeProjectContextMenu();
+    };
+
+    window.addEventListener('pointerdown', handleWindowPointerDown);
+    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('pointerdown', handleWindowPointerDown);
+      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('resize', handleResize);
+    };
+  });
 </script>
 
 <div class="app">
@@ -65,6 +158,7 @@
               <div 
                 class="project-card" 
                 onclick={() => selectProject(project.id)}
+                oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
                 onkeydown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
@@ -86,6 +180,26 @@
               </div>
             {/each}
           </div>
+
+          {#if projectContextMenu.open}
+            <div
+              class="project-context-menu"
+              role="menu"
+              style={`left: ${projectContextMenu.x}px; top: ${projectContextMenu.y}px;`}
+            >
+              <button
+                type="button"
+                class="project-context-item"
+                role="menuitem"
+                disabled={deletingProjectId === projectContextMenu.projectId}
+                onclick={handleContextDelete}
+              >
+                {deletingProjectId === projectContextMenu.projectId
+                  ? 'Deleting...'
+                  : 'Delete project'}
+              </button>
+            </div>
+          {/if}
         {/if}
       </section>
 
@@ -271,6 +385,39 @@
   .project-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  .project-context-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 220px;
+    padding: 0.25rem;
+    background: #1e1e1e;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  }
+
+  .project-context-item {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: #f4f4f5;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    line-height: 1.2;
+  }
+
+  .project-context-item:hover:not(:disabled) {
+    background: #4d1b1b;
+    color: #ffd5d5;
+  }
+
+  .project-context-item:disabled {
+    opacity: 0.7;
+    cursor: wait;
   }
 
   .project-thumbnail {

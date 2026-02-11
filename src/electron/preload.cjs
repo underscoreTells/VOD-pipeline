@@ -5,6 +5,7 @@ const electronAPI = {
     create: (name) => ipcRenderer.invoke('project:create', { name }),
     getAll: () => ipcRenderer.invoke('project:get-all'),
     get: (id) => ipcRenderer.invoke('project:get', { id }),
+    delete: (id) => ipcRenderer.invoke('project:delete', { id }),
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
@@ -75,8 +76,8 @@ const electronAPI = {
   waveforms: {
     get: (assetId, trackIndex, tierLevel) =>
       ipcRenderer.invoke('waveform:get', { assetId, trackIndex, tierLevel }),
-    generate: (assetId, trackIndex) =>
-      ipcRenderer.invoke('waveform:generate', { assetId, trackIndex }),
+    generate: (assetId, trackIndex, options) =>
+      ipcRenderer.invoke('waveform:generate', { assetId, trackIndex, ...(options || {}) }),
     onProgress: (callback) => {
       const handler = (_, data) => callback(data);
       ipcRenderer.on('waveform:progress', handler);

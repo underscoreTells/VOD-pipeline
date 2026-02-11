@@ -1,4 +1,11 @@
-import { createProject as ipcCreateProject, getProjects, type CreateProjectResult, type GetProjectsResult } from './electron.svelte';
+import {
+  createProject as ipcCreateProject,
+  deleteProject as ipcDeleteProject,
+  getProjects,
+  type CreateProjectResult,
+  type DeleteProjectResult,
+  type GetProjectsResult,
+} from './electron.svelte';
 
 export interface Project {
   id: number;
@@ -52,7 +59,21 @@ export async function createProject(name: string) {
 }
 
 export async function deleteProject(id: number) {
-  throw new Error('deleteProject not implemented');
+  try {
+    const result: DeleteProjectResult = await ipcDeleteProject(id);
+    if (!result.success) {
+      throw new Error(result.error ?? 'Failed to delete project');
+    }
+
+    projects.items = projects.items.filter((project) => project.id !== id);
+
+    if (projects.selectedId === id) {
+      projects.selectedId = null;
+    }
+  } catch (error) {
+    projects.error = (error as Error).message;
+    throw error;
+  }
 }
 
 export function selectProject(id: number | null) {

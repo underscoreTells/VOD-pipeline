@@ -115,6 +115,7 @@ export interface WaveformProgress {
     tier: 1 | 2 | 3;
     percent: number;
     status: string;
+    trackIndex?: number;
 }
 export type WaveformProgressCallback = (progress: WaveformProgress) => void;
 export interface WaveformGenerationResult {
