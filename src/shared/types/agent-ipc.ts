@@ -1,4 +1,67 @@
 import { BaseMessage } from "@langchain/core/messages";
+import type { Clip, Suggestion } from "./database.js";
+import type { TranscriptionSegment } from "./pipeline.js";
+
+export type ClipRole = NonNullable<Clip["role"]>;
+
+export interface CreateClipAction {
+  type: "create_clip";
+  assetId?: number;
+  trackIndex?: number;
+  startTime?: number;
+  inPoint: number;
+  outPoint: number;
+  role?: Clip["role"];
+  description?: string | null;
+  isEssential?: boolean;
+  reasoning?: string;
+}
+
+export interface UpdateClipAction {
+  type: "update_clip";
+  clipId: number;
+  updates: {
+    startTime?: number;
+    inPoint?: number;
+    outPoint?: number;
+    role?: Clip["role"];
+    description?: string | null;
+    isEssential?: boolean;
+  };
+  reasoning?: string;
+}
+
+export type TimelineAction = CreateClipAction | UpdateClipAction;
+
+export interface TranscriptDetailRequest {
+  windowStart: number;
+  windowEnd: number;
+  assetId?: number;
+  reason?: string;
+}
+
+export interface DetailedTranscriptWindow {
+  assetId: number;
+  windowStart: number;
+  windowEnd: number;
+  reason?: string;
+  text: string;
+  segments: TranscriptionSegment[];
+}
+
+export interface AgentSuggestionDraft {
+  in_point: number;
+  out_point: number;
+  description?: string;
+  reasoning?: string;
+}
+
+export interface AgentChatData {
+  message: string;
+  threadId?: string;
+  suggestions?: Suggestion[];
+  timelineActions?: TimelineAction[];
+}
 
 export type AgentInputMessage =
   | ChatInputMessage

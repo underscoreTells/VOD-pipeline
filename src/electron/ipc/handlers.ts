@@ -22,6 +22,11 @@ import {
   removeAssetFromChapter,
   getAssetsForChapter,
   replaceTranscripts,
+  getTranscriptsByChapter,
+  deleteTranscriptsByChapter,
+  getDetailedTranscriptWindow,
+  upsertDetailedTranscript,
+  deleteDetailedTranscriptsByChapter,
   createClip,
   getClip,
   getClipsByProject,
@@ -34,13 +39,27 @@ import {
   updateTimelineState,
   saveWaveform,
   getWaveform,
+  createChatConversation,
+  getChatConversation,
+  getChatConversationsByChapter,
+  updateChatConversation,
+  deleteChatConversation,
+  createChatMessage,
+  getChatMessagesByConversation,
   createProxy,
   updateProxyStatus,
   updateProxyMetadata,
   getProxyByAsset,
+  createChapterProxy,
+  getChapterProxyByChapterAsset,
+  updateChapterProxyStatus,
+  updateChapterProxyMetadata,
   createSuggestion,
+  getSuggestion,
   getSuggestionsByChapter,
   applySuggestionWithClip,
+  previewSuggestionWithClip,
+  cancelSuggestionPreview,
   rejectSuggestion,
 } from '../database/db.js';
 import { generateWaveformTiers, generateWaveformTiersForMkvTracks, WaveformError } from '../../pipeline/waveform.js';
@@ -48,8 +67,10 @@ import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError, generateAIProxy } from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError } from '../../pipeline/whisper.js';
 import { app } from 'electron';
+import { randomUUID } from 'crypto';
 import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export/index.js';
-import type { AssetMetadata, Clip } from '../../shared/types/database.js';
+import type { Asset, AssetMetadata, Clip, DetailedTranscript, Suggestion } from '../../shared/types/database.js';
+import type { AgentChatData, TimelineAction } from '../../shared/types/agent-ipc.js';
 import type { ExportFormat } from '../../pipeline/export/index.js';
 
 // Helper to create consistent error responses
@@ -71,8 +92,970 @@ function createSuccessResponse<T>(data: T) {
   };
 }
 
+const SETTINGS_SAFE_PREFIX = 'safe:';
+const SETTINGS_PLAINTEXT_PREFIX = 'plain:';
+
+function looksLikeJson(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith('{') && trimmed.endsWith('}');
+}
+
+function encryptSettingsPayload(text: string): string {
+  if (safeStorage.isEncryptionAvailable()) {
+    const encrypted = safeStorage.encryptString(text).toString('base64');
+    return `${SETTINGS_SAFE_PREFIX}${encrypted}`;
+  }
+
+  console.warn('[Settings] safeStorage unavailable; using local plaintext fallback for API key storage.');
+  const encoded = Buffer.from(text, 'utf8').toString('base64');
+  return `${SETTINGS_PLAINTEXT_PREFIX}${encoded}`;
+}
+
+function decryptSettingsPayload(encrypted: string): string {
+  if (encrypted.startsWith(SETTINGS_SAFE_PREFIX)) {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('System encryption is not available to decrypt saved settings. Re-enter API keys.');
+    }
+
+    const payload = encrypted.slice(SETTINGS_SAFE_PREFIX.length);
+    const buffer = Buffer.from(payload, 'base64');
+    return safeStorage.decryptString(buffer);
+  }
+
+  if (encrypted.startsWith(SETTINGS_PLAINTEXT_PREFIX)) {
+    const payload = encrypted.slice(SETTINGS_PLAINTEXT_PREFIX.length);
+    return Buffer.from(payload, 'base64').toString('utf8');
+  }
+
+  // Backward compatibility with legacy base64-only payloads.
+  const buffer = Buffer.from(encrypted, 'base64');
+
+  if (safeStorage.isEncryptionAvailable()) {
+    try {
+      return safeStorage.decryptString(buffer);
+    } catch {
+      const decoded = buffer.toString('utf8');
+      if (looksLikeJson(decoded)) {
+        return decoded;
+      }
+      throw new Error('Unable to decrypt saved settings payload. Re-enter API keys.');
+    }
+  }
+
+  const decoded = buffer.toString('utf8');
+  if (looksLikeJson(decoded)) {
+    return decoded;
+  }
+
+  throw new Error('System encryption is not available to decrypt saved settings. Re-enter API keys.');
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeTranscriptionModel(value: unknown): 'tiny' | 'base' | 'small' | 'medium' {
+  if (value === 'tiny' || value === 'base' || value === 'small' || value === 'medium') {
+    return value;
+  }
+  return 'base';
+}
+
+function normalizeComputeType(value: unknown): 'int8' | 'float16' {
+  if (value === 'int8' || value === 'float16') {
+    return value;
+  }
+  return 'int8';
+}
+
+function clipOverlapsChapter(clip: Clip, chapterStart: number, chapterEnd: number): boolean {
+  const duration = clip.out_point - clip.in_point;
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  const clipStart = clip.start_time;
+  const clipEnd = clip.start_time + duration;
+  return clipEnd > chapterStart && clipStart < chapterEnd;
+}
+
+const VIDEO_INTENT_KEYWORDS = [
+  'watch',
+  'video',
+  'visual',
+  'see',
+  'look',
+  'analyze video',
+  "what's in the video",
+  'what happens',
+  'show me',
+  'review video',
+];
+
+const hydratedConversationIds = new Set<number>();
+const chapterProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
+const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
+const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
+const chapterMediaPrewarmQueue: Array<() => Promise<void>> = [];
+const CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
+let activeChapterMediaPrewarmJobs = 0;
+
+function pumpChapterMediaPrewarmQueue() {
+  while (
+    activeChapterMediaPrewarmJobs < CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY &&
+    chapterMediaPrewarmQueue.length > 0
+  ) {
+    const nextJob = chapterMediaPrewarmQueue.shift();
+    if (!nextJob) {
+      continue;
+    }
+
+    activeChapterMediaPrewarmJobs += 1;
+    void nextJob()
+      .catch((error) => {
+        console.warn('[ChapterPrewarm] Job failed:', error);
+      })
+      .finally(() => {
+        activeChapterMediaPrewarmJobs = Math.max(0, activeChapterMediaPrewarmJobs - 1);
+        pumpChapterMediaPrewarmQueue();
+      });
+  }
+}
+
+function enqueueChapterMediaPrewarm(job: () => Promise<void>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chapterMediaPrewarmQueue.push(async () => {
+      try {
+        await job();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    pumpChapterMediaPrewarmQueue();
+  });
+}
+
+function hasVideoIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return VIDEO_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
+
+function deriveConversationTitle(message: string): string {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New conversation';
+  }
+  if (normalized.length <= 64) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 61)}...`;
+}
+
+function extractAssistantMessage(result: Record<string, unknown>): string {
+  const explicit = result.assistantResponse;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    return explicit;
+  }
+
+  const messages = Array.isArray(result.messages) ? result.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return message;
+    }
+    if (message && typeof message === 'object') {
+      const record = message as Record<string, unknown>;
+      const content = record.content;
+      if (typeof content === 'string' && content.trim().length > 0) {
+        return content;
+      }
+    }
+  }
+
+  return 'Analysis complete';
+}
+
+function normalizeTimelineActions(value: unknown): TimelineAction[] {
+  if (!Array.isArray(value)) return [];
+  const actions: TimelineAction[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const action = item as Record<string, unknown>;
+    if (action.type === 'create_clip') {
+      if (typeof action.inPoint !== 'number' || typeof action.outPoint !== 'number') continue;
+      if (!Number.isFinite(action.inPoint) || !Number.isFinite(action.outPoint)) continue;
+      if (action.outPoint <= action.inPoint) continue;
+
+      actions.push({
+        type: 'create_clip',
+        assetId: typeof action.assetId === 'number' ? action.assetId : undefined,
+        trackIndex: typeof action.trackIndex === 'number' ? action.trackIndex : undefined,
+        startTime: typeof action.startTime === 'number' ? action.startTime : undefined,
+        inPoint: action.inPoint,
+        outPoint: action.outPoint,
+        role: typeof action.role === 'string' || action.role === null ? action.role as Clip['role'] : undefined,
+        description: typeof action.description === 'string' || action.description === null ? action.description : undefined,
+        isEssential: typeof action.isEssential === 'boolean' ? action.isEssential : undefined,
+        reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+      });
+      continue;
+    }
+
+    if (action.type === 'update_clip') {
+      if (typeof action.clipId !== 'number' || !Number.isFinite(action.clipId)) continue;
+      const updatesRaw = action.updates;
+      if (!updatesRaw || typeof updatesRaw !== 'object') continue;
+
+      const updatesRecord = updatesRaw as Record<string, unknown>;
+      const updates: {
+        startTime?: number;
+        inPoint?: number;
+        outPoint?: number;
+        role?: Clip['role'];
+        description?: string | null;
+        isEssential?: boolean;
+      } = {};
+      if (typeof updatesRecord.startTime === 'number' && Number.isFinite(updatesRecord.startTime)) {
+        updates.startTime = updatesRecord.startTime;
+      }
+      if (typeof updatesRecord.inPoint === 'number' && Number.isFinite(updatesRecord.inPoint)) {
+        updates.inPoint = updatesRecord.inPoint;
+      }
+      if (typeof updatesRecord.outPoint === 'number' && Number.isFinite(updatesRecord.outPoint)) {
+        updates.outPoint = updatesRecord.outPoint;
+      }
+      if (typeof updatesRecord.role === 'string' || updatesRecord.role === null) {
+        updates.role = updatesRecord.role as Clip['role'];
+      }
+      if (typeof updatesRecord.description === 'string' || updatesRecord.description === null) {
+        updates.description = updatesRecord.description;
+      }
+      if (typeof updatesRecord.isEssential === 'boolean') {
+        updates.isEssential = updatesRecord.isEssential;
+      }
+
+      if (Object.keys(updates).length === 0) continue;
+      if (
+        updates.inPoint !== undefined &&
+        updates.outPoint !== undefined &&
+        updates.outPoint <= updates.inPoint
+      ) {
+        continue;
+      }
+
+      actions.push({
+        type: 'update_clip',
+        clipId: action.clipId,
+        updates,
+        reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+      });
+    }
+  }
+
+  return actions;
+}
+
+function normalizeSuggestionDrafts(value: unknown): Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }> {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      if (typeof record.in_point !== 'number' || typeof record.out_point !== 'number') return null;
+      if (!Number.isFinite(record.in_point) || !Number.isFinite(record.out_point)) return null;
+      if (record.out_point <= record.in_point) return null;
+
+      return {
+        in_point: record.in_point,
+        out_point: record.out_point,
+        description: typeof record.description === 'string' ? record.description : null,
+        reasoning: typeof record.reasoning === 'string' ? record.reasoning : null,
+      };
+    })
+    .filter((item): item is { in_point: number; out_point: number; description: string | null; reasoning: string | null } => Boolean(item));
+}
+
+function parseAgentGraphResult(
+  result: Record<string, unknown>,
+  chapterDuration: number | null,
+  chapterAssetIds: number[]
+): {
+  message: string;
+  timelineActions: TimelineAction[];
+  suggestionDrafts: Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }>;
+  transcriptDetailRequests: TranscriptDetailRequest[];
+} {
+  const message = extractAssistantMessage(result);
+  const timelineActions = normalizeTimelineActions(result.timelineActions);
+  const suggestionDrafts = normalizeSuggestionDrafts(result.suggestions);
+  const transcriptDetailRequests =
+    chapterDuration !== null
+      ? normalizeTranscriptDetailRequests(result.transcriptDetailRequests, chapterDuration, chapterAssetIds)
+      : [];
+
+  return {
+    message,
+    timelineActions,
+    suggestionDrafts,
+    transcriptDetailRequests,
+  };
+}
+
+function normalizeSuggestionProvider(provider: unknown): 'gemini' | 'kimi' | null {
+  return provider === 'gemini' || provider === 'kimi' ? provider : null;
+}
+
+function normalizeConversationProvider(
+  provider: unknown
+): 'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi' | null {
+  return provider === 'gemini' ||
+    provider === 'openai' ||
+    provider === 'anthropic' ||
+    provider === 'openrouter' ||
+    provider === 'kimi'
+    ? provider
+    : null;
+}
+
+async function persistAgentSuggestions(
+  chapterId: number,
+  provider: unknown,
+  suggestions: Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }>
+) {
+  if (suggestions.length === 0) return [];
+
+  const existing = await getSuggestionsByChapter(chapterId);
+  let displayOrder = existing.length;
+  const created: Suggestion[] = [];
+
+  for (const suggestion of suggestions) {
+    const createdSuggestion = await createSuggestion({
+      chapter_id: chapterId,
+      in_point: suggestion.in_point,
+      out_point: suggestion.out_point,
+      description: suggestion.description,
+      reasoning: suggestion.reasoning,
+      provider: normalizeSuggestionProvider(provider),
+      status: 'pending',
+      display_order: displayOrder,
+    });
+    created.push(createdSuggestion);
+    displayOrder += 1;
+  }
+
+  return created;
+}
+
+const OVERVIEW_TRANSCRIPT_CHUNK_SECONDS = 15;
+const OVERVIEW_TRANSCRIPT_MAX_LINES = 320;
+const OVERVIEW_TRANSCRIPT_MAX_CHARS = 30000;
+const MAX_DETAILED_TRANSCRIPT_REQUESTS = 3;
+const MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS = 90;
+const DETAILED_TRANSCRIPT_MODEL = 'small';
+const DETAILED_TRANSCRIPT_COMPUTE_TYPE: 'int8' | 'float16' = 'int8';
+const DETAILED_TRANSCRIPT_WORD_TIMESTAMPS = true;
+
+interface TranscriptDetailRequest {
+  windowStart: number;
+  windowEnd: number;
+  assetId?: number;
+  reason?: string;
+}
+
+interface DetailedTranscriptContextWindow {
+  assetId: number;
+  windowStart: number;
+  windowEnd: number;
+  reason?: string;
+  text: string;
+  segments: DetailedTranscript['segments_json'];
+}
+
+function roundSeconds(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeChapterLocalSegment(
+  segment: { start_time: number; end_time: number; text: string },
+  chapterStart: number,
+  chapterDuration: number
+): { start: number; end: number; text: string } | null {
+  if (!segment.text || !segment.text.trim()) return null;
+
+  const looksLikeLegacyGlobal =
+    segment.start_time > chapterDuration + 1 ||
+    segment.end_time > chapterDuration + 1 ||
+    segment.start_time < -0.001;
+
+  const localStartRaw = looksLikeLegacyGlobal ? segment.start_time - chapterStart : segment.start_time;
+  const localEndRaw = looksLikeLegacyGlobal ? segment.end_time - chapterStart : segment.end_time;
+
+  const start = clamp(localStartRaw, 0, chapterDuration);
+  const end = clamp(localEndRaw, start, chapterDuration);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+
+  return {
+    start,
+    end,
+    text: segment.text.trim(),
+  };
+}
+
+function formatOverviewTranscript(
+  transcriptSegments: Array<{ start_time: number; end_time: number; text: string }>,
+  chapterStart: number,
+  chapterEnd: number
+): string {
+  const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
+
+  const normalized = transcriptSegments
+    .map((segment) => normalizeChapterLocalSegment(segment, chapterStart, chapterDuration))
+    .filter((segment): segment is NonNullable<typeof segment> => segment !== null)
+    .sort((a, b) => a.start - b.start);
+
+  if (normalized.length === 0) return '';
+
+  const chunks = new Map<number, { start: number; end: number; textParts: string[] }>();
+  for (const segment of normalized) {
+    const bucket = Math.floor(segment.start / OVERVIEW_TRANSCRIPT_CHUNK_SECONDS);
+    const existing = chunks.get(bucket);
+    if (existing) {
+      existing.end = Math.max(existing.end, segment.end);
+      existing.textParts.push(segment.text);
+      continue;
+    }
+
+    chunks.set(bucket, {
+      start: bucket * OVERVIEW_TRANSCRIPT_CHUNK_SECONDS,
+      end: segment.end,
+      textParts: [segment.text],
+    });
+  }
+
+  const lines = [...chunks.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, OVERVIEW_TRANSCRIPT_MAX_LINES)
+    .map(([, chunk]) => {
+      const text = chunk.textParts.join(' ').replace(/\s+/g, ' ').trim();
+      return `[${chunk.start.toFixed(2)}-${chunk.end.toFixed(2)}] ${text}`;
+    });
+
+  return lines.join('\n').slice(0, OVERVIEW_TRANSCRIPT_MAX_CHARS);
+}
+
+function normalizeTranscriptDetailRequests(
+  value: unknown,
+  chapterDuration: number,
+  chapterAssetIds: number[]
+): TranscriptDetailRequest[] {
+  if (!Array.isArray(value)) return [];
+
+  const chapterAssetSet = new Set(chapterAssetIds);
+  const dedupe = new Set<string>();
+  const requests: TranscriptDetailRequest[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+
+    const startRaw = typeof record.windowStart === 'number' ? record.windowStart : NaN;
+    const endRaw = typeof record.windowEnd === 'number' ? record.windowEnd : NaN;
+    if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) continue;
+
+    const start = clamp(startRaw, 0, chapterDuration);
+    let end = clamp(endRaw, 0, chapterDuration);
+    if (end <= start) continue;
+
+    if (end - start > MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS) {
+      end = Math.min(chapterDuration, start + MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS);
+    }
+
+    const normalizedStart = roundSeconds(start);
+    const normalizedEnd = roundSeconds(end);
+    if (normalizedEnd <= normalizedStart) continue;
+
+    let assetId: number | undefined;
+    if (typeof record.assetId === 'number' && Number.isFinite(record.assetId) && chapterAssetSet.has(record.assetId)) {
+      assetId = record.assetId;
+    }
+
+    const reason =
+      typeof record.reason === 'string' && record.reason.trim().length > 0
+        ? record.reason.trim().slice(0, 240)
+        : undefined;
+
+    const key = `${assetId ?? 'auto'}:${normalizedStart}-${normalizedEnd}`;
+    if (dedupe.has(key)) continue;
+    dedupe.add(key);
+
+    requests.push({
+      windowStart: normalizedStart,
+      windowEnd: normalizedEnd,
+      assetId,
+      reason,
+    });
+
+    if (requests.length >= MAX_DETAILED_TRANSCRIPT_REQUESTS) {
+      break;
+    }
+  }
+
+  return requests;
+}
+
+function mapDetailedTranscriptForContext(
+  detailed: DetailedTranscript,
+  reason?: string
+): DetailedTranscriptContextWindow {
+  return {
+    assetId: detailed.asset_id,
+    windowStart: detailed.window_start,
+    windowEnd: detailed.window_end,
+    reason,
+    text: detailed.text,
+    segments: detailed.segments_json,
+  };
+}
+
+async function generateDetailedTranscriptsForRequests(
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  chapterAssetIds: number[],
+  requests: TranscriptDetailRequest[]
+): Promise<DetailedTranscriptContextWindow[]> {
+  if (requests.length === 0) return [];
+
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const chapterAssetSet = new Set(chapterAssetIds);
+  const windows: DetailedTranscriptContextWindow[] = [];
+
+  for (const request of requests) {
+    const assetId = request.assetId ?? chapterAssetIds[0];
+    if (!assetId || !chapterAssetSet.has(assetId)) {
+      continue;
+    }
+
+    const windowStart = roundSeconds(clamp(request.windowStart, 0, chapterDuration));
+    const requestedEnd = roundSeconds(clamp(request.windowEnd, 0, chapterDuration));
+    const maxEnd = windowStart + MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS;
+    const windowEnd = roundSeconds(Math.min(requestedEnd, chapterDuration, maxEnd));
+    if (windowEnd <= windowStart) continue;
+
+    const cached = await getDetailedTranscriptWindow(
+      chapter.id,
+      assetId,
+      windowStart,
+      windowEnd,
+      DETAILED_TRANSCRIPT_MODEL,
+      DETAILED_TRANSCRIPT_COMPUTE_TYPE,
+      DETAILED_TRANSCRIPT_WORD_TIMESTAMPS
+    );
+
+    if (cached) {
+      windows.push(mapDetailedTranscriptForContext(cached, request.reason));
+      continue;
+    }
+
+    const asset = await getAsset(assetId);
+    if (!asset) {
+      continue;
+    }
+
+    const tempAudioPath = path.join(
+      os.tmpdir(),
+      `vod-pipeline-detailed-${chapter.id}-${assetId}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`
+    );
+
+    try {
+      const globalStart = roundSeconds(chapter.start_time + windowStart);
+      const globalEnd = roundSeconds(chapter.start_time + windowEnd);
+
+      await extractAudio(asset.file_path, tempAudioPath, {
+        trackIndex: 0,
+        sampleRate: 16000,
+        channels: 1,
+        startTime: globalStart,
+        endTime: globalEnd,
+      });
+
+      const transcription = await transcribe({
+        audioPath: tempAudioPath,
+        model: DETAILED_TRANSCRIPT_MODEL,
+        computeType: DETAILED_TRANSCRIPT_COMPUTE_TYPE,
+        wordTimestamps: DETAILED_TRANSCRIPT_WORD_TIMESTAMPS,
+      });
+
+      const detailedSegments = transcription.segments.map((segment, index) => ({
+        id: typeof segment.id === 'number' && Number.isFinite(segment.id) ? segment.id : index,
+        start: roundSeconds(windowStart + segment.start),
+        end: roundSeconds(windowStart + segment.end),
+        text: segment.text,
+        words: Array.isArray(segment.words)
+          ? segment.words.map((word) => ({
+              word: word.word,
+              start: roundSeconds(windowStart + word.start),
+              end: roundSeconds(windowStart + word.end),
+              probability: word.probability,
+            }))
+          : undefined,
+      }));
+
+      const saved = await upsertDetailedTranscript({
+        chapter_id: chapter.id,
+        asset_id: assetId,
+        window_start: windowStart,
+        window_end: windowEnd,
+        model: DETAILED_TRANSCRIPT_MODEL,
+        compute_type: DETAILED_TRANSCRIPT_COMPUTE_TYPE,
+        word_timestamps: DETAILED_TRANSCRIPT_WORD_TIMESTAMPS,
+        text: transcription.text,
+        segments_json: detailedSegments,
+      });
+
+      windows.push(mapDetailedTranscriptForContext(saved, request.reason));
+    } catch (error) {
+      console.warn(
+        `[AgentChat] Failed to generate detailed transcript for chapter=${chapter.id} asset=${assetId} window=${windowStart}-${windowEnd}:`,
+        error
+      );
+    } finally {
+      if (fs.existsSync(tempAudioPath)) {
+        fs.unlinkSync(tempAudioPath);
+      }
+    }
+  }
+
+  return windows.sort((a, b) => a.windowStart - b.windowStart);
+}
+
+function getProxyDirectoryPath(): string {
+  const userDataPath = app.getPath('userData');
+  const proxiesDir = path.join(userDataPath, 'proxies');
+  if (!fs.existsSync(proxiesDir)) {
+    fs.mkdirSync(proxiesDir, { recursive: true });
+  }
+  return proxiesDir;
+}
+
+function getAssetProxyPath(assetId: number): string {
+  return path.join(getProxyDirectoryPath(), `asset_${assetId}_ai_proxy.mp4`);
+}
+
+function getChapterProxyPath(chapterId: number, assetId: number): string {
+  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_ai_proxy.mp4`);
+}
+
+async function ensureChapterProxyReady(
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  asset: Asset,
+  encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
+  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+): Promise<string | undefined> {
+  const lockKey = `${chapter.id}:${asset.id}`;
+  const inFlight = chapterProxyGenerationLocks.get(lockKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = (async () => {
+    const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+    if (existing?.status === 'ready' && fs.existsSync(existing.file_path)) {
+      return existing.file_path;
+    }
+
+    const proxyPath = existing?.file_path || getChapterProxyPath(chapter.id, asset.id);
+
+    let chapterProxyId = existing?.id ?? null;
+    if (chapterProxyId === null) {
+      const created = await createChapterProxy({
+        chapter_id: chapter.id,
+        asset_id: asset.id,
+        file_path: proxyPath,
+        preset: 'ai_analysis_chapter',
+        start_time: chapter.start_time,
+        end_time: chapter.end_time,
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        status: 'generating',
+        error_message: null,
+      });
+      chapterProxyId = created.id;
+    } else {
+      await updateChapterProxyStatus(chapterProxyId, 'generating');
+    }
+
+    try {
+      const metadata = await generateAIProxy(
+        asset.file_path,
+        proxyPath,
+        undefined,
+        undefined,
+        encodingMode,
+        quality,
+        {
+          startTime: chapter.start_time,
+          endTime: chapter.end_time,
+        }
+      );
+
+      await updateChapterProxyMetadata(chapterProxyId, {
+        width: metadata.width,
+        height: metadata.height,
+        framerate: metadata.framerate,
+        file_size: metadata.fileSize,
+        duration: metadata.duration,
+      });
+      await updateChapterProxyStatus(chapterProxyId, 'ready');
+
+      return proxyPath;
+    } catch (error) {
+      await updateChapterProxyStatus(
+        chapterProxyId,
+        'error',
+        error instanceof Error ? error.message : String(error)
+      );
+      console.warn(
+        `[ChapterProxy] Failed generating chapter proxy chapter=${chapter.id} asset=${asset.id}:`,
+        error
+      );
+      return undefined;
+    }
+  })();
+
+  chapterProxyGenerationLocks.set(lockKey, task);
+  try {
+    return await task;
+  } finally {
+    chapterProxyGenerationLocks.delete(lockKey);
+  }
+}
+
+async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
+  const lockKey = `${asset.id}:-1`;
+  const inFlight = chapterWaveformPrewarmLocks.get(lockKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = (async () => {
+    if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+      return;
+    }
+
+    const existingTier1 = await getWaveform(asset.id, -1, 1);
+    if (existingTier1) {
+      return;
+    }
+
+    const isMkv = path.extname(asset.file_path).toLowerCase() === '.mkv';
+    if (isMkv) {
+      await generateWaveformTiersForMkvTracks(asset.file_path, asset.id, undefined, {
+        includeTier2: false,
+        playbackActive: false,
+        trackIndices: [-1],
+        maxParallelTracks: 1,
+      });
+      return;
+    }
+
+    await generateWaveformTiers(asset.file_path, asset.id, -1, undefined, {
+      includeTier2: false,
+    });
+  })();
+
+  chapterWaveformPrewarmLocks.set(lockKey, task);
+  try {
+    await task;
+  } finally {
+    chapterWaveformPrewarmLocks.delete(lockKey);
+  }
+}
+
+async function prewarmChapterMedia(chapterId: number, assetId: number): Promise<void> {
+  const [chapter, asset] = await Promise.all([
+    getChapter(chapterId),
+    getAsset(assetId),
+  ]);
+
+  if (!chapter || !asset) {
+    return;
+  }
+
+  if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+    console.warn(`[ChapterPrewarm] Asset file missing for chapter=${chapterId} asset=${assetId}`);
+    return;
+  }
+
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  if (!chapterAssetIds.includes(asset.id)) {
+    return;
+  }
+
+  const jobs: Array<Promise<unknown>> = [
+    ensureAssetMixWaveformReady(asset),
+  ];
+
+  if (asset.file_type === 'video') {
+    jobs.push(ensureChapterProxyReady(chapter, asset, 'auto', 'balanced'));
+  }
+
+  const results = await Promise.allSettled(jobs);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.warn(`[ChapterPrewarm] Failed chapter=${chapter.id} asset=${asset.id}:`, result.reason);
+    }
+  }
+}
+
+function scheduleChapterMediaPrewarm(chapterId: number, assetId: number): Promise<void> {
+  const lockKey = `${chapterId}:${assetId}`;
+  const inFlight = chapterMediaPrewarmLocks.get(lockKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = enqueueChapterMediaPrewarm(async () => {
+    await prewarmChapterMedia(chapterId, assetId);
+  });
+
+  chapterMediaPrewarmLocks.set(lockKey, task);
+  return task.finally(() => {
+    chapterMediaPrewarmLocks.delete(lockKey);
+  });
+}
+
+async function buildAgentChatContext(
+  projectId: number,
+  chapterId?: number,
+  options?: {
+    detailedTranscripts?: DetailedTranscriptContextWindow[];
+    ensureChapterProxyReady?: boolean;
+  }
+) {
+  const detailedTranscripts = options?.detailedTranscripts ?? [];
+  const projectAssets = await getAssetsByProject(projectId);
+  const projectClips = await getClipsByProject(projectId);
+
+  if (!chapterId) {
+    return {
+      chapter: undefined,
+      chapterAssetIds: [] as number[],
+      chapterClips: [] as Array<{
+        id: number;
+        assetId: number;
+        trackIndex: number;
+        startTime: number;
+        inPoint: number;
+        outPoint: number;
+        role: string | null;
+        description: string | null;
+        isEssential: boolean;
+      }>,
+      transcript: '',
+      detailedTranscripts,
+      proxyPath: undefined as string | undefined,
+      assets: projectAssets.map((asset) => ({
+        id: asset.id,
+        filePath: asset.file_path,
+        duration: asset.duration,
+        fileType: asset.file_type,
+      })),
+    };
+  }
+
+  const chapter = await getChapter(chapterId);
+  if (!chapter) {
+    throw new Error(`Chapter not found: ${chapterId}`);
+  }
+  if (chapter.project_id !== projectId) {
+    throw new Error(`Chapter ${chapterId} does not belong to project ${projectId}`);
+  }
+
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  const chapterAssetSet = new Set(chapterAssetIds);
+  const chapterAssets = projectAssets.filter((asset) => chapterAssetSet.has(asset.id));
+  const chapterClips = projectClips
+    .filter((clip) => chapterAssetSet.has(clip.asset_id))
+    .filter((clip) => clipOverlapsChapter(clip, chapter.start_time, chapter.end_time))
+    .map((clip) => ({
+      id: clip.id,
+      assetId: clip.asset_id,
+      trackIndex: clip.track_index,
+      startTime: clip.start_time,
+      inPoint: clip.in_point,
+      outPoint: clip.out_point,
+      role: clip.role,
+      description: clip.description,
+      isEssential: clip.is_essential,
+    }));
+
+  const transcriptSegments = await getTranscriptsByChapter(chapter.id);
+  const transcript = formatOverviewTranscript(
+    transcriptSegments,
+    chapter.start_time,
+    chapter.end_time
+  );
+
+  let proxyPath: string | undefined;
+  if (chapterAssets.length > 0) {
+    const primaryAsset = chapterAssets[0];
+    const chapterProxy = await getChapterProxyByChapterAsset(chapter.id, primaryAsset.id);
+
+    if (chapterProxy?.status === 'ready' && fs.existsSync(chapterProxy.file_path)) {
+      proxyPath = chapterProxy.file_path;
+    } else if (options?.ensureChapterProxyReady) {
+      proxyPath = await ensureChapterProxyReady(chapter, primaryAsset);
+    }
+  }
+
+  const assets = chapterAssets
+    .map((asset) => ({
+      id: asset.id,
+      filePath: asset.file_path,
+      duration: asset.duration,
+      fileType: asset.file_type,
+      audioTrackCount: Array.isArray(asset.metadata?.audioTracks) ? asset.metadata.audioTracks.length : 0,
+    }));
+
+  return {
+    chapter: {
+      id: String(chapter.id),
+      title: chapter.title,
+      startTime: chapter.start_time,
+      endTime: chapter.end_time,
+    },
+    chapterAssetIds,
+    chapterClips,
+    transcript,
+    detailedTranscripts,
+    proxyPath,
+    assets,
+  };
+}
+
 export function registerIpcHandlers() {
   console.log('Registering IPC handlers...');
+
+  const agentBridge = getAgentBridge();
+  agentBridge.on('exit', () => {
+    hydratedConversationIds.clear();
+  });
+  agentBridge.on('error', () => {
+    hydratedConversationIds.clear();
+  });
 
   // Project handlers
   ipcMain.handle(IPC_CHANNELS.PROJECT_CREATE, async (_, { name }) => {
@@ -137,16 +1120,6 @@ export function registerIpcHandlers() {
     }
   });
 
-  // Helper to get proxy storage path
-  function getProxyPath(assetId: number): string {
-    const userDataPath = app.getPath('userData');
-    const proxiesDir = path.join(userDataPath, 'proxies');
-    if (!fs.existsSync(proxiesDir)) {
-      fs.mkdirSync(proxiesDir, { recursive: true });
-    }
-    return path.join(proxiesDir, `asset_${assetId}_ai_proxy.mp4`);
-  }
-
   // Background proxy generation
   async function generateProxyAsync(
     assetId: number, 
@@ -155,7 +1128,7 @@ export function registerIpcHandlers() {
     encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
     quality: 'high' | 'balanced' | 'fast' = 'balanced'
   ) {
-    const proxyPath = getProxyPath(assetId);
+    const proxyPath = getAssetProxyPath(assetId);
     let proxyId: number | null = null;
     
     try {
@@ -445,6 +1418,10 @@ export function registerIpcHandlers() {
 
       const success = await updateChapter(id, normalizedUpdates);
       if (success) {
+        if (normalizedUpdates.start_time !== undefined || normalizedUpdates.end_time !== undefined) {
+          await deleteTranscriptsByChapter(id);
+        }
+        await deleteDetailedTranscriptsByChapter(id);
         return createSuccessResponse(null);
       } else {
         return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -476,6 +1453,13 @@ export function registerIpcHandlers() {
     console.log('IPC: chapter:add-asset', chapterId, assetId);
     try {
       await addAssetToChapter(chapterId, assetId);
+      await deleteTranscriptsByChapter(chapterId);
+      await deleteDetailedTranscriptsByChapter(chapterId);
+
+      void scheduleChapterMediaPrewarm(chapterId, assetId).catch((error) => {
+        console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${chapterId} asset=${assetId}:`, error);
+      });
+
       return createSuccessResponse(null);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -487,6 +1471,8 @@ export function registerIpcHandlers() {
     try {
       const success = await removeAssetFromChapter(chapterId, assetId);
       if (success) {
+        await deleteTranscriptsByChapter(chapterId);
+        await deleteDetailedTranscriptsByChapter(chapterId);
         return createSuccessResponse(null);
       } else {
         return createErrorResponse('Link not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -527,6 +1513,27 @@ export function registerIpcHandlers() {
         return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
+      const chapterStart = chapter.start_time;
+      const chapterEnd = chapter.end_time;
+      const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
+      const assetDuration =
+        typeof asset.duration === 'number' && Number.isFinite(asset.duration) ? asset.duration : null;
+
+      if (assetDuration !== null) {
+        if (chapterStart >= assetDuration) {
+          return createErrorResponse(
+            `Chapter start (${chapterStart.toFixed(2)}s) is outside asset duration (${assetDuration.toFixed(2)}s)`,
+            IPC_ERROR_CODES.VALIDATION_ERROR
+          );
+        }
+        if (chapterEnd > assetDuration + 0.25) {
+          return createErrorResponse(
+            `Chapter end (${chapterEnd.toFixed(2)}s) exceeds asset duration (${assetDuration.toFixed(2)}s)`,
+            IPC_ERROR_CODES.VALIDATION_ERROR
+          );
+        }
+      }
+
       const tempDir = os.tmpdir();
       tempAudioPath = path.join(tempDir, `vod-pipeline-${chapterId}-${Date.now()}.wav`);
 
@@ -540,6 +1547,8 @@ export function registerIpcHandlers() {
           trackIndex: 0,
           sampleRate: 16000,
           channels: 1,
+          startTime: chapterStart,
+          endTime: chapterEnd,
         });
       } catch (error) {
         // Preserve FFmpegError to allow proper error code mapping
@@ -557,9 +1566,10 @@ export function registerIpcHandlers() {
       const result = await transcribe(
         {
           audioPath: tempAudioPath,
-          model: options.model || 'base',
-          language: options.language,
-          computeType: options.computeType || 'int8',
+          model: normalizeTranscriptionModel(options.model),
+          language: typeof options.language === 'string' ? options.language : undefined,
+          computeType: normalizeComputeType(options.computeType),
+          wordTimestamps: false,
         },
         (progress) => {
           event.sender.send(IPC_CHANNELS.TRANSCRIBE_PROGRESS, {
@@ -569,14 +1579,22 @@ export function registerIpcHandlers() {
         }
       );
 
-      const transcriptInputs = result.segments.map(segment => ({
-        text: segment.text,
-        start_time: segment.start,
-        end_time: segment.end,
-      }));
+      const transcriptInputs = result.segments
+        .map((segment) => {
+          const start = clamp(segment.start, 0, chapterDuration);
+          const end = clamp(segment.end, start, chapterDuration);
+          if (end <= start) return null;
+          return {
+            text: segment.text,
+            start_time: start,
+            end_time: end,
+          };
+        })
+        .filter((segment): segment is { text: string; start_time: number; end_time: number } => segment !== null);
 
       // Atomically replace transcripts (delete old + insert new in transaction)
       await replaceTranscripts(chapterId, transcriptInputs);
+      await deleteDetailedTranscriptsByChapter(chapterId);
 
       if (tempAudioPath && fs.existsSync(tempAudioPath)) {
         fs.unlinkSync(tempAudioPath);
@@ -585,7 +1603,7 @@ export function registerIpcHandlers() {
       return createSuccessResponse({
         chapterId,
         language: result.language,
-        duration: result.duration,
+        duration: chapterDuration,
         segmentCount: result.segments.length,
       });
     } catch (error) {
@@ -628,19 +1646,492 @@ export function registerIpcHandlers() {
     }
   });
 
-  // Agent handler
-  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, { projectId, message, provider, chapterId }) => {
-    console.log('IPC: agent:chat', projectId, provider, chapterId, message);
+  // Agent conversation handlers
+  ipcMain.handle(IPC_CHANNELS.AGENT_CONVERSATION_CREATE, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const chapterId = toNumberOrNull(payload?.chapterId);
+    const provider = typeof payload?.provider === 'string' ? payload.provider : null;
+    const titleRaw = typeof payload?.title === 'string' ? payload.title.trim() : '';
+
+    console.log('IPC: agent:conversation-create', projectId, chapterId, provider);
+
     try {
-      const agentBridge = getAgentBridge();
-      const response = await agentBridge.send({
-        type: 'chat',
-        messages: [{ role: 'user', content: message }],
-        metadata: { projectId, provider, chapterId },
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (!chapterId) {
+        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const project = await getProject(projectId);
+      if (!project) {
+        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const chapter = await getChapter(chapterId);
+      if (!chapter) {
+        return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (chapter.project_id !== projectId) {
+        return createErrorResponse('Chapter does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const conversation = await createChatConversation({
+        project_id: projectId,
+        chapter_id: chapterId,
+        title: titleRaw || 'New conversation',
+        provider: normalizeConversationProvider(provider),
+        thread_id: randomUUID(),
       });
-      return createSuccessResponse(response);
+
+      return createSuccessResponse(conversation);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_CONVERSATION_LIST, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const chapterId = toNumberOrNull(payload?.chapterId);
+
+    console.log('IPC: agent:conversation-list', projectId, chapterId);
+
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (!chapterId) {
+        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const conversations = await getChatConversationsByChapter(projectId, chapterId);
+      return createSuccessResponse(conversations);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_CONVERSATION_MESSAGES, async (_, payload) => {
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    console.log('IPC: agent:conversation-messages', conversationId);
+
+    try {
+      if (!conversationId) {
+        return createErrorResponse('Conversation ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const conversation = await getChatConversation(conversationId);
+      if (!conversation) {
+        return createErrorResponse('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const messages = await getChatMessagesByConversation(conversationId);
+      return createSuccessResponse(messages);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_CONVERSATION_DELETE, async (_, payload) => {
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    console.log('IPC: agent:conversation-delete', conversationId);
+
+    try {
+      if (!conversationId) {
+        return createErrorResponse('Conversation ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const success = await deleteChatConversation(conversationId);
+      if (success) {
+        hydratedConversationIds.delete(conversationId);
+        return createSuccessResponse(null);
+      }
+      return createErrorResponse('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  // Agent handler
+  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+    const provider = typeof payload?.provider === 'string' ? payload.provider : undefined;
+    const selectedClipIds = Array.isArray(payload?.selectedClipIds)
+      ? payload.selectedClipIds.filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value))
+      : [];
+    const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
+      ? payload.agentConfig
+      : undefined;
+
+    console.log('IPC: agent:chat', projectId, conversationId, provider, message);
+
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (!conversationId) {
+        return createErrorResponse('Conversation ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (!message) {
+        return createErrorResponse('Message is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const project = await getProject(projectId);
+      if (!project) {
+        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const conversation = await getChatConversation(conversationId);
+      if (!conversation) {
+        return createErrorResponse('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (conversation.project_id !== projectId) {
+        return createErrorResponse('Conversation does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const chapter = await getChapter(conversation.chapter_id);
+      if (!chapter) {
+        return createErrorResponse('Conversation chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (chapter.project_id !== projectId) {
+        return createErrorResponse('Conversation chapter does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const effectiveProvider = provider ?? conversation.provider ?? undefined;
+      if (provider && provider !== conversation.provider) {
+        await updateChatConversation(conversation.id, {
+          provider: normalizeConversationProvider(provider),
+        });
+      }
+
+      await createChatMessage({
+        conversation_id: conversation.id,
+        role: 'user',
+        content: message,
+      });
+
+      const existingMessages = await getChatMessagesByConversation(conversation.id);
+      if (conversation.title === 'New conversation' && existingMessages.length === 1) {
+        await updateChatConversation(conversation.id, {
+          title: deriveConversationTitle(message),
+        });
+      }
+
+      const threadId = conversation.thread_id?.trim() || randomUUID();
+      if (!conversation.thread_id || conversation.thread_id !== threadId) {
+        await updateChatConversation(conversation.id, { thread_id: threadId });
+      }
+
+      const chapterAssetIds = await getAssetsForChapter(chapter.id);
+      const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+
+      const needsHydration = !hydratedConversationIds.has(conversation.id);
+      const wantsVideoContext = hasVideoIntent(message);
+      const includeContext = needsHydration || wantsVideoContext;
+
+      const initialContext = includeContext
+        ? await buildAgentChatContext(projectId, chapter.id, {
+            ensureChapterProxyReady: false,
+          })
+        : undefined;
+
+      if (wantsVideoContext && chapterAssetIds.length > 0) {
+        const primaryAssetId = chapterAssetIds[0];
+        void scheduleChapterMediaPrewarm(chapter.id, primaryAssetId).catch((error) => {
+          console.warn(
+            `[ChapterPrewarm] Failed scheduling from chat chapter=${chapter.id} asset=${primaryAssetId}:`,
+            error
+          );
+        });
+      }
+
+      const messagePayload = needsHydration
+        ? existingMessages.map((item) => ({ role: item.role, content: item.content }))
+        : [{ role: 'user', content: message }];
+
+      const agentBridge = getAgentBridge();
+      await agentBridge.ensureStarted();
+
+      const sendChatPass = async (
+        messagesPayload: Array<{ role: string; content: string }>,
+        contextPayload?: Awaited<ReturnType<typeof buildAgentChatContext>>
+      ): Promise<Record<string, unknown>> => {
+        const response = await agentBridge.send({
+          type: 'chat',
+          threadId,
+          messages: messagesPayload,
+          metadata: {
+            projectId: String(projectId),
+            provider: effectiveProvider,
+            chapterId: String(chapter.id),
+            selectedClipIds,
+            playheadTime,
+            agentConfig,
+            context: contextPayload,
+          },
+        });
+
+        if (response.type === 'error') {
+          throw new Error(response.error);
+        }
+        if (response.type !== 'graph-complete') {
+          throw new Error('Unexpected agent response type');
+        }
+
+        return response.result && typeof response.result === 'object'
+          ? response.result as Record<string, unknown>
+          : {};
+      };
+
+      const firstPassResult = await sendChatPass(messagePayload, initialContext);
+      let finalPassResult = firstPassResult;
+
+      const firstParsed = parseAgentGraphResult(firstPassResult, chapterDuration, chapterAssetIds);
+      if (firstParsed.transcriptDetailRequests.length > 0) {
+        const detailedTranscripts = await generateDetailedTranscriptsForRequests(
+          chapter,
+          chapterAssetIds,
+          firstParsed.transcriptDetailRequests
+        );
+
+        if (detailedTranscripts.length > 0) {
+          const detailedContext = await buildAgentChatContext(projectId, chapter.id, {
+            detailedTranscripts,
+          });
+          finalPassResult = await sendChatPass([{ role: 'user', content: message }], detailedContext);
+        }
+      }
+
+      const finalParsed = parseAgentGraphResult(finalPassResult, chapterDuration, chapterAssetIds);
+      const persistedSuggestions = await persistAgentSuggestions(
+        chapter.id,
+        effectiveProvider,
+        finalParsed.suggestionDrafts
+      );
+
+      const assistantMessage = finalParsed.message || 'Analysis complete';
+      await createChatMessage({
+        conversation_id: conversation.id,
+        role: 'assistant',
+        content: assistantMessage,
+      });
+
+      hydratedConversationIds.add(conversation.id);
+
+      const normalized: AgentChatData = {
+        message: assistantMessage,
+        threadId,
+        suggestions: persistedSuggestions,
+        timelineActions: finalParsed.timelineActions,
+      };
+
+      return createSuccessResponse(normalized);
     } catch (error) {
       console.error('[IPC] agent:chat error:', error);
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_APPLY_ACTIONS, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const chapterId = toNumberOrNull(payload?.chapterId);
+    const actionsRaw = Array.isArray(payload?.actions) ? payload.actions : [];
+
+    console.log('IPC: agent:apply-actions', projectId, chapterId, actionsRaw.length);
+
+    try {
+      if (!projectId) {
+        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const project = await getProject(projectId);
+      if (!project) {
+        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      let chapter = null as Awaited<ReturnType<typeof getChapter>> | null;
+      let chapterAssetIds: number[] = [];
+      let chapterDuration: number | null = null;
+
+      if (chapterId !== null) {
+        chapter = await getChapter(chapterId);
+        if (!chapter) {
+          return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+        }
+        if (chapter.project_id !== projectId) {
+          return createErrorResponse('Chapter does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        chapterAssetIds = await getAssetsForChapter(chapter.id);
+        chapterDuration = Math.max(0, chapter.end_time - chapter.start_time);
+      }
+
+      const projectAssets = await getAssetsByProject(projectId);
+      const projectAssetIdSet = new Set(projectAssets.map((asset) => asset.id));
+      const chapterAssetIdSet = new Set(chapterAssetIds);
+
+      const results: Array<{
+        index: number;
+        action: TimelineAction;
+        success: boolean;
+        clip?: Clip;
+        error?: string;
+      }> = [];
+
+      const toGlobalTime = (localSeconds: number): number => {
+        if (!chapter) return localSeconds;
+        return chapter.start_time + localSeconds;
+      };
+
+      const ensureChapterLocalTime = (value: number, fieldName: string) => {
+        if (!chapter || chapterDuration === null) return;
+        if (value < 0 || value > chapterDuration) {
+          throw new Error(`${fieldName} (${value}) must be within chapter range 0-${chapterDuration.toFixed(2)}s`);
+        }
+      };
+
+      for (let index = 0; index < actionsRaw.length; index += 1) {
+        const rawAction = actionsRaw[index];
+        const [action] = normalizeTimelineActions([rawAction]);
+
+        if (!action) {
+          results.push({
+            index,
+            action: {
+              type: 'create_clip',
+              inPoint: 0,
+              outPoint: 0.01,
+              reasoning: 'Invalid action payload',
+            },
+            success: false,
+            error: 'Invalid timeline action payload',
+          });
+          continue;
+        }
+
+        try {
+          if (action.type === 'create_clip') {
+            const chapterLocalInPoint = action.inPoint;
+            const chapterLocalOutPoint = action.outPoint;
+            const chapterLocalStartTime = action.startTime ?? chapterLocalInPoint;
+
+            ensureChapterLocalTime(chapterLocalStartTime, 'startTime');
+            ensureChapterLocalTime(chapterLocalInPoint, 'inPoint');
+            ensureChapterLocalTime(chapterLocalOutPoint, 'outPoint');
+
+            const startTime = toGlobalTime(chapterLocalStartTime);
+            const inPoint = toGlobalTime(chapterLocalInPoint);
+            const outPoint = toGlobalTime(chapterLocalOutPoint);
+
+            if (outPoint <= inPoint) {
+              throw new Error('Out point must be greater than in point');
+            }
+            if (startTime < 0 || inPoint < 0) {
+              throw new Error('Times must be non-negative');
+            }
+
+            let assetId = action.assetId;
+            if (!assetId) {
+              const fallbackAssets = chapter ? chapterAssetIds : projectAssets.map((asset) => asset.id);
+              if (fallbackAssets.length === 1) {
+                assetId = fallbackAssets[0];
+              }
+            }
+
+            if (!assetId) {
+              throw new Error('assetId is required when multiple assets are available');
+            }
+
+            if (!projectAssetIdSet.has(assetId)) {
+              throw new Error(`Asset ${assetId} does not belong to project ${projectId}`);
+            }
+
+            if (chapter && !chapterAssetIdSet.has(assetId)) {
+              throw new Error(`Asset ${assetId} is not linked to chapter ${chapter.id}`);
+            }
+
+            const clip = await createClip({
+              project_id: projectId,
+              asset_id: assetId,
+              track_index: action.trackIndex ?? 0,
+              start_time: startTime,
+              in_point: inPoint,
+              out_point: outPoint,
+              role: action.role ?? null,
+              description: action.description ?? null,
+              is_essential: action.isEssential ?? false,
+            });
+
+            results.push({ index, action, success: true, clip });
+            continue;
+          }
+
+          const existingClip = await getClip(action.clipId);
+          if (!existingClip) {
+            throw new Error(`Clip not found: ${action.clipId}`);
+          }
+          if (existingClip.project_id !== projectId) {
+            throw new Error(`Clip ${action.clipId} does not belong to project ${projectId}`);
+          }
+          if (chapter && !chapterAssetIdSet.has(existingClip.asset_id)) {
+            throw new Error(`Clip ${action.clipId} is not linked to chapter ${chapter.id}`);
+          }
+
+          const updates: Partial<Clip> = {};
+
+          if (action.updates.startTime !== undefined) {
+            ensureChapterLocalTime(action.updates.startTime, 'startTime');
+            updates.start_time = toGlobalTime(action.updates.startTime);
+          }
+          if (action.updates.inPoint !== undefined) {
+            ensureChapterLocalTime(action.updates.inPoint, 'inPoint');
+            updates.in_point = toGlobalTime(action.updates.inPoint);
+          }
+          if (action.updates.outPoint !== undefined) {
+            ensureChapterLocalTime(action.updates.outPoint, 'outPoint');
+            updates.out_point = toGlobalTime(action.updates.outPoint);
+          }
+          if (action.updates.role !== undefined) {
+            updates.role = action.updates.role;
+          }
+          if (action.updates.description !== undefined) {
+            updates.description = action.updates.description;
+          }
+          if (action.updates.isEssential !== undefined) {
+            updates.is_essential = action.updates.isEssential;
+          }
+
+          const effectiveIn = updates.in_point ?? existingClip.in_point;
+          const effectiveOut = updates.out_point ?? existingClip.out_point;
+          if (effectiveOut <= effectiveIn) {
+            throw new Error('Out point must be greater than in point');
+          }
+          if ((updates.start_time ?? existingClip.start_time) < 0 || effectiveIn < 0) {
+            throw new Error('Times must be non-negative');
+          }
+
+          const updated = await updateClip(action.clipId, updates);
+          if (!updated) {
+            throw new Error(`Failed to update clip ${action.clipId}`);
+          }
+
+          const refreshed = await getClip(action.clipId);
+          results.push({ index, action, success: true, clip: refreshed ?? undefined });
+        } catch (error) {
+          results.push({
+            index,
+            action,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      return createSuccessResponse({ results });
+    } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
@@ -1186,6 +2677,48 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_PREVIEW, async (_, { id }) => {
+    console.log('IPC: suggestion:preview', id);
+    try {
+      if (!id) {
+        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const result = await previewSuggestionWithClip(id);
+      if (result.success) {
+        return createSuccessResponse({
+          previewed: true,
+          clip: result.clip,
+        });
+      }
+
+      return createErrorResponse(result.error || 'Failed to preview suggestion', IPC_ERROR_CODES.DATABASE_ERROR);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_CANCEL_PREVIEW, async (_, { id }) => {
+    console.log('IPC: suggestion:cancel-preview', id);
+    try {
+      if (!id) {
+        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const result = await cancelSuggestionPreview(id);
+      if (result.success) {
+        return createSuccessResponse({
+          cancelled: true,
+          removedClipId: result.removedClipId,
+        });
+      }
+
+      return createErrorResponse(result.error || 'Failed to cancel suggestion preview', IPC_ERROR_CODES.DATABASE_ERROR);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.SUGGESTION_REJECT, async (_, { id }) => {
     console.log('IPC: suggestion:reject', id);
     try {
@@ -1193,9 +2726,16 @@ export function registerIpcHandlers() {
         return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
+      const suggestion = await getSuggestion(id);
+      if (!suggestion) {
+        return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const removedClipId = suggestion.status === 'pending' ? (suggestion.clip_id ?? undefined) : undefined;
+
       const success = await rejectSuggestion(id);
       if (success) {
-        return createSuccessResponse({ rejected: true });
+        return createSuccessResponse({ rejected: true, removedClipId });
       } else {
         return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
       }
@@ -1246,12 +2786,7 @@ export function registerIpcHandlers() {
         return createErrorResponse('Text to encrypt is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      if (!safeStorage.isEncryptionAvailable()) {
-        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
-      }
-
-      const encrypted = safeStorage.encryptString(text);
-      return createSuccessResponse(encrypted.toString('base64'));
+      return createSuccessResponse(encryptSettingsPayload(text));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
@@ -1264,13 +2799,7 @@ export function registerIpcHandlers() {
         return createErrorResponse('Encrypted text is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      if (!safeStorage.isEncryptionAvailable()) {
-        return createErrorResponse('System encryption is not available', IPC_ERROR_CODES.UNKNOWN_ERROR);
-      }
-
-      const buffer = Buffer.from(encrypted, 'base64');
-      const decrypted = safeStorage.decryptString(buffer);
-      return createSuccessResponse(decrypted);
+      return createSuccessResponse(decryptSettingsPayload(encrypted));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }

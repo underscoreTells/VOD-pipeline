@@ -7,13 +7,25 @@ import { KimiChatModel } from "./kimi.js";
 export const VIDEO_CAPABLE_PROVIDERS = ["gemini", "kimi"];
 const DEFAULT_MODELS = {
     openai: "gpt-4o",
-    gemini: "gemini-2.0-flash-exp",
+    gemini: "gemini-3-flash-preview",
     anthropic: "claude-sonnet-4-20250514",
     openrouter: "anthropic/claude-sonnet-4-20250514",
     kimi: "kimi-k2.5"
 };
+const GEMINI_MODEL_ALIASES = {
+    "gemini-3.0-flash": "gemini-3-flash-preview",
+    "gemini-3-flash": "gemini-3-flash-preview",
+};
+function resolveModel(config) {
+    const configuredModel = config.model ?? DEFAULT_MODELS[config.provider];
+    if (config.provider !== "gemini") {
+        return configuredModel;
+    }
+    const alias = GEMINI_MODEL_ALIASES[configuredModel.toLowerCase()];
+    return alias ?? configuredModel;
+}
 export function createLLM(config) {
-    const model = config.model ?? DEFAULT_MODELS[config.provider];
+    const model = resolveModel(config);
     switch (config.provider) {
         case "openai":
             return new ChatOpenAI({

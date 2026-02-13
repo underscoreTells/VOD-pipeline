@@ -78,6 +78,23 @@ export interface Conversation {
     message: string;
     created_at: string;
 }
+export interface ChatConversation {
+    id: number;
+    project_id: number;
+    chapter_id: number;
+    title: string;
+    provider: 'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi' | null;
+    thread_id: string;
+    created_at: string;
+    updated_at: string;
+}
+export interface ChatConversationMessage {
+    id: number;
+    conversation_id: number;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    created_at: string;
+}
 export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
 export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order'> & {
@@ -86,6 +103,11 @@ export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_or
 export type CreateTranscriptInput = Omit<Transcript, 'id'>;
 export type CreateBeatInput = Omit<Beat, 'id'>;
 export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
+export type CreateChatConversationInput = Omit<ChatConversation, 'id' | 'thread_id' | 'created_at' | 'updated_at'> & {
+    thread_id?: string;
+};
+export type CreateChatConversationMessageInput = Omit<ChatConversationMessage, 'id' | 'created_at'>;
+export type UpdateChatConversationInput = Partial<Pick<ChatConversation, 'title' | 'provider' | 'thread_id'>>;
 export interface Clip {
     id: number;
     project_id: number;
@@ -144,6 +166,25 @@ export interface Proxy {
     created_at: string;
 }
 export type CreateProxyInput = Omit<Proxy, 'id' | 'created_at'>;
+export interface ChapterProxy {
+    id: number;
+    chapter_id: number;
+    asset_id: number;
+    file_path: string;
+    preset: 'ai_analysis_chapter';
+    start_time: number;
+    end_time: number;
+    width: number | null;
+    height: number | null;
+    framerate: number | null;
+    file_size: number | null;
+    duration: number | null;
+    status: 'pending' | 'generating' | 'ready' | 'error';
+    error_message: string | null;
+    created_at: string;
+    updated_at: string;
+}
+export type CreateChapterProxyInput = Omit<ChapterProxy, 'id' | 'created_at' | 'updated_at'>;
 export interface Suggestion {
     id: number;
     chapter_id: number;

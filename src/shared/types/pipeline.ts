@@ -32,6 +32,14 @@ export interface TranscriptionSegment {
   start: number;
   end: number;
   text: string;
+  words?: TranscriptionWord[];
+}
+
+export interface TranscriptionWord {
+  word: string;
+  start: number;
+  end: number;
+  probability?: number;
 }
 
 export interface TranscriptionResult {
@@ -46,6 +54,7 @@ export interface TranscriptionOptions {
   model?: 'tiny' | 'base' | 'small' | 'medium';
   language?: string;
   computeType?: 'int8' | 'float16';
+  wordTimestamps?: boolean;
 }
 
 export interface TranscriptionProgress {
@@ -128,6 +137,8 @@ export interface AudioExtractOptions {
   trackIndex?: number;
   sampleRate?: number;
   channels?: number;
+  startTime?: number;
+  endTime?: number;
 }
 
 export interface FFprobeStream {

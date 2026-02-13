@@ -34,6 +34,12 @@ interface WhisperOutput {
     start: number;
     end: number;
     text: string;
+    words?: Array<{
+      word: string;
+      start: number;
+      end: number;
+      probability?: number;
+    }>;
   }>;
 }
 
@@ -78,6 +84,10 @@ export async function transcribe(
 
     if (options.computeType) {
       args.push('--compute-type', options.computeType);
+    }
+
+    if (options.wordTimestamps) {
+      args.push('--word-timestamps');
     }
 
     console.log(`[Whisper] Starting transcription: ${pythonPath.path} ${args.join(' ')}`);
@@ -135,6 +145,26 @@ export async function transcribe(
             start: s.start,
             end: s.end,
             text: s.text.trim(),
+            words: Array.isArray(s.words)
+              ? s.words
+                  .filter((word) =>
+                    word &&
+                    typeof word.word === 'string' &&
+                    typeof word.start === 'number' &&
+                    Number.isFinite(word.start) &&
+                    typeof word.end === 'number' &&
+                    Number.isFinite(word.end)
+                  )
+                  .map((word) => ({
+                    word: word.word,
+                    start: word.start,
+                    end: word.end,
+                    probability:
+                      typeof word.probability === 'number' && Number.isFinite(word.probability)
+                        ? word.probability
+                        : undefined,
+                  }))
+              : undefined,
           })),
         };
         resolve(result);

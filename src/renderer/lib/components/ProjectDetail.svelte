@@ -126,7 +126,7 @@
     clearProjectDetail();
     clearChaptersState();
     setProjectContext(null);
-    setChapterContext(null, null);
+    void setChapterContext(null, null);
   });
   
   // Check if project has content (assets or chapters)
@@ -166,6 +166,24 @@
       // Auto-create chapters from files
       if (assets.length > 0) {
         const created = await autoCreateChaptersFromFiles(project.id, assets);
+
+        if (settingsState.settings.autoTranscribeOnImport) {
+          for (const chapter of created) {
+            void startChapterTranscription(chapter.id)
+              .then((result) => {
+                if (result.success) return;
+                const message = result.error || 'Failed to start transcription';
+                console.error('Failed to start transcription:', message);
+                setTranscriptionError(chapter.id, message);
+              })
+              .catch((error: Error) => {
+                const message = error.message || 'Failed to start transcription';
+                console.error('Failed to start transcription:', error);
+                setTranscriptionError(chapter.id, message);
+              });
+          }
+        }
+
         if (created.length > 0) {
           selectChapter(created[0].id);
         }
@@ -380,7 +398,7 @@
   // Update agent chapter context when selection changes
   $effect(() => {
     const chapterId = selectedChapter?.id ? String(selectedChapter.id) : null;
-    setChapterContext(chapterId, null);
+    void setChapterContext(chapterId, null);
   });
 
   $effect(() => {

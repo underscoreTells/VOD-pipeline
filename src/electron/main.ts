@@ -111,13 +111,11 @@ app.whenReady().then(async () => {
 async function startAgentBridge() {
   try {
     if (!hasAgentKeys()) {
-      console.warn('[Main] Agent disabled: no API keys found in environment.');
-      return;
+      console.log('[Main] No API keys found in environment. Agent will rely on Settings-provided keys.');
     }
 
     console.log('[Main] Starting agent bridge...');
     agentBridge = getAgentBridge();
-    await agentBridge.start();
 
     agentBridge.on('stream', (message: any) => {
       mainWindow?.webContents.send('agent:stream', message);
@@ -131,6 +129,8 @@ async function startAgentBridge() {
     agentBridge.on('exit', (code: number, signal: string) => {
       console.log(`[Main] Agent bridge exited: ${code} (${signal})`);
     });
+
+    await agentBridge.ensureStarted();
 
     console.log('[Main] Agent bridge started successfully');
   } catch (error) {

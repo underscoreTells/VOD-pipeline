@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
 """
 Transcription script using faster-whisper
 Outputs JSON to stdout, progress to stderr
@@ -32,6 +33,7 @@ def transcribe(
     model_name: str = "base",
     language: Optional[str] = None,
     compute_type: str = "int8",
+    word_timestamps: bool = False,
 ) -> dict:
     """
     Transcribe audio file using faster-whisper
@@ -52,6 +54,7 @@ def transcribe(
         language=language,
         task="transcribe",
         condition_on_previous_text=True,
+        word_timestamps=word_timestamps,
     )
 
     # Collect segments
@@ -71,6 +74,21 @@ def transcribe(
                 "text": segment.text.strip(),
             }
         )
+
+        if word_timestamps and getattr(segment, "words", None):
+            segments_list[-1]["words"] = [
+                {
+                    "word": word.word,
+                    "start": word.start,
+                    "end": word.end,
+                    "probability": word.probability,
+                }
+                for word in segment.words
+                if word.word is not None
+                and word.start is not None
+                and word.end is not None
+            ]
+
         full_text_parts.append(segment.text.strip())
 
         # Emit progress (10% to 90%)
@@ -116,6 +134,11 @@ def main():
         choices=["json"],
         help="Output format (only json supported)",
     )
+    parser.add_argument(
+        "--word-timestamps",
+        action="store_true",
+        help="Include word-level timestamps in each segment",
+    )
 
     args = parser.parse_args()
 
@@ -131,6 +154,7 @@ def main():
             model_name=args.model,
             language=args.language,
             compute_type=args.compute_type,
+            word_timestamps=args.word_timestamps,
         )
     except RuntimeError as e:
         print(f"ERROR: Transcription failed (runtime error): {e}", file=sys.stderr)

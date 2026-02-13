@@ -6,9 +6,8 @@ import { readFileAsBase64 } from "../providers/kimi.js";
  * Normalizes video content across different LLM providers
  * 
  * Providers:
- * - Gemini: Requires base64-encoded video data. Gemini's fileData field only accepts
- *   uploaded/hosted URIs (Gemini Files API upload, GCS, or HTTP URL), not local paths.
- *   Local files are converted to base64 before being passed to Gemini via createGeminiVideoMessage.
+ * - Gemini: Uses LangChain "file" multimodal blocks with base64 payloads so
+ *   @langchain/google-genai can convert them to Gemini inlineData.
  * - Kimi: Requires base64-encoded video via video_url field with data URI format.
  *   Video is encoded as base64 and sent as a data URL (data:video/mp4;base64,...).
  */
@@ -55,8 +54,7 @@ export async function createVideoMessage(
 const GEMINI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 
 /**
- * Create message for Gemini using base64-encoded video
- * Gemini requires base64-encoded video data for local files
+ * Create message for Gemini using a LangChain-supported file content block.
  */
 async function createGeminiVideoMessage(
   videoPath: string,
@@ -106,7 +104,7 @@ async function createGeminiVideoMessage(
         text: textPrompt,
       },
       {
-        type: "video",
+        type: "file",
         source_type: "base64",
         data: base64Video,
         mime_type: mimeType,

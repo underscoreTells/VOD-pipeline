@@ -1,22 +1,32 @@
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import type {
   Asset,
   AssetMetadata,
   Chapter,
   Transcript,
+  DetailedTranscript,
   CreateAssetInput,
   CreateChapterInput,
   CreateTranscriptInput,
+  CreateDetailedTranscriptInput,
   Clip,
   TimelineState,
   CreateClipInput,
   UpdateClipInput,
   UpdateTimelineStateInput,
+  ChatConversation,
+  ChatConversationMessage,
+  CreateChatConversationInput,
+  CreateChatConversationMessageInput,
+  UpdateChatConversationInput,
   Proxy as ProxyModel,
   CreateProxyInput,
+  ChapterProxy,
+  CreateChapterProxyInput,
   Suggestion,
   CreateSuggestionInput,
   UpdateSuggestionInput,
@@ -111,6 +121,103 @@ function ensureSchemaColumns(database: Database.Database) {
       `This will cause INSERT statements to fail with "no such column" errors.`
     );
   }
+
+  ensureDetailedTranscriptTable(database);
+  ensureChatConversationTables(database);
+  ensureChapterProxyTable(database);
+}
+
+function ensureDetailedTranscriptTable(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS detailed_transcripts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chapter_id INTEGER NOT NULL,
+      asset_id INTEGER NOT NULL,
+      window_start REAL NOT NULL,
+      window_end REAL NOT NULL,
+      model TEXT NOT NULL,
+      compute_type TEXT NOT NULL,
+      word_timestamps BOOLEAN DEFAULT 0,
+      text TEXT NOT NULL,
+      segments_json TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+      UNIQUE(chapter_id, asset_id, window_start, window_end, model, compute_type, word_timestamps)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_detailed_transcripts_chapter_id
+      ON detailed_transcripts(chapter_id);
+
+    CREATE INDEX IF NOT EXISTS idx_detailed_transcripts_window
+      ON detailed_transcripts(chapter_id, window_start, window_end);
+  `);
+}
+
+function ensureChatConversationTables(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      chapter_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      provider TEXT,
+      thread_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_conversations_project_chapter
+      ON chat_conversations(project_id, chapter_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at
+      ON chat_conversations(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id
+      ON chat_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
+      ON chat_messages(created_at);
+  `);
+}
+
+function ensureChapterProxyTable(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chapter_proxies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chapter_id INTEGER NOT NULL,
+      asset_id INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      preset TEXT NOT NULL CHECK(preset IN ('ai_analysis_chapter')),
+      start_time REAL NOT NULL,
+      end_time REAL NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      framerate INTEGER,
+      file_size INTEGER,
+      duration REAL,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'generating', 'ready', 'error')),
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+      UNIQUE(chapter_id, asset_id, preset)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chapter_proxies_chapter_asset
+      ON chapter_proxies(chapter_id, asset_id);
+    CREATE INDEX IF NOT EXISTS idx_chapter_proxies_status
+      ON chapter_proxies(status);
+  `);
 }
 
 function ensureColumn(
@@ -617,6 +724,245 @@ export async function replaceTranscripts(
   });
   
   return replaceTransaction(segments);
+}
+
+function parseDetailedTranscriptSegments(raw: string): DetailedTranscript['segments_json'] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((segment, index) => {
+        if (!segment || typeof segment !== 'object') return null;
+        const record = segment as Record<string, unknown>;
+        if (
+          typeof record.start !== 'number' ||
+          !Number.isFinite(record.start) ||
+          typeof record.end !== 'number' ||
+          !Number.isFinite(record.end) ||
+          typeof record.text !== 'string'
+        ) {
+          return null;
+        }
+
+        const words = Array.isArray(record.words)
+          ? record.words
+              .map((word) => {
+                if (!word || typeof word !== 'object') return null;
+                const wordRecord = word as Record<string, unknown>;
+                if (
+                  typeof wordRecord.word !== 'string' ||
+                  typeof wordRecord.start !== 'number' ||
+                  !Number.isFinite(wordRecord.start) ||
+                  typeof wordRecord.end !== 'number' ||
+                  !Number.isFinite(wordRecord.end)
+                ) {
+                  return null;
+                }
+
+                return {
+                  word: wordRecord.word,
+                  start: wordRecord.start,
+                  end: wordRecord.end,
+                  probability:
+                    typeof wordRecord.probability === 'number' && Number.isFinite(wordRecord.probability)
+                      ? wordRecord.probability
+                      : undefined,
+                };
+              })
+              .filter((word): word is NonNullable<typeof word> => word !== null)
+          : undefined;
+
+        return {
+          id: typeof record.id === 'number' && Number.isFinite(record.id) ? record.id : index,
+          start: record.start,
+          end: record.end,
+          text: record.text,
+          words: words && words.length > 0 ? words : undefined,
+        };
+      })
+      .filter((segment): segment is NonNullable<typeof segment> => segment !== null);
+  } catch {
+    return [];
+  }
+}
+
+function mapDetailedTranscriptRow(row: {
+  id: number;
+  chapter_id: number;
+  asset_id: number;
+  window_start: number;
+  window_end: number;
+  model: string;
+  compute_type: string;
+  word_timestamps: number;
+  text: string;
+  segments_json: string;
+  created_at: string;
+}): DetailedTranscript {
+  return {
+    id: row.id,
+    chapter_id: row.chapter_id,
+    asset_id: row.asset_id,
+    window_start: row.window_start,
+    window_end: row.window_end,
+    model: row.model,
+    compute_type: row.compute_type,
+    word_timestamps: Boolean(row.word_timestamps),
+    text: row.text,
+    segments_json: parseDetailedTranscriptSegments(row.segments_json),
+    created_at: row.created_at,
+  };
+}
+
+export async function getDetailedTranscriptWindow(
+  chapterId: number,
+  assetId: number,
+  windowStart: number,
+  windowEnd: number,
+  model: string,
+  computeType: string,
+  wordTimestamps: boolean
+): Promise<DetailedTranscript | null> {
+  const database = await getDatabase();
+  const result = database
+    .prepare(
+      `SELECT id, chapter_id, asset_id, window_start, window_end, model, compute_type, word_timestamps, text, segments_json, created_at
+       FROM detailed_transcripts
+       WHERE chapter_id = ?
+         AND asset_id = ?
+         AND window_start = ?
+         AND window_end = ?
+         AND model = ?
+         AND compute_type = ?
+         AND word_timestamps = ?`
+    )
+    .get(
+      chapterId,
+      assetId,
+      windowStart,
+      windowEnd,
+      model,
+      computeType,
+      wordTimestamps ? 1 : 0
+    ) as {
+    id: number;
+    chapter_id: number;
+    asset_id: number;
+    window_start: number;
+    window_end: number;
+    model: string;
+    compute_type: string;
+    word_timestamps: number;
+    text: string;
+    segments_json: string;
+    created_at: string;
+  } | undefined;
+
+  if (!result) return null;
+  return mapDetailedTranscriptRow(result);
+}
+
+export async function upsertDetailedTranscript(
+  transcript: CreateDetailedTranscriptInput
+): Promise<DetailedTranscript> {
+  const database = await getDatabase();
+
+  if (transcript.window_start < 0) {
+    throw new Error('Detailed transcript window_start must be >= 0');
+  }
+  if (transcript.window_end <= transcript.window_start) {
+    throw new Error('Detailed transcript window_end must be greater than window_start');
+  }
+
+  const chapter = await getChapter(transcript.chapter_id);
+  if (!chapter) {
+    throw new Error(`Chapter not found: ${transcript.chapter_id}`);
+  }
+
+  const asset = await getAsset(transcript.asset_id);
+  if (!asset) {
+    throw new Error(`Asset not found: ${transcript.asset_id}`);
+  }
+
+  const segmentsJson = JSON.stringify(transcript.segments_json);
+
+  database.prepare(
+    `INSERT INTO detailed_transcripts (
+      chapter_id,
+      asset_id,
+      window_start,
+      window_end,
+      model,
+      compute_type,
+      word_timestamps,
+      text,
+      segments_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chapter_id, asset_id, window_start, window_end, model, compute_type, word_timestamps)
+    DO UPDATE SET
+      text = excluded.text,
+      segments_json = excluded.segments_json,
+      created_at = CURRENT_TIMESTAMP`
+  ).run(
+    transcript.chapter_id,
+    transcript.asset_id,
+    transcript.window_start,
+    transcript.window_end,
+    transcript.model,
+    transcript.compute_type,
+    transcript.word_timestamps ? 1 : 0,
+    transcript.text,
+    segmentsJson
+  );
+
+  const created = await getDetailedTranscriptWindow(
+    transcript.chapter_id,
+    transcript.asset_id,
+    transcript.window_start,
+    transcript.window_end,
+    transcript.model,
+    transcript.compute_type,
+    transcript.word_timestamps
+  );
+
+  if (!created) {
+    throw new Error('Failed to persist detailed transcript');
+  }
+
+  return created;
+}
+
+export async function getDetailedTranscriptsByChapter(chapterId: number): Promise<DetailedTranscript[]> {
+  const database = await getDatabase();
+  const results = database
+    .prepare(
+      `SELECT id, chapter_id, asset_id, window_start, window_end, model, compute_type, word_timestamps, text, segments_json, created_at
+       FROM detailed_transcripts
+       WHERE chapter_id = ?
+       ORDER BY window_start ASC, window_end ASC, created_at DESC`
+    )
+    .all(chapterId) as Array<{
+    id: number;
+    chapter_id: number;
+    asset_id: number;
+    window_start: number;
+    window_end: number;
+    model: string;
+    compute_type: string;
+    word_timestamps: number;
+    text: string;
+    segments_json: string;
+    created_at: string;
+  }>;
+
+  return results.map(mapDetailedTranscriptRow);
+}
+
+export async function deleteDetailedTranscriptsByChapter(chapterId: number): Promise<number> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM detailed_transcripts WHERE chapter_id = ?').run(chapterId);
+  return result.changes;
 }
 
 // ============================================================================
@@ -1233,6 +1579,140 @@ export async function deleteOldWaveforms(olderThanDays: number): Promise<number>
 }
 
 // ============================================================================
+// CHAT CONVERSATION CRUD OPERATIONS
+// ============================================================================
+
+export async function createChatConversation(input: CreateChatConversationInput): Promise<ChatConversation> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+  const threadId = input.thread_id?.trim() || randomUUID();
+  const title = input.title?.trim() || 'New conversation';
+
+  const result = database.prepare(
+    `INSERT INTO chat_conversations (project_id, chapter_id, title, provider, thread_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.project_id,
+    input.chapter_id,
+    title,
+    input.provider ?? null,
+    threadId,
+    now,
+    now
+  );
+
+  return {
+    id: result.lastInsertRowid as number,
+    project_id: input.project_id,
+    chapter_id: input.chapter_id,
+    title,
+    provider: input.provider ?? null,
+    thread_id: threadId,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export async function getChatConversation(id: number): Promise<ChatConversation | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    `SELECT id, project_id, chapter_id, title, provider, thread_id, created_at, updated_at
+     FROM chat_conversations
+     WHERE id = ?`
+  ).get(id) as ChatConversation | undefined;
+
+  return result || null;
+}
+
+export async function getChatConversationsByChapter(projectId: number, chapterId: number): Promise<ChatConversation[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    `SELECT id, project_id, chapter_id, title, provider, thread_id, created_at, updated_at
+     FROM chat_conversations
+     WHERE project_id = ? AND chapter_id = ?
+     ORDER BY updated_at DESC, created_at DESC`
+  ).all(projectId, chapterId) as ChatConversation[];
+
+  return results;
+}
+
+export async function updateChatConversation(id: number, updates: UpdateChatConversationInput): Promise<boolean> {
+  const database = await getDatabase();
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.title !== undefined) {
+    fields.push('title = ?');
+    values.push(updates.title.trim() || 'New conversation');
+  }
+
+  if (updates.provider !== undefined) {
+    fields.push('provider = ?');
+    values.push(updates.provider ?? null);
+  }
+
+  if (updates.thread_id !== undefined) {
+    fields.push('thread_id = ?');
+    values.push(updates.thread_id.trim() || randomUUID());
+  }
+
+  if (fields.length === 0) {
+    return true;
+  }
+
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(id);
+
+  const result = database.prepare(
+    `UPDATE chat_conversations SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+
+  return result.changes > 0;
+}
+
+export async function deleteChatConversation(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const result = database.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+export async function createChatMessage(input: CreateChatConversationMessageInput): Promise<ChatConversationMessage> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+
+  const result = database.prepare(
+    `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(input.conversation_id, input.role, input.content, now);
+
+  database.prepare(
+    'UPDATE chat_conversations SET updated_at = ? WHERE id = ?'
+  ).run(now, input.conversation_id);
+
+  return {
+    id: result.lastInsertRowid as number,
+    conversation_id: input.conversation_id,
+    role: input.role,
+    content: input.content,
+    created_at: now,
+  };
+}
+
+export async function getChatMessagesByConversation(conversationId: number): Promise<ChatConversationMessage[]> {
+  const database = await getDatabase();
+  const results = database.prepare(
+    `SELECT id, conversation_id, role, content, created_at
+     FROM chat_messages
+     WHERE conversation_id = ?
+     ORDER BY created_at ASC, id ASC`
+  ).all(conversationId) as ChatConversationMessage[];
+
+  return results;
+}
+
+// ============================================================================
 // PROXY CRUD OPERATIONS (Phase 4: Visual AI)
 // ============================================================================
 
@@ -1360,6 +1840,117 @@ export async function deleteProxiesByAsset(assetId: number): Promise<number> {
   return result.changes;
 }
 
+export async function createChapterProxy(proxy: CreateChapterProxyInput): Promise<ChapterProxy> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+
+  const result = database.prepare(
+    `INSERT INTO chapter_proxies (
+      chapter_id, asset_id, file_path, preset, start_time, end_time,
+      width, height, framerate, file_size, duration, status, error_message, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    proxy.chapter_id,
+    proxy.asset_id,
+    proxy.file_path,
+    proxy.preset,
+    proxy.start_time,
+    proxy.end_time,
+    proxy.width,
+    proxy.height,
+    proxy.framerate,
+    proxy.file_size,
+    proxy.duration,
+    proxy.status,
+    proxy.error_message,
+    now,
+    now
+  );
+
+  return {
+    id: result.lastInsertRowid as number,
+    ...proxy,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export async function getChapterProxyByChapterAsset(
+  chapterId: number,
+  assetId: number,
+  preset: 'ai_analysis_chapter' = 'ai_analysis_chapter'
+): Promise<ChapterProxy | null> {
+  const database = await getDatabase();
+  const result = database.prepare(
+    `SELECT id, chapter_id, asset_id, file_path, preset, start_time, end_time,
+            width, height, framerate, file_size, duration, status, error_message, created_at, updated_at
+     FROM chapter_proxies
+     WHERE chapter_id = ? AND asset_id = ? AND preset = ?`
+  ).get(chapterId, assetId, preset) as ChapterProxy | undefined;
+
+  return result || null;
+}
+
+export async function updateChapterProxyStatus(
+  id: number,
+  status: ChapterProxy['status'],
+  errorMessage?: string
+): Promise<boolean> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+
+  const result = database.prepare(
+    'UPDATE chapter_proxies SET status = ?, error_message = ?, updated_at = ? WHERE id = ?'
+  ).run(status, errorMessage || null, now, id);
+
+  return result.changes > 0;
+}
+
+export async function updateChapterProxyMetadata(
+  id: number,
+  updates: { width?: number; height?: number; framerate?: number; file_size?: number; duration?: number }
+): Promise<boolean> {
+  const database = await getDatabase();
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.width !== undefined) {
+    fields.push('width = ?');
+    values.push(updates.width);
+  }
+  if (updates.height !== undefined) {
+    fields.push('height = ?');
+    values.push(updates.height);
+  }
+  if (updates.framerate !== undefined) {
+    fields.push('framerate = ?');
+    values.push(updates.framerate);
+  }
+  if (updates.file_size !== undefined) {
+    fields.push('file_size = ?');
+    values.push(updates.file_size);
+  }
+  if (updates.duration !== undefined) {
+    fields.push('duration = ?');
+    values.push(updates.duration);
+  }
+
+  if (fields.length === 0) {
+    return true;
+  }
+
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(id);
+
+  const result = database.prepare(
+    `UPDATE chapter_proxies SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+
+  return result.changes > 0;
+}
+
 // ============================================================================
 // SUGGESTION CRUD OPERATIONS (Phase 4: Visual AI)
 // ============================================================================
@@ -1431,6 +2022,202 @@ export interface ApplySuggestionResult {
   error?: string;
 }
 
+export interface CancelSuggestionPreviewResult {
+  success: boolean;
+  removedClipId?: number;
+  error?: string;
+}
+
+interface NormalizedSuggestionClipWindow {
+  inPoint: number;
+  outPoint: number;
+}
+
+function clampToRange(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSuggestionClipWindow(
+  suggestion: Suggestion,
+  chapter: Chapter
+): NormalizedSuggestionClipWindow {
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+
+  const looksLikeLegacyGlobal =
+    suggestion.in_point > chapterDuration + 1 ||
+    suggestion.out_point > chapterDuration + 1 ||
+    suggestion.in_point < -0.5 ||
+    suggestion.out_point < -0.5;
+
+  const localInRaw = looksLikeLegacyGlobal
+    ? suggestion.in_point - chapter.start_time
+    : suggestion.in_point;
+  const localOutRaw = looksLikeLegacyGlobal
+    ? suggestion.out_point - chapter.start_time
+    : suggestion.out_point;
+
+  const localInPoint = clampToRange(localInRaw, 0, chapterDuration);
+  const localOutPoint = clampToRange(localOutRaw, localInPoint, chapterDuration);
+
+  return {
+    inPoint: chapter.start_time + localInPoint,
+    outPoint: chapter.start_time + localOutPoint,
+  };
+}
+
+async function createSuggestionTimelineClip(suggestion: Suggestion, chapter: Chapter): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+
+  const assetIds = await getAssetsForChapter(chapter.id);
+  if (assetIds.length === 0) {
+    return { success: false, error: 'No assets found for this chapter' };
+  }
+
+  const assetId = assetIds[0];
+  const asset = await getAsset(assetId);
+  if (!asset) {
+    return { success: false, error: 'Asset not found' };
+  }
+
+  const normalizedWindow = normalizeSuggestionClipWindow(suggestion, chapter);
+
+  let startTime = normalizedWindow.inPoint;
+  let inPoint = normalizedWindow.inPoint;
+  const outPoint = normalizedWindow.outPoint;
+
+  const existingClips = await getClipsByProject(chapter.project_id);
+  const trackClips = existingClips.filter((clip) => clip.track_index === 0);
+
+  const proposedEndTime = startTime + (outPoint - inPoint);
+  const overlappingClips = trackClips.filter((clip) => {
+    const clipStart = clip.start_time;
+    const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+    return startTime < clipEnd && proposedEndTime > clipStart;
+  });
+
+  if (overlappingClips.length > 0) {
+    const rightmostClip = overlappingClips.reduce((latest, clip) => {
+      const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
+      const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
+      return clipEnd > latestEnd ? clip : latest;
+    });
+
+    const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
+    startTime = rightmostEnd;
+
+    const shiftAmount = startTime - normalizedWindow.inPoint;
+    inPoint = normalizedWindow.inPoint + shiftAmount;
+  }
+
+  if (inPoint >= outPoint) {
+    database.prepare(
+      "UPDATE suggestions SET status = 'rejected', clip_id = NULL, applied_at = NULL WHERE id = ?"
+    ).run(suggestion.id);
+
+    return {
+      success: false,
+      error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as rejected.`,
+    };
+  }
+
+  const clip = await createClip({
+    project_id: chapter.project_id,
+    asset_id: assetId,
+    track_index: 0,
+    start_time: startTime,
+    in_point: inPoint,
+    out_point: outPoint,
+    role: null,
+    description: suggestion.description,
+    is_essential: true,
+  });
+
+  return { success: true, clip };
+}
+
+export async function previewSuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+
+  try {
+    const suggestion = await getSuggestion(id);
+    if (!suggestion) {
+      return { success: false, error: 'Suggestion not found' };
+    }
+
+    if (suggestion.status !== 'pending') {
+      return { success: false, error: 'Suggestion is not pending' };
+    }
+
+    if (suggestion.clip_id) {
+      const existingClip = await getClip(suggestion.clip_id);
+      if (existingClip) {
+        return { success: true, clip: existingClip };
+      }
+
+      database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
+    }
+
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) {
+      return { success: false, error: 'Chapter not found for this suggestion' };
+    }
+
+    const createResult = await createSuggestionTimelineClip(suggestion, chapter);
+    if (!createResult.success || !createResult.clip) {
+      return createResult;
+    }
+
+    const updateResult = database.prepare(
+      'UPDATE suggestions SET clip_id = ?, applied_at = NULL WHERE id = ?'
+    ).run(createResult.clip.id, id);
+
+    if (updateResult.changes === 0) {
+      await deleteClip(createResult.clip.id);
+      return { success: false, error: 'Failed to save suggestion preview clip' };
+    }
+
+    return createResult;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[previewSuggestionWithClip] Error previewing suggestion ${id}:`, error);
+    return { success: false, error: errorMessage };
+  }
+}
+
+export async function cancelSuggestionPreview(id: number): Promise<CancelSuggestionPreviewResult> {
+  const database = await getDatabase();
+
+  try {
+    const suggestion = await getSuggestion(id);
+    if (!suggestion) {
+      return { success: false, error: 'Suggestion not found' };
+    }
+
+    if (suggestion.status !== 'pending') {
+      return { success: false, error: 'Suggestion is not pending' };
+    }
+
+    const previewClipId = suggestion.clip_id ?? undefined;
+
+    if (previewClipId) {
+      await deleteClip(previewClipId);
+    }
+
+    database.prepare(
+      'UPDATE suggestions SET clip_id = NULL, applied_at = NULL WHERE id = ?'
+    ).run(id);
+
+    return {
+      success: true,
+      removedClipId: previewClipId,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[cancelSuggestionPreview] Error cancelling preview for suggestion ${id}:`, error);
+    return { success: false, error: errorMessage };
+  }
+}
+
 /**
  * Apply a suggestion and create a corresponding timeline clip
  * This is the enhanced version that actually creates the cut on the timeline
@@ -1439,7 +2226,6 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
   const database = await getDatabase();
   
   try {
-    // Get the suggestion
     const suggestion = await getSuggestion(id);
     if (!suggestion) {
       return { success: false, error: 'Suggestion not found' };
@@ -1448,93 +2234,33 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
     if (suggestion.status === 'applied') {
       return { success: false, error: 'Suggestion has already been applied' };
     }
-    
-    // Get the chapter
+    if (suggestion.status !== 'pending') {
+      return { success: false, error: 'Suggestion is not pending' };
+    }
+
     const chapter = await getChapter(suggestion.chapter_id);
     if (!chapter) {
       return { success: false, error: 'Chapter not found for this suggestion' };
     }
-    
-    // Get assets for this chapter
-    const assetIds = await getAssetsForChapter(chapter.id);
-    if (assetIds.length === 0) {
-      return { success: false, error: 'No assets found for this chapter' };
+
+    let clip: Clip | undefined;
+    if (suggestion.clip_id) {
+      const existingPreviewClip = await getClip(suggestion.clip_id);
+      if (existingPreviewClip) {
+        clip = existingPreviewClip;
+      } else {
+        database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
+      }
     }
-    
-    // Use the first asset
-    const assetId = assetIds[0];
-    const asset = await getAsset(assetId);
-    if (!asset) {
-      return { success: false, error: 'Asset not found' };
+
+    if (!clip) {
+      const createResult = await createSuggestionTimelineClip(suggestion, chapter);
+      if (!createResult.success || !createResult.clip) {
+        return createResult;
+      }
+      clip = createResult.clip;
     }
-    
-    // Calculate clip timing with collision detection
-    let startTime = suggestion.in_point;
-    let inPoint = suggestion.in_point;
-    const outPoint = suggestion.out_point;
-    
-    // Check for overlapping clips on the same track
-    const existingClips = await getClipsByProject(chapter.project_id);
-    const trackClips = existingClips.filter(c => c.track_index === 0);
-    
-    // Find any clip that overlaps with our proposed position
-    const proposedEndTime = startTime + (outPoint - inPoint);
-    const overlappingClips = trackClips.filter(clip => {
-      const clipStart = clip.start_time;
-      const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
-      
-      // Overlap if: new clip starts before existing ends AND new clip ends after existing starts
-      return startTime < clipEnd && proposedEndTime > clipStart;
-    });
-    
-    if (overlappingClips.length > 0) {
-      // Find the rightmost (latest ending) overlapping clip
-      const rightmostClip = overlappingClips.reduce((latest, clip) => {
-        const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
-        const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
-        return clipEnd > latestEnd ? clip : latest;
-      });
-      
-      // Move start to end of rightmost overlapping clip (no gap)
-      const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
-      startTime = rightmostEnd;
-      
-      // Shift in_point by same amount (duration gets shortened)
-      const shiftAmount = startTime - suggestion.in_point;
-      inPoint = suggestion.in_point + shiftAmount;
-      
-      // outPoint stays the same - duration automatically shortened
-    }
-    
-    // Validate that the clip has positive duration after trimming
-    if (inPoint >= outPoint) {
-      // Mark suggestion as rejected since it would have no duration
-      database.prepare(
-        "UPDATE suggestions SET status = 'rejected' WHERE id = ?"
-      ).run(id);
-      
-      return { 
-        success: false, 
-        error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as rejected.` 
-      };
-    }
-    
-    // Create the clip from the suggestion (potentially trimmed)
-    const clipInput: CreateClipInput = {
-      project_id: chapter.project_id,
-      asset_id: assetId,
-      track_index: 0, // Default to first track
-      start_time: startTime,
-      in_point: inPoint,
-      out_point: outPoint,
-      role: null, // Suggestions don't have roles currently
-      description: suggestion.description,
-      is_essential: true, // Suggested cuts are typically essential
-    };
-    
-    const clip = await createClip(clipInput);
-    
-    // Update the suggestion with the clip_id and status
+
     const updateResult = database.prepare(
       "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ? WHERE id = ?"
     ).run(new Date().toISOString(), clip.id, id);
@@ -1553,8 +2279,18 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
 
 export async function rejectSuggestion(id: number): Promise<boolean> {
   const database = await getDatabase();
+
+  const suggestion = await getSuggestion(id);
+  if (!suggestion) {
+    return false;
+  }
+
+  if (suggestion.status === 'pending' && suggestion.clip_id) {
+    await deleteClip(suggestion.clip_id);
+  }
+
   const result = database.prepare(
-    "UPDATE suggestions SET status = 'rejected', applied_at = NULL WHERE id = ?"
+    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL WHERE id = ?"
   ).run(id);
   
   return result.changes > 0;
@@ -1600,6 +2336,12 @@ export async function updateSuggestion(id: number, updates: UpdateSuggestionInpu
 
 export async function deleteSuggestion(id: number): Promise<boolean> {
   const database = await getDatabase();
+
+  const suggestion = await getSuggestion(id);
+  if (suggestion && suggestion.status === 'pending' && suggestion.clip_id) {
+    await deleteClip(suggestion.clip_id);
+  }
+
   const result = database.prepare('DELETE FROM suggestions WHERE id = ?').run(id);
   
   return result.changes > 0;
@@ -1607,6 +2349,17 @@ export async function deleteSuggestion(id: number): Promise<boolean> {
 
 export async function deleteSuggestionsByChapter(chapterId: number): Promise<number> {
   const database = await getDatabase();
+
+  const pendingPreviewClipIds = database.prepare(
+    "SELECT clip_id FROM suggestions WHERE chapter_id = ? AND status = 'pending' AND clip_id IS NOT NULL"
+  ).all(chapterId) as Array<{ clip_id: number }>;
+
+  for (const item of pendingPreviewClipIds) {
+    if (Number.isFinite(item.clip_id)) {
+      await deleteClip(item.clip_id);
+    }
+  }
+
   const result = database.prepare('DELETE FROM suggestions WHERE chapter_id = ?').run(chapterId);
   
   return result.changes;
@@ -1614,6 +2367,17 @@ export async function deleteSuggestionsByChapter(chapterId: number): Promise<num
 
 export async function clearPendingSuggestions(chapterId: number): Promise<number> {
   const database = await getDatabase();
+
+  const pendingPreviewClipIds = database.prepare(
+    "SELECT clip_id FROM suggestions WHERE chapter_id = ? AND status = 'pending' AND clip_id IS NOT NULL"
+  ).all(chapterId) as Array<{ clip_id: number }>;
+
+  for (const item of pendingPreviewClipIds) {
+    if (Number.isFinite(item.clip_id)) {
+      await deleteClip(item.clip_id);
+    }
+  }
+
   const result = database.prepare(
     "DELETE FROM suggestions WHERE chapter_id = ? AND status = 'pending'"
   ).run(chapterId);

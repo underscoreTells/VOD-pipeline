@@ -1,5 +1,6 @@
 import { StateGraph, END, START, Send } from "@langchain/langgraph";
-import { BaseMessage, AIMessage } from "@langchain/core/messages";
+import { AIMessage } from "@langchain/core/messages";
+import { z } from "zod";
 import { createLLM, type LLMConfig, VIDEO_CAPABLE_PROVIDERS } from "../providers/index.js";
 import { loadConfig, type AgentConfig, getProviderLLMConfig } from "../config.js";
 import { MainState, ChapterState } from "../state/schemas.js";
@@ -9,10 +10,75 @@ import { storyCohesionPrompt } from "../prompts/story-cohesion.js";
 import { exportGenerationPrompt } from "../prompts/export-generation.js";
 import { createVideoMessage, type VideoProvider } from "../utils/video-messages.js";
 import type { LLMProviderType } from "../providers/index.js";
+import type {
+  DetailedTranscriptWindow,
+  TimelineAction,
+  TranscriptDetailRequest,
+} from "../../shared/types/agent-ipc.js";
 
 interface CreateMainGraphOptions {
-  checkpointer: any;
+  checkpointer?: any;
 }
+
+const CLIP_ROLE_VALUES = ["setup", "escalation", "twist", "payoff", "transition"] as const;
+
+const timelineEditIntentKeywords = [
+  "create clip",
+  "make clip",
+  "add clip",
+  "new clip",
+  "edit clip",
+  "update clip",
+  "move clip",
+  "trim clip",
+  "trim",
+  "cut",
+  "shorten",
+  "extend",
+  "retime",
+  "timeline",
+  "in point",
+  "out point",
+];
+
+const timelineActionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("create_clip"),
+    assetId: z.number().int().positive().optional(),
+    trackIndex: z.number().int().min(0).optional(),
+    startTime: z.number().finite().min(0).optional(),
+    inPoint: z.number().finite().min(0),
+    outPoint: z.number().finite().min(0),
+    role: z.enum(CLIP_ROLE_VALUES).nullable().optional(),
+    description: z.string().nullable().optional(),
+    isEssential: z.boolean().optional(),
+    reasoning: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("update_clip"),
+    clipId: z.number().int().positive(),
+    updates: z
+      .object({
+        startTime: z.number().finite().min(0).optional(),
+        inPoint: z.number().finite().min(0).optional(),
+        outPoint: z.number().finite().min(0).optional(),
+        role: z.enum(CLIP_ROLE_VALUES).nullable().optional(),
+        description: z.string().nullable().optional(),
+        isEssential: z.boolean().optional(),
+      })
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "update_clip requires at least one update field",
+      }),
+    reasoning: z.string().optional(),
+  }),
+]);
+
+const transcriptDetailRequestSchema = z.object({
+  windowStart: z.number().finite().min(0),
+  windowEnd: z.number().finite().min(0),
+  assetId: z.number().int().positive().optional(),
+  reason: z.string().min(1).max(240).optional(),
+});
 
 async function chatNode(state: typeof MainState.State, config: any) {
   const agentConfig = await loadConfig();
@@ -28,6 +94,10 @@ async function chatNode(state: typeof MainState.State, config: any) {
   });
 
   const response = await llm.invoke(state.messages);
+  const responseContent =
+    typeof response.content === "string"
+      ? response.content
+      : JSON.stringify(response.content ?? "");
 
   config.writer?.({
     type: "progress",
@@ -38,18 +108,15 @@ async function chatNode(state: typeof MainState.State, config: any) {
 
   return {
     messages: [response],
+    assistantResponse: responseContent,
+    timelineActions: undefined,
+    transcriptDetailRequests: undefined,
   };
 }
 
 async function visualAnalysisNode(state: typeof MainState.State, config: any) {
   // Find the index of the last human message to track analysis (do this before try block so catch can access it)
-  let lastHumanMessageIndex = -1;
-  for (let i = state.messages.length - 1; i >= 0; i--) {
-    if (state.messages[i]._getType() === "human") {
-      lastHumanMessageIndex = i;
-      break;
-    }
-  }
+  const lastHumanMessageIndex = getLastHumanMessageIndex(state.messages as unknown[]);
 
   try {
     config.writer?.({
@@ -120,7 +187,10 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
 
     return {
       messages: [new AIMessage(content)],
+      assistantResponse: content,
       suggestions: suggestions.length > 0 ? suggestions : undefined,
+      timelineActions: undefined,
+      transcriptDetailRequests: undefined,
       lastAnalyzedMessageIndex: lastHumanMessageIndex,
     };
   } catch (error) {
@@ -141,7 +211,10 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
 
     return {
       messages: [new AIMessage(errorContent)],
+      assistantResponse: errorContent,
       suggestions: undefined,
+      timelineActions: undefined,
+      transcriptDetailRequests: undefined,
       // Set lastAnalyzedMessageIndex even on error to prevent repeated retriggering
       lastAnalyzedMessageIndex: lastHumanMessageIndex >= 0 ? lastHumanMessageIndex : undefined,
     };
@@ -246,15 +319,435 @@ function extractSuggestionsFromResponse(content: string): any[] {
   return suggestions;
 }
 
-function getLastHumanMessage(state: typeof MainState.State): BaseMessage | null {
-  // Scan from end to find the most recent human/user message
-  for (let i = state.messages.length - 1; i >= 0; i--) {
-    const msg = state.messages[i];
-    if (msg._getType() === "human") {
-      return msg;
+function getMessageType(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const record = message as Record<string, unknown>;
+  const getter = record._getType;
+  if (typeof getter === "function") {
+    try {
+      const result = getter.call(message);
+      if (typeof result === "string") {
+        return result;
+      }
+    } catch {
+      // Fall back to role-based detection.
     }
   }
-  return null;
+
+  const role = record.role;
+  if (typeof role === "string") {
+    const normalizedRole = role.toLowerCase();
+    if (normalizedRole === "user") return "human";
+    if (normalizedRole === "assistant") return "ai";
+    return normalizedRole;
+  }
+
+  return undefined;
+}
+
+function getLastHumanMessageIndex(messages: unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (getMessageType(messages[i]) === "human") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function getLastHumanMessage(state: typeof MainState.State): { content?: unknown } | null {
+  const lastHumanMessageIndex = getLastHumanMessageIndex(state.messages as unknown[]);
+  if (lastHumanMessageIndex < 0) {
+    return null;
+  }
+
+  const message = state.messages[lastHumanMessageIndex];
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  return message as { content?: unknown };
+}
+
+function hasTimelineEditIntent(content: string): boolean {
+  return timelineEditIntentKeywords.some((keyword) => content.includes(keyword));
+}
+
+function extractTextAfterMarker(content: string, marker: string, fallback: string): string {
+  const markerIndex = content.indexOf(marker);
+  if (markerIndex === -1) {
+    return fallback;
+  }
+
+  const possibleMarkers = ["TIMELINE_ACTIONS_JSON:", "TRANSCRIPT_DETAIL_REQUESTS_JSON:"];
+  const nextMarkerIndex = possibleMarkers
+    .map((nextMarker) => content.indexOf(nextMarker, markerIndex + marker.length))
+    .filter((index) => index !== -1)
+    .sort((a, b) => a - b)[0] ?? -1;
+
+  const section = nextMarkerIndex === -1
+    ? content.slice(markerIndex + marker.length)
+    : content.slice(markerIndex + marker.length, nextMarkerIndex);
+
+  const normalized = section.trim();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function extractJsonArrayAfterMarker(content: string, marker: string): unknown[] {
+  const markerIndex = content.indexOf(marker);
+  if (markerIndex === -1) return [];
+
+  const searchStart = markerIndex + marker.length;
+  const arrayStart = content.indexOf("[", searchStart);
+  if (arrayStart === -1) return [];
+
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = arrayStart; i < content.length; i += 1) {
+    const char = content[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === "[") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        const raw = content.slice(arrayStart, i + 1);
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+    }
+  }
+
+  return [];
+}
+
+function parseTimelineActions(actionsRaw: unknown[]): TimelineAction[] {
+  const validated: TimelineAction[] = [];
+
+  for (const action of actionsRaw) {
+    const parsed = timelineActionSchema.safeParse(action);
+    if (!parsed.success) {
+      continue;
+    }
+
+    if (parsed.data.type === "create_clip" && parsed.data.outPoint <= parsed.data.inPoint) {
+      continue;
+    }
+
+    if (
+      parsed.data.type === "update_clip" &&
+      parsed.data.updates.inPoint !== undefined &&
+      parsed.data.updates.outPoint !== undefined &&
+      parsed.data.updates.outPoint <= parsed.data.updates.inPoint
+    ) {
+      continue;
+    }
+
+    validated.push(parsed.data as TimelineAction);
+  }
+
+  return validated;
+}
+
+function parseTranscriptDetailRequests(requestsRaw: unknown[]): TranscriptDetailRequest[] {
+  const validated: TranscriptDetailRequest[] = [];
+
+  for (const request of requestsRaw) {
+    const parsed = transcriptDetailRequestSchema.safeParse(request);
+    if (!parsed.success) {
+      continue;
+    }
+
+    if (parsed.data.windowEnd <= parsed.data.windowStart) {
+      continue;
+    }
+
+    validated.push(parsed.data);
+  }
+
+  return validated;
+}
+
+function formatDetailedTranscriptWindowsForPrompt(
+  windows: DetailedTranscriptWindow[] | undefined
+): string {
+  if (!Array.isArray(windows) || windows.length === 0) {
+    return "No detailed windows available.";
+  }
+
+  return windows
+    .slice(0, 3)
+    .map((window) => {
+      const segments = Array.isArray(window.segments) ? window.segments : [];
+      const segmentLines = segments
+        .slice(0, 80)
+        .map((segment) => `[${segment.start.toFixed(2)}-${segment.end.toFixed(2)}] ${segment.text}`)
+        .join("\n");
+
+      return [
+        `window assetId=${window.assetId} range=[${window.windowStart.toFixed(2)}, ${window.windowEnd.toFixed(2)}] reason=${window.reason ?? "n/a"}`,
+        `summary=${window.text.slice(0, 1200)}`,
+        segmentLines,
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n");
+    })
+    .join("\n\n");
+}
+
+function toShortJson(value: unknown, maxLength: number): string {
+  const json = JSON.stringify(value, null, 2);
+  if (json.length <= maxLength) return json;
+  return `${json.slice(0, maxLength)}\n...`;
+}
+
+function buildTimelineEditPrompt(
+  state: typeof MainState.State,
+  userRequest: string
+): string {
+  const chapter = state.chapterContext;
+  const chapterDuration = chapter
+    ? Math.max(0.01, chapter.endTime - chapter.startTime)
+    : undefined;
+  const chapterStart = chapter?.startTime ?? 0;
+
+  const chapterSummary = chapter
+    ? `Chapter ${chapter.id} (${chapter.title || "Untitled"}), start=${chapter.startTime.toFixed(2)}s, end=${chapter.endTime.toFixed(2)}s, duration=${chapterDuration?.toFixed(2)}s`
+    : "No chapter selected";
+
+  const chapterAssetIds = Array.isArray(state.chapterAssetIds)
+    ? state.chapterAssetIds
+    : [];
+
+  const chapterClips = Array.isArray(state.chapterClips)
+    ? state.chapterClips
+    : [];
+
+  const clipLines = chapterClips.length
+    ? chapterClips.map((clip) => {
+        const localStart = clip.startTime - chapterStart;
+        const duration = Math.max(0.01, clip.outPoint - clip.inPoint);
+        const localEnd = localStart + duration;
+        return [
+          `clipId=${clip.id}`,
+          `assetId=${clip.assetId}`,
+          `track=${clip.trackIndex}`,
+          `timeline=[${localStart.toFixed(2)}, ${localEnd.toFixed(2)}]`,
+          `source=[${(clip.inPoint - chapterStart).toFixed(2)}, ${(clip.outPoint - chapterStart).toFixed(2)}]`,
+          `role=${clip.role ?? "null"}`,
+          `essential=${clip.isEssential}`,
+          `description=${clip.description ?? ""}`,
+        ].join(", ");
+      }).join("\n")
+    : "No clips currently in this chapter.";
+
+  const transcript = typeof state.transcript === "string"
+    ? state.transcript.slice(0, 16000)
+    : "";
+
+  const detailedTranscripts = Array.isArray(state.detailedTranscripts)
+    ? state.detailedTranscripts
+    : [];
+  const detailedTranscriptPromptBlock = formatDetailedTranscriptWindowsForPrompt(detailedTranscripts).slice(0, 18000);
+  const hasDetailedTranscripts = detailedTranscripts.length > 0;
+
+  return `You are an assistant editor. Propose safe timeline edit actions.
+
+User request:
+${userRequest}
+
+Context:
+- ${chapterSummary}
+- chapterAssetIds=${toShortJson(chapterAssetIds, 1200)}
+- selectedClipIds=${toShortJson(state.selectedClipIds ?? [], 400)}
+- playheadTime=${typeof state.playheadTime === "number" ? state.playheadTime.toFixed(2) : "unknown"} (global seconds)
+
+Available clips (chapter-local timeline):
+${clipLines}
+
+Transcript excerpt (chapter-local):
+${transcript || "No transcript loaded."}
+
+Detailed transcript windows (chapter-local, high precision):
+${detailedTranscriptPromptBlock}
+
+Return exactly three sections:
+
+ASSISTANT_RESPONSE:
+<Short natural language response for the user. Mention that these are proposals.>
+
+TIMELINE_ACTIONS_JSON:
+<A valid JSON array. No markdown fences.>
+
+TRANSCRIPT_DETAIL_REQUESTS_JSON:
+<A valid JSON array. No markdown fences.>
+
+Action schema:
+1) create_clip
+{
+  "type": "create_clip",
+  "assetId": number,              // optional only if exactly one chapterAssetIds item
+  "trackIndex": number,           // optional, default 0
+  "startTime": number,            // chapter-local seconds, optional default=inPoint
+  "inPoint": number,              // chapter-local seconds
+  "outPoint": number,             // chapter-local seconds
+  "role": "setup"|"escalation"|"twist"|"payoff"|"transition"|null,
+  "description": string|null,
+  "isEssential": boolean,
+  "reasoning": string
+}
+
+2) update_clip
+{
+  "type": "update_clip",
+  "clipId": number,
+  "updates": {
+    "startTime": number,          // chapter-local seconds
+    "inPoint": number,            // chapter-local seconds
+    "outPoint": number,           // chapter-local seconds
+    "role": "setup"|"escalation"|"twist"|"payoff"|"transition"|null,
+    "description": string|null,
+    "isEssential": boolean
+  },
+  "reasoning": string
+}
+
+3) transcript detail request
+{
+  "windowStart": number,         // chapter-local seconds
+  "windowEnd": number,           // chapter-local seconds
+  "assetId": number,             // optional
+  "reason": string               // optional, short justification
+}
+
+Rules:
+- Use chapter-local seconds only (0 to ${chapterDuration?.toFixed(2) ?? "unknown"}).
+- If request is unclear or non-editing, return [] for both TIMELINE_ACTIONS_JSON and TRANSCRIPT_DETAIL_REQUESTS_JSON.
+- Never invent clipId values not listed in context.
+- For create_clip, outPoint must be > inPoint.
+- For update_clip, only include fields to change.
+- Keep proposals minimal and practical.
+- Detailed request windows must be <= 90 seconds each and no more than 3 items.
+- When detailed transcript windows are already provided (${hasDetailedTranscripts ? "YES" : "NO"}), do not request more windows.
+- If detailed windows are needed first, return [] for TIMELINE_ACTIONS_JSON and populate TRANSCRIPT_DETAIL_REQUESTS_JSON.
+- If you can already propose edits, return [] for TRANSCRIPT_DETAIL_REQUESTS_JSON.`;
+}
+
+async function timelineEditNode(state: typeof MainState.State, config: any) {
+  const lastHumanMessage = getLastHumanMessage(state);
+  const userRequest =
+    lastHumanMessage && typeof lastHumanMessage.content === "string"
+      ? lastHumanMessage.content
+      : "";
+
+  if (!userRequest) {
+    const fallback = "I can propose timeline edits once you provide a concrete edit request.";
+    return {
+      messages: [new AIMessage(fallback)],
+      assistantResponse: fallback,
+      timelineActions: undefined,
+      transcriptDetailRequests: undefined,
+    };
+  }
+
+  if (!state.currentChapterId || !state.chapterContext) {
+    const fallback = "I can propose timeline edits after you select a chapter.";
+    return {
+      messages: [new AIMessage(fallback)],
+      assistantResponse: fallback,
+      timelineActions: undefined,
+      transcriptDetailRequests: undefined,
+    };
+  }
+
+  try {
+    config.writer?.({
+      type: "progress",
+      status: "planning_timeline_edits",
+      nodeName: "timeline_edit",
+      progress: 0,
+    });
+
+    const agentConfig = await loadConfig();
+    const llmConfig = getProviderLLMConfig(agentConfig, state.selectedProvider);
+    const llm = createLLM(llmConfig);
+
+    const prompt = buildTimelineEditPrompt(state, userRequest);
+    const response = await llm.invoke(prompt);
+    const content =
+      typeof response.content === "string"
+        ? response.content
+        : JSON.stringify(response.content ?? "");
+
+    const assistantResponse = extractTextAfterMarker(
+      content,
+      "ASSISTANT_RESPONSE:",
+      content.trim() || "I reviewed your request and prepared timeline proposals."
+    );
+    const rawActions = extractJsonArrayAfterMarker(content, "TIMELINE_ACTIONS_JSON:");
+    const rawDetailRequests = extractJsonArrayAfterMarker(content, "TRANSCRIPT_DETAIL_REQUESTS_JSON:");
+    const timelineActions = parseTimelineActions(rawActions);
+    const requestedDetails = parseTranscriptDetailRequests(rawDetailRequests);
+    const hasDetailedTranscripts = Array.isArray(state.detailedTranscripts) && state.detailedTranscripts.length > 0;
+    const transcriptDetailRequests = hasDetailedTranscripts ? [] : requestedDetails;
+    const finalActions = transcriptDetailRequests.length > 0 ? [] : timelineActions;
+
+    config.writer?.({
+      type: "progress",
+      status: "planning_timeline_edits_complete",
+      nodeName: "timeline_edit",
+      progress: 100,
+    });
+
+    return {
+      messages: [new AIMessage(assistantResponse)],
+      assistantResponse,
+      timelineActions: finalActions.length > 0 ? finalActions : undefined,
+      transcriptDetailRequests:
+        transcriptDetailRequests.length > 0 ? transcriptDetailRequests : undefined,
+      suggestions: undefined,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `I could not generate timeline edit proposals: ${error.message}`
+        : "I could not generate timeline edit proposals.";
+    return {
+      messages: [new AIMessage(message)],
+      assistantResponse: message,
+      timelineActions: undefined,
+      transcriptDetailRequests: undefined,
+      suggestions: undefined,
+    };
+  }
 }
 
 function shouldContinueChat(state: typeof MainState.State): string {
@@ -284,13 +777,7 @@ function shouldContinueChat(state: typeof MainState.State): string {
     
     if (videoIntentKeywords.some(kw => content.includes(kw))) {
       // Find the index of the last human message
-      let lastHumanMessageIndex = -1;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        if (state.messages[i]._getType() === "human") {
-          lastHumanMessageIndex = i;
-          break;
-        }
-      }
+      const lastHumanMessageIndex = getLastHumanMessageIndex(state.messages as unknown[]);
       
       // Prevent repeated analysis: only analyze if we haven't analyzed this message yet
       if (lastHumanMessageIndex !== state.lastAnalyzedMessageIndex) {
@@ -299,31 +786,26 @@ function shouldContinueChat(state: typeof MainState.State): string {
     }
   }
 
-  return "chat_node";
+  if (hasTimelineEditIntent(content)) {
+    return "timeline_edit";
+  }
+
+  return "done";
 }
 
 async function dispatchChaptersNode(
   state: typeof MainState.State,
   config: any
-): Promise<Array<Send>> {
+) {
+  const chapterCount = Array.isArray(state.chapters) ? state.chapters.length : 0;
+
   config.writer?.({
     type: "progress",
     status: "dispatching_chapters",
     nodeName: "dispatch_chapters",
     progress: 0,
+    message: `Dispatching ${chapterCount} chapter${chapterCount === 1 ? "" : "s"}`,
   });
-
-  const dispatches: Array<Send> = [];
-
-  for (const chapter of state.chapters) {
-    dispatches.push(
-      new Send("chapter_agent", {
-        chapterId: chapter.id,
-        transcript: chapter.transcript || "",
-        instructions: `Analyze chapter ${chapter.id} for narrative structure and beats.`,
-      })
-    );
-  }
 
   config.writer?.({
     type: "progress",
@@ -332,7 +814,25 @@ async function dispatchChaptersNode(
     progress: 100,
   });
 
-  return dispatches;
+  return {};
+}
+
+function routeChapterDispatch(
+  state: typeof MainState.State
+): Array<Send> | typeof END {
+  const chapters = Array.isArray(state.chapters) ? state.chapters : [];
+  if (chapters.length === 0) {
+    return END;
+  }
+
+  return chapters.map(
+    (chapter) =>
+      new Send("chapter_agent", {
+        chapterId: chapter.id,
+        transcript: chapter.transcript || "",
+        instructions: `Analyze chapter ${chapter.id} for narrative structure and beats.`,
+      })
+  );
 }
 
 async function chapterAgentNode(
@@ -372,7 +872,7 @@ async function storyCohesionNode(
     progress: 0,
   });
 
-  const chaptersData = Object.entries(state.chapterSummaries).map(
+  const chaptersData = Object.entries(state.chapterSummaries || {}).map(
     ([chapterId, summary]) => ({
       chapterId,
       summary,
@@ -429,7 +929,7 @@ async function generateExportsNode(
       cuts: [],
     };
 
-  for (const [chapterId, beats] of Object.entries(state.chapterBeats)) {
+  for (const [chapterId, beats] of Object.entries(state.chapterBeats || {})) {
     const chapter = state.chapters.find((c) => c.id === chapterId);
     if (!chapter || !beats || beats.length === 0) continue;
 
@@ -477,24 +977,28 @@ export async function createMainGraph({ checkpointer }: CreateMainGraphOptions) 
   const workflow = new StateGraph(MainState)
     .addNode("chat_node", chatNode as any)
     .addNode("visual_analysis", visualAnalysisNode as any)
+    .addNode("timeline_edit", timelineEditNode as any)
     .addNode("dispatch_chapters", dispatchChaptersNode as any)
     .addNode("chapter_agent", await createChapterSubgraph())
     .addNode("story_cohesion", storyCohesionNode as any)
     .addNode("generate_exports", generateExportsNode as any)
     .addEdge(START, "chat_node")
     .addConditionalEdges("chat_node", shouldContinueChat, {
-      chat_node: "chat_node",
+      done: END,
       dispatch_chapters: "dispatch_chapters",
       visual_analysis: "visual_analysis",
+      timeline_edit: "timeline_edit",
     } as any)
-    .addEdge("visual_analysis", "chat_node")
+    .addConditionalEdges("dispatch_chapters", routeChapterDispatch, ["chapter_agent", END] as any)
+    .addEdge("visual_analysis", END)
+    .addEdge("timeline_edit", END)
     .addEdge("chapter_agent", "story_cohesion")
     .addEdge("story_cohesion", "generate_exports")
     .addEdge("generate_exports", END);
 
-  const compiledGraph = workflow.compile({
-    checkpointer,
-  });
+  const compiledGraph = checkpointer
+    ? workflow.compile({ checkpointer })
+    : workflow.compile();
 
   return compiledGraph;
 }
