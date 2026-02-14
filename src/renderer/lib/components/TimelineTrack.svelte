@@ -130,6 +130,8 @@
 
   const MIN_SELECTION_SECONDS = 0.25;
   const MIN_CLIP_DURATION = 0.05;
+  const MIN_RENDER_REGION_PX = 2;
+  const RENDER_VISIBILITY_EPSILON = 0.001;
   const CLICK_DRAG_THRESHOLD = 4;
   const DRAG_DIRECTION_EPSILON = 0.0001;
 
@@ -261,6 +263,44 @@
     return clamp(progress * waveSurferDuration, 0, waveSurferDuration);
   }
 
+  function getMinimumRenderableDurationSeconds(): number {
+    const pixelsPerSecond = Math.max(0.001, timelineState.zoomLevel);
+    return Math.max(0.01, MIN_RENDER_REGION_PX / pixelsPerSecond);
+  }
+
+  function normalizeRenderableLocalRange(localStart: number, localEnd: number): { start: number; end: number } | null {
+    if (!chapterRange) return null;
+
+    const chapterDuration = chapterRange.duration;
+    if (localEnd <= -RENDER_VISIBILITY_EPSILON || localStart >= chapterDuration + RENDER_VISIBILITY_EPSILON) {
+      return null;
+    }
+
+    let start = clamp(localStart, 0, chapterDuration);
+    let end = clamp(localEnd, 0, chapterDuration);
+    const minDuration = Math.min(chapterDuration, getMinimumRenderableDurationSeconds());
+
+    if (end <= start) {
+      end = clamp(start + minDuration, 0, chapterDuration);
+      if (end <= start) {
+        start = clamp(start - minDuration, 0, chapterDuration);
+        end = clamp(start + minDuration, 0, chapterDuration);
+      }
+    }
+
+    if (end - start < minDuration) {
+      const center = (start + end) / 2;
+      start = clamp(center - minDuration / 2, 0, Math.max(0, chapterDuration - minDuration));
+      end = clamp(start + minDuration, start + 0.001, chapterDuration);
+    }
+
+    if (end <= start) {
+      return null;
+    }
+
+    return { start, end };
+  }
+
   function updateSelectionRegion(start: number, end: number) {
     if (!regionsPlugin) return;
     const rangeStart = Math.min(start, end);
@@ -365,8 +405,10 @@
   function updateRegionVisual(clipId: number, localStart: number, localEnd: number) {
     const region = clipRegions.get(clipId);
     if (!region || !chapterRange) return;
-    const localRegionStart = clamp(localStart, 0, chapterRange.duration);
-    const localRegionEnd = clamp(localEnd, 0, chapterRange.duration);
+    const normalized = normalizeRenderableLocalRange(localStart, localEnd);
+    if (!normalized) return;
+    const localRegionStart = normalized.start;
+    const localRegionEnd = normalized.end;
     const regionStart = toWaveSurferRegionTime(localRegionStart);
     const regionEnd = toWaveSurferRegionTime(localRegionEnd);
 
@@ -526,15 +568,22 @@
       const deltaY = event.clientY - dragStartY;
       if (Math.hypot(deltaX, deltaY) <= CLICK_DRAG_THRESHOLD) return;
 
-      if (!dragMoveModifierActive) return;
+      const pointerTime = getPointerTime(event);
+      if (pointerTime === null) return;
+
+      if (!dragMoveModifierActive) {
+        dragDidMove = true;
+        dragClickTime = pointerTime;
+        if (!chapterRange) return;
+        const globalTime = chapterRange.start + pointerTime;
+        setPlayhead(globalTime);
+        return;
+      }
 
       dragDidMove = true;
 
       if (dragClickClipId === null) return;
       if (!chapterRange) return;
-
-      const pointerTime = getPointerTime(event);
-      if (pointerTime === null) return;
 
       const clip = getClipByIdLocal(dragClickClipId);
       if (!clip) return;
@@ -641,6 +690,14 @@
       }
       if (dragClickClipId !== null) {
         selectClip(dragClickClipId, false);
+      }
+    }
+
+    if (dragMode === 'click' && dragDidMove && chapterRange) {
+      const pointerTime = getPointerTime(event) ?? dragClickTime;
+      if (pointerTime !== null) {
+        const globalTime = chapterRange.start + pointerTime;
+        setPlayhead(globalTime);
       }
     }
 
@@ -1034,7 +1091,6 @@
     }
 
     const chapterStart = chapterRange.start;
-    const chapterDuration = chapterRange.duration;
 
     for (const clip of trackClips) {
       const duration = clip.out_point - clip.in_point;
@@ -1042,12 +1098,13 @@
       const localStart = clip.start_time - chapterStart;
       const localEnd = localStart + duration;
 
-      if (localEnd <= 0 || localStart >= chapterDuration) {
+      const normalized = normalizeRenderableLocalRange(localStart, localEnd);
+      if (!normalized) {
         continue;
       }
 
-      const localRegionStart = clamp(localStart, 0, chapterDuration);
-      const localRegionEnd = clamp(localEnd, 0, chapterDuration);
+      const localRegionStart = normalized.start;
+      const localRegionEnd = normalized.end;
       const regionStart = toWaveSurferRegionTime(localRegionStart);
       const regionEnd = toWaveSurferRegionTime(localRegionEnd);
       const region = regionsPlugin.addRegion({
@@ -1112,7 +1169,13 @@
       class="timeline-clip-context-menu"
       style={`top: ${clipContextMenu.y}px; left: ${clipContextMenu.x}px;`}
       role="menu"
+      tabindex="-1"
       onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => {
+        if (event.key === 'Escape') {
+          closeClipContextMenu();
+        }
+      }}
       oncontextmenu={(event) => event.preventDefault()}
     >
       <button class="timeline-context-item destructive" role="menuitem" onclick={handleClipContextDelete}>
@@ -1218,6 +1281,7 @@
 
   :global(.clip-region) {
     z-index: 2;
+    min-width: 2px;
   }
   
   :global(.wavesurfer-region:hover) {

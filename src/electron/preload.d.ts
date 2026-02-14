@@ -193,6 +193,7 @@ export interface TranscriptionResult {
         language: string;
         duration: number;
         segmentCount: number;
+        skipped?: boolean;
     };
     error?: string;
 }
@@ -273,6 +274,7 @@ export interface ApplySuggestionResult {
         applied?: boolean;
         previewed?: boolean;
         cancelled?: boolean;
+        rejected?: boolean;
         clip?: Clip;
         removedClipId?: number;
     };
@@ -366,6 +368,22 @@ export interface ElectronAPI {
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
     };
     transcription: {
+        getStatus: (options?: {
+            autoSetup?: boolean;
+        }) => Promise<{
+            success: boolean;
+            data?: {
+                available: boolean;
+                pythonPath?: string;
+                pythonSource?: 'managed' | 'bundled' | 'system';
+                pythonVersion?: string;
+                hasPip: boolean;
+                hasFasterWhisper: boolean;
+                managedEnvPath?: string;
+                error?: string;
+            };
+            error?: string;
+        }>;
         transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
         onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
     };

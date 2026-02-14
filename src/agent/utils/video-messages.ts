@@ -18,7 +18,28 @@ export interface VideoMessageOptions {
   provider: VideoProvider;
   videoPath: string;
   textPrompt: string;
+  transcriptContext?: string;
   mimeType?: string;
+}
+
+const TRANSCRIPT_CONTEXT_MAX_CHARS = 24000;
+
+function buildTranscriptContextBlock(transcriptContext?: string): string | null {
+  if (typeof transcriptContext !== 'string') {
+    return null;
+  }
+
+  const trimmed = transcriptContext.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const truncated = trimmed.slice(0, TRANSCRIPT_CONTEXT_MAX_CHARS);
+  if (trimmed.length > TRANSCRIPT_CONTEXT_MAX_CHARS) {
+    return `Transcript context (truncated):\n${truncated}`;
+  }
+
+  return `Transcript context:\n${truncated}`;
 }
 
 /**
@@ -27,14 +48,14 @@ export interface VideoMessageOptions {
 export async function createVideoMessage(
   options: VideoMessageOptions
 ): Promise<HumanMessage> {
-  const { provider, videoPath, textPrompt, mimeType = "video/mp4" } = options;
+  const { provider, videoPath, textPrompt, transcriptContext, mimeType = "video/mp4" } = options;
 
   try {
     switch (provider) {
       case "gemini":
-        return await createGeminiVideoMessage(videoPath, textPrompt, mimeType);
+        return await createGeminiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType);
       case "kimi":
-        return await createKimiVideoMessage(videoPath, textPrompt, mimeType);
+        return await createKimiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType);
       default:
         throw new Error(`Unsupported video provider: ${provider}`);
     }
@@ -59,6 +80,7 @@ const GEMINI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 async function createGeminiVideoMessage(
   videoPath: string,
   textPrompt: string,
+  transcriptContext: string | undefined,
   mimeType: string
 ): Promise<HumanMessage> {
   // Check file size before encoding to avoid memory issues
@@ -97,19 +119,31 @@ async function createGeminiVideoMessage(
     );
   }
 
+  const transcriptBlock = buildTranscriptContextBlock(transcriptContext);
+
+  const contentBlocks: any[] = [
+    {
+      type: 'text',
+      text: textPrompt,
+    },
+  ];
+
+  if (transcriptBlock) {
+    contentBlocks.push({
+      type: 'text',
+      text: transcriptBlock,
+    });
+  }
+
+  contentBlocks.push({
+    type: 'file',
+    source_type: 'base64',
+    data: base64Video,
+    mime_type: mimeType,
+  });
+
   return new HumanMessage({
-    content: [
-      {
-        type: "text",
-        text: textPrompt,
-      },
-      {
-        type: "file",
-        source_type: "base64",
-        data: base64Video,
-        mime_type: mimeType,
-      },
-    ],
+    content: contentBlocks,
   });
 }
 
@@ -126,6 +160,7 @@ const KIMI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 async function createKimiVideoMessage(
   videoPath: string,
   textPrompt: string,
+  transcriptContext: string | undefined,
   mimeType: string
 ): Promise<HumanMessage> {
   // Check file size before encoding to avoid memory issues
@@ -164,19 +199,31 @@ async function createKimiVideoMessage(
     );
   }
 
+  const transcriptBlock = buildTranscriptContextBlock(transcriptContext);
+
+  const contentBlocks: any[] = [
+    {
+      type: 'text',
+      text: textPrompt,
+    },
+  ];
+
+  if (transcriptBlock) {
+    contentBlocks.push({
+      type: 'text',
+      text: transcriptBlock,
+    });
+  }
+
+  contentBlocks.push({
+    type: 'video_url',
+    video_url: {
+      url: `data:${mimeType};base64,${base64Video}`,
+    },
+  });
+
   return new HumanMessage({
-    content: [
-      {
-        type: "text",
-        text: textPrompt,
-      },
-      {
-        type: "video_url",
-        video_url: {
-          url: `data:${mimeType};base64,${base64Video}`,
-        },
-      },
-    ],
+    content: contentBlocks,
   });
 }
 

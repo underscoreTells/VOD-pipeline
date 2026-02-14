@@ -1,5 +1,5 @@
 import { StateGraph, END, START, Send } from "@langchain/langgraph";
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { createLLM, type LLMConfig, VIDEO_CAPABLE_PROVIDERS } from "../providers/index.js";
 import { loadConfig, type AgentConfig, getProviderLLMConfig } from "../config.js";
@@ -39,6 +39,66 @@ const timelineEditIntentKeywords = [
   "timeline",
   "in point",
   "out point",
+  "continuity",
+  "transition",
+  "flow",
+  "pacing",
+  "refine",
+  "revise",
+  "tighten",
+  "rework",
+  "bridge",
+  "cliffhanger",
+  "story beat",
+  "chapter",
+  "those clips",
+  "these clips",
+  "good start",
+  "next chapter",
+];
+
+const timelineEditFollowupKeywords = [
+  "continuity",
+  "transition",
+  "flow",
+  "pacing",
+  "hook",
+  "payoff",
+  "callback",
+  "refine",
+  "tighten",
+  "rework",
+  "those clips",
+  "these clips",
+  "good start",
+  "make this",
+  "more aggressive",
+  "less aggressive",
+  "end with",
+  "next chapter",
+  "bridge",
+  "cliffhanger",
+];
+
+const genericCapabilityKeywords = [
+  "what can you do",
+  "who are you",
+  "which model",
+  "api key",
+  "provider",
+  "help menu",
+  "settings",
+];
+
+const acknowledgementKeywords = [
+  "thanks",
+  "thank you",
+  "sounds good",
+  "got it",
+  "cool",
+  "nice",
+  "perfect",
+  "great",
 ];
 
 const timelineActionSchema = z.discriminatedUnion("type", [
@@ -93,7 +153,19 @@ async function chatNode(state: typeof MainState.State, config: any) {
     progress: 0,
   });
 
-  const response = await llm.invoke(state.messages);
+  const baseMessages = Array.isArray(state.messages) ? state.messages : [];
+  let response;
+
+  if (state.currentChapterId && state.chapterContext) {
+    const groundedSystemPrompt = buildChapterGroundingSystemPrompt(state);
+    response = await llm.invoke([
+      new SystemMessage(groundedSystemPrompt),
+      ...baseMessages,
+    ] as any);
+  } else {
+    response = await llm.invoke(baseMessages as any);
+  }
+
   const responseContent =
     typeof response.content === "string"
       ? response.content
@@ -138,7 +210,7 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       : "Analyze this video chapter";
 
     // Build the analysis prompt
-    const analysisPrompt = buildVisualAnalysisPrompt(userQuery, state.transcript);
+    const analysisPrompt = buildVisualAnalysisPrompt(userQuery);
 
     config.writer?.({
       type: "progress",
@@ -168,6 +240,7 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       provider,
       videoPath: state.proxyPath,
       textPrompt: analysisPrompt,
+      transcriptContext: typeof state.transcript === 'string' ? state.transcript : undefined,
     });
 
     // Send to LLM
@@ -221,14 +294,22 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
   }
 }
 
-function buildVisualAnalysisPrompt(userQuery: string, transcript?: string): string {
+function buildVisualAnalysisPrompt(userQuery: string): string {
   let prompt = `You are a professional video editor analyzing a video chapter.
 
 User question: ${userQuery}
 
-Watch the video and analyze both visual content and dialogue. Identify:
-1. Sections to KEEP (essential content, key moments, visual interest, dialogue)
-2. Sections to CUT (dead air, repetitive content, off-topic, boring visuals)
+Watch the video and analyze both visual content and dialogue.
+
+Primary goal:
+- Preserve and strengthen story progression across the chapter (setup -> escalation -> payoff).
+
+Secondary goal:
+- Keep funny moments that improve engagement and pacing, but do not let humor derail story momentum.
+
+Identify:
+1. Sections to KEEP (story-critical beats, meaningful transitions, and high-value humor)
+2. Sections to CUT (dead air, repetition, off-topic tangents, or humor that stalls progression)
 
 For each suggestion, provide:
 - Time range (start → end in seconds)
@@ -238,11 +319,9 @@ For each suggestion, provide:
 Format suggestions as JSON:
 SUGGESTION: {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
 
-Be concise and actionable. Focus on the most important cuts.`;
+Be concise and actionable. Focus on the most important cuts.
 
-  if (transcript) {
-    prompt += `\n\nTranscript:\n${transcript}\n\nUse the transcript to understand dialogue timing, but also pay attention to visual content (action, gameplay, reactions, etc.).`;
-  }
+If transcript context is provided in a separate text block, use it to align dialogue timing and verify narrative beats.`;
 
   return prompt;
 }
@@ -373,6 +452,62 @@ function getLastHumanMessage(state: typeof MainState.State): { content?: unknown
 
 function hasTimelineEditIntent(content: string): boolean {
   return timelineEditIntentKeywords.some((keyword) => content.includes(keyword));
+}
+
+function isGenericCapabilityQuery(content: string): boolean {
+  return genericCapabilityKeywords.some((keyword) => content.includes(keyword));
+}
+
+function hasTimelineEditFollowupIntent(content: string): boolean {
+  return timelineEditFollowupKeywords.some((keyword) => content.includes(keyword));
+}
+
+function isBriefAcknowledgement(content: string): boolean {
+  return acknowledgementKeywords.some((keyword) => content === keyword || content.startsWith(`${keyword} `));
+}
+
+function buildChapterGroundingSystemPrompt(state: typeof MainState.State): string {
+  const chapter = state.chapterContext;
+  if (!chapter) {
+    return "You are an assistant editor for a livestream chapter. Stay concrete and avoid generic stock-video scripts.";
+  }
+
+  const chapterDuration = Math.max(0, chapter.endTime - chapter.startTime);
+  const transcriptExcerpt = typeof state.transcript === "string"
+    ? state.transcript.slice(0, 5000)
+    : "";
+  const chapterClips = Array.isArray(state.chapterClips) ? state.chapterClips : [];
+  const clipPreview = chapterClips
+    .slice(0, 18)
+    .map((clip) => {
+      const localStart = Math.max(0, clip.startTime - chapter.startTime);
+      const localIn = Math.max(0, clip.inPoint - chapter.startTime);
+      const localOut = Math.max(localIn, clip.outPoint - chapter.startTime);
+      return `- clip#${clip.id} timeline=${localStart.toFixed(2)}s source=${localIn.toFixed(2)}-${localOut.toFixed(2)} role=${clip.role ?? "none"} desc=${clip.description ?? ""}`;
+    })
+    .join("\n");
+
+  return `You are a senior video editing copilot working inside a chapter-based timeline tool.
+
+Active chapter:
+- id=${chapter.id}
+- title=${chapter.title ?? "Untitled chapter"}
+- chapter-global-start=${chapter.startTime.toFixed(2)}s
+- chapter-duration=${chapterDuration.toFixed(2)}s
+
+Rules:
+- Keep responses grounded in this chapter and the prior conversation history.
+- If the user says "those clips", "good start", "refine", "tighten", or asks for continuity/transition, treat it as a follow-up to earlier chapter-specific suggestions.
+- Prefer concrete editing instructions and chapter-local timing when appropriate.
+- Prioritize narrative continuity and progression over isolated highlight density.
+- Preserve strong funny moments when they support momentum, but avoid choices that overshadow story advancement.
+- Never switch to generic unrelated templates unless the user explicitly asks for unrelated examples.
+
+Existing chapter clips:
+${clipPreview || "- none yet"}
+
+Transcript excerpt:
+${transcriptExcerpt || "No transcript excerpt loaded."}`;
 }
 
 function extractTextAfterMarker(content: string, marker: string, fallback: string): string {
@@ -655,6 +790,8 @@ Rules:
 - For create_clip, outPoint must be > inPoint.
 - For update_clip, only include fields to change.
 - Keep proposals minimal and practical.
+- Prioritize narrative continuity and story progression over isolated highlight density.
+- Keep funny beats when they support pacing, but do not let humor override chapter progression.
 - Detailed request windows must be <= 90 seconds each and no more than 3 items.
 - When detailed transcript windows are already provided (${hasDetailedTranscripts ? "YES" : "NO"}), do not request more windows.
 - If detailed windows are needed first, return [] for TIMELINE_ACTIONS_JSON and populate TRANSCRIPT_DETAIL_REQUESTS_JSON.
@@ -786,8 +923,27 @@ function shouldContinueChat(state: typeof MainState.State): string {
     }
   }
 
+  const hasChapterContext = Boolean(state.currentChapterId && state.chapterContext);
   if (hasTimelineEditIntent(content)) {
     return "timeline_edit";
+  }
+
+  if (hasChapterContext && hasTimelineEditFollowupIntent(content)) {
+    return "timeline_edit";
+  }
+
+  if (hasChapterContext && !isGenericCapabilityQuery(content)) {
+    const chapterLanguageSignals = ["clip", "chapter", "edit", "cut", "sequence", "story", "beat", "transition"];
+    if (chapterLanguageSignals.some((signal) => content.includes(signal))) {
+      return "timeline_edit";
+    }
+  }
+
+  if (hasChapterContext && content.length > 0 && !isGenericCapabilityQuery(content)) {
+    const shortFollowup = content.length <= 220;
+    if (shortFollowup && !isBriefAcknowledgement(content)) {
+      return "timeline_edit";
+    }
   }
 
   return "done";

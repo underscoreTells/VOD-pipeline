@@ -74,8 +74,14 @@ export class AgentBridge extends EventEmitter {
 
     const agentPath = this.getAgentPath();
 
+    const checkpointerDbPath = path.join(app.getPath("userData"), "agent-checkpoints.db");
+
     this.process = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        AGENT_CHECKPOINTER_DB_PATH: checkpointerDbPath,
+      },
     });
 
     this.stdinWriter = new JSONStdinWriter(this.process.stdin!);
@@ -93,6 +99,8 @@ export class AgentBridge extends EventEmitter {
         `Agent process exited: ${code ?? "unknown"} (${signal ?? "unknown"})`
       );
 
+      this.emit("exit", code, signal);
+
       if (code !== 0 && this.restartAttempts < this.maxRestartAttempts) {
         this.restartAttempts++;
         const backoffMs = Math.pow(2, this.restartAttempts) * 1000;
@@ -107,8 +115,6 @@ export class AgentBridge extends EventEmitter {
         }, backoffMs);
         return;
       }
-
-      this.emit("exit", code, signal);
     });
 
     this.process.on("error", (error: Error) => {

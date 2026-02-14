@@ -193,13 +193,21 @@ export interface Suggestion {
     description: string | null;
     reasoning: string | null;
     provider: 'gemini' | 'kimi' | null;
+    action_type: 'create_clip' | 'update_clip';
+    target_clip_id: number | null;
+    action_payload_json: string | null;
+    preview_snapshot_json: string | null;
     status: 'pending' | 'applied' | 'rejected';
     display_order: number;
     created_at: string;
     applied_at: string | null;
     clip_id: number | null;
 }
-export type CreateSuggestionInput = Omit<Suggestion, 'id' | 'created_at' | 'applied_at' | 'clip_id'> & {
+export type CreateSuggestionInput = Omit<Suggestion, 'id' | 'created_at' | 'applied_at' | 'action_type' | 'target_clip_id' | 'action_payload_json' | 'preview_snapshot_json' | 'clip_id'> & {
+    action_type?: Suggestion['action_type'];
+    target_clip_id?: number | null;
+    action_payload_json?: string | null;
+    preview_snapshot_json?: string | null;
     clip_id?: number | null;
 };
 export type UpdateSuggestionInput = Partial<Pick<Suggestion, 'status' | 'display_order'>>;

@@ -19,41 +19,45 @@
     'twist': { color: '#eab308', label: 'Twist', icon: '↩️' },
     'payoff': { color: '#22c55e', label: 'Payoff', icon: '🎉' },
     'transition': { color: '#3b82f6', label: 'Transition', icon: '➡️' },
+    'unassigned': { color: '#6b7280', label: 'Unassigned', icon: '📝' },
   };
-  
-  // Group clips by role
-  const clipsByRole = $derived.by(() => {
-    const grouped = new Map<string, Clip[]>();
-    const sortedClips = [...clips].sort((a, b) => {
+
+  const sortedClips = $derived.by(() => {
+    return [...clips].sort((a, b) => {
       if (Math.abs(a.start_time - b.start_time) > 0.0001) {
         return a.start_time - b.start_time;
       }
       return a.id - b.id;
     });
-    
+  });
+
+  const clipSections = $derived.by(() => {
+    const sections: Array<{
+      key: string;
+      role: string;
+      config: { color: string; label: string; icon: string };
+      clips: Clip[];
+    }> = [];
+
     for (const clip of sortedClips) {
       const role = clip.role || 'unassigned';
-      const existing = grouped.get(role) || [];
-      existing.push(clip);
-      grouped.set(role, existing);
+      const config = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned;
+      const lastSection = sections[sections.length - 1];
+
+      if (!lastSection || lastSection.role !== role) {
+        sections.push({
+          key: `${role}-${sections.length}-${clip.id}`,
+          role,
+          config,
+          clips: [clip],
+        });
+        continue;
+      }
+
+      lastSection.clips.push(clip);
     }
-    
-    return grouped;
-  });
-  
-  // Get sorted role keys
-  const sortedRoles = $derived.by(() => {
-    return Array.from(clipsByRole.entries())
-      .filter(([, roleClips]) => roleClips.length > 0)
-      .sort((a, b) => {
-        const aStart = a[1][0]?.start_time ?? Number.POSITIVE_INFINITY;
-        const bStart = b[1][0]?.start_time ?? Number.POSITIVE_INFINITY;
-        if (Math.abs(aStart - bStart) > 0.0001) {
-          return aStart - bStart;
-        }
-        return a[0].localeCompare(b[0]);
-      })
-      .map(([role]) => role);
+
+    return sections;
   });
   
   // Handle clip click
@@ -67,6 +71,40 @@
     x: 0,
     y: 0,
     clip: null as Clip | null,
+  });
+  let collapsedSectionKeys = $state<Set<string>>(new Set());
+
+  const hasAnyCollapsedSections = $derived.by(() => clipSections.some((section) => collapsedSectionKeys.has(section.key)));
+
+  function isSectionCollapsed(sectionKey: string): boolean {
+    return collapsedSectionKeys.has(sectionKey);
+  }
+
+  function toggleSection(sectionKey: string) {
+    const next = new Set(collapsedSectionKeys);
+    if (next.has(sectionKey)) {
+      next.delete(sectionKey);
+    } else {
+      next.add(sectionKey);
+    }
+    collapsedSectionKeys = next;
+  }
+
+  function collapseAllSections() {
+    collapsedSectionKeys = new Set(clipSections.map((section) => section.key));
+  }
+
+  function expandAllSections() {
+    collapsedSectionKeys = new Set();
+  }
+
+  $effect(() => {
+    const keys = clipSections.map((section) => section.key);
+    const valid = new Set(keys);
+    const next = new Set(Array.from(collapsedSectionKeys).filter((key) => valid.has(key)));
+    if (next.size !== collapsedSectionKeys.size) {
+      collapsedSectionKeys = next;
+    }
   });
 
   function closeContextMenu() {
@@ -149,6 +187,11 @@
     <h3>Clips</h3>
     <div class="header-actions">
       <span class="clip-count">{clips.length} total</span>
+      {#if clipSections.length > 0}
+        <button class="section-toggle-btn" onclick={hasAnyCollapsedSections ? expandAllSections : collapseAllSections}>
+          {hasAnyCollapsedSections ? 'Expand Sections' : 'Collapse Sections'}
+        </button>
+      {/if}
       <button class="collapse-btn" onclick={collapseBeat}>
         Hide
       </button>
@@ -156,58 +199,66 @@
   </div>
   
   <div class="clip-groups">
-    {#each sortedRoles as role (role)}
-      {@const roleClips = clipsByRole.get(role) || []}
-      {@const config = ROLE_CONFIG[role] || { color: '#6b7280', label: 'Unassigned', icon: '📝' }}
+    {#each clipSections as section (section.key)}
+      {@const roleClips = section.clips}
+      {@const config = section.config}
       
       <div class="role-group">
-        <div class="role-header" style="background-color: {config.color}20; border-left-color: {config.color}">
+        <button
+          class="role-header"
+          style="background-color: {config.color}20; border-left-color: {config.color}"
+          onclick={() => toggleSection(section.key)}
+          aria-expanded={!isSectionCollapsed(section.key)}
+        >
+          <span class="section-expand-icon">{isSectionCollapsed(section.key) ? '▸' : '▾'}</span>
           <span class="role-icon">{config.icon}</span>
           <span class="role-label">{config.label}</span>
           <span class="role-count">{roleClips.length}</span>
-        </div>
+        </button>
         
-        <div class="clip-list">
-          {#each roleClips as clip (clip.id)}
-            {@const clipDuration = Math.max(0, clip.out_point - clip.in_point)}
-            {@const localStart = toChapterLocal(clip.start_time)}
-            {@const localEnd = chapterDuration !== null
-              ? Math.min(localStart + clipDuration, Math.max(0, chapterDuration))
-              : localStart + clipDuration}
-            <div 
-              class="clip-item"
-              class:selected={timelineState.selectedClipIds.has(clip.id)}
-              class:discarded={!clip.is_essential}
-              onclick={() => handleClipClick(clip)}
-              oncontextmenu={(event) => openContextMenu(event, clip)}
-              onkeydown={(e) => e.key === 'Enter' && handleClipClick(clip)}
-              role="button"
-              tabindex="0"
-              aria-haspopup="menu"
-            >
-              <div class="clip-time">
-                <span class="time-start">{formatDuration(localStart)}</span>
-                <span class="time-separator">→</span>
-                <span class="time-end">{formatDuration(localEnd)}</span>
-              </div>
-              
-              <div class="clip-info">
-                {#if clip.description}
-                  <span class="clip-description">{clip.description}</span>
-                {:else}
-                  <span class="clip-description empty">No description</span>
-                {/if}
+        {#if !isSectionCollapsed(section.key)}
+          <div class="clip-list">
+            {#each roleClips as clip (clip.id)}
+              {@const clipDuration = Math.max(0, clip.out_point - clip.in_point)}
+              {@const localStart = toChapterLocal(clip.start_time)}
+              {@const localEnd = chapterDuration !== null
+                ? Math.min(localStart + clipDuration, Math.max(0, chapterDuration))
+                : localStart + clipDuration}
+              <div 
+                class="clip-item"
+                class:selected={timelineState.selectedClipIds.has(clip.id)}
+                class:discarded={!clip.is_essential}
+                onclick={() => handleClipClick(clip)}
+                oncontextmenu={(event) => openContextMenu(event, clip)}
+                onkeydown={(e) => e.key === 'Enter' && handleClipClick(clip)}
+                role="button"
+                tabindex="0"
+                aria-haspopup="menu"
+              >
+                <div class="clip-time">
+                  <span class="time-start">{formatDuration(localStart)}</span>
+                  <span class="time-separator">→</span>
+                  <span class="time-end">{formatDuration(localEnd)}</span>
+                </div>
                 
-                <div class="clip-meta">
-                  <span class="track-badge">T{clip.track_index + 1}</span>
-                  {#if clip.is_essential}
-                    <span class="essential-badge" title="Essential">★</span>
+                <div class="clip-info">
+                  {#if clip.description}
+                    <span class="clip-description">{clip.description}</span>
+                  {:else}
+                    <span class="clip-description empty">No description</span>
                   {/if}
+                  
+                  <div class="clip-meta">
+                    <span class="track-badge">T{clip.track_index + 1}</span>
+                    {#if clip.is_essential}
+                      <span class="essential-badge" title="Essential">★</span>
+                    {/if}
+                  </div>
                 </div>
               </div>
-            </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/each}
     
@@ -224,7 +275,13 @@
       class="clip-context-menu"
       style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
       role="menu"
+      tabindex="-1"
       onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => {
+        if (event.key === 'Escape') {
+          closeContextMenu();
+        }
+      }}
       oncontextmenu={(event) => event.preventDefault()}
     >
       <button class="context-item destructive" role="menuitem" onclick={handleContextDelete}>
@@ -289,6 +346,21 @@
     background: #444;
     color: #fff;
   }
+
+  .section-toggle-btn {
+    padding: 0.25rem 0.5rem;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #c7c7c7;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .section-toggle-btn:hover {
+    background: #343434;
+    color: #fff;
+  }
   
   .clip-groups {
     flex: 1;
@@ -306,8 +378,26 @@
     gap: 0.5rem;
     padding: 0.5rem;
     border-left: 3px solid;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
     border-radius: 4px;
     margin-bottom: 0.5rem;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+
+  .role-header:hover {
+    filter: brightness(1.08);
+  }
+
+  .section-expand-icon {
+    color: #bbb;
+    font-size: 0.8rem;
+    width: 0.75rem;
+    text-align: center;
   }
   
   .role-icon {

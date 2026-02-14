@@ -11,30 +11,46 @@
     previewSuggestion,
     cancelSuggestionPreviewAction,
     rejectSuggestion,
-    applyTimelineProposal,
-    rejectTimelineProposal,
   } from "../state/agent.svelte";
-  import type { TimelineAction } from "../../../shared/types/agent-ipc";
   import { collapseChat } from "../state/layout.svelte";
   
   let message = $state("");
   let chatContainer: HTMLDivElement;
+  let messageInput: HTMLTextAreaElement | null = null;
   let showSuggestions = $state(true);
-  let showTimelineProposals = $state(true);
   let applyingAllSuggestionState = $state(false);
   let suggestionActionBusy = $state<Map<number, boolean>>(new Map());
+  const MESSAGE_INPUT_MIN_HEIGHT = 40;
+  const MESSAGE_INPUT_MAX_HEIGHT = 180;
   
   const providers = [
     { value: "gemini", label: "Gemini" },
     { value: "kimi", label: "Kimi K2.5" },
   ];
   
-  async function handleSubmit(e: Event) {
-    e.preventDefault();
+  function autoResizeMessageInput() {
+    if (!messageInput) return;
+    messageInput.style.height = 'auto';
+    const nextHeight = Math.min(
+      MESSAGE_INPUT_MAX_HEIGHT,
+      Math.max(MESSAGE_INPUT_MIN_HEIGHT, messageInput.scrollHeight)
+    );
+    messageInput.style.height = `${nextHeight}px`;
+    messageInput.style.overflowY = messageInput.scrollHeight > MESSAGE_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  }
+
+  $effect(() => {
+    message;
+    if (!messageInput) return;
+    autoResizeMessageInput();
+  });
+
+  async function submitMessage() {
     if (!message.trim() || agentState.isStreaming) return;
     
     const msg = message;
     message = "";
+    autoResizeMessageInput();
     await sendChatMessage(msg);
     
     // Scroll to bottom
@@ -43,6 +59,18 @@
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
     }, 100);
+  }
+
+  async function handleSubmit(e: Event) {
+    e.preventDefault();
+    await submitMessage();
+  }
+
+  function handleInputKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void submitMessage();
+    }
   }
   
   function formatTime(date: Date) {
@@ -56,6 +84,14 @@
       return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
     return `${format(start)} - ${format(end)}`;
+  }
+
+  function formatSuggestionPrimaryLine(suggestion: { action_type?: string; target_clip_id?: number | null; in_point: number; out_point: number }) {
+    if (suggestion.action_type === 'update_clip') {
+      const clipLabel = suggestion.target_clip_id ? `Clip #${suggestion.target_clip_id}` : 'Target clip';
+      return `${clipLabel} (${formatDuration(suggestion.in_point, suggestion.out_point)})`;
+    }
+    return formatDuration(suggestion.in_point, suggestion.out_point);
   }
 
   async function handleCreateConversation() {
@@ -131,24 +167,6 @@
     }
   }
 
-  async function handleApplyTimelineProposal(id: string) {
-    await applyTimelineProposal(id);
-  }
-
-  function handleRejectTimelineProposal(id: string) {
-    rejectTimelineProposal(id);
-  }
-
-  function formatTimelineAction(action: TimelineAction): string {
-    if (action.type === "create_clip") {
-      const track = action.trackIndex ?? 0;
-      const asset = action.assetId ? ` on asset ${action.assetId}` : "";
-      return `Create clip ${formatDuration(action.inPoint, action.outPoint)} on track ${track + 1}${asset}`;
-    }
-
-    const fields = Object.keys(action.updates ?? {});
-    return `Edit clip #${action.clipId}${fields.length > 0 ? ` (${fields.join(", ")})` : ""}`;
-  }
 </script>
 
 <div class="chat-panel">
@@ -254,7 +272,7 @@
           {#each agentState.suggestions.filter(s => s.status === 'pending') as suggestion}
             <div class="suggestion-card">
               <div class="suggestion-time">
-                {formatDuration(suggestion.in_point, suggestion.out_point)}
+                {formatSuggestionPrimaryLine(suggestion)}
               </div>
               <div class="suggestion-description">
                 {suggestion.description || 'No description'}
@@ -302,52 +320,16 @@
     </div>
   {/if}
 
-  {#if agentState.timelineProposals.length > 0}
-    <div class="suggestions-panel">
-      <div class="suggestions-header">
-        <h4>Timeline Proposals ({agentState.timelineProposals.filter(p => p.status === 'pending').length} pending)</h4>
-        <button class="toggle-btn" onclick={() => showTimelineProposals = !showTimelineProposals}>
-          {showTimelineProposals ? 'Hide' : 'Show'}
-        </button>
-      </div>
-
-      {#if showTimelineProposals}
-        <div class="suggestions-list">
-          {#each agentState.timelineProposals.filter(p => p.status === 'pending' || p.status === 'failed') as proposal}
-            <div class="suggestion-card">
-              <div class="suggestion-description">
-                {formatTimelineAction(proposal.action)}
-              </div>
-              {#if proposal.action.reasoning}
-                <div class="suggestion-reasoning">
-                  {proposal.action.reasoning}
-                </div>
-              {/if}
-              {#if proposal.error}
-                <div class="proposal-error">{proposal.error}</div>
-              {/if}
-              <div class="suggestion-actions">
-                <button class="apply-btn" onclick={() => handleApplyTimelineProposal(proposal.id)}>
-                  {proposal.status === 'failed' ? 'Retry Apply' : '✓ Apply'}
-                </button>
-                <button class="reject-btn" onclick={() => handleRejectTimelineProposal(proposal.id)}>
-                  ✕ Reject
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  {/if}
-  
   <form class="chat-input" onsubmit={handleSubmit}>
-    <input
-      type="text"
+    <textarea
+      rows="1"
       bind:value={message}
+      bind:this={messageInput}
       placeholder="Ask the AI editor..."
       disabled={agentState.isStreaming || !agentState.currentChapterId}
-    />
+      oninput={autoResizeMessageInput}
+      onkeydown={handleInputKeydown}
+    ></textarea>
     <button type="submit" disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId}>
       Send
     </button>
@@ -501,13 +483,14 @@
   
   .chat-input {
     display: flex;
+    align-items: flex-end;
     gap: 8px;
     padding: 12px 16px;
     border-top: 1px solid #333;
     background: #252525;
   }
   
-  .chat-input input {
+  .chat-input textarea {
     flex: 1;
     padding: 8px 12px;
     background: #333;
@@ -515,9 +498,15 @@
     border-radius: 4px;
     color: #fff;
     font-size: 14px;
+    line-height: 1.4;
+    min-height: 40px;
+    max-height: 180px;
+    resize: none;
+    overflow-y: hidden;
+    font-family: inherit;
   }
   
-  .chat-input input:focus {
+  .chat-input textarea:focus {
     outline: none;
     border-color: #2563eb;
   }

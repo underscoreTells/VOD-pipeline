@@ -252,6 +252,7 @@ export interface TranscriptionResult {
     language: string;
     duration: number;
     segmentCount: number;
+    skipped?: boolean;
   };
   error?: string;
 }
@@ -297,9 +298,9 @@ export interface ElectronAPI {
     onError: (callback: AgentErrorCallback) => () => void;
     getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
     previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
-    cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number }; error?: string }>;
+    cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
     applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
-    rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number }; error?: string }>;
+    rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
     applyAllSuggestions: (chapterId: string) => Promise<{
       success: boolean;
       data?: {
@@ -349,6 +350,20 @@ export interface ElectronAPI {
     onProgress: (callback: WaveformProgressCallback) => () => void;
   };
   transcription: {
+    getStatus: (options?: { autoSetup?: boolean }) => Promise<{
+      success: boolean;
+      data?: {
+        available: boolean;
+        pythonPath?: string;
+        pythonSource?: 'managed' | 'bundled' | 'system';
+        pythonVersion?: string;
+        hasPip: boolean;
+        hasFasterWhisper: boolean;
+        managedEnvPath?: string;
+        error?: string;
+      };
+      error?: string;
+    }>;
     transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
     onProgress: (callback: TranscriptionProgressCallback) => () => void;
   };
@@ -489,6 +504,7 @@ const electronAPI: ElectronAPI = {
     },
   },
   transcription: {
+    getStatus: (options) => ipcRenderer.invoke('transcription:status', { autoSetup: options?.autoSetup === true }),
     transcribe: (chapterId, options) =>
       ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
     onProgress: (callback) => {

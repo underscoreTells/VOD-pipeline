@@ -4,11 +4,81 @@ import { spawn } from 'child_process';
 
 export interface PythonPathResult {
   path: string;
-  source: 'bundled' | 'system';
+  source: 'managed' | 'bundled' | 'system';
   version: string;
 }
 
 let cachedResult: PythonPathResult | null = null;
+
+interface PythonCommandResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+async function getManagedPythonCandidates(): Promise<string[]> {
+  try {
+    const { app } = await import('electron');
+    const userDataPath = app.getPath('userData');
+    const venvDir = path.join(userDataPath, 'python-runtime', 'venv');
+
+    if (process.platform === 'win32') {
+      return [
+        path.join(venvDir, 'Scripts', 'python.exe'),
+        path.join(venvDir, 'Scripts', 'python3.exe'),
+      ];
+    }
+
+    return [
+      path.join(venvDir, 'bin', 'python'),
+      path.join(venvDir, 'bin', 'python3'),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+async function runPythonCommand(
+  executablePath: string,
+  args: string[],
+  timeoutMs = 120000
+): Promise<PythonCommandResult> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(executablePath, args);
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill('SIGTERM');
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${executablePath} ${args.join(' ')}`));
+    }, timeoutMs);
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    proc.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
 
 /**
  * Detect Python installation
@@ -24,6 +94,20 @@ export async function detectPython(): Promise<PythonPathResult | null> {
   const binaryNames = platform === 'win32'
     ? ['python.exe', 'python3.exe']
     : ['python3', 'python'];
+
+  const managedPaths = await getManagedPythonCandidates();
+  for (const managedPath of managedPaths) {
+    if (!fs.existsSync(managedPath)) {
+      continue;
+    }
+
+    const version = await getPythonVersion(managedPath);
+    if (version) {
+      cachedResult = { path: managedPath, source: 'managed', version };
+      console.log(`[Python] Found managed runtime at: ${managedPath} (version: ${version})`);
+      return cachedResult;
+    }
+  }
 
   // Check bundled Python first
   const resourcesPath = process.resourcesPath || process.cwd();
@@ -122,4 +206,56 @@ export async function hasPythonPackage(pythonPath: string, packageName: string):
  */
 export async function hasFasterWhisper(pythonPath: string): Promise<boolean> {
   return hasPythonPackage(pythonPath, 'faster_whisper');
+}
+
+/**
+ * Check if pip is available for a Python executable.
+ */
+export async function hasPip(pythonPath: string): Promise<boolean> {
+  try {
+    const result = await runPythonCommand(pythonPath, ['-m', 'pip', '--version']);
+    return result.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure pip is available (bootstraps via ensurepip when missing).
+ */
+export async function ensurePip(pythonPath: string): Promise<void> {
+  if (await hasPip(pythonPath)) {
+    return;
+  }
+
+  const bootstrap = await runPythonCommand(pythonPath, ['-m', 'ensurepip', '--upgrade']);
+  if (bootstrap.code !== 0) {
+    throw new Error(
+      `Failed to bootstrap pip for ${pythonPath}: ${bootstrap.stderr || bootstrap.stdout || 'unknown error'}`
+    );
+  }
+
+  if (!(await hasPip(pythonPath))) {
+    throw new Error(`pip is still unavailable after ensurepip for ${pythonPath}`);
+  }
+}
+
+/**
+ * Run pip install for a Python executable.
+ */
+export async function pipInstall(pythonPath: string, args: string[]): Promise<void> {
+  const result = await runPythonCommand(pythonPath, ['-m', 'pip', ...args], 600000);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `pip command failed with code ${result.code}`);
+  }
+}
+
+/**
+ * Create a venv using a base Python executable.
+ */
+export async function createVirtualEnv(basePythonPath: string, venvPath: string): Promise<void> {
+  const result = await runPythonCommand(basePythonPath, ['-m', 'venv', venvPath], 300000);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `venv creation failed with code ${result.code}`);
+  }
 }

@@ -65,7 +65,7 @@ import {
 import { generateWaveformTiers, generateWaveformTiersForMkvTracks, WaveformError } from '../../pipeline/waveform.js';
 import { getAgentBridge } from '../agent-bridge.js';
 import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError, generateAIProxy } from '../../pipeline/ffmpeg.js';
-import { transcribe, WhisperError } from '../../pipeline/whisper.js';
+import { transcribe, WhisperError, getWhisperRuntimeStatus } from '../../pipeline/whisper.js';
 import { app } from 'electron';
 import { randomUUID } from 'crypto';
 import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export/index.js';
@@ -197,6 +197,164 @@ const VIDEO_INTENT_KEYWORDS = [
   'show me',
   'review video',
 ];
+
+const PROVIDER_CONTEXT_TOKEN_LIMITS: Record<'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi', number> = {
+  gemini: 1_000_000,
+  openai: 128_000,
+  anthropic: 200_000,
+  openrouter: 200_000,
+  kimi: 128_000,
+};
+
+const TOKEN_GUARD_SOFT_RATIO = 0.92;
+const TOKEN_GUARD_HARD_RATIO = 0.97;
+const TOKEN_GUARD_RESPONSE_RESERVE = 4096;
+const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
+const TOKEN_GUARD_MIN_RECENT_MESSAGES = 8;
+const TOKEN_GUARD_MAX_SUMMARY_CHARS = 12000;
+const TOKEN_GUARD_MIN_MESSAGES_AFTER_TRIM = 6;
+
+function estimateTokenCount(text: string): number {
+  return Math.max(1, Math.ceil(text.length / TOKEN_ESTIMATE_CHARS_PER_TOKEN));
+}
+
+function estimateMessageTokens(messages: Array<{ role: string; content: string }>): number {
+  return messages.reduce((total, message) => {
+    const roleTokens = estimateTokenCount(message.role || 'user');
+    const contentTokens = estimateTokenCount(message.content || '');
+    return total + roleTokens + contentTokens + 4;
+  }, 0);
+}
+
+function estimateContextTokens(contextPayload: unknown): number {
+  if (!contextPayload) return 0;
+  try {
+    return estimateTokenCount(JSON.stringify(contextPayload));
+  } catch {
+    return 0;
+  }
+}
+
+function getProviderContextLimit(provider: unknown): number {
+  const normalizedProvider = normalizeConversationProvider(provider);
+  if (!normalizedProvider) {
+    return PROVIDER_CONTEXT_TOKEN_LIMITS.gemini;
+  }
+  return PROVIDER_CONTEXT_TOKEN_LIMITS[normalizedProvider];
+}
+
+function normalizeMessagePayload(
+  messages: Array<{ role: string; content: string }>
+): Array<{ role: string; content: string }> {
+  return messages
+    .map((message) => ({
+      role: typeof message.role === 'string' ? message.role : 'user',
+      content: typeof message.content === 'string' ? message.content : String(message.content ?? ''),
+    }))
+    .filter((message) => message.content.trim().length > 0);
+}
+
+function buildConversationArchiveSummary(
+  archivedMessages: Array<{ role: string; content: string }>,
+  maxChars: number
+): string {
+  if (archivedMessages.length === 0) return '';
+
+  const lines: string[] = [
+    `Conversation archive summary (${archivedMessages.length} earlier messages):`,
+    'Keep continuity with this prior context when responding.',
+  ];
+
+  let usedChars = lines.join('\n').length;
+  for (const message of archivedMessages) {
+    if (usedChars >= maxChars) break;
+
+    const role = typeof message.role === 'string' ? message.role.toLowerCase() : 'user';
+    const normalizedRole = role === 'assistant' || role === 'ai' || role === 'system' ? role : 'user';
+    const normalizedContent = (typeof message.content === 'string' ? message.content : String(message.content ?? ''))
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!normalizedContent) continue;
+
+    const entry = `- ${normalizedRole}: ${normalizedContent.slice(0, 260)}`;
+    const nextChars = usedChars + entry.length + 1;
+    if (nextChars > maxChars) {
+      break;
+    }
+
+    lines.push(entry);
+    usedChars = nextChars;
+  }
+
+  return lines.join('\n');
+}
+
+function applyNearLimitTokenGuard(
+  rawMessages: Array<{ role: string; content: string }>,
+  contextPayload: unknown,
+  provider: unknown
+): {
+  messages: Array<{ role: string; content: string }>;
+  estimatedTotalTokens: number;
+  effectiveContextLimit: number;
+  compressed: boolean;
+} {
+  const normalizedMessages = normalizeMessagePayload(rawMessages);
+  const contextLimit = getProviderContextLimit(provider);
+  const effectiveContextLimit = Math.max(8192, contextLimit - TOKEN_GUARD_RESPONSE_RESERVE);
+  const softThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_SOFT_RATIO);
+  const hardThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_HARD_RATIO);
+
+  const estimateTotal = (messages: Array<{ role: string; content: string }>) => {
+    return estimateMessageTokens(messages) + estimateContextTokens(contextPayload);
+  };
+
+  let estimatedTotalTokens = estimateTotal(normalizedMessages);
+  if (estimatedTotalTokens <= softThreshold || normalizedMessages.length <= TOKEN_GUARD_MIN_RECENT_MESSAGES + 1) {
+    return {
+      messages: normalizedMessages,
+      estimatedTotalTokens,
+      effectiveContextLimit,
+      compressed: false,
+    };
+  }
+
+  const recentCount = Math.max(TOKEN_GUARD_MIN_RECENT_MESSAGES, Math.min(24, normalizedMessages.length - 1));
+  const splitIndex = Math.max(0, normalizedMessages.length - recentCount);
+  const archivedMessages = normalizedMessages.slice(0, splitIndex);
+  const recentMessages = normalizedMessages.slice(splitIndex);
+
+  const summary = buildConversationArchiveSummary(archivedMessages, TOKEN_GUARD_MAX_SUMMARY_CHARS);
+  let guardedMessages = summary
+    ? [{ role: 'system', content: summary }, ...recentMessages]
+    : recentMessages;
+
+  estimatedTotalTokens = estimateTotal(guardedMessages);
+
+  while (estimatedTotalTokens > hardThreshold && guardedMessages.length > TOKEN_GUARD_MIN_MESSAGES_AFTER_TRIM) {
+    const removalIndex = guardedMessages[0]?.role === 'system' ? 1 : 0;
+    if (removalIndex >= guardedMessages.length - 1) {
+      break;
+    }
+
+    guardedMessages = guardedMessages.filter((_, index) => index !== removalIndex);
+    estimatedTotalTokens = estimateTotal(guardedMessages);
+  }
+
+  if (estimatedTotalTokens > hardThreshold && guardedMessages[0]?.role === 'system') {
+    const compactSummary = guardedMessages[0].content.slice(0, 3200);
+    guardedMessages = [{ role: 'system', content: compactSummary }, ...guardedMessages.slice(1)];
+    estimatedTotalTokens = estimateTotal(guardedMessages);
+  }
+
+  return {
+    messages: guardedMessages,
+    estimatedTotalTokens,
+    effectiveContextLimit,
+    compressed: true,
+  };
+}
 
 const hydratedConversationIds = new Set<number>();
 const chapterProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
@@ -363,11 +521,21 @@ function normalizeTimelineActions(value: unknown): TimelineAction[] {
   return actions;
 }
 
-function normalizeSuggestionDrafts(value: unknown): Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }> {
+interface PersistableSuggestionDraft {
+  in_point: number;
+  out_point: number;
+  description: string | null;
+  reasoning: string | null;
+  action_type: 'create_clip' | 'update_clip';
+  target_clip_id: number | null;
+  action_payload_json: string | null;
+}
+
+function normalizeSuggestionDrafts(value: unknown): PersistableSuggestionDraft[] {
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item) => {
+    .map((item): PersistableSuggestionDraft | null => {
       if (!item || typeof item !== 'object') return null;
       const record = item as Record<string, unknown>;
       if (typeof record.in_point !== 'number' || typeof record.out_point !== 'number') return null;
@@ -379,9 +547,71 @@ function normalizeSuggestionDrafts(value: unknown): Array<{ in_point: number; ou
         out_point: record.out_point,
         description: typeof record.description === 'string' ? record.description : null,
         reasoning: typeof record.reasoning === 'string' ? record.reasoning : null,
+        action_type: 'create_clip' as const,
+        target_clip_id: null,
+        action_payload_json: null,
       };
     })
-    .filter((item): item is { in_point: number; out_point: number; description: string | null; reasoning: string | null } => Boolean(item));
+    .filter((item): item is PersistableSuggestionDraft => item !== null);
+}
+
+function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): PersistableSuggestionDraft[] {
+  return actions
+    .map((action): PersistableSuggestionDraft | null => {
+      if (action.type === 'create_clip') {
+        const payload = {
+          create: {
+            assetId: action.assetId,
+            trackIndex: action.trackIndex,
+            startTime: action.startTime,
+            role: action.role,
+            description: action.description ?? null,
+            isEssential: action.isEssential,
+          },
+        };
+
+        return {
+          action_type: 'create_clip',
+          in_point: action.inPoint,
+          out_point: action.outPoint,
+          description: action.description ?? action.reasoning ?? 'Create clip',
+          reasoning: action.reasoning ?? null,
+          target_clip_id: null,
+          action_payload_json: JSON.stringify(payload),
+        };
+      }
+
+      const updates = action.updates;
+      const hasRange = typeof updates.inPoint === 'number' && typeof updates.outPoint === 'number' && updates.outPoint > updates.inPoint;
+      const fallbackIn = typeof updates.inPoint === 'number' ? updates.inPoint : 0;
+      const fallbackOut = hasRange
+        ? (updates.outPoint as number)
+        : typeof updates.outPoint === 'number' && updates.outPoint > fallbackIn
+          ? updates.outPoint
+          : fallbackIn + 1;
+
+      const payload = {
+        update: {
+          startTime: updates.startTime,
+          inPoint: updates.inPoint,
+          outPoint: updates.outPoint,
+          role: updates.role,
+          description: updates.description,
+          isEssential: updates.isEssential,
+        },
+      };
+
+      return {
+        action_type: 'update_clip',
+        target_clip_id: action.clipId,
+        in_point: fallbackIn,
+        out_point: fallbackOut,
+        description: updates.description ?? `Update clip #${action.clipId}`,
+        reasoning: action.reasoning ?? null,
+        action_payload_json: JSON.stringify(payload),
+      };
+    })
+    .filter((item): item is PersistableSuggestionDraft => Boolean(item));
 }
 
 function parseAgentGraphResult(
@@ -391,12 +621,15 @@ function parseAgentGraphResult(
 ): {
   message: string;
   timelineActions: TimelineAction[];
-  suggestionDrafts: Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }>;
+  suggestionDrafts: PersistableSuggestionDraft[];
   transcriptDetailRequests: TranscriptDetailRequest[];
 } {
   const message = extractAssistantMessage(result);
   const timelineActions = normalizeTimelineActions(result.timelineActions);
-  const suggestionDrafts = normalizeSuggestionDrafts(result.suggestions);
+  const suggestionDrafts = [
+    ...normalizeSuggestionDrafts(result.suggestions),
+    ...timelineActionsToSuggestionDrafts(timelineActions),
+  ];
   const transcriptDetailRequests =
     chapterDuration !== null
       ? normalizeTranscriptDetailRequests(result.transcriptDetailRequests, chapterDuration, chapterAssetIds)
@@ -429,24 +662,76 @@ function normalizeConversationProvider(
 async function persistAgentSuggestions(
   chapterId: number,
   provider: unknown,
-  suggestions: Array<{ in_point: number; out_point: number; description: string | null; reasoning: string | null }>
+  suggestions: PersistableSuggestionDraft[]
 ) {
   if (suggestions.length === 0) return [];
 
   const existing = await getSuggestionsByChapter(chapterId);
+  const chapter = await getChapter(chapterId);
+  if (!chapter) {
+    return [];
+  }
+
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
   let displayOrder = existing.length;
   const created: Suggestion[] = [];
 
   for (const suggestion of suggestions) {
+    let localInPoint = suggestion.in_point;
+    let localOutPoint = suggestion.out_point;
+
+    if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id) {
+      const targetClip = await getClip(suggestion.target_clip_id);
+      if (!targetClip) {
+        continue;
+      }
+
+      const baseLocalIn = targetClip.in_point - chapter.start_time;
+      const baseLocalOut = targetClip.out_point - chapter.start_time;
+
+      let payloadInPoint: number | undefined;
+      let payloadOutPoint: number | undefined;
+      if (typeof suggestion.action_payload_json === 'string') {
+        try {
+          const payload = JSON.parse(suggestion.action_payload_json) as {
+            update?: { inPoint?: unknown; outPoint?: unknown };
+          };
+          if (typeof payload?.update?.inPoint === 'number' && Number.isFinite(payload.update.inPoint)) {
+            payloadInPoint = payload.update.inPoint;
+          }
+          if (typeof payload?.update?.outPoint === 'number' && Number.isFinite(payload.update.outPoint)) {
+            payloadOutPoint = payload.update.outPoint;
+          }
+        } catch {
+          // Keep draft fallback values when payload cannot be parsed.
+        }
+      }
+
+      localInPoint = payloadInPoint ?? baseLocalIn;
+      localOutPoint = payloadOutPoint ?? baseLocalOut;
+    }
+
+    localInPoint = clamp(localInPoint, 0, chapterDuration);
+    localOutPoint = clamp(localOutPoint, localInPoint + 0.01, chapterDuration);
+
+    if (!Number.isFinite(localInPoint) || !Number.isFinite(localOutPoint) || localOutPoint <= localInPoint) {
+      continue;
+    }
+
     const createdSuggestion = await createSuggestion({
       chapter_id: chapterId,
-      in_point: suggestion.in_point,
-      out_point: suggestion.out_point,
+      in_point: localInPoint,
+      out_point: localOutPoint,
       description: suggestion.description,
       reasoning: suggestion.reasoning,
       provider: normalizeSuggestionProvider(provider),
+      action_type: suggestion.action_type,
+      target_clip_id: suggestion.target_clip_id,
+      action_payload_json: suggestion.action_payload_json,
+      preview_snapshot_json: null,
       status: 'pending',
       display_order: displayOrder,
+      clip_id: null,
     });
     created.push(createdSuggestion);
     displayOrder += 1;
@@ -1492,6 +1777,17 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.TRANSCRIPTION_STATUS, async (_, payload) => {
+    console.log('IPC: transcription:status');
+    try {
+      const autoSetup = Boolean(payload?.autoSetup);
+      const status = await getWhisperRuntimeStatus({ autoSetup });
+      return createSuccessResponse(status);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
   // Transcription handler
   ipcMain.handle(IPC_CHANNELS.TRANSCRIBE_CHAPTER, async (event, { chapterId, options = {} }) => {
     console.log('IPC: transcribe:chapter', chapterId);
@@ -1501,6 +1797,29 @@ export function registerIpcHandlers() {
       const chapter = await getChapter(chapterId);
       if (!chapter) {
         return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const chapterStart = chapter.start_time;
+      const chapterEnd = chapter.end_time;
+      const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
+      const skipIfExists = options?.skipIfExists === true;
+
+      if (skipIfExists) {
+        const existingTranscripts = await getTranscriptsByChapter(chapterId);
+        if (existingTranscripts.length > 0) {
+          event.sender.send(IPC_CHANNELS.TRANSCRIBE_PROGRESS, {
+            chapterId,
+            progress: { percent: 100, status: 'Using existing transcript' },
+          });
+
+          return createSuccessResponse({
+            chapterId,
+            language: 'existing',
+            duration: chapterDuration,
+            segmentCount: existingTranscripts.length,
+            skipped: true,
+          });
+        }
       }
 
       const assetIds = await getAssetsForChapter(chapterId);
@@ -1513,9 +1832,6 @@ export function registerIpcHandlers() {
         return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
-      const chapterStart = chapter.start_time;
-      const chapterEnd = chapter.end_time;
-      const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
       const assetDuration =
         typeof asset.duration === 'number' && Number.isFinite(asset.duration) ? asset.duration : null;
 
@@ -1828,15 +2144,11 @@ export function registerIpcHandlers() {
       const chapterAssetIds = await getAssetsForChapter(chapter.id);
       const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
 
-      const needsHydration = !hydratedConversationIds.has(conversation.id);
       const wantsVideoContext = hasVideoIntent(message);
-      const includeContext = needsHydration || wantsVideoContext;
 
-      const initialContext = includeContext
-        ? await buildAgentChatContext(projectId, chapter.id, {
-            ensureChapterProxyReady: false,
-          })
-        : undefined;
+      const initialContext = await buildAgentChatContext(projectId, chapter.id, {
+        ensureChapterProxyReady: false,
+      });
 
       if (wantsVideoContext && chapterAssetIds.length > 0) {
         const primaryAssetId = chapterAssetIds[0];
@@ -1848,9 +2160,19 @@ export function registerIpcHandlers() {
         });
       }
 
-      const messagePayload = needsHydration
-        ? existingMessages.map((item) => ({ role: item.role, content: item.content }))
-        : [{ role: 'user', content: message }];
+      const conversationHistory = existingMessages.map((item) => ({ role: item.role, content: item.content }));
+      const guardedInitialPayload = applyNearLimitTokenGuard(
+        conversationHistory,
+        initialContext,
+        effectiveProvider
+      );
+
+      if (guardedInitialPayload.compressed) {
+        console.log(
+          `[AgentChat] Token guard engaged conversation=${conversation.id} provider=${effectiveProvider || 'default'} ` +
+          `estimatedTokens=${guardedInitialPayload.estimatedTotalTokens}/${guardedInitialPayload.effectiveContextLimit}`
+        );
+      }
 
       const agentBridge = getAgentBridge();
       await agentBridge.ensureStarted();
@@ -1886,7 +2208,7 @@ export function registerIpcHandlers() {
           : {};
       };
 
-      const firstPassResult = await sendChatPass(messagePayload, initialContext);
+      const firstPassResult = await sendChatPass(guardedInitialPayload.messages, initialContext);
       let finalPassResult = firstPassResult;
 
       const firstParsed = parseAgentGraphResult(firstPassResult, chapterDuration, chapterAssetIds);
@@ -1901,7 +2223,20 @@ export function registerIpcHandlers() {
           const detailedContext = await buildAgentChatContext(projectId, chapter.id, {
             detailedTranscripts,
           });
-          finalPassResult = await sendChatPass([{ role: 'user', content: message }], detailedContext);
+          const guardedDetailedPayload = applyNearLimitTokenGuard(
+            conversationHistory,
+            detailedContext,
+            effectiveProvider
+          );
+
+          if (guardedDetailedPayload.compressed) {
+            console.log(
+              `[AgentChat] Token guard engaged (detailed pass) conversation=${conversation.id} provider=${effectiveProvider || 'default'} ` +
+              `estimatedTokens=${guardedDetailedPayload.estimatedTotalTokens}/${guardedDetailedPayload.effectiveContextLimit}`
+            );
+          }
+
+          finalPassResult = await sendChatPass(guardedDetailedPayload.messages, detailedContext);
         }
       }
 
@@ -1925,7 +2260,7 @@ export function registerIpcHandlers() {
         message: assistantMessage,
         threadId,
         suggestions: persistedSuggestions,
-        timelineActions: finalParsed.timelineActions,
+        timelineActions: undefined,
       };
 
       return createSuccessResponse(normalized);
@@ -2632,8 +2967,13 @@ export function registerIpcHandlers() {
         description: description ?? null,
         reasoning: reasoning ?? null,
         provider: provider ?? null,
+        action_type: 'create_clip',
+        target_clip_id: null,
+        action_payload_json: null,
+        preview_snapshot_json: null,
         status: 'pending',
         display_order: 0,
+        clip_id: null,
       });
 
       return createSuccessResponse(suggestion);
@@ -2710,6 +3050,7 @@ export function registerIpcHandlers() {
         return createSuccessResponse({
           cancelled: true,
           removedClipId: result.removedClipId,
+          clip: result.clip,
         });
       }
 
@@ -2731,11 +3072,27 @@ export function registerIpcHandlers() {
         return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
-      const removedClipId = suggestion.status === 'pending' ? (suggestion.clip_id ?? undefined) : undefined;
+      const removedClipId =
+        suggestion.status === 'pending' && suggestion.action_type === 'create_clip'
+          ? (suggestion.clip_id ?? undefined)
+          : undefined;
+      const shouldReturnUpdatedClip =
+        suggestion.status === 'pending' &&
+        suggestion.action_type === 'update_clip' &&
+        Boolean(suggestion.preview_snapshot_json) &&
+        Number.isFinite(suggestion.target_clip_id);
 
       const success = await rejectSuggestion(id);
       if (success) {
-        return createSuccessResponse({ rejected: true, removedClipId });
+        const restoredClip = shouldReturnUpdatedClip && suggestion.target_clip_id
+          ? await getClip(suggestion.target_clip_id)
+          : undefined;
+
+        return createSuccessResponse({
+          rejected: true,
+          removedClipId,
+          clip: restoredClip,
+        });
       } else {
         return createErrorResponse('Suggestion not found', IPC_ERROR_CODES.NOT_FOUND);
       }

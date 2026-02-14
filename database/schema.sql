@@ -210,12 +210,17 @@ CREATE TABLE IF NOT EXISTS suggestions (
   description TEXT,
   reasoning TEXT,  -- Why AI suggested this
   provider TEXT,   -- 'gemini' or 'kimi'
+  action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip')),
+  target_clip_id INTEGER,
+  action_payload_json TEXT,
+  preview_snapshot_json TEXT,
   status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected')),
   display_order INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   applied_at DATETIME,
   clip_id INTEGER, -- Linked clip on timeline when applied
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (target_clip_id) REFERENCES clips(id) ON DELETE SET NULL,
   FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
 

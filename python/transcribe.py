@@ -33,6 +33,7 @@ def transcribe(
     model_name: str = "base",
     language: Optional[str] = None,
     compute_type: str = "int8",
+    device: str = "auto",
     word_timestamps: bool = False,
 ) -> dict:
     """
@@ -44,7 +45,7 @@ def transcribe(
     emit_progress(0, "Loading model...")
 
     # Load model
-    model = WhisperModel(model_name, compute_type=compute_type)
+    model = WhisperModel(model_name, compute_type=compute_type, device=device)
 
     emit_progress(10, "Transcribing...")
 
@@ -129,6 +130,12 @@ def main():
         help="Compute type (default: int8)",
     )
     parser.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Execution device (default: auto)",
+    )
+    parser.add_argument(
         "--output-format",
         default="json",
         choices=["json"],
@@ -154,6 +161,7 @@ def main():
             model_name=args.model,
             language=args.language,
             compute_type=args.compute_type,
+            device=args.device,
             word_timestamps=args.word_timestamps,
         )
     except RuntimeError as e:

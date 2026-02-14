@@ -484,7 +484,6 @@ export async function previewSuggestion(suggestionId: number) {
 
 export async function cancelSuggestionPreviewAction(suggestionId: number) {
   const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
-  const fallbackClipId = suggestion?.clip_id ?? undefined;
 
   try {
     const response = await window.electronAPI.agent.cancelSuggestionPreview(suggestionId);
@@ -492,8 +491,15 @@ export async function cancelSuggestionPreviewAction(suggestionId: number) {
       return { success: false, error: response.error || "Failed to cancel preview" };
     }
 
-    const removedClipId = response.data?.removedClipId ?? fallbackClipId;
-    removeTimelineClipById(removedClipId);
+    const removedClipId = response.data?.removedClipId;
+    if (removedClipId) {
+      removeTimelineClipById(removedClipId);
+    }
+
+    if (response.data?.clip) {
+      upsertTimelineClip(response.data.clip);
+      selectClip(response.data.clip.id, false);
+    }
 
     if (suggestion) {
       suggestion.clip_id = null;
@@ -572,7 +578,6 @@ export async function applyAllSuggestions() {
 
 export async function rejectSuggestion(suggestionId: number) {
   const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
-  const fallbackClipId = suggestion?.clip_id ?? undefined;
 
   try {
     const response = await window.electronAPI.agent.rejectSuggestion(suggestionId);
@@ -582,8 +587,14 @@ export async function rejectSuggestion(suggestionId: number) {
         suggestion.clip_id = null;
       }
 
-      const removedClipId = response.data?.removedClipId ?? fallbackClipId;
-      removeTimelineClipById(removedClipId);
+      const removedClipId = response.data?.removedClipId;
+      if (removedClipId) {
+        removeTimelineClipById(removedClipId);
+      }
+
+      if (response.data?.clip) {
+        upsertTimelineClip(response.data.clip);
+      }
     }
     return response.success;
   } catch (error) {

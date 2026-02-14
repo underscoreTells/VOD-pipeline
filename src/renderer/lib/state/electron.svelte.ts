@@ -423,8 +423,31 @@ export interface TranscriptionResult {
     language: string;
     duration: number;
     segmentCount: number;
+    skipped?: boolean;
   };
   error?: string;
+}
+
+export interface TranscriptionBackendStatus {
+  available: boolean;
+  pythonPath?: string;
+  pythonSource?: 'managed' | 'bundled' | 'system';
+  pythonVersion?: string;
+  hasPip: boolean;
+  hasFasterWhisper: boolean;
+  managedEnvPath?: string;
+  error?: string;
+}
+
+export async function getTranscriptionStatus(autoSetup = false): Promise<{
+  success: boolean;
+  data?: TranscriptionBackendStatus;
+  error?: string;
+}> {
+  return await (window.electronAPI as any).transcription?.getStatus({ autoSetup }) || {
+    success: false,
+    error: 'Transcription status not available',
+  };
 }
 
 export async function transcribeChapter(
@@ -506,9 +529,9 @@ declare global {
         onError: (callback: (payload: { error: string }) => void) => () => void;
         getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
         previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
-        cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number }; error?: string }>;
+        cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
         applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
-        rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number }; error?: string }>;
+        rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
         applyAllSuggestions: (chapterId: string) => Promise<{
           success: boolean;
           data?: {
@@ -551,6 +574,11 @@ declare global {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number, options?: WaveformGenerateOptions) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
+      };
+      transcription: {
+        getStatus: (options?: { autoSetup?: boolean }) => Promise<{ success: boolean; data?: TranscriptionBackendStatus; error?: string }>;
+        transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
+        onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
       };
       exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;

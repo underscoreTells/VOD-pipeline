@@ -27,6 +27,7 @@ export const IPC_CHANNELS = {
   // Transcription channels
   TRANSCRIBE_CHAPTER: 'transcribe:chapter',
   TRANSCRIBE_PROGRESS: 'transcribe:progress',
+  TRANSCRIPTION_STATUS: 'transcription:status',
 
   // Agent channels
   AGENT_CHAT: 'agent:chat',

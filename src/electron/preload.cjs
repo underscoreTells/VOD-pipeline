@@ -105,6 +105,7 @@ const electronAPI = {
     },
   },
   transcription: {
+    getStatus: (options) => ipcRenderer.invoke('transcription:status', { autoSetup: options?.autoSetup === true }),
     transcribe: (chapterId, options) =>
       ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
     onProgress: (callback) => {

@@ -43,14 +43,17 @@
     setLeftWidth,
     setRightWidth,
     setPreviewHeight,
-    setChatHeight,
     setClipPreviewWidth,
     expandLeft,
     expandChat,
     expandBeat,
   } from '../state/layout.svelte';
   import { buildAssetUrl } from '../utils/media';
-  import { onTranscriptionProgress, transcribeChapter as startChapterTranscription } from '../state/electron.svelte';
+  import {
+    onTranscriptionProgress,
+    transcribeChapter as startChapterTranscription,
+    getTranscriptionStatus,
+  } from '../state/electron.svelte';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
   import { setProjectContext, setChapterContext } from '../state/agent.svelte';
   import type { Project, Asset } from '$shared/types/database';
@@ -85,9 +88,10 @@
   const waveformInFlight = new Set<string>();
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
-  let editorSideRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
   let previousSelectedChapterId: number | null = null;
+  let initialChapterLoadEvaluated = $state(false);
+  let scheduledMissingChapterTranscription = $state(false);
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -96,12 +100,58 @@
   const MAX_RIGHT_WIDTH = 560;
   const MIN_PREVIEW_HEIGHT = 200;
   const MIN_TIMELINE_HEIGHT = 220;
-  const MIN_CHAT_HEIGHT = 240;
-  const MIN_BEAT_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
   const MIX_TRACK_INDEX = 0;
   const MIX_WAVEFORM_TRACK_INDEX = -1;
+
+  async function checkTranscriptionAvailability(chapterIds: number[]): Promise<boolean> {
+    const statusResponse = await getTranscriptionStatus(true);
+    if (statusResponse.success && statusResponse.data?.available) {
+      return true;
+    }
+
+    const backendStatus = statusResponse.data;
+    const message = backendStatus?.error
+      || statusResponse.error
+      || 'Transcription backend is unavailable (missing Python/pip/faster-whisper).';
+
+    console.warn('[Transcription] Backend unavailable:', message);
+
+    for (const chapterId of chapterIds) {
+      setTranscriptionError(chapterId, message);
+    }
+
+    return false;
+  }
+
+  async function transcribeMissingChaptersOnReopen(chapterIds: number[]): Promise<void> {
+    if (chapterIds.length === 0) {
+      return;
+    }
+
+    const transcriptionReady = await checkTranscriptionAvailability(chapterIds);
+    if (!transcriptionReady) {
+      return;
+    }
+
+    for (const chapterId of chapterIds) {
+      try {
+        const result = await startChapterTranscription(chapterId, { skipIfExists: true });
+        if (result.success) {
+          continue;
+        }
+
+        const message = result.error || 'Failed to start transcription';
+        console.error('Failed to start transcription:', message);
+        setTranscriptionError(chapterId, message);
+      } catch (error) {
+        const message = (error as Error).message || 'Failed to start transcription';
+        console.error('Failed to start transcription:', error);
+        setTranscriptionError(chapterId, message);
+      }
+    }
+  }
   
   // Load project data and chapters on mount
   onMount(() => {
@@ -116,6 +166,13 @@
     // Set up transcription progress listener
     cleanupTranscription = onTranscriptionProgress((event: { chapterId: number; progress: { percent: number; status: string } }) => {
       setTranscriptionProgress(event.chapterId, event.progress);
+    });
+
+    // Warm transcription runtime for existing projects as soon as detail view loads.
+    void getTranscriptionStatus(true).then((status: { success: boolean; data?: { available?: boolean; error?: string }; error?: string }) => {
+      if (!status.success || !status.data?.available) {
+        console.warn('[Transcription] Runtime not ready during project load:', status.data?.error || status.error);
+      }
     });
   });
   
@@ -168,6 +225,16 @@
         const created = await autoCreateChaptersFromFiles(project.id, assets);
 
         if (settingsState.settings.autoTranscribeOnImport) {
+          const chapterIds = created.map((chapter) => chapter.id);
+          const transcriptionReady = await checkTranscriptionAvailability(chapterIds);
+          if (!transcriptionReady) {
+            setIsImporting(false);
+            if (created.length > 0) {
+              selectChapter(created[0].id);
+            }
+            return;
+          }
+
           for (const chapter of created) {
             void startChapterTranscription(chapter.id)
               .then((result) => {
@@ -220,6 +287,11 @@
           
           // Start transcription if enabled
           if (settingsState.settings.autoTranscribeOnImport) {
+            const transcriptionReady = await checkTranscriptionAvailability([chapter.id]);
+            if (!transcriptionReady) {
+              continue;
+            }
+
             // Start transcription asynchronously
             void startChapterTranscription(chapter.id)
               .then((result) => {
@@ -317,7 +389,7 @@
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
 
-  const rightHidden = $derived(() => layoutState.chatCollapsed && layoutState.beatCollapsed);
+  const rightHidden = $derived(() => layoutState.chatCollapsed);
 
   $effect(() => {
     if (!canShowSourceTracks && showSourceTracks) {
@@ -393,6 +465,22 @@
     if (selectedChapter && !hasChapterAssets) {
       void loadAssetsForChapter(selectedChapter.id);
     }
+  });
+
+  $effect(() => {
+    if (initialChapterLoadEvaluated) return;
+    if (chaptersState.isLoading) return;
+
+    initialChapterLoadEvaluated = true;
+
+    const chapterIds = chaptersState.chapters.map((chapter) => chapter.id);
+    if (chapterIds.length === 0) {
+      scheduledMissingChapterTranscription = true;
+      return;
+    }
+
+    scheduledMissingChapterTranscription = true;
+    void transcribeMissingChaptersOnReopen(chapterIds);
   });
 
   // Update agent chapter context when selection changes
@@ -586,7 +674,7 @@
     const startWidth = layoutState.rightWidth;
     startPointerDrag(event, 'col-resize', (moveEvent) => {
       const delta = moveEvent.clientX - startX;
-      const next = clamp(startWidth + delta, MIN_RIGHT_WIDTH, MAX_RIGHT_WIDTH);
+      const next = clamp(startWidth - delta, MIN_RIGHT_WIDTH, MAX_RIGHT_WIDTH);
       setRightWidth(next);
     }, persistLayout);
   }
@@ -604,22 +692,6 @@
       const delta = moveEvent.clientY - startY;
       const next = clamp(startHeight + delta, MIN_PREVIEW_HEIGHT, maxHeight);
       setPreviewHeight(next);
-    }, persistLayout);
-  }
-
-  function handleChatResize(event: PointerEvent) {
-    if (!editorSideRef) return;
-    const startY = event.clientY;
-    const startHeight = layoutState.chatHeight;
-    const containerHeight = editorSideRef.clientHeight;
-    const maxHeight = Math.max(
-      MIN_CHAT_HEIGHT,
-      containerHeight - MIN_BEAT_HEIGHT - RESIZE_HANDLE_SIZE
-    );
-    startPointerDrag(event, 'row-resize', (moveEvent) => {
-      const delta = moveEvent.clientY - startY;
-      const next = clamp(startHeight + delta, MIN_CHAT_HEIGHT, maxHeight);
-      setChatHeight(next);
     }, persistLayout);
   }
 
@@ -733,10 +805,24 @@
         <!-- Chapter Panel Sidebar -->
         {#if !layoutState.leftCollapsed}
           <aside class="chapters-sidebar" style="width: {layoutState.leftWidth}px">
-            <ChapterPanel
-              projectAssets={projectDetail.assets}
-              onImportClick={() => setIsImporting(true)}
-            />
+            <div class="left-sidebar-stack">
+              <div class="left-sidebar-chapters">
+                <ChapterPanel
+                  projectAssets={projectDetail.assets}
+                  onImportClick={() => setIsImporting(true)}
+                />
+              </div>
+
+              {#if !layoutState.beatCollapsed}
+                <div class="left-sidebar-clips">
+                  <BeatPanel
+                    clips={selectedChapterClips}
+                    chapterStartTime={selectedChapter?.start_time ?? 0}
+                    chapterDuration={selectedChapterDuration}
+                  />
+                </div>
+              {/if}
+            </div>
           </aside>
           <div
             class="resize-handle-vertical"
@@ -833,36 +919,10 @@
                 aria-orientation="vertical"
                 onpointerdown={handleRightResize}
               ></div>
-              <aside class="editor-side" style="width: {layoutState.rightWidth}px" bind:this={editorSideRef}>
-                {#if !layoutState.chatCollapsed}
-                  <div
-                    class="side-panel chat-panel-wrapper"
-                    style={layoutState.beatCollapsed
-                      ? 'flex: 1 1 auto;'
-                      : `flex: 0 0 ${layoutState.chatHeight}px;`}
-                  >
-                    <ChatPanel />
-                  </div>
-                {/if}
-
-                {#if !layoutState.chatCollapsed && !layoutState.beatCollapsed}
-                  <div
-                    class="resize-handle-horizontal"
-                    role="separator"
-                    aria-orientation="horizontal"
-                    onpointerdown={handleChatResize}
-                  ></div>
-                {/if}
-
-                {#if !layoutState.beatCollapsed}
-                  <div class="side-panel beat-panel-wrapper">
-                    <BeatPanel
-                      clips={selectedChapterClips}
-                      chapterStartTime={selectedChapter?.start_time ?? 0}
-                      chapterDuration={selectedChapterDuration}
-                    />
-                  </div>
-                {/if}
+              <aside class="editor-side" style="width: {layoutState.rightWidth}px">
+                <div class="side-panel chat-panel-wrapper full-height">
+                  <ChatPanel />
+                </div>
               </aside>
             {/if}
           </div>
@@ -935,9 +995,9 @@
       Show Chat
     </button>
   {/if}
-  {#if layoutState.beatCollapsed}
-    <button class="floating-toggle right beat" onclick={expandBeat}>
-      Show Beats
+  {#if !layoutState.leftCollapsed && layoutState.beatCollapsed}
+    <button class="floating-toggle left clips" onclick={expandBeat}>
+      Show Clips
     </button>
   {/if}
 </div>
@@ -1063,8 +1123,40 @@
     flex-shrink: 0;
     flex: 0 0 auto;
     border-right: 1px solid #333;
-    overflow-y: auto;
+    overflow: hidden;
     min-height: 0;
+  }
+
+  .left-sidebar-stack {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .left-sidebar-chapters {
+    flex: 1 1 auto;
+    min-height: 220px;
+    overflow: hidden;
+  }
+
+  .left-sidebar-clips {
+    flex: 1 1 auto;
+    min-height: 220px;
+    overflow: hidden;
+    border-top: 1px solid #333;
+  }
+
+  .chapters-sidebar :global(.chapter-panel) {
+    height: 100%;
+    border-right: none;
+  }
+
+  .chapters-sidebar :global(.beat-panel) {
+    width: 100%;
+    height: 100%;
+    border-left: none;
+    border-top: none;
   }
   
   .main-content {
@@ -1216,9 +1308,9 @@
     min-height: 240px;
   }
 
-  .beat-panel-wrapper {
+  .chat-panel-wrapper.full-height {
     flex: 1 1 auto;
-    min-height: 220px;
+    min-height: 0;
   }
 
   .editor-side :global(.chat-panel) {
@@ -1227,14 +1319,6 @@
     height: 100%;
   }
 
-  .editor-side :global(.beat-panel) {
-    width: 100%;
-    border-left: none;
-    border-top: 1px solid #333;
-    flex: 1 1 auto;
-    height: 100%;
-  }
-  
   .timeline-wrapper {
     flex: 1;
     display: flex;
@@ -1366,7 +1450,7 @@
     top: 96px;
   }
 
-  .floating-toggle.right.beat {
+  .floating-toggle.left.clips {
     top: 140px;
   }
   

@@ -9,6 +9,7 @@ import { getAgentBridge } from './agent-bridge.js';
 import { detectFFmpeg } from './ffmpegDetector.js';
 import { detectAudiowaveform } from './audiowaveformDetector.js';
 import { detectPython } from './pythonDetector.js';
+import { getWhisperRuntimeStatus } from '../pipeline/whisper.js';
 import { fileURLToPath } from 'url';
 
 // Load .env file early and check for errors
@@ -216,6 +217,19 @@ async function initializePython() {
       console.log(`[Main] Python found: ${result.path}`);
       console.log(`[Main] Python version: ${result.version}`);
       console.log(`[Main] Python source: ${result.source}`);
+
+      void getWhisperRuntimeStatus({ autoSetup: true })
+        .then((status) => {
+          if (status.available) {
+            console.log(`[Main] Whisper runtime ready: ${status.pythonPath || 'unknown python'}`);
+            return;
+          }
+
+          console.warn('[Main] Whisper runtime unavailable after setup attempt:', status.error || 'unknown reason');
+        })
+        .catch((setupError) => {
+          console.warn('[Main] Whisper runtime setup check failed:', setupError);
+        });
     } else {
       console.warn('[Main] Python not found. Transcription features will be disabled.');
       console.warn('[Main] Install Python 3.8+ to enable transcription.');

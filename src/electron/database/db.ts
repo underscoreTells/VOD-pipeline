@@ -104,6 +104,10 @@ function ensureSchemaColumns(database: Database.Database) {
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'display_order', definition: 'INTEGER DEFAULT 0' },
     { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
+    { table: 'suggestions', column: 'action_type', definition: "TEXT DEFAULT 'create_clip'" },
+    { table: 'suggestions', column: 'target_clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
+    { table: 'suggestions', column: 'action_payload_json', definition: 'TEXT' },
+    { table: 'suggestions', column: 'preview_snapshot_json', definition: 'TEXT' },
   ];
 
   const failedMigrations: string[] = [];
@@ -1957,10 +1961,34 @@ export async function updateChapterProxyMetadata(
 
 export async function createSuggestion(suggestion: CreateSuggestionInput): Promise<Suggestion> {
   const database = await getDatabase();
+
+  const normalizedActionType = suggestion.action_type === 'update_clip' ? 'update_clip' : 'create_clip';
+  const normalizedTargetClipId =
+    normalizedActionType === 'update_clip' && typeof suggestion.target_clip_id === 'number' && Number.isFinite(suggestion.target_clip_id)
+      ? suggestion.target_clip_id
+      : null;
+  const normalizedActionPayload =
+    typeof suggestion.action_payload_json === 'string' ? suggestion.action_payload_json : null;
+  const normalizedPreviewSnapshot =
+    typeof suggestion.preview_snapshot_json === 'string' ? suggestion.preview_snapshot_json : null;
   
   const result = database.prepare(
-    `INSERT INTO suggestions (chapter_id, in_point, out_point, description, reasoning, provider, status, display_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO suggestions (
+      chapter_id,
+      in_point,
+      out_point,
+      description,
+      reasoning,
+      provider,
+      action_type,
+      target_clip_id,
+      action_payload_json,
+      preview_snapshot_json,
+      status,
+      display_order,
+      clip_id
+    )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     suggestion.chapter_id,
     suggestion.in_point,
@@ -1968,32 +1996,61 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
     suggestion.description,
     suggestion.reasoning,
     suggestion.provider,
+    normalizedActionType,
+    normalizedTargetClipId,
+    normalizedActionPayload,
+    normalizedPreviewSnapshot,
     suggestion.status,
-    suggestion.display_order
+    suggestion.display_order,
+    suggestion.clip_id ?? null
   );
   
   return {
     id: result.lastInsertRowid as number,
     ...suggestion,
+    action_type: normalizedActionType,
+    target_clip_id: normalizedTargetClipId,
+    action_payload_json: normalizedActionPayload,
+    preview_snapshot_json: normalizedPreviewSnapshot,
     created_at: new Date().toISOString(),
     applied_at: null,
-    clip_id: null,
+    clip_id: suggestion.clip_id ?? null,
+  };
+}
+
+function normalizeSuggestionRecord(row: Suggestion): Suggestion {
+  return {
+    ...row,
+    action_type: row.action_type === 'update_clip' ? 'update_clip' : 'create_clip',
+    target_clip_id: typeof row.target_clip_id === 'number' && Number.isFinite(row.target_clip_id)
+      ? row.target_clip_id
+      : null,
+    action_payload_json: typeof row.action_payload_json === 'string' ? row.action_payload_json : null,
+    preview_snapshot_json: typeof row.preview_snapshot_json === 'string' ? row.preview_snapshot_json : null,
   };
 }
 
 export async function getSuggestion(id: number): Promise<Suggestion | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE id = ?'
+    `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+            action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+            status, display_order, created_at, applied_at, clip_id
+     FROM suggestions
+     WHERE id = ?`
   ).get(id) as Suggestion | undefined;
   
-  return result || null;
+  return result ? normalizeSuggestionRecord(result) : null;
 }
 
 export async function getSuggestionsByChapter(chapterId: number, status?: Suggestion['status']): Promise<Suggestion[]> {
   const database = await getDatabase();
   
-  let query = 'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ?';
+  let query = `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+                      action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+                      status, display_order, created_at, applied_at, clip_id
+               FROM suggestions
+               WHERE chapter_id = ?`;
   const params: unknown[] = [chapterId];
   
   if (status) {
@@ -2004,16 +2061,21 @@ export async function getSuggestionsByChapter(chapterId: number, status?: Sugges
   query += ' ORDER BY display_order ASC, created_at DESC';
   
   const results = database.prepare(query).all(...params) as Suggestion[];
-  return results;
+  return results.map(normalizeSuggestionRecord);
 }
 
 export async function getSuggestionsByProvider(chapterId: number, provider: 'gemini' | 'kimi'): Promise<Suggestion[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    'SELECT id, chapter_id, in_point, out_point, description, reasoning, provider, status, display_order, created_at, applied_at, clip_id FROM suggestions WHERE chapter_id = ? AND provider = ? ORDER BY display_order ASC'
+    `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+            action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+            status, display_order, created_at, applied_at, clip_id
+     FROM suggestions
+     WHERE chapter_id = ? AND provider = ?
+     ORDER BY display_order ASC`
   ).all(chapterId, provider) as Suggestion[];
   
-  return results;
+  return results.map(normalizeSuggestionRecord);
 }
 
 export interface ApplySuggestionResult {
@@ -2025,7 +2087,211 @@ export interface ApplySuggestionResult {
 export interface CancelSuggestionPreviewResult {
   success: boolean;
   removedClipId?: number;
+  clip?: Clip;
   error?: string;
+}
+
+interface SuggestionActionPayload {
+  create?: {
+    assetId?: number;
+    trackIndex?: number;
+    startTime?: number;
+    role?: Clip['role'];
+    description?: string | null;
+    isEssential?: boolean;
+  };
+  update?: {
+    startTime?: number;
+    inPoint?: number;
+    outPoint?: number;
+    role?: Clip['role'];
+    description?: string | null;
+    isEssential?: boolean;
+  };
+}
+
+interface SuggestionPreviewSnapshot {
+  clip: {
+    id: number;
+    start_time: number;
+    in_point: number;
+    out_point: number;
+    role: Clip['role'];
+    description: string | null;
+    is_essential: boolean;
+  };
+}
+
+function isUpdateSuggestion(suggestion: Suggestion): boolean {
+  return suggestion.action_type === 'update_clip';
+}
+
+function parseSuggestionActionPayload(suggestion: Suggestion): SuggestionActionPayload | null {
+  if (!suggestion.action_payload_json) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(suggestion.action_payload_json) as SuggestionActionPayload;
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseSuggestionPreviewSnapshot(suggestion: Suggestion): SuggestionPreviewSnapshot | null {
+  if (!suggestion.preview_snapshot_json) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(suggestion.preview_snapshot_json) as SuggestionPreviewSnapshot;
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    if (!parsed.clip || typeof parsed.clip !== 'object') {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function serializeSuggestionPreviewSnapshot(clip: Clip): string {
+  const snapshot: SuggestionPreviewSnapshot = {
+    clip: {
+      id: clip.id,
+      start_time: clip.start_time,
+      in_point: clip.in_point,
+      out_point: clip.out_point,
+      role: clip.role,
+      description: clip.description,
+      is_essential: clip.is_essential,
+    },
+  };
+
+  return JSON.stringify(snapshot);
+}
+
+async function applyUpdateSuggestionToClip(
+  suggestion: Suggestion,
+  chapter: Chapter,
+  targetClip: Clip
+): Promise<ApplySuggestionResult> {
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  if (!chapterAssetIds.includes(targetClip.asset_id)) {
+    return {
+      success: false,
+      error: `Target clip ${targetClip.id} is not linked to chapter ${chapter.id}`,
+    };
+  }
+
+  const actionPayload = parseSuggestionActionPayload(suggestion);
+  const updatePayload = actionPayload?.update;
+  if (!updatePayload) {
+    return { success: false, error: 'Missing update payload for update suggestion' };
+  }
+
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const updates: UpdateClipInput = {};
+
+  if (typeof updatePayload.startTime === 'number' && Number.isFinite(updatePayload.startTime)) {
+    const localStart = clampToRange(updatePayload.startTime, 0, chapterDuration);
+    updates.start_time = chapter.start_time + localStart;
+  }
+
+  if (typeof updatePayload.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
+    const localIn = clampToRange(updatePayload.inPoint, 0, chapterDuration);
+    updates.in_point = chapter.start_time + localIn;
+  }
+
+  if (typeof updatePayload.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
+    const minLocalOut = updates.in_point !== undefined
+      ? updates.in_point - chapter.start_time
+      : clampToRange(targetClip.in_point - chapter.start_time, 0, chapterDuration);
+    const localOut = clampToRange(updatePayload.outPoint, minLocalOut, chapterDuration);
+    updates.out_point = chapter.start_time + localOut;
+  }
+
+  if (updatePayload.role !== undefined) {
+    updates.role = updatePayload.role;
+  }
+
+  if (updatePayload.description !== undefined) {
+    updates.description = updatePayload.description;
+  }
+
+  if (typeof updatePayload.isEssential === 'boolean') {
+    updates.is_essential = updatePayload.isEssential;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { success: true, clip: targetClip };
+  }
+
+  const applied = await updateClip(targetClip.id, updates);
+  if (!applied) {
+    return { success: false, error: `Failed to update clip ${targetClip.id}` };
+  }
+
+  const refreshed = await getClip(targetClip.id);
+  if (!refreshed) {
+    return { success: false, error: `Updated clip ${targetClip.id} could not be loaded` };
+  }
+
+  return { success: true, clip: refreshed };
+}
+
+async function restoreClipFromSuggestionSnapshot(suggestion: Suggestion): Promise<ApplySuggestionResult> {
+  const snapshot = parseSuggestionPreviewSnapshot(suggestion);
+  const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+
+  if (!snapshot || !targetClipId) {
+    return { success: true };
+  }
+
+  const targetClip = await getClip(targetClipId);
+  if (!targetClip) {
+    return { success: true };
+  }
+
+  const restored = await updateClip(targetClip.id, {
+    start_time: snapshot.clip.start_time,
+    in_point: snapshot.clip.in_point,
+    out_point: snapshot.clip.out_point,
+    role: snapshot.clip.role,
+    description: snapshot.clip.description,
+    is_essential: snapshot.clip.is_essential,
+  });
+
+  if (!restored) {
+    return { success: false, error: `Failed to restore clip ${targetClip.id} from preview snapshot` };
+  }
+
+  const refreshed = await getClip(targetClip.id);
+  return { success: true, clip: refreshed ?? undefined };
+}
+
+async function cleanupPendingSuggestionArtifacts(suggestion: Suggestion): Promise<ApplySuggestionResult> {
+  if (suggestion.status !== 'pending') {
+    return { success: true };
+  }
+
+  if (isUpdateSuggestion(suggestion)) {
+    return restoreClipFromSuggestionSnapshot(suggestion);
+  }
+
+  if (suggestion.clip_id) {
+    await deleteClip(suggestion.clip_id);
+  }
+
+  return { success: true };
 }
 
 interface NormalizedSuggestionClipWindow {
@@ -2067,13 +2333,19 @@ function normalizeSuggestionClipWindow(
 
 async function createSuggestionTimelineClip(suggestion: Suggestion, chapter: Chapter): Promise<ApplySuggestionResult> {
   const database = await getDatabase();
+  const actionPayload = parseSuggestionActionPayload(suggestion);
+  const createPayload = actionPayload?.create;
 
   const assetIds = await getAssetsForChapter(chapter.id);
   if (assetIds.length === 0) {
     return { success: false, error: 'No assets found for this chapter' };
   }
 
-  const assetId = assetIds[0];
+  let assetId = assetIds[0];
+  if (typeof createPayload?.assetId === 'number' && assetIds.includes(createPayload.assetId)) {
+    assetId = createPayload.assetId;
+  }
+
   const asset = await getAsset(assetId);
   if (!asset) {
     return { success: false, error: 'Asset not found' };
@@ -2082,11 +2354,21 @@ async function createSuggestionTimelineClip(suggestion: Suggestion, chapter: Cha
   const normalizedWindow = normalizeSuggestionClipWindow(suggestion, chapter);
 
   let startTime = normalizedWindow.inPoint;
+  if (typeof createPayload?.startTime === 'number' && Number.isFinite(createPayload.startTime)) {
+    const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+    const localStart = clampToRange(createPayload.startTime, 0, chapterDuration);
+    startTime = chapter.start_time + localStart;
+  }
+
   let inPoint = normalizedWindow.inPoint;
   const outPoint = normalizedWindow.outPoint;
+  const trackIndex =
+    typeof createPayload?.trackIndex === 'number' && Number.isFinite(createPayload.trackIndex)
+      ? createPayload.trackIndex
+      : 0;
 
   const existingClips = await getClipsByProject(chapter.project_id);
-  const trackClips = existingClips.filter((clip) => clip.track_index === 0);
+  const trackClips = existingClips.filter((clip) => clip.track_index === trackIndex);
 
   const proposedEndTime = startTime + (outPoint - inPoint);
   const overlappingClips = trackClips.filter((clip) => {
@@ -2123,13 +2405,13 @@ async function createSuggestionTimelineClip(suggestion: Suggestion, chapter: Cha
   const clip = await createClip({
     project_id: chapter.project_id,
     asset_id: assetId,
-    track_index: 0,
+    track_index: trackIndex,
     start_time: startTime,
     in_point: inPoint,
     out_point: outPoint,
-    role: null,
-    description: suggestion.description,
-    is_essential: true,
+    role: createPayload?.role ?? null,
+    description: createPayload?.description ?? suggestion.description,
+    is_essential: createPayload?.isEssential ?? true,
   });
 
   return { success: true, clip };
@@ -2146,6 +2428,49 @@ export async function previewSuggestionWithClip(id: number): Promise<ApplySugges
 
     if (suggestion.status !== 'pending') {
       return { success: false, error: 'Suggestion is not pending' };
+    }
+
+    if (isUpdateSuggestion(suggestion)) {
+      const chapter = await getChapter(suggestion.chapter_id);
+      if (!chapter) {
+        return { success: false, error: 'Chapter not found for this suggestion' };
+      }
+
+      const targetClipId = suggestion.target_clip_id;
+      if (!targetClipId) {
+        return { success: false, error: 'Update suggestion has no target clip' };
+      }
+
+      const targetClip = await getClip(targetClipId);
+      if (!targetClip) {
+        return { success: false, error: `Target clip ${targetClipId} not found` };
+      }
+
+      if (suggestion.preview_snapshot_json) {
+        return { success: true, clip: targetClip };
+      }
+
+      const snapshotJson = serializeSuggestionPreviewSnapshot(targetClip);
+      const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
+      if (!applyResult.success || !applyResult.clip) {
+        return applyResult;
+      }
+
+      const updateResult = database.prepare(
+        'UPDATE suggestions SET clip_id = ?, preview_snapshot_json = ?, applied_at = NULL WHERE id = ?'
+      ).run(targetClip.id, snapshotJson, id);
+
+      if (updateResult.changes === 0) {
+        await restoreClipFromSuggestionSnapshot({
+          ...suggestion,
+          clip_id: targetClip.id,
+          preview_snapshot_json: snapshotJson,
+        });
+
+        return { success: false, error: 'Failed to save update suggestion preview state' };
+      }
+
+      return applyResult;
     }
 
     if (suggestion.clip_id) {
@@ -2197,6 +2522,26 @@ export async function cancelSuggestionPreview(id: number): Promise<CancelSuggest
       return { success: false, error: 'Suggestion is not pending' };
     }
 
+    if (isUpdateSuggestion(suggestion)) {
+      const restoreResult = await restoreClipFromSuggestionSnapshot(suggestion);
+      if (!restoreResult.success) {
+        return {
+          success: false,
+          error: restoreResult.error || 'Failed to restore update preview state',
+        };
+      }
+
+      database.prepare(
+        'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
+      ).run(id);
+
+      return {
+        success: true,
+        removedClipId: undefined,
+        clip: restoreResult.clip,
+      };
+    }
+
     const previewClipId = suggestion.clip_id ?? undefined;
 
     if (previewClipId) {
@@ -2210,6 +2555,7 @@ export async function cancelSuggestionPreview(id: number): Promise<CancelSuggest
     return {
       success: true,
       removedClipId: previewClipId,
+      clip: undefined,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2243,6 +2589,37 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
       return { success: false, error: 'Chapter not found for this suggestion' };
     }
 
+    if (isUpdateSuggestion(suggestion)) {
+      const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+      if (!targetClipId) {
+        return { success: false, error: 'Update suggestion has no target clip' };
+      }
+
+      const targetClip = await getClip(targetClipId);
+      if (!targetClip) {
+        return { success: false, error: `Target clip ${targetClipId} not found` };
+      }
+
+      let updatedClip = targetClip;
+      if (!suggestion.preview_snapshot_json) {
+        const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
+        if (!applyResult.success || !applyResult.clip) {
+          return applyResult;
+        }
+        updatedClip = applyResult.clip;
+      }
+
+      const updateResult = database.prepare(
+        "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
+      ).run(new Date().toISOString(), updatedClip.id, id);
+
+      if (updateResult.changes === 0) {
+        return { success: false, error: 'Failed to update suggestion status' };
+      }
+
+      return { success: true, clip: updatedClip };
+    }
+
     let clip: Clip | undefined;
     if (suggestion.clip_id) {
       const existingPreviewClip = await getClip(suggestion.clip_id);
@@ -2262,7 +2639,7 @@ export async function applySuggestionWithClip(id: number): Promise<ApplySuggesti
     }
 
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ? WHERE id = ?"
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
     ).run(new Date().toISOString(), clip.id, id);
     
     if (updateResult.changes === 0) {
@@ -2285,12 +2662,13 @@ export async function rejectSuggestion(id: number): Promise<boolean> {
     return false;
   }
 
-  if (suggestion.status === 'pending' && suggestion.clip_id) {
-    await deleteClip(suggestion.clip_id);
+  const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
+  if (!cleanupResult.success) {
+    return false;
   }
 
   const result = database.prepare(
-    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL WHERE id = ?"
+    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
   ).run(id);
   
   return result.changes > 0;
@@ -2338,8 +2716,11 @@ export async function deleteSuggestion(id: number): Promise<boolean> {
   const database = await getDatabase();
 
   const suggestion = await getSuggestion(id);
-  if (suggestion && suggestion.status === 'pending' && suggestion.clip_id) {
-    await deleteClip(suggestion.clip_id);
+  if (suggestion) {
+    const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
+    if (!cleanupResult.success) {
+      return false;
+    }
   }
 
   const result = database.prepare('DELETE FROM suggestions WHERE id = ?').run(id);
@@ -2350,13 +2731,11 @@ export async function deleteSuggestion(id: number): Promise<boolean> {
 export async function deleteSuggestionsByChapter(chapterId: number): Promise<number> {
   const database = await getDatabase();
 
-  const pendingPreviewClipIds = database.prepare(
-    "SELECT clip_id FROM suggestions WHERE chapter_id = ? AND status = 'pending' AND clip_id IS NOT NULL"
-  ).all(chapterId) as Array<{ clip_id: number }>;
-
-  for (const item of pendingPreviewClipIds) {
-    if (Number.isFinite(item.clip_id)) {
-      await deleteClip(item.clip_id);
+  const suggestions = await getSuggestionsByChapter(chapterId);
+  for (const suggestion of suggestions) {
+    const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
+    if (!cleanupResult.success) {
+      throw new Error(cleanupResult.error || `Failed cleaning suggestion ${suggestion.id}`);
     }
   }
 
@@ -2368,13 +2747,11 @@ export async function deleteSuggestionsByChapter(chapterId: number): Promise<num
 export async function clearPendingSuggestions(chapterId: number): Promise<number> {
   const database = await getDatabase();
 
-  const pendingPreviewClipIds = database.prepare(
-    "SELECT clip_id FROM suggestions WHERE chapter_id = ? AND status = 'pending' AND clip_id IS NOT NULL"
-  ).all(chapterId) as Array<{ clip_id: number }>;
-
-  for (const item of pendingPreviewClipIds) {
-    if (Number.isFinite(item.clip_id)) {
-      await deleteClip(item.clip_id);
+  const pendingSuggestions = await getSuggestionsByChapter(chapterId, 'pending');
+  for (const suggestion of pendingSuggestions) {
+    const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
+    if (!cleanupResult.success) {
+      throw new Error(cleanupResult.error || `Failed cleaning suggestion ${suggestion.id}`);
     }
   }
 

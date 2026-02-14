@@ -4,6 +4,8 @@ import { createMainGraph } from "./graphs/main-orchestrator.js";
 import { JSONStdinWriter, JSONStdoutReader } from "./ipc/json-message-transport.js";
 import { v4 as uuidv4 } from "uuid";
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
+import fs from "fs";
+import path from "path";
 import type { AgentInputMessage, DetailedTranscriptWindow } from "../shared/types/agent-ipc.js";
 import type { LLMProviderType } from "./providers/index.js";
 
@@ -300,11 +302,17 @@ async function main() {
   try {
     console.error("[Agent] Waiting for provider config from settings IPC or environment");
 
-    const dbPath = `${process.env.HOME || process.env.USERPROFILE}/.vod-pipeline/vod-pipeline.db`;
+    const configuredCheckpointerPath = process.env.AGENT_CHECKPOINTER_DB_PATH?.trim();
+    const dbPath = configuredCheckpointerPath && configuredCheckpointerPath.length > 0
+      ? configuredCheckpointerPath
+      : `${process.env.HOME || process.env.USERPROFILE}/.vod-pipeline/vod-pipeline.db`;
     let checkpointer: any;
     let checkpointerBackend: "sqlite" | "none" = "sqlite";
 
     try {
+      const checkpointerDir = path.dirname(dbPath);
+      fs.mkdirSync(checkpointerDir, { recursive: true });
+
       checkpointer = SqliteSaver.fromConnString(`file:${dbPath}`);
       console.error("[Agent] Checkpointer initialized at:", dbPath);
     } catch (error) {
