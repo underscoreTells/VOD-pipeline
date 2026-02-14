@@ -130,10 +130,36 @@ export async function extractAudio(
     throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
   }
 
-  const args: string[] = [
+  const startTime = options.startTime;
+  const endTime = options.endTime;
+
+  if (startTime !== undefined && (!Number.isFinite(startTime) || startTime < 0)) {
+    throw new FFmpegError('Audio extract startTime must be a finite number >= 0', 'INVALID_OPTIONS');
+  }
+  if (endTime !== undefined && (!Number.isFinite(endTime) || endTime <= 0)) {
+    throw new FFmpegError('Audio extract endTime must be a finite number > 0', 'INVALID_OPTIONS');
+  }
+  if (startTime !== undefined && endTime !== undefined && endTime <= startTime) {
+    throw new FFmpegError('Audio extract endTime must be greater than startTime', 'INVALID_OPTIONS');
+  }
+
+  const args: string[] = [];
+
+  // Seek before input for faster extraction when chapter range is provided.
+  if (startTime !== undefined) {
+    args.push('-ss', startTime.toString());
+  }
+
+  args.push(
     '-i', videoPath,
     '-vn', // No video
-  ];
+  );
+
+  if (startTime !== undefined && endTime !== undefined) {
+    args.push('-t', (endTime - startTime).toString());
+  } else if (endTime !== undefined) {
+    args.push('-to', endTime.toString());
+  }
 
   // Select specific audio track if specified
   if (options.trackIndex !== undefined) {
@@ -485,7 +511,8 @@ export async function generateAIProxy(
   onProgress?: (percent: number) => void,
   timeoutMs?: number,
   encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
-  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+  quality: 'high' | 'balanced' | 'fast' = 'balanced',
+  trimOptions?: { startTime: number; endTime: number }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
@@ -520,6 +547,25 @@ export async function generateAIProxy(
 
   // Get source metadata first
   const metadata = await getVideoMetadata(inputPath);
+  const trimRange = trimOptions
+    ? {
+        startTime: Math.max(0, trimOptions.startTime),
+        endTime: trimOptions.endTime,
+      }
+    : undefined;
+
+  if (trimRange) {
+    if (!Number.isFinite(trimRange.startTime) || !Number.isFinite(trimRange.endTime)) {
+      throw new FFmpegError('Chapter proxy trim range must be finite numbers', 'INVALID_OPTIONS');
+    }
+    if (trimRange.endTime <= trimRange.startTime) {
+      throw new FFmpegError('Chapter proxy trim endTime must be greater than startTime', 'INVALID_OPTIONS');
+    }
+  }
+
+  const targetDuration = trimRange
+    ? Math.max(0.01, trimRange.endTime - trimRange.startTime)
+    : metadata.duration;
 
   // Try GPU encoding first if enabled, with fallback to CPU
   if (useGPU) {
@@ -529,11 +575,12 @@ export async function generateAIProxy(
         encodingBinaryPath,
         inputPath,
         outputPath,
-        metadata,
+        { duration: targetDuration },
         onProgress,
         timeoutMs,
         true, // useGPU
-        quality
+        quality,
+        trimRange
       );
     } catch (error) {
       console.warn('[Proxy] GPU encoding failed, falling back to CPU:', error instanceof Error ? error.message : 'Unknown error');
@@ -548,11 +595,12 @@ export async function generateAIProxy(
     ffmpegPath.path,
     inputPath,
     outputPath,
-    metadata,
+    { duration: targetDuration },
     onProgress,
     timeoutMs,
     false, // useGPU
-    quality
+    quality,
+    trimRange
   );
 }
 
@@ -568,7 +616,8 @@ async function executeProxyGeneration(
   onProgress?: (percent: number) => void,
   timeoutMs?: number,
   useGPU: boolean = false,
-  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+  quality: 'high' | 'balanced' | 'fast' = 'balanced',
+  trimRange?: { startTime: number; endTime: number }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   // Get encoder-specific arguments
   const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
@@ -584,6 +633,7 @@ async function executeProxyGeneration(
   const args: string[] = [
     ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
     '-i', inputPath,
+    ...(trimRange ? ['-ss', trimRange.startTime.toString(), '-to', trimRange.endTime.toString()] : []),
     ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
     ...videoArgs,
     '-c:a', 'aac',

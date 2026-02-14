@@ -9,9 +9,29 @@ const electronAPI = {
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
+    createConversation: (params) => ipcRenderer.invoke('agent:conversation-create', params),
+    listConversations: (params) => ipcRenderer.invoke('agent:conversation-list', params),
+    getConversationMessages: (conversationId) =>
+      ipcRenderer.invoke('agent:conversation-messages', { conversationId }),
+    deleteConversation: (conversationId) =>
+      ipcRenderer.invoke('agent:conversation-delete', { conversationId }),
+    applyActions: (params) => ipcRenderer.invoke('agent:apply-actions', params),
+    onStream: (callback) => {
+      const handler = (_, data) => callback(data);
+      ipcRenderer.on('agent:stream', handler);
+      return () => ipcRenderer.removeListener('agent:stream', handler);
+    },
+    onError: (callback) => {
+      const handler = (_, data) => callback(data);
+      ipcRenderer.on('agent:error', handler);
+      return () => ipcRenderer.removeListener('agent:error', handler);
+    },
     getSuggestions: (chapterId) => ipcRenderer.invoke('suggestion:get-by-chapter', { chapterId }),
+    previewSuggestion: (suggestionId) => ipcRenderer.invoke('suggestion:preview', { id: suggestionId }),
+    cancelSuggestionPreview: (suggestionId) => ipcRenderer.invoke('suggestion:cancel-preview', { id: suggestionId }),
     applySuggestion: (suggestionId) => ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) => ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
+    applyAllSuggestions: (chapterId) => ipcRenderer.invoke('suggestion:apply-all', { chapterId }),
   },
   settings: {
     encrypt: async (text) => {
@@ -85,6 +105,7 @@ const electronAPI = {
     },
   },
   transcription: {
+    getStatus: (options) => ipcRenderer.invoke('transcription:status', { autoSetup: options?.autoSetup === true }),
     transcribe: (chapterId, options) =>
       ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
     onProgress: (callback) => {

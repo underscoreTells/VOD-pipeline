@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
-import type { Asset, Clip, TimelineState, Suggestion, Chapter } from '../shared/types/database';
-import type { AgentOutputMessage } from '../shared/types/agent-ipc';
+import type { Asset, Clip, TimelineState, Suggestion, Chapter, ChatConversation, ChatConversationMessage } from '../shared/types/database';
+import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../shared/types/agent-ipc';
 
 // ============================================================================
 // Type Definitions
@@ -28,6 +28,8 @@ type WaveformProgressCallback = (data: {
   progress: { tier: number; percent: number; status: string; trackIndex?: number };
 }) => void;
 type TranscriptionProgressCallback = (data: { chapterId: number; progress: { percent: number; status: string } }) => void;
+type AgentStreamCallback = (data: AgentOutputMessage) => void;
+type AgentErrorCallback = (data: { error: string }) => void;
 
 // ============================================================================
 // Result Types
@@ -58,7 +60,39 @@ export interface DeleteProjectResult {
 
 export interface AgentChatResult {
   success: boolean;
-  data?: AgentOutputMessage;
+  data?: AgentChatData;
+  error?: string;
+}
+
+export interface AgentConversationListResult {
+  success: boolean;
+  data?: ChatConversation[];
+  error?: string;
+}
+
+export interface AgentConversationCreateResult {
+  success: boolean;
+  data?: ChatConversation;
+  error?: string;
+}
+
+export interface AgentConversationMessagesResult {
+  success: boolean;
+  data?: ChatConversationMessage[];
+  error?: string;
+}
+
+export interface AgentApplyActionsResult {
+  success: boolean;
+  data?: {
+    results: Array<{
+      index: number;
+      action: TimelineAction;
+      success: boolean;
+      clip?: Clip;
+      error?: string;
+    }>;
+  };
   error?: string;
 }
 
@@ -218,6 +252,7 @@ export interface TranscriptionResult {
     language: string;
     duration: number;
     segmentCount: number;
+    skipped?: boolean;
   };
   error?: string;
 }
@@ -234,10 +269,48 @@ export interface ElectronAPI {
     delete: (id: number) => Promise<DeleteProjectResult>;
   };
   agent: {
-    chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<AgentChatResult>;
+    chat: (params: {
+      projectId: string;
+      conversationId: number;
+      message: string;
+      provider?: string;
+      selectedClipIds?: number[];
+      playheadTime?: number;
+      agentConfig?: {
+        defaultProvider?: string;
+        providers?: Record<string, string>;
+      };
+    }) => Promise<AgentChatResult>;
+    createConversation: (params: {
+      projectId: string;
+      chapterId: string;
+      provider?: string;
+      title?: string;
+    }) => Promise<AgentConversationCreateResult>;
+    listConversations: (params: {
+      projectId: string;
+      chapterId: string;
+    }) => Promise<AgentConversationListResult>;
+    getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;
+    deleteConversation: (conversationId: number) => Promise<{ success: boolean; error?: string }>;
+    applyActions: (params: { projectId: string; chapterId?: string; actions: TimelineAction[] }) => Promise<AgentApplyActionsResult>;
+    onStream: (callback: AgentStreamCallback) => () => void;
+    onError: (callback: AgentErrorCallback) => () => void;
     getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
+    previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
+    cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
     applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
-    rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+    rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
+    applyAllSuggestions: (chapterId: string) => Promise<{
+      success: boolean;
+      data?: {
+        appliedCount: number;
+        total: number;
+        clips: Clip[];
+        results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }>;
+      };
+      error?: string;
+    }>;
   };
   settings: {
     encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
@@ -277,6 +350,20 @@ export interface ElectronAPI {
     onProgress: (callback: WaveformProgressCallback) => () => void;
   };
   transcription: {
+    getStatus: (options?: { autoSetup?: boolean }) => Promise<{
+      success: boolean;
+      data?: {
+        available: boolean;
+        pythonPath?: string;
+        pythonSource?: 'managed' | 'bundled' | 'system';
+        pythonVersion?: string;
+        hasPip: boolean;
+        hasFasterWhisper: boolean;
+        managedEnvPath?: string;
+        error?: string;
+      };
+      error?: string;
+    }>;
     transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
     onProgress: (callback: TranscriptionProgressCallback) => () => void;
   };
@@ -305,12 +392,38 @@ const electronAPI: ElectronAPI = {
   agent: {
     chat: (params) =>
       ipcRenderer.invoke('agent:chat', params),
+    createConversation: (params) =>
+      ipcRenderer.invoke('agent:conversation-create', params),
+    listConversations: (params) =>
+      ipcRenderer.invoke('agent:conversation-list', params),
+    getConversationMessages: (conversationId) =>
+      ipcRenderer.invoke('agent:conversation-messages', { conversationId }),
+    deleteConversation: (conversationId) =>
+      ipcRenderer.invoke('agent:conversation-delete', { conversationId }),
+    applyActions: (params) =>
+      ipcRenderer.invoke('agent:apply-actions', params),
+    onStream: (callback) => {
+      const handler = (_: any, data: AgentOutputMessage) => callback(data);
+      ipcRenderer.on('agent:stream', handler);
+      return () => ipcRenderer.removeListener('agent:stream', handler);
+    },
+    onError: (callback) => {
+      const handler = (_: any, data: { error: string }) => callback(data);
+      ipcRenderer.on('agent:error', handler);
+      return () => ipcRenderer.removeListener('agent:error', handler);
+    },
     getSuggestions: (chapterId) =>
       ipcRenderer.invoke('suggestion:get-by-chapter', { chapterId }),
+    previewSuggestion: (suggestionId) =>
+      ipcRenderer.invoke('suggestion:preview', { id: suggestionId }),
+    cancelSuggestionPreview: (suggestionId) =>
+      ipcRenderer.invoke('suggestion:cancel-preview', { id: suggestionId }),
     applySuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
+    applyAllSuggestions: (chapterId) =>
+      ipcRenderer.invoke('suggestion:apply-all', { chapterId }),
   },
   settings: {
     encrypt: async (text) => {
@@ -391,6 +504,7 @@ const electronAPI: ElectronAPI = {
     },
   },
   transcription: {
+    getStatus: (options) => ipcRenderer.invoke('transcription:status', { autoSetup: options?.autoSetup === true }),
     transcribe: (chapterId, options) =>
       ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
     onProgress: (callback) => {

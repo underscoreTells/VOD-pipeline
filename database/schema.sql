@@ -49,6 +49,24 @@ CREATE TABLE IF NOT EXISTS transcripts (
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
 );
 
+-- Detailed transcript windows (high precision, generated on demand)
+CREATE TABLE IF NOT EXISTS detailed_transcripts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  asset_id INTEGER NOT NULL,
+  window_start REAL NOT NULL,
+  window_end REAL NOT NULL,
+  model TEXT NOT NULL,
+  compute_type TEXT NOT NULL,
+  word_timestamps BOOLEAN DEFAULT 0,
+  text TEXT NOT NULL,
+  segments_json TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+  UNIQUE(chapter_id, asset_id, window_start, window_end, model, compute_type, word_timestamps)
+);
+
 -- Beats table (AI-generated narrative beats)
 -- display_order: AI's suggested ordering within the chapter
 -- sort_order: User-defined ordering after manual rearrangement
@@ -78,6 +96,29 @@ CREATE TABLE IF NOT EXISTS conversations (
   message TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- Persistent chapter-locked conversations (multiple per chapter)
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  chapter_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  provider TEXT,
+  thread_id TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
 );
 
 -- Timeline clips (represents cuts/beats on timeline)
@@ -137,6 +178,29 @@ CREATE TABLE IF NOT EXISTS proxies (
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
+-- Chapter-trimmed proxy videos for visual analysis
+CREATE TABLE IF NOT EXISTS chapter_proxies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chapter_id INTEGER NOT NULL,
+  asset_id INTEGER NOT NULL,
+  file_path TEXT NOT NULL,
+  preset TEXT NOT NULL CHECK(preset IN ('ai_analysis_chapter')),
+  start_time REAL NOT NULL,
+  end_time REAL NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  framerate INTEGER,
+  file_size INTEGER,
+  duration REAL,
+  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'generating', 'ready', 'error')),
+  error_message TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+  UNIQUE(chapter_id, asset_id, preset)
+);
+
 -- AI cut suggestions (pending user approval)
 CREATE TABLE IF NOT EXISTS suggestions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,12 +210,17 @@ CREATE TABLE IF NOT EXISTS suggestions (
   description TEXT,
   reasoning TEXT,  -- Why AI suggested this
   provider TEXT,   -- 'gemini' or 'kimi'
+  action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip')),
+  target_clip_id INTEGER,
+  action_payload_json TEXT,
+  preview_snapshot_json TEXT,
   status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected')),
   display_order INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   applied_at DATETIME,
   clip_id INTEGER, -- Linked clip on timeline when applied
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (target_clip_id) REFERENCES clips(id) ON DELETE SET NULL,
   FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
 
@@ -164,15 +233,23 @@ CREATE INDEX IF NOT EXISTS idx_chapter_assets_chapter_id ON chapter_assets(chapt
 CREATE INDEX IF NOT EXISTS idx_chapter_assets_asset_id ON chapter_assets(asset_id);
 CREATE INDEX IF NOT EXISTS idx_transcripts_chapter_id ON transcripts(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_transcripts_start_time ON transcripts(start_time);
+CREATE INDEX IF NOT EXISTS idx_detailed_transcripts_chapter_id ON detailed_transcripts(chapter_id);
+CREATE INDEX IF NOT EXISTS idx_detailed_transcripts_window ON detailed_transcripts(chapter_id, window_start, window_end);
 CREATE INDEX IF NOT EXISTS idx_beats_chapter_id ON beats(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_project_chapter ON chat_conversations(project_id, chapter_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at ON chat_conversations(updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_clips_project_id ON clips(project_id);
 CREATE INDEX IF NOT EXISTS idx_clips_asset_id ON clips(asset_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track_index ON clips(track_index);
 CREATE INDEX IF NOT EXISTS idx_waveform_cache_asset_id ON waveform_cache(asset_id);
 CREATE INDEX IF NOT EXISTS idx_proxies_asset_id ON proxies(asset_id);
 CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
+CREATE INDEX IF NOT EXISTS idx_chapter_proxies_chapter_asset ON chapter_proxies(chapter_id, asset_id);
+CREATE INDEX IF NOT EXISTS idx_chapter_proxies_status ON chapter_proxies(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_chapter_id ON suggestions(chapter_id);
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_provider ON suggestions(provider);

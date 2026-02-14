@@ -49,7 +49,7 @@ export async function loadConfig(): Promise<AgentConfig> {
     console.warn("[Config] Failed to load IPC config, falling back to .env:", error);
   }
 
-  dotenv.config();
+  dotenv.config({ quiet: true });
 
   const defaultProvider = (process.env.DEFAULT_PROVIDER || "gemini") as LLMProviderType;
 

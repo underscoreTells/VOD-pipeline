@@ -1,4 +1,5 @@
 import { undo, redo } from './undo-redo.svelte';
+import type { Clip } from '$shared/types/database';
 import {
   timelineState,
   togglePlayback,
@@ -10,6 +11,7 @@ import {
   setPlayhead,
 } from './timeline.svelte';
 import { executeDeleteClip } from './project-detail.svelte';
+import { getSelectedChapter, getAssetsForChapter } from './chapters.svelte';
 import {
   clipBuilderState,
   setInPoint as setClipInPoint,
@@ -25,8 +27,8 @@ const SHORTCUTS: Record<string, ShortcutHandler> = {
   'Space': togglePlayback,
   
   // Navigation
-  'ArrowLeft': () => nudgePlayhead(-1),
-  'ArrowRight': () => nudgePlayhead(1),
+  'ArrowLeft': () => handleArrowNavigation('previous', -1),
+  'ArrowRight': () => handleArrowNavigation('next', 1),
   'Shift+ArrowLeft': () => nudgePlayhead(-10),
   'Shift+ArrowRight': () => nudgePlayhead(10),
   
@@ -84,6 +86,67 @@ function nudgePlayhead(frames: number) {
   const frameDuration = 1 / fps;
   const newTime = timelineState.playheadTime + (frames * frameDuration);
   setPlayhead(Math.max(0, newTime));
+}
+
+function getChapterScopedClips(): Clip[] {
+  const selectedChapter = getSelectedChapter();
+  if (!selectedChapter) {
+    return [...timelineState.clips].sort((a, b) =>
+      Math.abs(a.start_time - b.start_time) > 0.0001 ? a.start_time - b.start_time : a.id - b.id
+    );
+  }
+
+  const chapterAssetIds = new Set(getAssetsForChapter(selectedChapter.id));
+  const chapterStart = selectedChapter.start_time;
+  const chapterEnd = selectedChapter.end_time;
+
+  return timelineState.clips
+    .filter((clip) => {
+      if (chapterAssetIds.size > 0 && !chapterAssetIds.has(clip.asset_id)) return false;
+      const duration = clip.out_point - clip.in_point;
+      if (!Number.isFinite(duration) || duration <= 0) return false;
+      const clipStart = clip.start_time;
+      const clipEnd = clip.start_time + duration;
+      return clipEnd > chapterStart && clipStart < chapterEnd;
+    })
+    .sort((a, b) =>
+      Math.abs(a.start_time - b.start_time) > 0.0001 ? a.start_time - b.start_time : a.id - b.id
+    );
+}
+
+function jumpToAdjacentClip(direction: 'previous' | 'next'): boolean {
+  const clips = getChapterScopedClips();
+  if (clips.length === 0) return false;
+
+  const playhead = timelineState.playheadTime;
+  const epsilon = 0.01;
+
+  if (direction === 'next') {
+    const nextClip = clips.find((clip) => clip.start_time > playhead + epsilon);
+    if (!nextClip) return false;
+    setPlayhead(nextClip.start_time);
+    return true;
+  }
+
+  for (let i = clips.length - 1; i >= 0; i -= 1) {
+    if (clips[i].start_time < playhead - epsilon) {
+      setPlayhead(clips[i].start_time);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function handleArrowNavigation(direction: 'previous' | 'next', fallbackFrames: number) {
+  if (timelineState.excludeCutContent) {
+    const jumped = jumpToAdjacentClip(direction);
+    if (jumped) {
+      return;
+    }
+  }
+
+  nudgePlayhead(fallbackFrames);
 }
 
 // Handle delete key

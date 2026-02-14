@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 
 export class JSONStdinWriter {
   private writable: NodeJS.WritableStream;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(writable: NodeJS.WritableStream) {
     this.writable = writable;
@@ -15,6 +16,123 @@ export class JSONStdinWriter {
       console.error("[JSONStdinWriter] Write error:", error);
       return false;
     }
+  }
+
+  writeAsync(message: any): Promise<void> {
+    const queuedWrite = this.writeQueue.then(() => this.writeWithBackpressure(message));
+
+    // Keep queue alive even if one write fails.
+    this.writeQueue = queuedWrite.catch(() => undefined);
+
+    return queuedWrite;
+  }
+
+  private writeWithBackpressure(message: any): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let json: string;
+      try {
+        json = JSON.stringify(message) + "\n";
+      } catch (error) {
+        reject(
+          error instanceof Error
+            ? error
+            : new Error(String(error))
+        );
+        return;
+      }
+
+      const writable = this.writable as NodeJS.WritableStream & {
+        destroyed?: boolean;
+        writable?: boolean;
+        writableEnded?: boolean;
+        writableFinished?: boolean;
+      };
+
+      if (
+        writable.destroyed ||
+        writable.writable === false ||
+        writable.writableEnded ||
+        writable.writableFinished
+      ) {
+        reject(new Error("Writable stream is closed"));
+        return;
+      }
+
+      let waitingForDrain = false;
+      let writeCallbackCompleted = false;
+      let settled = false;
+
+      const cleanup = () => {
+        this.writable.removeListener("error", onError);
+        this.writable.removeListener("close", onClose);
+        this.writable.removeListener("finish", onFinish);
+        this.writable.removeListener("drain", onDrain);
+      };
+
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(
+          error instanceof Error
+            ? error
+            : new Error(String(error))
+        );
+      };
+
+      const maybeResolve = () => {
+        if (settled || waitingForDrain || !writeCallbackCompleted) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const onError = (error: Error) => {
+        fail(error);
+      };
+
+      const onClose = () => {
+        fail(new Error("Writable stream closed"));
+      };
+
+      const onFinish = () => {
+        fail(new Error("Writable stream finished"));
+      };
+
+      const onDrain = () => {
+        waitingForDrain = false;
+        maybeResolve();
+      };
+
+      this.writable.once("error", onError);
+      this.writable.once("close", onClose);
+      this.writable.once("finish", onFinish);
+
+      try {
+        const canWriteMore = this.writable.write(
+          json,
+          (error?: Error | null) => {
+            if (error) {
+              fail(error);
+              return;
+            }
+
+            writeCallbackCompleted = true;
+            maybeResolve();
+          }
+        );
+
+        if (!canWriteMore) {
+          waitingForDrain = true;
+          this.writable.once("drain", onDrain);
+        }
+      } catch (error) {
+        fail(error);
+      }
+    });
   }
 
   writeSync(message: any): boolean {

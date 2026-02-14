@@ -20,14 +20,29 @@ export interface LLMConfig {
 
 const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   openai: "gpt-4o",
-  gemini: "gemini-2.0-flash-exp",
+  gemini: "gemini-3-flash-preview",
   anthropic: "claude-sonnet-4-20250514",
   openrouter: "anthropic/claude-sonnet-4-20250514",
   kimi: "kimi-k2.5"
 };
 
+const GEMINI_MODEL_ALIASES: Record<string, string> = {
+  "gemini-3.0-flash": "gemini-3-flash-preview",
+  "gemini-3-flash": "gemini-3-flash-preview",
+};
+
+function resolveModel(config: LLMConfig): string {
+  const configuredModel = config.model ?? DEFAULT_MODELS[config.provider];
+  if (config.provider !== "gemini") {
+    return configuredModel;
+  }
+
+  const alias = GEMINI_MODEL_ALIASES[configuredModel.toLowerCase()];
+  return alias ?? configuredModel;
+}
+
 export function createLLM(config: LLMConfig): BaseChatModel {
-  const model = config.model ?? DEFAULT_MODELS[config.provider];
+  const model = resolveModel(config);
 
   switch (config.provider) {
     case "openai":

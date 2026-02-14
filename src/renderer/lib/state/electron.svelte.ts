@@ -1,4 +1,5 @@
-import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
+import type { Asset, ChatConversation, ChatConversationMessage, Clip, Suggestion, TimelineState } from '../../../shared/types/database';
+import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../../../shared/types/agent-ipc';
 
 // ============================================================================
 // Preload Verification
@@ -52,6 +53,143 @@ export async function getProject(id: number): Promise<GetProjectResult> {
 
 export async function deleteProject(id: number): Promise<DeleteProjectResult> {
   return await window.electronAPI.projects.delete(id);
+}
+
+// ============================================================================
+// Agent Types & Functions
+// ============================================================================
+
+export interface AgentChatParams {
+  projectId: string;
+  conversationId: number;
+  message: string;
+  provider?: string;
+  selectedClipIds?: number[];
+  playheadTime?: number;
+  agentConfig?: {
+    defaultProvider?: string;
+    providers?: Record<string, string>;
+  };
+}
+
+export interface AgentChatResult {
+  success: boolean;
+  data?: AgentChatData;
+  error?: string;
+}
+
+export interface AgentConversationListResult {
+  success: boolean;
+  data?: ChatConversation[];
+  error?: string;
+}
+
+export interface AgentConversationCreateResult {
+  success: boolean;
+  data?: ChatConversation;
+  error?: string;
+}
+
+export interface AgentConversationMessagesResult {
+  success: boolean;
+  data?: ChatConversationMessage[];
+  error?: string;
+}
+
+export interface AgentApplyActionsResult {
+  success: boolean;
+  data?: {
+    results: Array<{
+      index: number;
+      action: TimelineAction;
+      success: boolean;
+      clip?: Clip;
+      error?: string;
+    }>;
+  };
+  error?: string;
+}
+
+export async function agentChat(params: AgentChatParams): Promise<AgentChatResult> {
+  return await window.electronAPI.agent.chat(params);
+}
+
+export async function createAgentConversation(params: {
+  projectId: string;
+  chapterId: string;
+  provider?: string;
+  title?: string;
+}): Promise<AgentConversationCreateResult> {
+  return await window.electronAPI.agent.createConversation(params);
+}
+
+export async function listAgentConversations(params: {
+  projectId: string;
+  chapterId: string;
+}): Promise<AgentConversationListResult> {
+  return await window.electronAPI.agent.listConversations(params);
+}
+
+export async function getAgentConversationMessages(conversationId: number): Promise<AgentConversationMessagesResult> {
+  return await window.electronAPI.agent.getConversationMessages(conversationId);
+}
+
+export async function deleteAgentConversation(conversationId: number): Promise<{ success: boolean; error?: string }> {
+  return await window.electronAPI.agent.deleteConversation(conversationId);
+}
+
+export async function applyAgentActions(params: {
+  projectId: string;
+  chapterId?: string;
+  actions: TimelineAction[];
+}): Promise<AgentApplyActionsResult> {
+  return await window.electronAPI.agent.applyActions(params);
+}
+
+const agentStreamSubscribers = new Set<(message: AgentOutputMessage) => void>();
+let agentStreamUnsubscribe: (() => void) | null = null;
+
+export function onAgentStream(callback: (message: AgentOutputMessage) => void): () => void {
+  agentStreamSubscribers.add(callback);
+
+  if (!agentStreamUnsubscribe) {
+    agentStreamUnsubscribe = window.electronAPI.agent.onStream((message: AgentOutputMessage) => {
+      for (const subscriber of agentStreamSubscribers) {
+        subscriber(message);
+      }
+    });
+  }
+
+  return () => {
+    agentStreamSubscribers.delete(callback);
+    if (agentStreamSubscribers.size === 0 && agentStreamUnsubscribe) {
+      agentStreamUnsubscribe();
+      agentStreamUnsubscribe = null;
+    }
+  };
+}
+
+const agentErrorSubscribers = new Set<(payload: { error: string }) => void>();
+let agentErrorUnsubscribe: (() => void) | null = null;
+
+export function onAgentError(callback: (payload: { error: string }) => void): () => void {
+  agentErrorSubscribers.add(callback);
+
+  if (!agentErrorUnsubscribe) {
+    agentErrorUnsubscribe = window.electronAPI.agent.onError((payload: { error: string }) => {
+      for (const subscriber of agentErrorSubscribers) {
+        subscriber(payload);
+      }
+    });
+  }
+
+  return () => {
+    agentErrorSubscribers.delete(callback);
+    if (agentErrorSubscribers.size === 0 && agentErrorUnsubscribe) {
+      agentErrorUnsubscribe();
+      agentErrorUnsubscribe = null;
+    }
+  };
 }
 
 // ============================================================================
@@ -285,8 +423,31 @@ export interface TranscriptionResult {
     language: string;
     duration: number;
     segmentCount: number;
+    skipped?: boolean;
   };
   error?: string;
+}
+
+export interface TranscriptionBackendStatus {
+  available: boolean;
+  pythonPath?: string;
+  pythonSource?: 'managed' | 'bundled' | 'system';
+  pythonVersion?: string;
+  hasPip: boolean;
+  hasFasterWhisper: boolean;
+  managedEnvPath?: string;
+  error?: string;
+}
+
+export async function getTranscriptionStatus(autoSetup = false): Promise<{
+  success: boolean;
+  data?: TranscriptionBackendStatus;
+  error?: string;
+}> {
+  return await (window.electronAPI as any).transcription?.getStatus({ autoSetup }) || {
+    success: false,
+    error: 'Transcription status not available',
+  };
 }
 
 export async function transcribeChapter(
@@ -339,10 +500,48 @@ declare global {
         delete: (id: number) => Promise<DeleteProjectResult>;
       };
       agent: {
-        chat: (params: { projectId: string; message: string; provider?: string; chapterId?: string; threadId?: string }) => Promise<any>;
-        getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: any[]; error?: string }>;
-        applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: { id: number } }; error?: string }>;
-        rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; error?: string }>;
+        chat: (params: {
+          projectId: string;
+          conversationId: number;
+          message: string;
+          provider?: string;
+          selectedClipIds?: number[];
+          playheadTime?: number;
+          agentConfig?: {
+            defaultProvider?: string;
+            providers?: Record<string, string>;
+          };
+        }) => Promise<AgentChatResult>;
+        createConversation: (params: {
+          projectId: string;
+          chapterId: string;
+          provider?: string;
+          title?: string;
+        }) => Promise<AgentConversationCreateResult>;
+        listConversations: (params: {
+          projectId: string;
+          chapterId: string;
+        }) => Promise<AgentConversationListResult>;
+        getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;
+        deleteConversation: (conversationId: number) => Promise<{ success: boolean; error?: string }>;
+        applyActions: (params: { projectId: string; chapterId?: string; actions: TimelineAction[] }) => Promise<AgentApplyActionsResult>;
+        onStream: (callback: (message: AgentOutputMessage) => void) => () => void;
+        onError: (callback: (payload: { error: string }) => void) => () => void;
+        getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
+        previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
+        cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
+        applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
+        rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
+        applyAllSuggestions: (chapterId: string) => Promise<{
+          success: boolean;
+          data?: {
+            appliedCount: number;
+            total: number;
+            clips: Clip[];
+            results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }>;
+          };
+          error?: string;
+        }>;
       };
       settings: {
         encrypt: (text: string) => Promise<{ success: boolean; data?: string; error?: string }>;
@@ -375,6 +574,11 @@ declare global {
         get: (assetId: number, trackIndex: number, tierLevel: number) => Promise<WaveformResult>;
         generate: (assetId: number, trackIndex: number, options?: WaveformGenerateOptions) => Promise<WaveformGenerationResult>;
         onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
+      };
+      transcription: {
+        getStatus: (options?: { autoSetup?: boolean }) => Promise<{ success: boolean; data?: TranscriptionBackendStatus; error?: string }>;
+        transcribe: (chapterId: number, options?: Record<string, unknown>) => Promise<TranscriptionResult>;
+        onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
       };
       exports: {
         generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;

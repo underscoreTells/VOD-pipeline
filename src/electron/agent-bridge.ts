@@ -29,6 +29,42 @@ export class AgentBridge extends EventEmitter {
   private restartAttempts: number = 0;
   private maxRestartAttempts: number = 3;
 
+  private emitBridgeError(error: Error): void {
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", error);
+      return;
+    }
+
+    console.error("[AgentBridge] Unhandled bridge error:", error);
+  }
+
+  async ensureStarted(): Promise<void> {
+    if (this.process) {
+      if (this.readyPromise) {
+        await this.readyPromise;
+      }
+      return;
+    }
+
+    await this.start();
+  }
+
+  private rejectPendingRequests(reason: string): void {
+    for (const [requestId, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+      this.pendingRequests.delete(requestId);
+    }
+  }
+
+  private clearProcessReferences(): void {
+    this.stdinWriter = null;
+    this.stdoutReader?.removeAllListeners();
+    this.stdoutReader = null;
+    this.process = null;
+    this.readyPromise = null;
+  }
+
   async start(): Promise<void> {
     if (this.process) {
       throw new Error("Agent process already started");
@@ -38,8 +74,14 @@ export class AgentBridge extends EventEmitter {
 
     const agentPath = this.getAgentPath();
 
+    const checkpointerDbPath = path.join(app.getPath("userData"), "agent-checkpoints.db");
+
     this.process = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        AGENT_CHECKPOINTER_DB_PATH: checkpointerDbPath,
+      },
     });
 
     this.stdinWriter = new JSONStdinWriter(this.process.stdin!);
@@ -52,6 +94,13 @@ export class AgentBridge extends EventEmitter {
     this.process.on("exit", (code, signal) => {
       console.log(`[AgentBridge] Agent process exited: ${code} (${signal})`);
 
+      this.clearProcessReferences();
+      this.rejectPendingRequests(
+        `Agent process exited: ${code ?? "unknown"} (${signal ?? "unknown"})`
+      );
+
+      this.emit("exit", code, signal);
+
       if (code !== 0 && this.restartAttempts < this.maxRestartAttempts) {
         this.restartAttempts++;
         const backoffMs = Math.pow(2, this.restartAttempts) * 1000;
@@ -59,31 +108,32 @@ export class AgentBridge extends EventEmitter {
           `[AgentBridge] Restarting in ${backoffMs}ms (attempt ${this.restartAttempts}/${this.maxRestartAttempts})`
         );
         setTimeout(() => {
-          this.process = null;
           this.start().catch((error) => {
             console.error("[AgentBridge] Restart failed:", error);
-            this.emit("error", error);
+            this.emitBridgeError(error);
           });
         }, backoffMs);
         return;
       }
-
-      this.emit("exit", code, signal);
     });
 
     this.process.on("error", (error: Error) => {
       console.error("[AgentBridge] Agent process error:", error);
-      this.emit("error", error);
+      this.clearProcessReferences();
+      this.rejectPendingRequests(`Agent process error: ${error.message}`);
+      this.emitBridgeError(error);
     });
 
     this.stdoutReader.on("message", this.handleMessage.bind(this));
     this.stdoutReader.on("error", (error: Error) => {
       console.error("[AgentBridge] stdout reader error:", error);
-      this.emit("error", error);
+      this.emitBridgeError(error);
     });
 
     this.readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        this.stdoutReader?.removeListener("message", onReady);
+        this.stdoutReader?.removeListener("close", onClose);
         reject(new Error("Agent startup timeout"));
       }, AGENT_STARTUP_TIMEOUT);
 
@@ -91,12 +141,20 @@ export class AgentBridge extends EventEmitter {
         if (message.type === "ready") {
           clearTimeout(timeout);
           this.stdoutReader?.removeListener("message", onReady);
+          this.stdoutReader?.removeListener("close", onClose);
           console.log("[AgentBridge] Agent ready");
           resolve();
         }
       };
 
+      const onClose = () => {
+        clearTimeout(timeout);
+        this.stdoutReader?.removeListener("message", onReady);
+        reject(new Error("Agent process closed before ready"));
+      };
+
       this.stdoutReader?.on("message", onReady);
+      this.stdoutReader?.once("close", onClose);
     });
 
     await this.readyPromise;
@@ -144,7 +202,8 @@ export class AgentBridge extends EventEmitter {
     message: AgentInputMessageWithoutId,
     timeoutMs: number = AGENT_REQUEST_TIMEOUT
   ): Promise<AgentOutputMessage> {
-    if (!this.stdinWriter) {
+    const stdinWriter = this.stdinWriter;
+    if (!stdinWriter) {
       throw new Error("Agent process not started");
     }
 
@@ -168,11 +227,15 @@ export class AgentBridge extends EventEmitter {
         timeout,
       });
 
-      if (!this.stdinWriter?.write(fullMessage)) {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(requestId);
-        reject(new Error("Failed to write to agent stdin"));
-      }
+      stdinWriter
+        .writeAsync(fullMessage)
+        .catch((error) => {
+          clearTimeout(timeout);
+          this.pendingRequests.delete(requestId);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          reject(new Error(`Failed to write to agent stdin: ${message}`));
+        });
     });
   }
 
@@ -192,16 +255,8 @@ export class AgentBridge extends EventEmitter {
     }, 5000);
 
     this.stdinWriter?.end();
-    this.stdoutReader?.removeAllListeners();
-    this.process = null;
-    this.stdinWriter = null;
-    this.stdoutReader = null;
-
-    for (const [requestId, pending] of this.pendingRequests) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Agent shut down"));
-      this.pendingRequests.delete(requestId);
-    }
+    this.clearProcessReferences();
+    this.rejectPendingRequests("Agent shut down");
 
     console.log("[AgentBridge] Agent stopped");
   }
