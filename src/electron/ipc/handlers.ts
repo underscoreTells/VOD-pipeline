@@ -2160,7 +2160,10 @@ export function registerIpcHandlers() {
         });
       }
 
-      const conversationHistory = existingMessages.map((item) => ({ role: item.role, content: item.content }));
+      const latestUserTurn = [{ role: 'user', content: message }];
+      const conversationHistory = conversation.thread_id?.trim()
+        ? latestUserTurn
+        : existingMessages.map((item) => ({ role: item.role, content: item.content }));
       const guardedInitialPayload = applyNearLimitTokenGuard(
         conversationHistory,
         initialContext,
@@ -2223,11 +2226,7 @@ export function registerIpcHandlers() {
           const detailedContext = await buildAgentChatContext(projectId, chapter.id, {
             detailedTranscripts,
           });
-          const guardedDetailedPayload = applyNearLimitTokenGuard(
-            conversationHistory,
-            detailedContext,
-            effectiveProvider
-          );
+          const guardedDetailedPayload = applyNearLimitTokenGuard([], detailedContext, effectiveProvider);
 
           if (guardedDetailedPayload.compressed) {
             console.log(
