@@ -26,6 +26,11 @@ export interface Settings {
   // Chapter auto-naming preferences
   autoChapterNamingEnabled: boolean;
   autoChapterNamingModel: string;
+
+  // Clip auto-naming preferences
+  autoClipNamingEnabled: boolean;
+  autoClipNamingModel: string;
+
   autoTranscribeOnImport: boolean;
 }
 
@@ -60,6 +65,8 @@ export const settingsState = $state<{
     proxyQuality: 'balanced', // Balanced quality/speed
     autoChapterNamingEnabled: true,
     autoChapterNamingModel: "gpt-4o-mini",
+    autoClipNamingEnabled: true,
+    autoClipNamingModel: "gpt-5-nano",
     autoTranscribeOnImport: true,
   },
   providerStatuses: new Map(),
@@ -104,6 +111,12 @@ export async function loadSettings(): Promise<void> {
     }
     if (parsed.autoChapterNamingModel) {
       settingsState.settings.autoChapterNamingModel = parsed.autoChapterNamingModel;
+    }
+    if (parsed.autoClipNamingEnabled !== undefined) {
+      settingsState.settings.autoClipNamingEnabled = parsed.autoClipNamingEnabled;
+    }
+    if (parsed.autoClipNamingModel) {
+      settingsState.settings.autoClipNamingModel = parsed.autoClipNamingModel;
     }
     if (parsed.autoTranscribeOnImport !== undefined) {
       settingsState.settings.autoTranscribeOnImport = parsed.autoTranscribeOnImport;
@@ -171,6 +184,8 @@ export async function saveSettings(): Promise<void> {
       proxyQuality: settingsState.settings.proxyQuality,
       autoChapterNamingEnabled: settingsState.settings.autoChapterNamingEnabled,
       autoChapterNamingModel: settingsState.settings.autoChapterNamingModel,
+      autoClipNamingEnabled: settingsState.settings.autoClipNamingEnabled,
+      autoClipNamingModel: settingsState.settings.autoClipNamingModel,
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
       _encryptedKeys: response.data,
     };
@@ -395,6 +410,8 @@ export async function resetSettings(): Promise<void> {
     proxyQuality: 'balanced',
     autoChapterNamingEnabled: true,
     autoChapterNamingModel: "gpt-4o-mini",
+    autoClipNamingEnabled: true,
+    autoClipNamingModel: "gpt-5-nano",
     autoTranscribeOnImport: true,
   };
   settingsState.providerStatuses.clear();

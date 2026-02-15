@@ -21,7 +21,8 @@
     }
   },
   "files": [
-    "src/renderer/lib/state/layout.svelte.ts"
+    "src/renderer/lib/state/layout.svelte.ts",
+    "src/renderer/lib/utils/timeline-edit.ts"
   ],
   "include": [
     "src/renderer/**/*.d.ts",

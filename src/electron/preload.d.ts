@@ -133,6 +133,14 @@ export interface BatchUpdateClipsResult {
     error?: string;
 }
 
+export interface SuggestClipNameResult {
+    success: boolean;
+    data?: {
+        name: string | null;
+    };
+    error?: string;
+}
+
 export interface TimelineStateResult {
     success: boolean;
     data?: TimelineState | null;
@@ -262,6 +270,18 @@ export interface GetChapterAssetsResult {
     error?: string;
 }
 
+export interface GetChapterReverseProxyResult {
+  success: boolean;
+  data?: {
+    status: 'missing' | 'generating' | 'ready' | 'error';
+    url?: string;
+    quality?: 'quick' | 'full';
+    isFinal?: boolean;
+    error?: string;
+  };
+  error?: string;
+}
+
 export interface GetSuggestionsResult {
     success: boolean;
     data?: Suggestion[];
@@ -350,6 +370,7 @@ export interface ElectronAPI {
         delete: (id: number) => Promise<DeleteChapterResult>;
         addAsset: (chapterId: number, assetId: number) => Promise<AddAssetToChapterResult>;
         getAssets: (chapterId: number) => Promise<GetChapterAssetsResult>;
+        getReverseProxy: (chapterId: number, assetId: number, options?: { ensureReady?: boolean }) => Promise<GetChapterReverseProxyResult>;
     };
     clips: {
         getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -357,6 +378,14 @@ export interface ElectronAPI {
         update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
         delete: (id: number) => Promise<DeleteClipResult>;
         batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
+        suggestName: (input: {
+            chapterId: number;
+            inPoint: number;
+            outPoint: number;
+            model: string;
+            apiKey: string;
+            chapterTitle?: string;
+        }) => Promise<SuggestClipNameResult>;
     };
     timeline: {
         loadState: (projectId: number) => Promise<TimelineStateResult>;

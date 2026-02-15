@@ -30,7 +30,10 @@ let mainWindow: BrowserWindow | null = null;
 let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
 
 function createWindow() {
-  const preloadPath = path.join(__dirname, 'preload.cjs');
+  const isDev = process.env.NODE_ENV !== 'production';
+  const preloadPath = isDev
+    ? path.join(process.cwd(), 'src', 'electron', 'preload.cjs')
+    : path.join(__dirname, 'preload.cjs');
   console.log('[Main] Preload path:', preloadPath);
   console.log('[Main] Preload exists:', fs.existsSync(preloadPath));
 
@@ -54,8 +57,6 @@ function createWindow() {
   mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
     console.error(`[Preload Error] Failed to load ${preloadPath}:`, error);
   });
-
-  const isDev = process.env.NODE_ENV !== 'production';
 
   // Debug: Log renderer console messages (dev only)
   if (isDev) {

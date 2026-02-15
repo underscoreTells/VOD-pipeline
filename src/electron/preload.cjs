@@ -69,6 +69,12 @@ const electronAPI = {
     delete: (id) => ipcRenderer.invoke('chapter:delete', { id }),
     addAsset: (chapterId, assetId) => ipcRenderer.invoke('chapter:add-asset', { chapterId, assetId }),
     getAssets: (chapterId) => ipcRenderer.invoke('chapter:get-assets', { chapterId }),
+    getReverseProxy: (chapterId, assetId, options) =>
+      ipcRenderer.invoke('chapter:reverse-proxy-get', {
+        chapterId,
+        assetId,
+        ensureReady: options?.ensureReady === true,
+      }),
   },
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
@@ -88,6 +94,7 @@ const electronAPI = {
     update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
     batchUpdate: (updates) => ipcRenderer.invoke('clip:batch-update', { updates }),
+    suggestName: (input) => ipcRenderer.invoke('clip:suggest-name', input),
   },
   timeline: {
     loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),

@@ -9,6 +9,8 @@ interface TimelineStateStore {
   playheadTime: number;
   selectedClipIds: Set<number>;
   isPlaying: boolean;
+  shuttleDirection: -1 | 0 | 1;
+  shuttleSpeed: number;
   excludeCutContent: boolean;
   isLoading: boolean;
   error: string | null;
@@ -27,10 +29,23 @@ export const timelineState = $state<TimelineStateStore>({
   playheadTime: 0,       // current position
   selectedClipIds: new Set<number>(),
   isPlaying: false,
+  shuttleDirection: 0,
+  shuttleSpeed: 1,
   excludeCutContent: false,
   isLoading: false,
   error: null as string | null,
 });
+
+const SHUTTLE_SPEED_TIERS = [1, 2, 4, 8] as const;
+
+function nextShuttleSpeed(current: number): number {
+  for (const speed of SHUTTLE_SPEED_TIERS) {
+    if (current < speed) {
+      return speed;
+    }
+  }
+  return SHUTTLE_SPEED_TIERS[SHUTTLE_SPEED_TIERS.length - 1];
+}
 
 // Derived state
 export function getSelectedClips(): Clip[] {
@@ -61,6 +76,9 @@ export function loadTimeline(projectId: number, clips: Clip[], state?: TimelineS
   timelineState.projectId = projectId;
   timelineState.clips = clips;
   timelineState.excludeCutContent = false;
+  timelineState.isPlaying = false;
+  timelineState.shuttleDirection = 0;
+  timelineState.shuttleSpeed = 1;
 
   if (state) {
     timelineState.zoomLevel = Math.max(timelineState.minZoomLevel, Math.min(MAX_ALLOWED_ZOOM, state.zoom_level));
@@ -164,11 +182,58 @@ export function zoomToFit() {
 }
 
 export function togglePlayback() {
-  timelineState.isPlaying = !timelineState.isPlaying;
+  if (timelineState.isPlaying) {
+    stopShuttle();
+    return;
+  }
+
+  timelineState.isPlaying = true;
+  timelineState.shuttleDirection = 1;
+  timelineState.shuttleSpeed = 1;
 }
 
 export function setPlaying(playing: boolean) {
   timelineState.isPlaying = playing;
+  if (!playing) {
+    timelineState.shuttleDirection = 0;
+    timelineState.shuttleSpeed = 1;
+    return;
+  }
+
+  if (timelineState.shuttleDirection === 0) {
+    timelineState.shuttleDirection = 1;
+    timelineState.shuttleSpeed = 1;
+  }
+}
+
+export function stopShuttle() {
+  timelineState.isPlaying = false;
+  timelineState.shuttleDirection = 0;
+  timelineState.shuttleSpeed = 1;
+}
+
+export function shuttleForward() {
+  if (timelineState.shuttleDirection !== 1) {
+    timelineState.shuttleDirection = 1;
+    timelineState.shuttleSpeed = 1;
+    timelineState.isPlaying = true;
+    return;
+  }
+
+  timelineState.shuttleSpeed = nextShuttleSpeed(timelineState.shuttleSpeed);
+  timelineState.isPlaying = true;
+}
+
+export function shuttleReverse() {
+  if (timelineState.shuttleDirection !== -1) {
+    timelineState.shuttleDirection = -1;
+    timelineState.shuttleSpeed = 1;
+    timelineState.isPlaying = true;
+    return;
+  }
+
+  timelineState.shuttleSpeed = nextShuttleSpeed(timelineState.shuttleSpeed);
+  timelineState.isPlaying = true;
 }
 
 export function setExcludeCutContent(enabled: boolean) {
@@ -196,6 +261,8 @@ export function clearTimeline() {
   timelineState.playheadTime = 0;
   timelineState.selectedClipIds = new Set();
   timelineState.isPlaying = false;
+  timelineState.shuttleDirection = 0;
+  timelineState.shuttleSpeed = 1;
   timelineState.excludeCutContent = false;
   timelineState.isLoading = false;
   timelineState.error = null;

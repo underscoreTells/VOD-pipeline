@@ -152,6 +152,14 @@ export interface BatchUpdateClipsResult {
   error?: string;
 }
 
+export interface SuggestClipNameResult {
+  success: boolean;
+  data?: {
+    name: string | null;
+  };
+  error?: string;
+}
+
 export interface TimelineStateResult {
   success: boolean;
   data?: TimelineState | null;
@@ -245,6 +253,18 @@ export interface GetChapterAssetsResult {
   error?: string;
 }
 
+export interface GetChapterReverseProxyResult {
+  success: boolean;
+  data?: {
+    status: 'missing' | 'generating' | 'ready' | 'error';
+    url?: string;
+    quality?: 'quick' | 'full';
+    isFinal?: boolean;
+    error?: string;
+  };
+  error?: string;
+}
+
 export interface TranscriptionResult {
   success: boolean;
   data?: {
@@ -332,6 +352,11 @@ export interface ElectronAPI {
     delete: (id: number) => Promise<DeleteChapterResult>;
     addAsset: (chapterId: number, assetId: number) => Promise<AddAssetToChapterResult>;
     getAssets: (chapterId: number) => Promise<GetChapterAssetsResult>;
+    getReverseProxy: (
+      chapterId: number,
+      assetId: number,
+      options?: { ensureReady?: boolean }
+    ) => Promise<GetChapterReverseProxyResult>;
   };
   clips: {
     getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -339,6 +364,14 @@ export interface ElectronAPI {
     update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
     delete: (id: number) => Promise<DeleteClipResult>;
     batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
+    suggestName: (input: {
+      chapterId: number;
+      inPoint: number;
+      outPoint: number;
+      model: string;
+      apiKey: string;
+      chapterTitle?: string;
+    }) => Promise<SuggestClipNameResult>;
   };
   timeline: {
     loadState: (projectId: number) => Promise<TimelineStateResult>;
@@ -461,6 +494,12 @@ const electronAPI: ElectronAPI = {
     delete: (id) => ipcRenderer.invoke('chapter:delete', { id }),
     addAsset: (chapterId, assetId) => ipcRenderer.invoke('chapter:add-asset', { chapterId, assetId }),
     getAssets: (chapterId) => ipcRenderer.invoke('chapter:get-assets', { chapterId }),
+    getReverseProxy: (chapterId, assetId, options) =>
+      ipcRenderer.invoke('chapter:reverse-proxy-get', {
+        chapterId,
+        assetId,
+        ensureReady: options?.ensureReady === true,
+      }),
   },
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
@@ -480,6 +519,7 @@ const electronAPI: ElectronAPI = {
     update: (id, updates) => ipcRenderer.invoke('clip:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('clip:delete', { id }),
     batchUpdate: (updates) => ipcRenderer.invoke('clip:batch-update', { updates }),
+    suggestName: (input) => ipcRenderer.invoke('clip:suggest-name', input),
   },
   timeline: {
     loadState: (projectId) => ipcRenderer.invoke('timeline:state-load', { projectId }),

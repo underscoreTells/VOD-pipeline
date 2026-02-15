@@ -64,7 +64,14 @@ import {
 } from '../database/db.js';
 import { generateWaveformTiers, generateWaveformTiersForMkvTracks, WaveformError } from '../../pipeline/waveform.js';
 import { getAgentBridge } from '../agent-bridge.js';
-import { getVideoMetadata, isValidVideo, extractAudio, FFmpegError, generateAIProxy } from '../../pipeline/ffmpeg.js';
+import {
+  getVideoMetadata,
+  isValidVideo,
+  extractAudio,
+  FFmpegError,
+  generateAIProxy,
+  generateChapterReverseProxy,
+} from '../../pipeline/ffmpeg.js';
 import { transcribe, WhisperError, getWhisperRuntimeStatus } from '../../pipeline/whisper.js';
 import { app } from 'electron';
 import { randomUUID } from 'crypto';
@@ -175,6 +182,132 @@ function normalizeComputeType(value: unknown): 'int8' | 'float16' {
     return value;
   }
   return 'int8';
+}
+
+function sanitizeSuggestedClipName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/^"+|"+$/g, '')
+    .trim();
+  if (normalized.length < 3) return null;
+  return normalized.slice(0, 80);
+}
+
+function extractOpenAITextPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+
+  const outputText = sanitizeSuggestedClipName(record.output_text);
+  if (outputText) return outputText;
+
+  const output = record.output;
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      if (!item || typeof item !== 'object') continue;
+      const itemRecord = item as Record<string, unknown>;
+      const content = itemRecord.content;
+      if (!Array.isArray(content)) continue;
+      for (const contentItem of content) {
+        if (!contentItem || typeof contentItem !== 'object') continue;
+        const text = sanitizeSuggestedClipName((contentItem as Record<string, unknown>).text);
+        if (text) return text;
+      }
+    }
+  }
+
+  const choices = record.choices;
+  if (Array.isArray(choices)) {
+    const first = choices[0];
+    if (first && typeof first === 'object') {
+      const message = (first as Record<string, unknown>).message;
+      if (message && typeof message === 'object') {
+        const content = sanitizeSuggestedClipName((message as Record<string, unknown>).content);
+        if (content) return content;
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildTranscriptExcerpt(
+  transcripts: Array<{ text: string; start_time: number; end_time: number }>,
+  inPoint: number,
+  outPoint: number
+): string {
+  const overlapEpsilon = 0.001;
+  const snippets: string[] = [];
+
+  for (const transcript of transcripts) {
+    if (!transcript || typeof transcript.text !== 'string') continue;
+    const start = transcript.start_time;
+    const end = transcript.end_time;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (end <= inPoint + overlapEpsilon || start >= outPoint - overlapEpsilon) continue;
+    const text = transcript.text.trim();
+    if (!text) continue;
+    snippets.push(text);
+    if (snippets.join(' ').length > 1200) {
+      break;
+    }
+  }
+
+  return snippets.join(' ').slice(0, 1200);
+}
+
+async function requestOpenAIClipName(input: {
+  apiKey: string;
+  model: string;
+  chapterTitle: string;
+  inPoint: number;
+  outPoint: number;
+  transcriptExcerpt: string;
+}): Promise<string | null> {
+  const { apiKey, model, chapterTitle, inPoint, outPoint, transcriptExcerpt } = input;
+
+  if (typeof fetch !== 'function') {
+    throw new Error('Fetch API is not available in main process');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      max_output_tokens: 24,
+      input: [
+        {
+          role: 'system',
+          content:
+            'You name short video clips for editors. Return only one concise 3-7 word title. No quotes, no trailing punctuation, no labels.',
+        },
+        {
+          role: 'user',
+          content: [
+            `Chapter title: ${chapterTitle || 'Untitled chapter'}`,
+            `Clip local time range: ${inPoint.toFixed(2)}s to ${outPoint.toFixed(2)}s`,
+            transcriptExcerpt
+              ? `Transcript excerpt: ${transcriptExcerpt}`
+              : 'Transcript excerpt: (none)',
+            'Return title only.',
+          ].join('\n'),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`OpenAI request failed (${response.status}): ${message.slice(0, 200)}`);
+  }
+
+  const payload = await response.json();
+  return extractOpenAITextPayload(payload);
 }
 
 function clipOverlapsChapter(clip: Clip, chapterStart: number, chapterEnd: number): boolean {
@@ -358,11 +491,55 @@ function applyNearLimitTokenGuard(
 
 const hydratedConversationIds = new Set<number>();
 const chapterProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
+const chapterReverseProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
+const chapterReverseProxyQuickGenerationLocks = new Map<string, Promise<string | undefined>>();
+const chapterReverseProxyBackgroundTimers = new Map<string, NodeJS.Timeout>();
+const chapterReverseProxyErrors = new Map<string, string>();
+const chapterReverseProxyValidationCache = new Map<string, { mtimeMs: number; size: number; valid: boolean }>();
+const chapterReverseProxyQueue: Array<() => Promise<void>> = [];
+const CHAPTER_REVERSE_PROXY_MAX_CONCURRENCY = 1;
+let activeChapterReverseProxyJobs = 0;
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmQueue: Array<() => Promise<void>> = [];
 const CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
 let activeChapterMediaPrewarmJobs = 0;
+
+function pumpChapterReverseProxyQueue() {
+  while (
+    activeChapterReverseProxyJobs < CHAPTER_REVERSE_PROXY_MAX_CONCURRENCY &&
+    chapterReverseProxyQueue.length > 0
+  ) {
+    const nextJob = chapterReverseProxyQueue.shift();
+    if (!nextJob) {
+      continue;
+    }
+
+    activeChapterReverseProxyJobs += 1;
+    void nextJob()
+      .catch((error) => {
+        console.warn('[ReverseProxy] Job failed:', error);
+      })
+      .finally(() => {
+        activeChapterReverseProxyJobs = Math.max(0, activeChapterReverseProxyJobs - 1);
+        pumpChapterReverseProxyQueue();
+      });
+  }
+}
+
+function enqueueChapterReverseProxy(job: () => Promise<void>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chapterReverseProxyQueue.push(async () => {
+      try {
+        await job();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    pumpChapterReverseProxyQueue();
+  });
+}
 
 function pumpChapterMediaPrewarmQueue() {
   while (
@@ -1040,6 +1217,420 @@ function getChapterProxyPath(chapterId: number, assetId: number): string {
   return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_ai_proxy.mp4`);
 }
 
+type ReverseProxyVariant = 'full' | 'quick';
+
+function getChapterReverseProxyPath(chapterId: number, assetId: number, variant: ReverseProxyVariant = 'full'): string {
+  const suffix = variant === 'full' ? 'reverse_preview.mp4' : 'reverse_preview_quick.mp4';
+  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
+}
+
+function getChapterReverseProxyTempPath(
+  chapterId: number,
+  assetId: number,
+  variant: ReverseProxyVariant = 'full'
+): string {
+  const suffix = variant === 'full' ? 'reverse_preview.partial.mp4' : 'reverse_preview_quick.partial.mp4';
+  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
+}
+
+function getChapterReverseProxyUrl(
+  chapterId: number,
+  assetId: number,
+  variant: ReverseProxyVariant = 'full'
+): string {
+  if (variant === 'quick') {
+    return `vod://reverse/${chapterId}/${assetId}/quick`;
+  }
+  return `vod://reverse/${chapterId}/${assetId}`;
+}
+
+function getReverseValidationCacheKey(chapterId: number, assetId: number, variant: ReverseProxyVariant): string {
+  return `${chapterId}:${assetId}:${variant}`;
+}
+
+type ChapterReverseProxyStatusPayload = {
+  status: 'missing' | 'generating' | 'ready' | 'error';
+  url?: string;
+  quality?: ReverseProxyVariant;
+  isFinal?: boolean;
+  error?: string;
+};
+
+async function isChapterReverseProxyPlayable(
+  chapterId: number,
+  assetId: number,
+  variant: ReverseProxyVariant = 'full'
+): Promise<boolean> {
+  const cacheKey = getReverseValidationCacheKey(chapterId, assetId, variant);
+  const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
+  if (!fs.existsSync(proxyPath)) {
+    chapterReverseProxyValidationCache.delete(cacheKey);
+    return false;
+  }
+
+  let stats: fs.Stats;
+  try {
+    stats = fs.statSync(proxyPath);
+  } catch {
+    chapterReverseProxyValidationCache.delete(cacheKey);
+    return false;
+  }
+
+  const cached = chapterReverseProxyValidationCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+    return cached.valid;
+  }
+
+  let valid = false;
+  try {
+    const metadata = await getVideoMetadata(proxyPath, 5000);
+    valid = Number.isFinite(metadata.duration) && metadata.duration > 0.01;
+  } catch {
+    valid = false;
+  }
+
+  chapterReverseProxyValidationCache.set(cacheKey, {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    valid,
+  });
+  return valid;
+}
+
+function invalidateChapterReverseProxyVariant(
+  chapterId: number,
+  assetId: number,
+  variant: ReverseProxyVariant
+): void {
+  const cacheKey = getReverseValidationCacheKey(chapterId, assetId, variant);
+  const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
+  const tempPath = getChapterReverseProxyTempPath(chapterId, assetId, variant);
+  const legacyTempPath = `${proxyPath}.partial`;
+  chapterReverseProxyValidationCache.delete(cacheKey);
+
+  if (fs.existsSync(proxyPath)) {
+    try {
+      fs.unlinkSync(proxyPath);
+    } catch (error) {
+      console.warn(
+        `[ReverseProxy] Failed deleting ${variant} cache chapter=${chapterId} asset=${assetId}:`,
+        error
+      );
+    }
+  }
+
+  if (fs.existsSync(tempPath)) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Ignore stale partial cleanup errors.
+    }
+  }
+
+  if (variant === 'full' && fs.existsSync(legacyTempPath)) {
+    try {
+      fs.unlinkSync(legacyTempPath);
+    } catch {
+      // Ignore stale legacy partial cleanup errors.
+    }
+  }
+}
+
+async function ensureChapterReverseProxyCacheValid(
+  chapterId: number,
+  assetId: number,
+  variant: ReverseProxyVariant = 'full'
+): Promise<boolean> {
+  const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
+  if (!fs.existsSync(proxyPath)) {
+    return false;
+  }
+
+  const isPlayable = await isChapterReverseProxyPlayable(chapterId, assetId, variant);
+  if (isPlayable) {
+    return true;
+  }
+
+  console.warn(
+    `[ReverseProxy] Invalid cached ${variant} reverse preview detected, rebuilding chapter=${chapterId} asset=${assetId}`
+  );
+  invalidateChapterReverseProxyVariant(chapterId, assetId, variant);
+  return false;
+}
+
+function clearChapterReverseProxyBackgroundTimer(lockKey: string): void {
+  const timer = chapterReverseProxyBackgroundTimers.get(lockKey);
+  if (!timer) {
+    return;
+  }
+  clearTimeout(timer);
+  chapterReverseProxyBackgroundTimers.delete(lockKey);
+}
+
+function scheduleChapterReverseProxyFullWarm(
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  asset: Asset,
+  delayMs = 12000
+): void {
+  if (asset.file_type !== 'video') {
+    return;
+  }
+
+  const lockKey = `${chapter.id}:${asset.id}`;
+  if (chapterReverseProxyGenerationLocks.has(lockKey) || chapterReverseProxyBackgroundTimers.has(lockKey)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    chapterReverseProxyBackgroundTimers.delete(lockKey);
+    void ensureChapterReverseProxyFullReady(chapter, asset).catch((error) => {
+      console.warn(
+        `[ReverseProxy] Failed background full warm chapter=${chapter.id} asset=${asset.id}:`,
+        error
+      );
+    });
+  }, Math.max(0, delayMs));
+
+  chapterReverseProxyBackgroundTimers.set(lockKey, timer);
+}
+
+async function getChapterReverseProxyStatus(chapterId: number, assetId: number): Promise<ChapterReverseProxyStatusPayload> {
+  const lockKey = `${chapterId}:${assetId}`;
+
+  if (await ensureChapterReverseProxyCacheValid(chapterId, assetId, 'full')) {
+    chapterReverseProxyErrors.delete(lockKey);
+    return {
+      status: 'ready',
+      url: getChapterReverseProxyUrl(chapterId, assetId, 'full'),
+      quality: 'full',
+      isFinal: true,
+    };
+  }
+
+  if (await ensureChapterReverseProxyCacheValid(chapterId, assetId, 'quick')) {
+    chapterReverseProxyErrors.delete(lockKey);
+    return {
+      status: 'ready',
+      url: getChapterReverseProxyUrl(chapterId, assetId, 'quick'),
+      quality: 'quick',
+      isFinal: false,
+    };
+  }
+
+  if (chapterReverseProxyQuickGenerationLocks.has(lockKey) || chapterReverseProxyGenerationLocks.has(lockKey)) {
+    return { status: 'generating' };
+  }
+
+  const error = chapterReverseProxyErrors.get(lockKey);
+  if (error) {
+    return {
+      status: 'error',
+      error,
+    };
+  }
+
+  return { status: 'missing' };
+}
+
+function invalidateChapterReverseProxy(chapterId: number, assetId: number): void {
+  const lockKey = `${chapterId}:${assetId}`;
+  chapterReverseProxyErrors.delete(lockKey);
+  clearChapterReverseProxyBackgroundTimer(lockKey);
+  invalidateChapterReverseProxyVariant(chapterId, assetId, 'full');
+  invalidateChapterReverseProxyVariant(chapterId, assetId, 'quick');
+}
+
+async function ensureChapterReverseProxyQuickReady(
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  asset: Asset
+): Promise<string | undefined> {
+  if (asset.file_type !== 'video') {
+    return undefined;
+  }
+
+  const lockKey = `${chapter.id}:${asset.id}`;
+  const inFlight = chapterReverseProxyQuickGenerationLocks.get(lockKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = (async () => {
+    const fullProxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'full');
+    if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
+      chapterReverseProxyErrors.delete(lockKey);
+      return fullProxyPath;
+    }
+
+    const quickProxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'quick');
+    const quickTempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'quick');
+    if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'quick')) {
+      chapterReverseProxyErrors.delete(lockKey);
+      return quickProxyPath;
+    }
+
+    try {
+      if (fs.existsSync(quickTempPath)) {
+        try {
+          fs.unlinkSync(quickTempPath);
+        } catch {
+          // Ignore stale temp cleanup errors.
+        }
+      }
+
+      let inputPath = asset.file_path;
+      let inputStartTime = chapter.start_time;
+      let inputEndTime = chapter.end_time;
+      let fps = 10;
+
+      const chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+      if (
+        chapterProxy?.status === 'ready' &&
+        chapterProxy.file_path &&
+        fs.existsSync(chapterProxy.file_path)
+      ) {
+        try {
+          const chapterProxyMetadata = await getVideoMetadata(chapterProxy.file_path, 5000);
+          if (chapterProxyMetadata.duration > 0.1) {
+            const chapterDuration = Math.max(0.1, chapter.end_time - chapter.start_time);
+            inputPath = chapterProxy.file_path;
+            inputStartTime = 0;
+            inputEndTime = Math.min(chapterProxyMetadata.duration, chapterDuration);
+            fps = Math.max(5, Math.min(10, Math.round(chapterProxyMetadata.fps) || 5));
+          }
+        } catch {
+          // Fallback to source media if chapter proxy metadata lookup fails.
+        }
+      }
+
+      await generateChapterReverseProxy(inputPath, quickTempPath, {
+        startTime: inputStartTime,
+        endTime: inputEndTime,
+        fps,
+        encodingMode: 'auto',
+        quality: 'fast',
+        chunkDurationSec: 45,
+        maxParallelChunks: 3,
+      });
+
+      if (fs.existsSync(quickProxyPath)) {
+        fs.unlinkSync(quickProxyPath);
+      }
+
+      fs.renameSync(quickTempPath, quickProxyPath);
+
+      if (!(await isChapterReverseProxyPlayable(chapter.id, asset.id, 'quick'))) {
+        throw new Error('Generated quick reverse preview is not playable');
+      }
+
+      chapterReverseProxyErrors.delete(lockKey);
+      return quickProxyPath;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
+      chapterReverseProxyErrors.set(lockKey, message);
+      console.warn(
+        `[ReverseProxy] Failed generating quick reverse chapter=${chapter.id} asset=${asset.id}:`,
+        error
+      );
+      return undefined;
+    }
+  })();
+
+  chapterReverseProxyQuickGenerationLocks.set(lockKey, task);
+  try {
+    return await task;
+  } finally {
+    chapterReverseProxyQuickGenerationLocks.delete(lockKey);
+  }
+}
+
+async function ensureChapterReverseProxyFullReady(
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  asset: Asset
+): Promise<string | undefined> {
+  if (asset.file_type !== 'video') {
+    return undefined;
+  }
+
+  const lockKey = `${chapter.id}:${asset.id}`;
+  clearChapterReverseProxyBackgroundTimer(lockKey);
+
+  const inFlight = chapterReverseProxyGenerationLocks.get(lockKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = (async () => {
+    const proxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'full');
+    const tempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'full');
+    if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
+      chapterReverseProxyErrors.delete(lockKey);
+      return proxyPath;
+    }
+
+    let generatedPath: string | undefined;
+
+    try {
+      await enqueueChapterReverseProxy(async () => {
+        if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
+          generatedPath = proxyPath;
+          chapterReverseProxyErrors.delete(lockKey);
+          return;
+        }
+
+        if (fs.existsSync(tempPath)) {
+          try {
+            fs.unlinkSync(tempPath);
+          } catch {
+            // Ignore stale temp cleanup errors.
+          }
+        }
+
+        await generateChapterReverseProxy(asset.file_path, tempPath, {
+          startTime: chapter.start_time,
+          endTime: chapter.end_time,
+          fps: 15,
+          encodingMode: 'auto',
+          quality: 'high',
+          chunkDurationSec: 11,
+          maxParallelChunks: 3,
+        });
+
+        if (fs.existsSync(proxyPath)) {
+          fs.unlinkSync(proxyPath);
+        }
+
+        fs.renameSync(tempPath, proxyPath);
+
+        if (!(await isChapterReverseProxyPlayable(chapter.id, asset.id, 'full'))) {
+          throw new Error('Generated reverse preview is not playable');
+        }
+
+        generatedPath = proxyPath;
+        chapterReverseProxyErrors.delete(lockKey);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
+      chapterReverseProxyErrors.set(lockKey, message);
+      console.warn(
+        `[ReverseProxy] Failed generating chapter=${chapter.id} asset=${asset.id}:`,
+        error
+      );
+      return undefined;
+    }
+
+    return generatedPath;
+  })();
+
+  chapterReverseProxyGenerationLocks.set(lockKey, task);
+  try {
+    return await task;
+  } finally {
+    chapterReverseProxyGenerationLocks.delete(lockKey);
+  }
+}
+
 async function ensureChapterProxyReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
   asset: Asset,
@@ -1645,6 +2236,13 @@ export function registerIpcHandlers() {
         end_time: endTime,
       });
 
+      const linkedAssetIds = await getAssetsForChapter(chapter.id);
+      for (const assetId of linkedAssetIds) {
+        void scheduleChapterMediaPrewarm(chapter.id, assetId).catch((error) => {
+          console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${chapter.id} asset=${assetId}:`, error);
+        });
+      }
+
       return createSuccessResponse(chapter);
     } catch (error) {
       if (error instanceof Error && error.message.includes('time')) {
@@ -1672,6 +2270,25 @@ export function registerIpcHandlers() {
     console.log('IPC: chapter:get-by-project', projectId);
     try {
       const chapters = await getChaptersByProject(projectId);
+
+      for (const chapter of chapters) {
+        void (async () => {
+          try {
+            const assetIds = await getAssetsForChapter(chapter.id);
+            for (const assetId of assetIds) {
+              void scheduleChapterMediaPrewarm(chapter.id, assetId).catch((error) => {
+                console.warn(
+                  `[ChapterPrewarm] Failed to prewarm chapter=${chapter.id} asset=${assetId}:`,
+                  error
+                );
+              });
+            }
+          } catch (error) {
+            console.warn(`[ChapterPrewarm] Failed to resolve assets for chapter=${chapter.id}:`, error);
+          }
+        })();
+      }
+
       return createSuccessResponse(chapters);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -1705,6 +2322,14 @@ export function registerIpcHandlers() {
       if (success) {
         if (normalizedUpdates.start_time !== undefined || normalizedUpdates.end_time !== undefined) {
           await deleteTranscriptsByChapter(id);
+
+          const chapterAssetIds = await getAssetsForChapter(id);
+          for (const assetId of chapterAssetIds) {
+            invalidateChapterReverseProxy(id, assetId);
+            void scheduleChapterMediaPrewarm(id, assetId).catch((error) => {
+              console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${id} asset=${assetId}:`, error);
+            });
+          }
         }
         await deleteDetailedTranscriptsByChapter(id);
         return createSuccessResponse(null);
@@ -1722,8 +2347,12 @@ export function registerIpcHandlers() {
   ipcMain.handle(IPC_CHANNELS.CHAPTER_DELETE, async (_, { id }) => {
     console.log('IPC: chapter:delete', id);
     try {
+      const linkedAssetIds = await getAssetsForChapter(id);
       const success = await deleteChapter(id);
       if (success) {
+        for (const assetId of linkedAssetIds) {
+          invalidateChapterReverseProxy(id, assetId);
+        }
         return createSuccessResponse(null);
       } else {
         return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -1756,6 +2385,7 @@ export function registerIpcHandlers() {
     try {
       const success = await removeAssetFromChapter(chapterId, assetId);
       if (success) {
+        invalidateChapterReverseProxy(chapterId, assetId);
         await deleteTranscriptsByChapter(chapterId);
         await deleteDetailedTranscriptsByChapter(chapterId);
         return createSuccessResponse(null);
@@ -1774,6 +2404,73 @@ export function registerIpcHandlers() {
       return createSuccessResponse(assetIds);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHAPTER_REVERSE_PROXY_GET, async (_, payload) => {
+    const chapterId = toNumberOrNull(payload?.chapterId);
+    const assetId = toNumberOrNull(payload?.assetId);
+    const ensureReady = Boolean(payload?.ensureReady);
+    if (ensureReady) {
+      console.log('IPC: chapter:reverse-proxy-get', chapterId, assetId, ensureReady);
+    }
+
+    try {
+      if (chapterId === null || !Number.isInteger(chapterId) || chapterId <= 0) {
+        return createErrorResponse('Invalid chapterId', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (assetId === null || !Number.isInteger(assetId) || assetId <= 0) {
+        return createErrorResponse('Invalid assetId', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const [chapter, asset] = await Promise.all([
+        getChapter(chapterId),
+        getAsset(assetId),
+      ]);
+
+      if (!chapter) {
+        return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (!asset) {
+        return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const chapterAssetIds = await getAssetsForChapter(chapterId);
+      if (!chapterAssetIds.includes(assetId)) {
+        return createErrorResponse('Asset is not linked to chapter', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      if (asset.file_type !== 'video') {
+        return createSuccessResponse({ status: 'missing' as const });
+      }
+
+      const statusBefore = await getChapterReverseProxyStatus(chapterId, assetId);
+
+      if (ensureReady) {
+        if (statusBefore.status === 'missing' || statusBefore.status === 'error') {
+          void ensureChapterReverseProxyQuickReady(chapter, asset)
+            .finally(() => {
+              scheduleChapterReverseProxyFullWarm(chapter, asset);
+            })
+            .catch((error: unknown) => {
+              console.warn(
+                `[ReverseProxy] Failed quick warm request chapter=${chapterId} asset=${assetId}:`,
+                error
+              );
+            });
+        } else if (statusBefore.status === 'ready' && statusBefore.quality === 'quick') {
+          scheduleChapterReverseProxyFullWarm(chapter, asset);
+        }
+      }
+
+      const status = await getChapterReverseProxyStatus(chapterId, assetId);
+      if (ensureReady && (status.status === 'missing' || status.status === 'generating')) {
+        return createSuccessResponse({ status: 'generating' as const });
+      }
+
+      return createSuccessResponse(status);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 
@@ -2592,6 +3289,75 @@ export function registerIpcHandlers() {
         return createErrorResponse(error.message, IPC_ERROR_CODES.VALIDATION_ERROR);
       }
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLIP_SUGGEST_NAME, async (_, payload) => {
+    console.log('IPC: clip:suggest-name');
+    try {
+      const chapterId = toNumberOrNull(payload?.chapterId);
+      const inPoint = toNumberOrNull(payload?.inPoint);
+      const outPoint = toNumberOrNull(payload?.outPoint);
+      const model = typeof payload?.model === 'string' && payload.model.trim().length > 0
+        ? payload.model.trim()
+        : 'gpt-5-nano';
+      const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : '';
+
+      if (chapterId === null || !Number.isInteger(chapterId) || chapterId <= 0) {
+        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (inPoint === null || inPoint < 0) {
+        return createErrorResponse('In point must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (outPoint === null || outPoint <= inPoint) {
+        return createErrorResponse('Out point must be greater than in point', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (!apiKey) {
+        return createSuccessResponse({ name: null });
+      }
+
+      const chapter = await getChapter(chapterId);
+      if (!chapter) {
+        return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const transcriptRows = await getTranscriptsByChapter(chapterId);
+      const transcriptExcerpt = buildTranscriptExcerpt(transcriptRows, inPoint, outPoint);
+      const chapterTitle =
+        (typeof payload?.chapterTitle === 'string' && payload.chapterTitle.trim().length > 0)
+          ? payload.chapterTitle.trim()
+          : chapter.title;
+
+      let name: string | null = null;
+      try {
+        name = await requestOpenAIClipName({
+          apiKey,
+          model,
+          chapterTitle,
+          inPoint,
+          outPoint,
+          transcriptExcerpt,
+        });
+      } catch (primaryError) {
+        if (model === 'gpt-4o-mini') {
+          throw primaryError;
+        }
+
+        name = await requestOpenAIClipName({
+          apiKey,
+          model: 'gpt-4o-mini',
+          chapterTitle,
+          inPoint,
+          outPoint,
+          transcriptExcerpt,
+        });
+      }
+
+      return createSuccessResponse({
+        name: sanitizeSuggestedClipName(name),
+      });
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 

@@ -23,6 +23,7 @@ export const IPC_CHANNELS = {
   CHAPTER_ADD_ASSET: 'chapter:add-asset',
   CHAPTER_REMOVE_ASSET: 'chapter:remove-asset',
   CHAPTER_GET_ASSETS: 'chapter:get-assets',
+  CHAPTER_REVERSE_PROXY_GET: 'chapter:reverse-proxy-get',
 
   // Transcription channels
   TRANSCRIBE_CHAPTER: 'transcribe:chapter',
@@ -46,6 +47,7 @@ export const IPC_CHANNELS = {
   CLIP_UPDATE: 'clip:update',
   CLIP_DELETE: 'clip:delete',
   CLIP_BATCH_UPDATE: 'clip:batch-update',
+  CLIP_SUGGEST_NAME: 'clip:suggest-name',
 
   // Timeline state channels
   TIMELINE_STATE_SAVE: 'timeline:state-save',
