@@ -17,9 +17,16 @@ import {
   getClipsByProject,
   getClip,
   setDatabaseForTesting,
-} from "../../src/electron/database/db.js";
+} from "../../src/electron/database/index.js";
+import { combinePrerequisites, requireNativeModule, requireSupportedNode } from "../helpers/prerequisites.js";
 
-describe("Suggestion to Clip Integration (Task 4.9)", () => {
+const suggestionPrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireNativeModule('better-sqlite3')
+);
+const describeSuggestionClip = suggestionPrerequisite.ok ? describe : describe.skip;
+
+describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
   let tempDir: string;
   let db: Database.Database;
   let testProjectId: number;

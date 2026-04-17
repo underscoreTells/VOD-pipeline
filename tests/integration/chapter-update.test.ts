@@ -3,9 +3,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import Database from 'better-sqlite3';
-import { getChapter, setDatabaseForTesting, updateChapter } from '../../src/electron/database/db.js';
+import { getChapter, setDatabaseForTesting, updateChapter } from '../../src/electron/database/index.js';
+import { combinePrerequisites, requireNativeModule, requireSupportedNode } from '../helpers/prerequisites.js';
 
-describe('Chapter update integration', () => {
+const chapterUpdatePrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireNativeModule('better-sqlite3')
+);
+const describeChapterUpdate = chapterUpdatePrerequisite.ok ? describe : describe.skip;
+
+describeChapterUpdate('Chapter update integration', () => {
   let tempDir: string;
   let db: Database.Database;
   let chapterId: number;

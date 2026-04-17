@@ -3927,3 +3927,5 @@ export function registerIpcHandlers() {
     }
   });
 }
+
+export const registerLegacyIpcHandlers = registerIpcHandlers;

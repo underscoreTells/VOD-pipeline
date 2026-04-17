@@ -1,15 +1,37 @@
 import { EventEmitter } from "events";
+import { AgentStreamParseError } from "../../shared/contracts/ipc.js";
 
 export class JSONStdinWriter {
   private writable: NodeJS.WritableStream;
   private writeQueue: Promise<void> = Promise.resolve();
+  private lastStreamError: Error | null = null;
 
   constructor(writable: NodeJS.WritableStream) {
     this.writable = writable;
+    this.writable.on("error", (error) => {
+      this.lastStreamError = error instanceof Error ? error : new Error(String(error));
+    });
   }
 
   write(message: any): boolean {
     try {
+      const writable = this.writable as NodeJS.WritableStream & {
+        destroyed?: boolean;
+        writable?: boolean;
+        writableEnded?: boolean;
+        writableFinished?: boolean;
+      };
+
+      if (
+        this.lastStreamError ||
+        writable.destroyed ||
+        writable.writable === false ||
+        writable.writableEnded ||
+        writable.writableFinished
+      ) {
+        return false;
+      }
+
       const json = JSON.stringify(message) + "\n";
       return this.writable.write(json);
     } catch (error) {
@@ -173,7 +195,7 @@ export class JSONStdoutReader extends EventEmitter {
 
     this.readable.on("error", (error: Error) => {
       console.error("[JSONStdoutReader] Stream error:", error);
-      this.emit("error", error);
+      this.emit("stream-error", error);
     });
 
     this.readable.on("close", () => {
@@ -204,6 +226,7 @@ export class JSONStdoutReader extends EventEmitter {
         this.emit("message", message);
       } catch (error) {
         console.warn("[JSONStdoutReader] Ignoring non-JSON line:", line);
+        this.emit("parse-error", new AgentStreamParseError(line, error));
       }
     }
   }

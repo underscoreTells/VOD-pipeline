@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { Writable, Readable } from "stream";
 import { JSONStdinWriter, JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
+import { AgentStreamParseError } from "../../src/shared/contracts/ipc.js";
 
 describe("JSONStdinWriter", () => {
   let mockWritable: Writable;
@@ -77,7 +78,7 @@ describe("JSONStdoutReader", () => {
     reader = new JSONStdoutReader(mockReadable);
 
     reader.on("message", (msg) => messages.push(msg));
-    reader.on("error", (err) => errors.push(err));
+    reader.on("parse-error", (err) => errors.push(err));
   });
 
   it("should parse newline-delimited JSON messages", async () => {
@@ -126,7 +127,7 @@ describe("JSONStdoutReader", () => {
     expect(messages[1]).toEqual({ type: "msg2" });
   });
 
-  it("should emit error on invalid JSON", async () => {
+  it("should emit parse-error on invalid JSON", async () => {
     messages = [];
     errors = [];
 
@@ -136,7 +137,7 @@ describe("JSONStdoutReader", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(Error);
+    expect(errors[0]).toBeInstanceOf(AgentStreamParseError);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toEqual({ type: "valid" });
   });

@@ -25,6 +25,7 @@
   
   interface Props {
     audioUrl: string;
+    missing?: boolean;
     assetId: number | null;
     laneLabel: string;
     editable?: boolean;
@@ -37,6 +38,7 @@
   
   let {
     audioUrl,
+    missing = false,
     assetId,
     laneLabel,
     editable = true,
@@ -1267,15 +1269,20 @@
 <div class="track-container">
   <div class="track-header">
     <span class="track-label">{laneLabel}</span>
-    <span class="track-info">{editable ? `${trackClips.length} clips` : 'visual only'}</span>
+    <span class="track-info">{missing ? 'source unavailable' : editable ? `${trackClips.length} clips` : 'visual only'}</span>
   </div>
   <div
     class="waveform-container"
     class:visual-only={!editable}
+    class:missing={missing}
     class:panning={isPanning}
     class:selecting={isSelecting}
     bind:this={container}
-  ></div>
+  >
+    {#if missing}
+      <div class="missing-overlay">Original media unavailable</div>
+    {/if}
+  </div>
 
   {#if editable && contextMenu.open}
     <div
@@ -1343,9 +1350,14 @@
   }
   
   .waveform-container {
+    position: relative;
     width: 100%;
     min-height: 100px;
     cursor: pointer;
+  }
+
+  .waveform-container.missing {
+    background: linear-gradient(180deg, #151515 0%, #101010 100%);
   }
 
   .waveform-container.visual-only {
@@ -1368,6 +1380,18 @@
 
   .waveform-container.selecting {
     cursor: crosshair;
+  }
+
+  .missing-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #b0b0b0;
+    font-size: 0.8rem;
+    pointer-events: none;
+    background: rgba(12, 12, 12, 0.55);
   }
 
   .timeline-clip-context-menu {

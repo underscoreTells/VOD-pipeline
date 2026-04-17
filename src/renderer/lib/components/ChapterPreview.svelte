@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { Chapter, Asset, Clip } from '$shared/types/database';
-  import { buildAssetUrl } from '../utils/media';
+  import type { AssetAvailability } from '$shared/contracts/ipc';
+  import { buildPlayableAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
     clampToChapter,
@@ -23,9 +24,11 @@
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../state/electron.svelte';
 
+  type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
+
   interface Props {
     chapter: Chapter | null;
-    asset: Asset | null;
+    asset: AvailabilityAwareAsset | null;
     clips?: Clip[];
   }
 
@@ -53,6 +56,7 @@
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
+  const assetUnavailable = $derived(() => asset?.availability?.exists === false);
 
   const chapterDuration = $derived(() => getChapterDuration(chapter));
   const localTime = $derived(() => toChapterLocalTime(chapter, currentTime));
@@ -141,7 +145,7 @@
   }
 
   async function refreshReverseProxy(ensureReady: boolean): Promise<void> {
-    if (!chapter || !asset || asset.file_type !== 'video') {
+    if (!chapter || !asset || asset.file_type !== 'video' || asset.availability?.exists === false) {
       reverseProxyStatus = 'missing';
       reverseProxyUrl = null;
       reverseProxyError = null;
@@ -219,7 +223,7 @@
 
   function setVideoSource(source: 'normal' | 'reverse', targetGlobalTime: number) {
     if (!videoRef || !chapter || !asset) return;
-    const targetUrl = source === 'normal' ? buildAssetUrl(asset.id) : reverseProxyUrl;
+    const targetUrl = source === 'normal' ? buildPlayableAssetUrl(asset) : reverseProxyUrl;
     if (!targetUrl) return;
 
     activeSource = source;
@@ -267,6 +271,13 @@
 
   function applyTransportState() {
     if (!videoRef || !chapter || !asset) return;
+    if (asset.availability?.exists === false) {
+      reverseStatusMessage = null;
+      if (!videoRef.paused) {
+        videoRef.pause();
+      }
+      return;
+    }
 
     if (!timelineState.isPlaying || timelineState.shuttleDirection === 0) {
       reverseStatusMessage = null;
@@ -489,7 +500,15 @@
       return;
     }
 
-    const normalUrl = buildAssetUrl(asset.id);
+    const normalUrl = buildPlayableAssetUrl(asset);
+    if (!normalUrl) {
+      videoRef.pause();
+      videoRef.removeAttribute('src');
+      videoRef.load();
+      currentTime = 0;
+      return;
+    }
+
     currentVideoUrl = normalUrl;
     videoRef.src = normalUrl;
     pendingGlobalSeekTime = chapter
@@ -497,7 +516,7 @@
       : 0;
     videoRef.load();
 
-    if (chapter && asset.file_type === 'video') {
+    if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
       void refreshReverseProxy(true);
     }
   });
@@ -511,7 +530,7 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter || !asset) return;
+    if (!videoRef || !chapter || !asset || asset.availability?.exists === false) return;
     applyTransportState();
   });
 
@@ -541,7 +560,7 @@
   });
 
   async function handleSelectionAutoCreate() {
-    if (!projectDetail.projectId || !chapter || !asset) return;
+    if (!projectDetail.projectId || !chapter || !asset || asset.availability?.exists === false) return;
     if (!hasCompleteSelection()) return;
     if (isCreatingFromSelection) return;
 
@@ -595,32 +614,42 @@
     <span class="chapter-title">{previewTitle()}</span>
   </div>
 
-  <div class="video-frame" class:empty={!hasPreview()}>
-    <video
-      bind:this={videoRef}
-      class="preview-video"
-      onseeking={handleSeeking}
-      onseeked={handleSeeked}
-      ontimeupdate={handleTimeUpdate}
-      onloadedmetadata={handleLoadedMetadata}
-      onerror={handleVideoError}
-      preload="metadata"
-      playsinline
-    >
-      <track kind="captions" />
-    </video>
-
+  <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()}>
     {#if !hasPreview()}
       <div class="empty-state">
         <div class="empty-icon">🎬</div>
         <p>Select a chapter to preview</p>
       </div>
+    {:else if assetUnavailable()}
+      <div class="unavailable-state">
+        <p class="unavailable-title">Chapter source file is unavailable</p>
+        <p class="unavailable-path">{asset?.availability?.savedPath ?? asset?.file_path}</p>
+        {#if asset?.availability?.nearestExistingAncestor}
+          <p class="unavailable-ancestor">
+            Nearest existing path: {asset.availability.nearestExistingAncestor}
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <video
+        bind:this={videoRef}
+        class="preview-video"
+        onseeking={handleSeeking}
+        onseeked={handleSeeked}
+        ontimeupdate={handleTimeUpdate}
+        onloadedmetadata={handleLoadedMetadata}
+        onerror={handleVideoError}
+        preload="metadata"
+        playsinline
+      >
+        <track kind="captions" />
+      </video>
     {/if}
   </div>
 
   {#if chapter && asset}
     <div class="preview-controls">
-      <button class="play-toggle" onclick={togglePlayback}>
+      <button class="play-toggle" onclick={togglePlayback} disabled={assetUnavailable()}>
         {timelineState.isPlaying ? 'Pause' : 'Play'}
       </button>
       <div class="time-display">
@@ -635,6 +664,7 @@
         max={chapterDuration()}
         step="0.01"
         value={localTime()}
+        disabled={assetUnavailable()}
         oninput={handleScrubInput}
       />
       {#if reverseStatusMessage}
@@ -708,6 +738,34 @@
     height: 100%;
     display: block;
     object-fit: contain;
+  }
+
+  .unavailable-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 1.25rem;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, #1c1c1c 0%, #111 100%);
+    color: #d4d4d4;
+  }
+
+  .unavailable-title {
+    margin: 0;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .unavailable-path,
+  .unavailable-ancestor {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: #a0a0a0;
+    word-break: break-all;
   }
 
   .empty-state {

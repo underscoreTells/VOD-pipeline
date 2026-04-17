@@ -22,13 +22,15 @@ An Electron desktop app for turning long Twitch VODs into cohesive, long-form Yo
 
 ### Prerequisites
 
-- Node.js 20+
-- pnpm 10+
+- Node.js 22.x
+- pnpm 10.26.0
 
 ### Install dependencies
 
 ```bash
+npm install -g pnpm@10.26.0
 pnpm install
+pnpm doctor
 ```
 
 ### Run in development
@@ -46,8 +48,12 @@ pnpm build
 ## Useful scripts
 
 ```bash
+pnpm doctor         # Validate local toolchain and optional media dependencies
+pnpm verify         # Lint + typecheck + unit tests
 pnpm typecheck      # Svelte + TypeScript checks
 pnpm test           # Run unit tests with Vitest
+pnpm test:integration
+pnpm test:all
 pnpm test:coverage  # Coverage report
 pnpm dist           # Build distributable Electron package
 ```
@@ -65,7 +71,9 @@ pnpm dist           # Build distributable Electron package
 ## Documentation
 
 - `PLAN.md` – architecture and implementation roadmap
-- `docs/phase-1-3-plan.md` – detailed phase 1-3 breakdown
+- `docs/architecture/current-state.md` – current implemented architecture and boundaries
+- `docs/implementation/resumable-base-baseline.md` – baseline snapshot for the resumable-base refactor
+- `docs/maintenance/resumable-base.md` – implementation notes for the resumable-base cleanup
 - `docs/WORKFLOW.md` – development workflow notes
 
 ## Status

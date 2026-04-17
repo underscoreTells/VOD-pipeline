@@ -583,8 +583,12 @@ pnpm dist
 ## References
 
 - @AGENTS.md - High-level project reference
-- @docs/phase-1-3-plan.md - Detailed task breakdown for phases 1-3 (infrastructure, agent foundation, video processing)
-- @docs/phase-3b-plan.md - Detailed task breakdown for Phase 3b (timeline editor, waveforms, advanced features)
+- @docs/architecture/current-state.md - Current implemented architecture and module boundaries
+- @docs/maintenance/resumable-base.md - Resumable-base cleanup notes and transitional boundaries
+- @docs/archive/phase-1-plan.md - Archived Phase 1 planning notes
+- @docs/archive/phase-2-plan.md - Archived Phase 2 planning notes
+- @docs/archive/phase-3a-plan.md - Archived Phase 3a planning notes
+- @docs/archive/phase-3b-plan.md - Archived Phase 3b planning notes
 - @docs/research/langgraph-architecture.md - LangGraph implementation details
 - @docs/research/svelte-5-architecture.md - Svelte 5 UI implementation details
 - @docs/research/whisper-integration.md - Whisper transcription integration

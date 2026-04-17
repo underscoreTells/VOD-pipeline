@@ -2,9 +2,12 @@ import { app, protocol } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
-import { getAsset } from './database/db.js';
+import { getAsset } from './database/index.js';
+import { createLogger } from './logger.js';
+import { getAssetAvailability } from './services/asset-availability-service.js';
 
 const MEDIA_SCHEME = 'vod';
+const logger = createLogger('MediaProtocol');
 
 export function registerMediaProtocolScheme() {
   protocol.registerSchemesAsPrivileged([
@@ -192,6 +195,12 @@ export function registerMediaProtocol() {
       }
 
       if (!fs.existsSync(asset.file_path)) {
+        const availability = getAssetAvailability(asset.file_path);
+        logger.warn('Asset file not found', {
+          assetId,
+          savedPath: asset.file_path,
+          nearestExistingAncestor: availability.nearestExistingAncestor,
+        });
         respondWithError(404, 'Asset file not found');
         return;
       }

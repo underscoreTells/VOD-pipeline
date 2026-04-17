@@ -1,4 +1,3 @@
-import { app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
@@ -28,6 +27,7 @@ export async function detectAudiowaveform(): Promise<AudiowaveformPathResult | n
     const binaryName = platform === 'win32' ? 'audiowaveform.exe' : 'audiowaveform';
     const resourcesPath = process.resourcesPath || process.cwd();
 
+    const userDataPath = await getElectronUserDataPath();
     const detectionOrder: Array<{ path: string; source: AudiowaveformPathResult['source'] }> = [
       {
         path: path.join(resourcesPath, 'binaries', platform, binaryName),
@@ -38,14 +38,17 @@ export async function detectAudiowaveform(): Promise<AudiowaveformPathResult | n
         source: 'development',
       },
       {
-        path: path.join(app.getPath('userData'), 'binaries', binaryName),
-        source: 'userData',
-      },
-      {
         path: binaryName,
         source: 'system',
       },
     ];
+
+    if (userDataPath) {
+      detectionOrder.splice(2, 0, {
+        path: path.join(userDataPath, 'binaries', binaryName),
+        source: 'userData',
+      });
+    }
 
     for (const { path: testPath, source } of detectionOrder) {
       if (await isExecutable(testPath)) {
@@ -143,4 +146,13 @@ export async function getAudiowaveformVersion(executablePath: string): Promise<s
  */
 export function isAudiowaveformAvailable(): boolean {
   return cachedResult !== null;
+}
+
+async function getElectronUserDataPath(): Promise<string | null> {
+  try {
+    const electron = await import('electron');
+    return electron.app?.getPath('userData') ?? null;
+  } catch {
+    return null;
+  }
 }

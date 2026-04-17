@@ -1,248 +1,43 @@
-import { app, BrowserWindow } from 'electron';
-import * as path from 'path';
-import * as fs from 'fs';
-import dotenv from 'dotenv';
-import { registerIpcHandlers } from './ipc/handlers.js';
-import { initializeDatabase, closeDatabase } from './database/db.js';
+import { app } from 'electron';
+import { startAgentRuntime, stopAgentRuntime } from './bootstrap/agent-runtime.js';
+import { registerAppLifecycleHandlers } from './bootstrap/app-lifecycle.js';
+import { initializeDependencies } from './bootstrap/dependencies.js';
+import { loadEnvironment } from './bootstrap/env.js';
+import { createMainWindow, getMainWindow } from './bootstrap/window.js';
+import { initializeDatabase, closeDatabase } from './database/index.js';
+import { registerIpcHandlers } from './ipc/register.js';
+import { createLogger } from './logger.js';
 import { registerMediaProtocol, registerMediaProtocolScheme } from './media-protocol.js';
-import { getAgentBridge } from './agent-bridge.js';
-import { detectFFmpeg } from './ffmpegDetector.js';
-import { detectAudiowaveform } from './audiowaveformDetector.js';
-import { detectPython } from './pythonDetector.js';
-import { getWhisperRuntimeStatus } from '../pipeline/whisper.js';
-import { fileURLToPath } from 'url';
 
-// Load .env file early and check for errors
-const envPath = path.resolve(process.cwd(), '.env');
-if (fs.existsSync(envPath)) {
-  const dotenvResult = dotenv.config({ path: envPath });
-  if (dotenvResult.error) {
-    console.error('[Main] Failed to load .env file:', dotenvResult.error);
-  }
-}
+const logger = createLogger('Main');
 
+loadEnvironment();
 registerMediaProtocolScheme();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-let mainWindow: BrowserWindow | null = null;
-let agentBridge: ReturnType<typeof getAgentBridge> | null = null;
-
-function createWindow() {
-  const isDev = process.env.NODE_ENV !== 'production';
-  const preloadPath = isDev
-    ? path.join(process.cwd(), 'src', 'electron', 'preload.cjs')
-    : path.join(__dirname, 'preload.cjs');
-  console.log('[Main] Preload path:', preloadPath);
-  console.log('[Main] Preload exists:', fs.existsSync(preloadPath));
-
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  if (process.platform !== 'darwin') {
-    mainWindow.setMenuBarVisibility(false);
-    mainWindow.removeMenu();
-  }
-
-  // Debug: Log preload errors
-  mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
-    console.error(`[Preload Error] Failed to load ${preloadPath}:`, error);
-  });
-
-  // Debug: Log renderer console messages (dev only)
-  if (isDev) {
-    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      const levels = ['debug', 'info', 'warning', 'error'];
-      console.log(`[Renderer ${levels[level] || level}] ${message}`);
-    });
-  }
-
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    const indexPath = path.join(__dirname, '../renderer/index.html');
-    if (fs.existsSync(indexPath)) {
-      mainWindow.loadFile(indexPath);
-    } else {
-      console.error('Renderer build not found. Please run `pnpm build` first.');
-    }
-  }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
-
 app.whenReady().then(async () => {
-  console.log('Electron app starting...');
-  console.log('Platform:', process.platform);
-  console.log('Node version:', process.version);
-  console.log('Electron version:', process.versions.electron);
-  console.log('Development mode:', process.env.NODE_ENV !== 'production');
+  logger.info('Electron app starting...');
+  logger.info('Platform:', process.platform);
+  logger.info('Node version:', process.version);
+  logger.info('Electron version:', process.versions.electron);
+  logger.info('Development mode:', process.env.NODE_ENV !== 'production');
 
-  // Initialize core systems
-  initializeDatabase();
+  await initializeDatabase();
   registerIpcHandlers();
   registerMediaProtocol();
+  await initializeDependencies();
+  createMainWindow();
+  await startAgentRuntime(getMainWindow);
 
-  // Detect external dependencies
-    await initializeFFmpeg();
-    await initializeAudiowaveform();
-    await initializePython();
-
-  createWindow();
-  await startAgentBridge();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+  registerAppLifecycleHandlers({
+    createWindow: createMainWindow,
+    beforeQuit: async () => {
+      logger.info('App is quitting...');
+      closeDatabase();
+      await stopAgentRuntime();
+    },
   });
+}).catch((error) => {
+  logger.error('Failed during Electron bootstrap:', error);
 });
 
-async function startAgentBridge() {
-  try {
-    if (!hasAgentKeys()) {
-      console.log('[Main] No API keys found in environment. Agent will rely on Settings-provided keys.');
-    }
-
-    console.log('[Main] Starting agent bridge...');
-    agentBridge = getAgentBridge();
-
-    agentBridge.on('stream', (message: any) => {
-      mainWindow?.webContents.send('agent:stream', message);
-    });
-
-    agentBridge.on('error', (error: Error) => {
-      console.error('[Main] Agent bridge error:', error);
-      mainWindow?.webContents.send('agent:error', { error: error.message });
-    });
-
-    agentBridge.on('exit', (code: number, signal: string) => {
-      console.log(`[Main] Agent bridge exited: ${code} (${signal})`);
-    });
-
-    await agentBridge.ensureStarted();
-
-    console.log('[Main] Agent bridge started successfully');
-  } catch (error) {
-    console.error('[Main] Failed to start agent bridge:', error);
-  }
-}
-
-function hasAgentKeys(): boolean {
-  return Boolean(
-    process.env.GEMINI_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.OPENROUTER_API_KEY ||
-    process.env.KIMI_API_KEY
-  );
-}
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('before-quit', async () => {
-  console.log('App is quitting...');
-  closeDatabase();
-
-  if (agentBridge) {
-    console.log('[Main] Stopping agent bridge...');
-    await agentBridge.stop();
-  }
-});
-
-async function initializeFFmpeg() {
-  console.log('[Main] Initializing FFmpeg...');
-
-  try {
-    const result = await detectFFmpeg();
-    if (result) {
-      console.log(`[Main] FFmpeg found: ${result.path}`);
-      console.log(`[Main] FFmpeg version: ${result.version}`);
-      console.log(`[Main] FFmpeg source: ${result.source}`);
-    } else {
-      console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
-      console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
-    }
-  } catch (error) {
-    console.error('[Main] FFmpeg detection failed:', error);
-    console.warn('[Main] FFmpeg not found. Video processing features will be disabled.');
-    console.warn('[Main] Install FFmpeg or run: pnpm postinstall');
-  }
-}
-
-async function initializeAudiowaveform() {
-  console.log('[Main] Initializing audiowaveform...');
-
-  try {
-    const result = await detectAudiowaveform();
-    if (result) {
-      console.log(`[Main] Audiowaveform found: ${result.path}`);
-      console.log(`[Main] Audiowaveform version: ${result.version}`);
-      console.log(`[Main] Audiowaveform source: ${result.source}`);
-    } else {
-      console.warn('[Main] Audiowaveform not found. Waveform visualization will be disabled.');
-      console.warn('[Main] Install audiowaveform for waveform generation:');
-      console.warn('[Main]   Ubuntu/Debian: sudo apt install audiowaveform');
-      console.warn('[Main]   Fedora: sudo dnf install audiowaveform');
-      console.warn('[Main]   Arch: yay -S audiowaveform');
-      console.warn('[Main]   macOS: brew install audiowaveform');
-    }
-  } catch (error) {
-    console.error('[Main] Audiowaveform detection failed:', error);
-    console.warn('[Main] Waveform visualization will be disabled.');
-  }
-}
-
-async function initializePython() {
-  console.log('[Main] Initializing Python...');
-
-  try {
-    const result = await detectPython();
-    if (result) {
-      console.log(`[Main] Python found: ${result.path}`);
-      console.log(`[Main] Python version: ${result.version}`);
-      console.log(`[Main] Python source: ${result.source}`);
-
-      void getWhisperRuntimeStatus({ autoSetup: true })
-        .then((status) => {
-          if (status.available) {
-            console.log(`[Main] Whisper runtime ready: ${status.pythonPath || 'unknown python'}`);
-            return;
-          }
-
-          console.warn('[Main] Whisper runtime unavailable after setup attempt:', status.error || 'unknown reason');
-        })
-        .catch((setupError) => {
-          console.warn('[Main] Whisper runtime setup check failed:', setupError);
-        });
-    } else {
-      console.warn('[Main] Python not found. Transcription features will be disabled.');
-      console.warn('[Main] Install Python 3.8+ to enable transcription.');
-    }
-  } catch (error) {
-    console.error('[Main] Python detection failed:', error);
-    console.warn('[Main] Python not found. Transcription features will be disabled.');
-    console.warn('[Main] Install Python 3.8+ to enable transcription.');
-  }
-}
-
-// Export mainWindow getter for IPC handlers
-export function getMainWindow(): BrowserWindow | null {
-  return mainWindow;
-}
+export { getMainWindow } from './bootstrap/window.js';

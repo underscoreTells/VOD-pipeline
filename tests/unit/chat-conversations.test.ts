@@ -14,7 +14,7 @@ import {
   getChapterProxyByChapterAsset,
   updateChapterProxyStatus,
   updateChapterProxyMetadata,
-} from "../../src/electron/database/db.js";
+} from "../../src/electron/database/index.js";
 
 const canUseNativeSqlite = (() => {
   try {

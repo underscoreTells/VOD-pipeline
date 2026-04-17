@@ -17,7 +17,8 @@
     saveProjectTimelineState,
     exportProjectToFile,
     generateAssetWaveform,
-    getAssetWaveform
+    getAssetWaveform,
+    getMissingProjectAssets
   } from '../state/project-detail.svelte';
   import { 
     chaptersState, 
@@ -48,7 +49,7 @@
     expandChat,
     expandBeat,
   } from '../state/layout.svelte';
-  import { buildAssetUrl } from '../utils/media';
+  import { buildPlayableAssetUrl, looksLikeExternalStoragePath } from '../utils/media';
   import {
     onTranscriptionProgress,
     transcribeChapter as startChapterTranscription,
@@ -57,6 +58,7 @@
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
   import { setProjectContext, setChapterContext } from '../state/agent.svelte';
   import type { Project, Asset } from '$shared/types/database';
+  import type { ProjectAsset } from '$shared/contracts/ipc';
   
   interface Props {
     project: Project;
@@ -67,6 +69,7 @@
     id: string;
     label: string;
     audioUrl: string;
+    missing: boolean;
     assetId: number | null;
     editable: boolean;
     clipTrackIndex: number;
@@ -348,8 +351,13 @@
     if (!selectedChapterAssetIds.length) return [];
     return selectedChapterAssetIds
       .map((assetId) => projectDetail.assets.find((asset) => asset.id === assetId))
-      .filter((asset): asset is Asset => Boolean(asset));
+      .filter((asset): asset is ProjectAsset => Boolean(asset));
   });
+
+  const missingProjectAssets = $derived.by(() => getMissingProjectAssets());
+  const missingMediaLooksExternal = $derived.by(() =>
+    missingProjectAssets.some((asset) => looksLikeExternalStoragePath(asset.availability.nearestExistingAncestor))
+  );
 
   function getAssetAudioTrackCount(asset: Asset | null): number {
     const trackCount = asset?.metadata?.audioTracks?.length;
@@ -378,9 +386,13 @@
     return [MIX_WAVEFORM_TRACK_INDEX, ...sourceTracks];
   }
 
-  const chapterPreviewAsset = $derived.by(() => selectedChapterAssets[0] ?? null);
+  const chapterPreviewAsset = $derived.by(() =>
+    selectedChapterAssets.find((asset) => asset.availability.exists !== false) ?? selectedChapterAssets[0] ?? null
+  );
   const timelineWaveformAssetIds = $derived.by(() => {
-    return selectedChapterAssets.map((asset) => asset.id);
+    return selectedChapterAssets
+      .filter((asset) => asset.availability.exists !== false)
+      .map((asset) => asset.id);
   });
   const canShowSourceTracks = $derived.by(() => {
     return selectedChapterAssets.some((asset) => getAssetAudioTrackCount(asset) > 1);
@@ -402,6 +414,9 @@
     for (const assetId of assetIds) {
       if (token !== waveformCheckToken) return;
       const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
+      if (asset?.availability.exists === false) {
+        continue;
+      }
       const sourceTrackCount = getAssetAudioTrackCount(asset);
       const trackIndices = getWaveformTrackIndices(asset, includeSourceTracks);
 
@@ -577,7 +592,8 @@
       lanes.push({
         id: `mix-${asset.id}`,
         label: `Mix${assetLabelSuffix}`,
-        audioUrl: buildAssetUrl(asset.id),
+        audioUrl: buildPlayableAssetUrl(asset),
+        missing: asset.availability.exists === false,
         assetId: asset.id,
         editable: true,
         clipTrackIndex: -1,
@@ -590,7 +606,8 @@
           lanes.push({
             id: `a${index + 1}-${asset.id}`,
             label: `A${index + 1}${assetLabelSuffix}`,
-            audioUrl: buildAssetUrl(asset.id),
+            audioUrl: buildPlayableAssetUrl(asset),
+            missing: asset.availability.exists === false,
             assetId: asset.id,
             editable: false,
             clipTrackIndex: -1,
@@ -801,6 +818,32 @@
       />
     {:else}
       <!-- Chapters-First Layout -->
+      {#if missingProjectAssets.length > 0}
+        <div class="missing-media-banner">
+          <div class="missing-media-header">
+            <h3>Missing project media</h3>
+            <span>{missingProjectAssets.length} asset{missingProjectAssets.length === 1 ? '' : 's'} unavailable</span>
+          </div>
+          <div class="missing-media-list">
+            {#each missingProjectAssets as asset (asset.id)}
+              <div class="missing-media-item">
+                <p class="missing-media-name">{getAssetDisplayName(asset)}</p>
+                <p class="missing-media-path">{asset.availability.savedPath}</p>
+                {#if asset.availability.nearestExistingAncestor}
+                  <p class="missing-media-ancestor">
+                    Nearest existing path: {asset.availability.nearestExistingAncestor}
+                  </p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          <p class="missing-media-guidance">Mount the original storage and reload the project.</p>
+          {#if missingMediaLooksExternal}
+            <p class="missing-media-guidance secondary">This looks like external or network storage.</p>
+          {/if}
+        </div>
+      {/if}
+
       <div class="project-layout">
         <!-- Chapter Panel Sidebar -->
         {#if !layoutState.leftCollapsed}
@@ -1087,6 +1130,72 @@
     overflow: hidden;
     position: relative;
     min-height: 0;
+  }
+
+  .missing-media-banner {
+    margin: 1rem 1rem 0;
+    padding: 1rem;
+    border: 1px solid #5a3d1a;
+    border-radius: 8px;
+    background: linear-gradient(180deg, #2a1f12 0%, #1b1610 100%);
+    color: #f0d3a1;
+  }
+
+  .missing-media-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .missing-media-header h3 {
+    margin: 0;
+    color: #fff;
+    font-size: 1rem;
+  }
+
+  .missing-media-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .missing-media-item {
+    padding: 0.75rem;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .missing-media-name,
+  .missing-media-path,
+  .missing-media-ancestor,
+  .missing-media-guidance {
+    margin: 0;
+  }
+
+  .missing-media-name {
+    color: #fff;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  .missing-media-path,
+  .missing-media-ancestor,
+  .missing-media-guidance {
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: #d2c0a4;
+    word-break: break-all;
+  }
+
+  .missing-media-guidance {
+    margin-top: 0.75rem;
+  }
+
+  .missing-media-guidance.secondary {
+    margin-top: 0.35rem;
+    color: #c9b38d;
   }
   
   .loading {

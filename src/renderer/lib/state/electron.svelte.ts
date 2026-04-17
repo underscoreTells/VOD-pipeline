@@ -1,5 +1,6 @@
 import type { Asset, ChatConversation, ChatConversationMessage, Clip, Suggestion, TimelineState } from '../../../shared/types/database';
 import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../../../shared/types/agent-ipc';
+import type { ProjectAsset } from '../../../shared/contracts/ipc.js';
 
 // ============================================================================
 // Preload Verification
@@ -198,7 +199,13 @@ export function onAgentError(callback: (payload: { error: string }) => void): ()
 
 export interface GetAssetsResult {
   success: boolean;
-  data?: Asset[];
+  data?: ProjectAsset[];
+  error?: string;
+}
+
+export interface GetAssetResult {
+  success: boolean;
+  data?: ProjectAsset;
   error?: string;
 }
 
@@ -210,6 +217,10 @@ export interface AddAssetResult {
 
 export async function getAssetsByProject(projectId: number): Promise<GetAssetsResult> {
   return await window.electronAPI.assets.getByProject(projectId);
+}
+
+export async function getAsset(id: number): Promise<GetAssetResult> {
+  return await window.electronAPI.assets.get(id);
 }
 
 export async function addAsset(
@@ -613,6 +624,7 @@ declare global {
         decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
       };
       assets: {
+        get: (id: number) => Promise<GetAssetResult>;
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string, proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }) => Promise<AddAssetResult>;
       };

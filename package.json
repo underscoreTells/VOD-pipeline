@@ -4,21 +4,29 @@
   "description": "AI-Assisted Video Editor for Twitch VODs",
   "main": "dist/src/electron/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "dev": "pnpm setup:dev && concurrently \"pnpm dev:renderer\" \"wait-on http://localhost:5173 && pnpm dev:electron\"",
-    "setup:dev": "pnpm rebuild && node ./scripts/copy-database.js && node ./scripts/copy-preload.js",
+    "setup:dev": "node ./scripts/ensure-electron.js && node ./scripts/ensure-better-sqlite3.js && node ./scripts/copy-database.js && node ./scripts/copy-preload.js",
     "dev:renderer": "vite",
-    "dev:electron": "concurrently \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist/src/electron/main.js dist/src/electron/preload.cjs && electron dist/src/electron/main.js\"",
-    "dev:main": "electron dist/src/electron/main.js",
+    "dev:electron": "concurrently \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist/src/electron/main.js dist/src/electron/preload.cjs && node ./scripts/run-electron.js dist/src/electron/main.js\"",
+    "dev:main": "node ./scripts/run-electron.js dist/src/electron/main.js",
+    "doctor": "node ./scripts/doctor.mjs",
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json && node ./scripts/copy-database.js && node ./scripts/copy-preload.js",
     "dist": "pnpm build && electron-builder",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
-    "lint": "echo \"Linting not configured yet\"",
-    "test": "vitest",
+    "lint": "eslint .",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:unit",
+    "test": "pnpm test:unit",
+    "test:unit": "vitest --run tests/unit",
+    "test:integration": "vitest --run tests/integration",
+    "test:all": "vitest --run",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage",
+    "test:coverage": "vitest --coverage --run tests/unit",
     "postinstall": "node ./scripts/install-ffmpeg.js && node ./scripts/install-audiowaveform.js"
   },
   "keywords": [
@@ -47,6 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@eslint/js": "^9.26.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.1.0",
@@ -54,8 +63,12 @@
     "concurrently": "^9.2.1",
     "electron": "^40.0.0",
     "electron-builder": "^26.4.0",
+    "eslint": "^9.26.0",
+    "eslint-plugin-svelte": "^2.46.1",
+    "globals": "^15.15.0",
     "svelte-check": "^4.3.5",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.31.1",
     "vite": "^7.3.1",
     "vitest": "^3.0.0",
     "wait-on": "^8.0.5"

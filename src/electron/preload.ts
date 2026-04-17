@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
 import type { Asset, Clip, TimelineState, Suggestion, Chapter, ChatConversation, ChatConversationMessage } from '../shared/types/database';
 import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../shared/types/agent-ipc';
+import type { ProjectAsset } from '../shared/contracts/ipc.js';
 
 // ============================================================================
 // Type Definitions
@@ -98,7 +99,13 @@ export interface AgentApplyActionsResult {
 
 export interface GetAssetsResult {
   success: boolean;
-  data?: Asset[];
+  data?: ProjectAsset[];
+  error?: string;
+}
+
+export interface GetAssetResult {
+  success: boolean;
+  data?: ProjectAsset;
   error?: string;
 }
 
@@ -337,6 +344,7 @@ export interface ElectronAPI {
     decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
   };
   assets: {
+    get: (id: number) => Promise<GetAssetResult>;
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
     add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => Promise<AddAssetResult>;
   };
@@ -479,6 +487,7 @@ const electronAPI: ElectronAPI = {
     },
   },
   assets: {
+    get: (id: number) => ipcRenderer.invoke('asset:get', { id }),
     getByProject: (projectId: number) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
     add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => ipcRenderer.invoke('asset:add', { projectId, filePath, proxyOptions }),
   },

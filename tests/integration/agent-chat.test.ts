@@ -3,6 +3,13 @@ import { spawn, ChildProcess } from "child_process";
 import path from "path";
 import { JSONStdinWriter, JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
 import type { AgentOutputMessage } from "../../src/shared/types/agent-ipc.js";
+import { combinePrerequisites, requireBuiltAgent, requireSupportedNode } from "../helpers/prerequisites.js";
+
+const agentChatPrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireBuiltAgent()
+);
+const describeAgentChat = agentChatPrerequisite.ok ? describe : describe.skip;
 
 /**
  * Integration tests for the agent chat system.
@@ -21,21 +28,16 @@ import type { AgentOutputMessage } from "../../src/shared/types/agent-ipc.js";
  * 2. Set API keys: export GEMINI_API_KEY=your_key
  * 3. Remove .skip() from tests or run with --testNamePattern
  */
-describe("Agent Chat Integration", () => {
+describeAgentChat("Agent Chat Integration", () => {
   let agentProcess: ChildProcess | null = null;
   let stdinWriter: JSONStdinWriter | null = null;
   let stdoutReader: JSONStdoutReader | null = null;
   let messages: AgentOutputMessage[] = [];
   let pending: Map<string, { resolve: (value: any) => void; reject: (error: any) => void }>;
 
-  const agentPath = path.resolve(__dirname, "../../build/src/agent/index.js");
+  const agentPath = path.resolve(__dirname, "../../dist/src/agent/index.js");
 
   beforeEach(async () => {
-    if (!require("fs").existsSync(agentPath)) {
-      console.warn("Agent build not found, skipping integration test");
-      throw new Error("SKIP");
-    }
-
     messages = [];
     pending = new Map();
 

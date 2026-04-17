@@ -8,30 +8,30 @@ import {
   getWaveform, 
   checkWaveformExists,
   deleteWaveformsByAsset,
-  initializeDatabase,
   closeDatabase 
-} from '../../../src/electron/database/db.js';
+} from '../../../src/electron/database/index.js';
+import {
+  combinePrerequisites,
+  requireBinary,
+  requireNativeModule,
+  requireSupportedNode,
+} from '../../helpers/prerequisites.js';
 
-// Skip tests if FFmpeg is not available
-describe('Waveform Generation Integration', () => {
+const waveformPrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireNativeModule('better-sqlite3'),
+  requireBinary('ffmpeg'),
+  requireBinary('audiowaveform')
+);
+const describeWaveforms = waveformPrerequisite.ok ? describe : describe.skip;
+
+describeWaveforms('Waveform Generation Integration', () => {
   let testAudioPath: string;
   let tempDir: string;
   const assetId = 9999;
-  let ffmpegAvailable = false;
 
   beforeAll(async () => {
-    // Check if FFmpeg is available
     const { spawn } = await import('child_process');
-    ffmpegAvailable = await new Promise<boolean>((resolve) => {
-      const proc = spawn('ffmpeg', ['-version'], { stdio: 'ignore' });
-      proc.on('error', () => resolve(false));
-      proc.on('close', (code) => resolve(code === 0));
-    });
-
-    if (!ffmpegAvailable) {
-      console.log('FFmpeg not available, skipping waveform generation tests');
-      return;
-    }
 
     // Create temp directory for test files
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waveform-test-'));
@@ -75,19 +75,7 @@ describe('Waveform Generation Integration', () => {
     closeDatabase();
   });
 
-  it('should skip if FFmpeg is not available', () => {
-    if (!ffmpegAvailable) {
-      console.log('FFmpeg not available, skipping waveform tests');
-      return;
-    }
-    expect(true).toBe(true); // Placeholder
-  });
-
   it('should generate Tier 1 and Tier 2 waveforms', async () => {
-    if (!ffmpegAvailable || !fs.existsSync(testAudioPath)) {
-      return; // Skip
-    }
-
     const progressEvents: Array<{ tier: number; percent: number }> = [];
     
     const result = await generateWaveformTiers(
@@ -122,10 +110,6 @@ describe('Waveform Generation Integration', () => {
   });
 
   it('should save and retrieve waveforms from database', async () => {
-    if (!ffmpegAvailable || !fs.existsSync(testAudioPath)) {
-      return; // Skip
-    }
-
     // First generate and save
     await generateWaveformTiers(testAudioPath, assetId, 0);
     
@@ -142,10 +126,6 @@ describe('Waveform Generation Integration', () => {
   });
 
   it('should generate Tier 3 on demand', async () => {
-    if (!ffmpegAvailable || !fs.existsSync(testAudioPath)) {
-      return; // Skip
-    }
-
     const peaks = await generateTier3OnDemand(testAudioPath, 0, 0, 1);
     
     expect(peaks.length).toBeGreaterThan(0);
@@ -172,10 +152,6 @@ describe('Waveform Generation Integration', () => {
   });
 
   it('should cleanup waveforms on asset delete', async () => {
-    if (!ffmpegAvailable || !fs.existsSync(testAudioPath)) {
-      return; // Skip
-    }
-
     // Generate waveforms
     await generateWaveformTiers(testAudioPath, assetId, 0);
     

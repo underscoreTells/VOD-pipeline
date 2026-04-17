@@ -5,7 +5,7 @@ import * as os from 'os';
 import { randomUUID } from 'crypto';
 import { getAudiowaveformPath } from '../electron/audiowaveformDetector.js';
 import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
-import { checkWaveformExists, saveWaveform } from '../electron/database/db.js';
+import { checkWaveformExists, saveWaveform } from '../electron/database/index.js';
 import type {
   WaveformPeak,
   WaveformProgress,
@@ -69,13 +69,14 @@ export async function generateWaveformTiers(
   trackIndex: number = 0,
   onProgress?: WaveformProgressCallback,
   options: WaveformGenerationOptions = {}
-): Promise<WaveformGenerationResult | null> {
+): Promise<WaveformGenerationResult> {
   const audiowaveformPath = getAudiowaveformPath();
 
   if (!audiowaveformPath) {
-    console.warn('[Waveform] audiowaveform not found. Waveform generation disabled.');
-    console.warn('[Waveform] Install audiowaveform for waveform visualization.');
-    return null;
+    throw new WaveformError(
+      'audiowaveform not found. Install audiowaveform for waveform visualization.',
+      'AUDIOWAVEFORM_NOT_FOUND'
+    );
   }
 
   const includeTier2 = options.includeTier2 ?? true;
@@ -112,8 +113,14 @@ export async function generateWaveformTiers(
     });
   } catch (error) {
     console.error('[Waveform] Generation failed:', error);
-
-    return null;
+    if (error instanceof WaveformError) {
+      throw error;
+    }
+    throw new WaveformError(
+      `Waveform generation failed: ${error instanceof Error ? error.message : String(error)}`,
+      'GENERATION_ERROR',
+      error
+    );
   } finally {
     if (tempAudioPath) {
       cleanupTempFiles([tempAudioPath]);
@@ -132,16 +139,17 @@ export async function generateWaveformTiersForMkvTracks(
   assetId: number,
   onProgress?: WaveformProgressCallback,
   options: MkvWaveformGenerationOptions = {}
-): Promise<WaveformGenerationResult[] | null> {
+): Promise<WaveformGenerationResult[]> {
   if (path.extname(inputPath).toLowerCase() !== '.mkv') {
-    return null;
+    return [];
   }
 
   const audiowaveformPath = getAudiowaveformPath();
   if (!audiowaveformPath) {
-    console.warn('[Waveform] audiowaveform not found. Waveform generation disabled.');
-    console.warn('[Waveform] Install audiowaveform for waveform visualization.');
-    return null;
+    throw new WaveformError(
+      'audiowaveform not found. Install audiowaveform for waveform visualization.',
+      'AUDIOWAVEFORM_NOT_FOUND'
+    );
   }
 
   const ffmpegPath = getFFmpegPath();
@@ -153,7 +161,7 @@ export async function generateWaveformTiersForMkvTracks(
   const audioStreamCount = await getAudioStreamCount(ffprobePath, inputPath);
 
   if (audioStreamCount <= 1) {
-    return null;
+    return [];
   }
 
   const includeTier2 = options.includeTier2 ?? false;
@@ -163,7 +171,7 @@ export async function generateWaveformTiersForMkvTracks(
   );
 
   if (requestedTrackIndices.length === 0) {
-    return null;
+    return [];
   }
 
   const generationPlans = await Promise.all(
@@ -256,7 +264,14 @@ export async function generateWaveformTiersForMkvTracks(
   } catch (error) {
     console.error('[Waveform] MKV batch generation failed:', error);
     if (results.size === 0) {
-      return null;
+      if (error instanceof WaveformError) {
+        throw error;
+      }
+      throw new WaveformError(
+        `MKV waveform generation failed: ${error instanceof Error ? error.message : String(error)}`,
+        'GENERATION_ERROR',
+        error
+      );
     }
   } finally {
     cleanupTempFiles(tempAudioPaths);
@@ -1058,12 +1073,14 @@ export async function generateTier3OnDemand(
   trackIndex: number = 0,
   startTime: number = 0,
   duration: number = 60
-): Promise<WaveformPeak[] | null> {
+): Promise<WaveformPeak[]> {
   const audiowaveformPath = getAudiowaveformPath();
   
   if (!audiowaveformPath) {
-    console.warn('[Waveform] audiowaveform not found. Cannot generate fine detail waveform.');
-    return null;
+    throw new WaveformError(
+      'audiowaveform not found. Cannot generate fine detail waveform.',
+      'AUDIOWAVEFORM_NOT_FOUND'
+    );
   }
 
   const tempDir = os.tmpdir();
@@ -1087,7 +1104,14 @@ export async function generateTier3OnDemand(
     return convertJsonToPeaks(waveformData, 16);
   } catch (error) {
     console.error('[Waveform] Tier 3 generation failed:', error);
-    return null;
+    if (error instanceof WaveformError) {
+      throw error;
+    }
+    throw new WaveformError(
+      `Tier 3 generation failed: ${error instanceof Error ? error.message : String(error)}`,
+      'TIER_GENERATION_ERROR',
+      error
+    );
   } finally {
     try {
       if (fs.existsSync(tempJsonPath)) {
@@ -1154,8 +1178,8 @@ async function executeAudiowaveformWithTimeRange(
  * Calculate target zoom level for switching between tiers
  */
 export function getTierForZoomLevel(zoomLevel: number): 1 | 2 | 3 {
-  if (zoomLevel < 100) return 1;
-  if (zoomLevel < 200) return 2;
+  if (zoomLevel <= 100) return 1;
+  if (zoomLevel < 250) return 2;
   return 3;
 }
 

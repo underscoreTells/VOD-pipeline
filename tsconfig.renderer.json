@@ -13,8 +13,6 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
-    "checkJs": false,
     "paths": {
       "@/*": ["./src/renderer/*"],
       "$shared/*": ["./src/shared/*"]
@@ -31,7 +29,6 @@
     "src/renderer/lib/state/**/*.svelte.ts",
     "src/renderer/lib/utils/media.ts",
     "src/renderer/lib/utils/**/*.ts",
-    "src/renderer/**/*.js",
     "src/renderer/**/*.svelte",
     "src/shared/**/*.ts",
     "src/agent/providers/**/*.ts"
