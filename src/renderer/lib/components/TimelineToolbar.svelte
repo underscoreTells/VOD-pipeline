@@ -53,7 +53,7 @@
 
 <div class="toolbar">
   <div class="toolbar-section playback">
-    <button class="play-btn" onclick={togglePlayback} title="Play/Pause (Space)">
+    <button class="play-btn" onclick={togglePlayback} title="Play/Pause (Space, J/K/L shuttle)">
       <span class="icon">{getPlayIcon()}</span>
     </button>
     <span class="timecode">{formatTimecode(timelineState.playheadTime)}</span>
@@ -98,7 +98,7 @@
       class="text-btn toggle-btn"
       class:active={timelineState.excludeCutContent}
       onclick={toggleExcludeCutContent}
-      title="Exclude cut content (skip gaps while playing)"
+      title="Exclude cut content (\\)"
       aria-pressed={timelineState.excludeCutContent}
     >
       Exclude cut content

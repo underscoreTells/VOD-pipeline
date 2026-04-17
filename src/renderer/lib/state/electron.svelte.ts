@@ -1,5 +1,6 @@
 import type { Asset, ChatConversation, ChatConversationMessage, Clip, Suggestion, TimelineState } from '../../../shared/types/database';
 import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../../../shared/types/agent-ipc';
+import type { ProjectAsset } from '../../../shared/contracts/ipc.js';
 
 // ============================================================================
 // Preload Verification
@@ -198,7 +199,13 @@ export function onAgentError(callback: (payload: { error: string }) => void): ()
 
 export interface GetAssetsResult {
   success: boolean;
-  data?: Asset[];
+  data?: ProjectAsset[];
+  error?: string;
+}
+
+export interface GetAssetResult {
+  success: boolean;
+  data?: ProjectAsset;
   error?: string;
 }
 
@@ -210,6 +217,10 @@ export interface AddAssetResult {
 
 export async function getAssetsByProject(projectId: number): Promise<GetAssetsResult> {
   return await window.electronAPI.assets.getByProject(projectId);
+}
+
+export async function getAsset(id: number): Promise<GetAssetResult> {
+  return await window.electronAPI.assets.get(id);
 }
 
 export async function addAsset(
@@ -268,6 +279,26 @@ export interface BatchUpdateClipsResult {
   error?: string;
 }
 
+export interface SuggestClipNameResult {
+  success: boolean;
+  data?: {
+    name: string | null;
+  };
+  error?: string;
+}
+
+export interface ChapterReverseProxyResult {
+  success: boolean;
+  data?: {
+    status: 'missing' | 'generating' | 'ready' | 'error';
+    url?: string;
+    quality?: 'quick' | 'full';
+    isFinal?: boolean;
+    error?: string;
+  };
+  error?: string;
+}
+
 export async function getClipsByProject(projectId: number): Promise<GetClipsResult> {
   return await window.electronAPI.clips.getByProject(projectId);
 }
@@ -286,6 +317,51 @@ export async function deleteClip(id: number): Promise<DeleteClipResult> {
 
 export async function batchUpdateClips(updates: Array<{ id: number } & Partial<Clip>>): Promise<BatchUpdateClipsResult> {
   return await window.electronAPI.clips.batchUpdate(updates);
+}
+
+export async function suggestClipName(input: {
+  chapterId: number;
+  inPoint: number;
+  outPoint: number;
+  model: string;
+  apiKey: string;
+  chapterTitle?: string;
+}): Promise<SuggestClipNameResult> {
+  const suggestName = (window.electronAPI.clips as {
+    suggestName?: (payload: typeof input) => Promise<SuggestClipNameResult>;
+  }).suggestName;
+
+  if (typeof suggestName !== 'function') {
+    return {
+      success: false,
+      error: 'Clip naming API is unavailable. Restart the app to refresh preload bindings.',
+    };
+  }
+
+  return await suggestName(input);
+}
+
+export async function getChapterReverseProxy(
+  chapterId: number,
+  assetId: number,
+  options?: { ensureReady?: boolean }
+): Promise<ChapterReverseProxyResult> {
+  const getReverseProxy = (window.electronAPI.chapters as {
+    getReverseProxy?: (
+      chapterId: number,
+      assetId: number,
+      options?: { ensureReady?: boolean }
+    ) => Promise<ChapterReverseProxyResult>;
+  }).getReverseProxy;
+
+  if (typeof getReverseProxy !== 'function') {
+    return {
+      success: false,
+      error: 'Chapter reverse proxy API is unavailable. Restart the app to refresh preload bindings.',
+    };
+  }
+
+  return await getReverseProxy(chapterId, assetId, options);
 }
 
 // ============================================================================
@@ -548,6 +624,7 @@ declare global {
         decrypt: (encrypted: string) => Promise<{ success: boolean; data?: string; error?: string }>;
       };
       assets: {
+        get: (id: number) => Promise<GetAssetResult>;
         getByProject: (projectId: number) => Promise<GetAssetsResult>;
         add: (projectId: number, filePath: string, proxyOptions?: { encodingMode?: 'cpu' | 'gpu' | 'auto'; quality?: 'high' | 'balanced' | 'fast' }) => Promise<AddAssetResult>;
       };
@@ -558,6 +635,11 @@ declare global {
         delete: (id: number) => Promise<{ success: boolean; error?: string }>;
         addAsset: (chapterId: number, assetId: number) => Promise<{ success: boolean; error?: string }>;
         getAssets: (chapterId: number) => Promise<{ success: boolean; data?: number[]; error?: string }>;
+        getReverseProxy: (
+          chapterId: number,
+          assetId: number,
+          options?: { ensureReady?: boolean }
+        ) => Promise<ChapterReverseProxyResult>;
       };
       clips: {
         getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -565,6 +647,14 @@ declare global {
         update: (id: number, updates: Partial<Clip>) => Promise<UpdateClipResult>;
         delete: (id: number) => Promise<DeleteClipResult>;
         batchUpdate: (updates: Array<{ id: number } & Partial<Clip>>) => Promise<BatchUpdateClipsResult>;
+        suggestName: (input: {
+          chapterId: number;
+          inPoint: number;
+          outPoint: number;
+          model: string;
+          apiKey: string;
+          chapterTitle?: string;
+        }) => Promise<SuggestClipNameResult>;
       };
       timeline: {
         loadState: (projectId: number) => Promise<TimelineStateResult>;

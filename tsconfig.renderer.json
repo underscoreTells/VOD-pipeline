@@ -13,15 +13,14 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
-    "checkJs": false,
     "paths": {
       "@/*": ["./src/renderer/*"],
       "$shared/*": ["./src/shared/*"]
     }
   },
   "files": [
-    "src/renderer/lib/state/layout.svelte.ts"
+    "src/renderer/lib/state/layout.svelte.ts",
+    "src/renderer/lib/utils/timeline-edit.ts"
   ],
   "include": [
     "src/renderer/**/*.d.ts",
@@ -30,7 +29,6 @@
     "src/renderer/lib/state/**/*.svelte.ts",
     "src/renderer/lib/utils/media.ts",
     "src/renderer/lib/utils/**/*.ts",
-    "src/renderer/**/*.js",
     "src/renderer/**/*.svelte",
     "src/shared/**/*.ts",
     "src/agent/providers/**/*.ts"

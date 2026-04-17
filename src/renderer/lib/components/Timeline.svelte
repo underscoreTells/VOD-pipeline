@@ -10,6 +10,7 @@
     id: string;
     label: string;
     audioUrl: string;
+    missing: boolean;
     assetId: number | null;
     editable: boolean;
     clipTrackIndex: number;
@@ -124,6 +125,7 @@
       {#each lanes as lane (lane.id)}
         <TimelineTrack 
           audioUrl={lane.audioUrl}
+          missing={lane.missing}
           assetId={lane.assetId}
           laneLabel={lane.label}
           editable={lane.editable}

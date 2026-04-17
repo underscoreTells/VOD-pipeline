@@ -356,8 +356,12 @@ async function main() {
       }
     });
 
-    inputReader.on("error", (error: Error) => {
+    inputReader.on("stream-error", (error: Error) => {
       console.error("[Agent] Input reader error:", error);
+    });
+
+    inputReader.on("parse-error", (error: Error) => {
+      console.error("[Agent] Input parse error:", error);
     });
 
     inputReader.on("close", () => {

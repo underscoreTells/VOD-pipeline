@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
 import { detectGPUEncoders, getGPUEncoder, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
 import type {
@@ -374,9 +375,16 @@ export async function generateMultiResolutionProxies(
 /**
  * Run FFmpeg command and handle errors
  */
-function runFFmpeg(executablePath: string, args: string[], timeoutMs: number = 30 * 60 * 1000): Promise<void> {
+function runFFmpeg(
+  executablePath: string,
+  args: string[],
+  timeoutMs: number = 30 * 60 * 1000,
+  options?: { logCommand?: boolean }
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    console.log(`[FFmpeg] Running: ${executablePath} ${args.join(' ')}`);
+    if (options?.logCommand !== false) {
+      console.log(`[FFmpeg] Running: ${executablePath} ${args.join(' ')}`);
+    }
 
     const proc = spawn(executablePath, args);
     let errorOutput = '';
@@ -761,4 +769,302 @@ export async function generateAIProxyWithProgress(
   
   // Delegate to generateAIProxy with timeout built-in
   return generateAIProxy(inputPath, outputPath, options.onProgress, timeoutMs);
+}
+
+/**
+ * Generate chapter-scoped reverse playback preview.
+ * Preserves source resolution and downsamples to target FPS.
+ */
+function getRecommendedReverseChunkDuration(
+  width: number,
+  height: number,
+  fps: number
+): number {
+  const safeFps = Math.max(1, fps);
+  const safeWidth = Math.max(1, Math.floor(width));
+  const safeHeight = Math.max(1, Math.floor(height));
+  const bytesPerFrame = safeWidth * safeHeight * 1.5;
+  const targetFrameBufferBytes = 512 * 1024 * 1024;
+  const maxFramesPerChunk = Math.max(60, Math.floor(targetFrameBufferBytes / bytesPerFrame));
+  const seconds = maxFramesPerChunk / safeFps;
+  return Math.min(30, Math.max(4, Math.floor(seconds)));
+}
+
+function buildReverseChunkRanges(
+  startTime: number,
+  endTime: number,
+  chunkDurationSec: number
+): Array<{ startTime: number; duration: number }> {
+  const ranges: Array<{ startTime: number; duration: number }> = [];
+  const epsilon = 0.0001;
+  let cursor = startTime;
+
+  while (cursor < endTime - epsilon) {
+    const chunkEnd = Math.min(endTime, cursor + chunkDurationSec);
+    const duration = chunkEnd - cursor;
+    if (duration > epsilon) {
+      ranges.push({
+        startTime: cursor,
+        duration,
+      });
+    }
+    cursor = chunkEnd;
+  }
+
+  ranges.reverse();
+  return ranges;
+}
+
+function toConcatFileEntry(filePath: string): string {
+  const normalizedPath = path.resolve(filePath).replace(/\\/g, '/');
+  const escapedPath = normalizedPath.replace(/'/g, "'\\''");
+  return `file '${escapedPath}'`;
+}
+
+async function runChunkedChapterReverseGeneration(params: {
+  ffmpegBinaryPath: string;
+  inputPath: string;
+  outputPath: string;
+  startTime: number;
+  endTime: number;
+  fps: number;
+  hasAudio: boolean;
+  videoArgs: string[];
+  chunkDurationSec: number;
+  maxParallelChunks: number;
+  timeoutMs: number;
+}): Promise<void> {
+  const {
+    ffmpegBinaryPath,
+    inputPath,
+    outputPath,
+    startTime,
+    endTime,
+    fps,
+    hasAudio,
+    videoArgs,
+    chunkDurationSec,
+    maxParallelChunks,
+    timeoutMs,
+  } = params;
+
+  const chunkRanges = buildReverseChunkRanges(startTime, endTime, chunkDurationSec);
+  if (chunkRanges.length === 0) {
+    throw new FFmpegError('Reverse proxy chunk plan is empty', 'INVALID_OPTIONS');
+  }
+
+  const outputDir = path.dirname(outputPath);
+  const outputBaseName = path.basename(outputPath, path.extname(outputPath));
+  const tempDir = fs.mkdtempSync(path.join(outputDir, `${outputBaseName}.chunks-`));
+  const totalChunks = chunkRanges.length;
+  const chunkPaths = new Array<string>(totalChunks);
+  const workerCount = Math.min(totalChunks, Math.max(1, Math.floor(maxParallelChunks)));
+  const logStep = Math.max(1, Math.floor(totalChunks / 10));
+  let completedChunks = 0;
+
+  console.log(`[ReverseProxy] Rendering ${totalChunks} chunk(s) with ${workerCount} worker(s)`);
+
+  try {
+    const renderChunkAtIndex = async (index: number): Promise<void> => {
+      const chunk = chunkRanges[index];
+      const chunkPath = path.join(tempDir, `chunk_${String(index).padStart(4, '0')}.mp4`);
+      chunkPaths[index] = chunkPath;
+
+      const args: string[] = [
+        '-ss', chunk.startTime.toString(),
+        '-t', chunk.duration.toString(),
+        '-i', inputPath,
+        '-map', '0:v:0',
+        '-vf', `fps=${fps},reverse`,
+        ...videoArgs,
+        '-pix_fmt', 'yuv420p',
+      ];
+
+      if (hasAudio) {
+        args.push(
+          '-map', '0:a:0',
+          '-af', 'areverse',
+          '-c:a', 'aac',
+          '-b:a', '128k'
+        );
+      } else {
+        args.push('-an');
+      }
+
+      args.push(
+        '-f', 'mp4',
+        '-movflags', '+faststart',
+        '-y', chunkPath
+      );
+
+      await runFFmpeg(ffmpegBinaryPath, args, timeoutMs, { logCommand: false });
+
+      completedChunks += 1;
+      if (completedChunks === 1 || completedChunks === totalChunks || completedChunks % logStep === 0) {
+        console.log(`[ReverseProxy] Chunk progress ${completedChunks}/${totalChunks}`);
+      }
+    };
+
+    let nextChunkIndex = 0;
+    let shouldStop = false;
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (!shouldStop) {
+        const index = nextChunkIndex;
+        nextChunkIndex += 1;
+        if (index >= totalChunks) {
+          return;
+        }
+
+        try {
+          await renderChunkAtIndex(index);
+        } catch (error) {
+          shouldStop = true;
+          throw error;
+        }
+      }
+    });
+
+    await Promise.all(workers);
+
+    const concatListPath = path.join(tempDir, 'concat-list.txt');
+    const concatList = chunkPaths.map((chunkPath) => toConcatFileEntry(chunkPath)).join('\n');
+    fs.writeFileSync(concatListPath, `${concatList}\n`, 'utf-8');
+
+    const concatArgs: string[] = [
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatListPath,
+      '-c:v', 'copy',
+      ...(hasAudio ? ['-c:a', 'aac', '-b:a', '128k'] : ['-an']),
+      '-movflags', '+faststart',
+      '-y', outputPath,
+    ];
+
+    await runFFmpeg(ffmpegBinaryPath, concatArgs, timeoutMs);
+  } finally {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+}
+
+export async function generateChapterReverseProxy(
+  inputPath: string,
+  outputPath: string,
+  options: {
+    startTime: number;
+    endTime: number;
+    fps?: number;
+    timeoutMs?: number;
+    encodingMode?: 'cpu' | 'gpu' | 'auto';
+    quality?: 'high' | 'balanced' | 'fast';
+    chunkDurationSec?: number;
+    maxParallelChunks?: number;
+  }
+): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
+  const ffmpegPath = getFFmpegPath();
+  if (!ffmpegPath) {
+    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
+  }
+
+  const startTime = options.startTime;
+  const endTime = options.endTime;
+  const fps = options.fps ?? 15;
+  const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000;
+  const encodingMode = options.encodingMode ?? 'auto';
+  const quality = options.quality ?? 'high';
+
+  if (!Number.isFinite(startTime) || startTime < 0) {
+    throw new FFmpegError('Reverse proxy startTime must be a finite number >= 0', 'INVALID_OPTIONS');
+  }
+  if (!Number.isFinite(endTime) || endTime <= startTime) {
+    throw new FFmpegError('Reverse proxy endTime must be greater than startTime', 'INVALID_OPTIONS');
+  }
+  if (!Number.isFinite(fps) || fps <= 0) {
+    throw new FFmpegError('Reverse proxy fps must be a finite number > 0', 'INVALID_OPTIONS');
+  }
+  if (encodingMode !== 'cpu' && encodingMode !== 'gpu' && encodingMode !== 'auto') {
+    throw new FFmpegError('Reverse proxy encodingMode must be cpu, gpu, or auto', 'INVALID_OPTIONS');
+  }
+  if (quality !== 'high' && quality !== 'balanced' && quality !== 'fast') {
+    throw new FFmpegError('Reverse proxy quality must be high, balanced, or fast', 'INVALID_OPTIONS');
+  }
+
+  const inputMetadata = await getVideoMetadata(inputPath);
+  const hasAudio = Array.isArray(inputMetadata.audioTracks) && inputMetadata.audioTracks.length > 0;
+  const recommendedChunkDuration = getRecommendedReverseChunkDuration(inputMetadata.width, inputMetadata.height, fps);
+  const chunkDurationSec = options.chunkDurationSec ?? recommendedChunkDuration;
+  if (!Number.isFinite(chunkDurationSec) || chunkDurationSec <= 0) {
+    throw new FFmpegError('Reverse proxy chunkDurationSec must be a finite number > 0', 'INVALID_OPTIONS');
+  }
+
+  let useGPU = false;
+  let encodingBinaryPath = ffmpegPath.path;
+  if (encodingMode === 'gpu' || encodingMode === 'auto') {
+    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
+    useGPU = gpuEncoder !== null;
+    if (useGPU) {
+      const gpuFFmpegPath = getGPUFFmpegPath();
+      if (gpuFFmpegPath) {
+        encodingBinaryPath = gpuFFmpegPath;
+      }
+      console.log(`[ReverseProxy] Using GPU acceleration: ${gpuEncoder?.name}`);
+    } else if (encodingMode === 'gpu') {
+      throw new FFmpegError('GPU encoding requested but no GPU encoder is available', 'FFMPEG_ERROR');
+    } else {
+      console.log('[ReverseProxy] GPU not available, using CPU encoding');
+    }
+  }
+
+  const generateWithEncoder = async (useGpuEncoder: boolean, ffmpegBinaryPath: string): Promise<void> => {
+    const { videoCodec, videoArgs } = getProxyEncoderArgs(useGpuEncoder, quality);
+    const cpuCount = Math.max(1, os.cpus().length);
+    const defaultParallelism = useGpuEncoder
+      ? Math.max(1, Math.min(4, Math.floor(cpuCount / 4) || 1))
+      : Math.max(1, Math.min(8, Math.floor(cpuCount / 2) || 1));
+    const maxParallelChunks = Math.max(1, Math.floor(options.maxParallelChunks ?? defaultParallelism));
+    console.log(
+      `[ReverseProxy] Generating reverse proxy with ${useGpuEncoder ? 'GPU' : 'CPU'} encoder ${videoCodec}, chunk=${chunkDurationSec}s, workers=${maxParallelChunks}`
+    );
+
+    await runChunkedChapterReverseGeneration({
+      ffmpegBinaryPath,
+      inputPath,
+      outputPath,
+      startTime,
+      endTime,
+      fps,
+      hasAudio,
+      videoArgs,
+      chunkDurationSec,
+      maxParallelChunks,
+      timeoutMs,
+    });
+  };
+
+  if (useGPU) {
+    try {
+      await generateWithEncoder(true, encodingBinaryPath);
+    } catch (error) {
+      if (encodingMode === 'gpu') {
+        throw error;
+      }
+
+      console.warn('[ReverseProxy] GPU reverse generation failed, retrying on CPU:', error);
+      await generateWithEncoder(false, ffmpegPath.path);
+    }
+  } else {
+    await generateWithEncoder(false, ffmpegPath.path);
+  }
+
+  const outputMetadata = await getVideoMetadata(outputPath, 60000);
+  const stats = fs.statSync(outputPath);
+
+  return {
+    width: outputMetadata.width,
+    height: outputMetadata.height,
+    framerate: Math.round(outputMetadata.fps),
+    fileSize: stats.size,
+    duration: outputMetadata.duration,
+  };
 }

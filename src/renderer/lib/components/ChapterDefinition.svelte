@@ -1,12 +1,15 @@
 <script lang="ts">
   import type { Asset } from "../../../shared/types/database";
+  import type { AssetAvailability } from "../../../shared/contracts/ipc";
   import { createChapter, linkAssetToChapter, chaptersState } from "../state/chapters.svelte";
   import { settingsState } from "../state/settings.svelte";
-  import { buildAssetUrl } from "../utils/media";
+  import { buildPlayableAssetUrl } from "../utils/media";
   import { formatTime } from "../utils/time";
 
+  type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
+
   interface Props {
-    asset: Asset;
+    asset: AvailabilityAwareAsset;
     projectId: number;
     onComplete: (chapters: Array<{ title: string; startTime: number; endTime: number }>) => void;
     onCancel: () => void;
@@ -19,6 +22,8 @@
   let videoDuration = $state(0);
   let definitionContainer = $state<HTMLElement | null>(null);
   let definitionTopHeight = $state(320);
+  const assetUnavailable = $derived(asset.availability?.exists === false);
+  const videoSrc = $derived(buildPlayableAssetUrl(asset));
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_DEFINITION_TOP = 220;
@@ -92,7 +97,7 @@
   }
 
   $effect(() => {
-    if (videoRef) {
+    if (videoRef && videoSrc) {
       videoRef.load();
     }
   });
@@ -203,7 +208,7 @@
   }
 
   function previewSelection() {
-    if (!videoRef || !hasSelection) return;
+    if (!videoRef || !hasSelection || assetUnavailable) return;
     isPreviewing = true;
     videoRef.currentTime = selectionStart;
     videoRef.play().catch(() => {
@@ -267,19 +272,31 @@
     </div>
 
     <div class="video-preview">
-      <video
-        bind:this={videoRef}
-        class="definition-video"
-        src={buildAssetUrl(asset.id)}
-        ontimeupdate={handleVideoTimeUpdate}
-        onloadedmetadata={handleVideoLoadedMetadata}
-        onerror={handleVideoError}
-        controls
-        preload="metadata"
-        playsinline
-      >
-        <track kind="captions" />
-      </video>
+      {#if assetUnavailable}
+        <div class="unavailable-state">
+          <p class="unavailable-title">Chapter source file is unavailable</p>
+          <p class="unavailable-path">{asset.availability?.savedPath ?? asset.file_path}</p>
+          {#if asset.availability?.nearestExistingAncestor}
+            <p class="unavailable-ancestor">
+              Nearest existing path: {asset.availability.nearestExistingAncestor}
+            </p>
+          {/if}
+        </div>
+      {:else}
+        <video
+          bind:this={videoRef}
+          class="definition-video"
+          src={videoSrc}
+          ontimeupdate={handleVideoTimeUpdate}
+          onloadedmetadata={handleVideoLoadedMetadata}
+          onerror={handleVideoError}
+          controls
+          preload="metadata"
+          playsinline
+        >
+          <track kind="captions" />
+        </video>
+      {/if}
     </div>
   </div>
 
@@ -325,16 +342,16 @@
 
     <!-- Controls -->
     <div class="controls">
-      <button class="control-btn" onclick={markStart}>
+      <button class="control-btn" onclick={markStart} disabled={assetUnavailable}>
         Mark Start @ {formatTime(playheadTime)}
       </button>
-      <button class="control-btn" onclick={markEnd}>
+      <button class="control-btn" onclick={markEnd} disabled={assetUnavailable}>
         Mark End
       </button>
-      <button class="control-btn secondary" onclick={previewSelection} disabled={!hasSelection}>
+      <button class="control-btn secondary" onclick={previewSelection} disabled={!hasSelection || assetUnavailable}>
         Preview
       </button>
-      <button class="control-btn secondary" onclick={clearSelection}>
+      <button class="control-btn secondary" onclick={clearSelection} disabled={assetUnavailable}>
         Clear
       </button>
     </div>
@@ -345,7 +362,7 @@
         <span class="selection-text">
           Selection: {formatTime(selectionStart)} - {formatTime(selectionEnd)} ({formatTime(selectionDuration)})
         </span>
-        <button class="add-btn" onclick={addChapter}>
+        <button class="add-btn" onclick={addChapter} disabled={assetUnavailable}>
           + Add Chapter
         </button>
       {:else}
@@ -491,6 +508,34 @@
     display: block;
     background: #000;
     object-fit: contain;
+  }
+
+  .unavailable-state {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    height: 100%;
+    padding: 1.25rem;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
+    color: #d4d4d4;
+  }
+
+  .unavailable-title {
+    margin: 0;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .unavailable-path,
+  .unavailable-ancestor {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: #a0a0a0;
+    word-break: break-all;
   }
 
   .timeline-section {

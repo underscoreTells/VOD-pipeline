@@ -3,14 +3,19 @@ import type { Clip } from '$shared/types/database';
 import {
   timelineState,
   togglePlayback,
+  shuttleForward,
+  shuttleReverse,
+  stopShuttle,
   selectAll,
   clearSelection as clearTimelineSelection,
   zoomIn,
   zoomOut,
   zoomToFit,
   setPlayhead,
+  getClipById,
+  toggleExcludeCutContent,
 } from './timeline.svelte';
-import { executeDeleteClip } from './project-detail.svelte';
+import { executeDeleteClip, executeSplitClip } from './project-detail.svelte';
 import { getSelectedChapter, getAssetsForChapter } from './chapters.svelte';
 import {
   clipBuilderState,
@@ -25,8 +30,17 @@ type ShortcutHandler = () => void | Promise<unknown>;
 const SHORTCUTS: Record<string, ShortcutHandler> = {
   // Playback
   'Space': togglePlayback,
+  'j': shuttleReverse,
+  'k': stopShuttle,
+  'l': shuttleForward,
   
   // Navigation
+  'Tab': () => {
+    jumpToAdjacentClip('next');
+  },
+  'Shift+Tab': () => {
+    jumpToAdjacentClip('previous');
+  },
   'ArrowLeft': () => handleArrowNavigation('previous', -1),
   'ArrowRight': () => handleArrowNavigation('next', 1),
   'Shift+ArrowLeft': () => nudgePlayhead(-10),
@@ -47,11 +61,13 @@ const SHORTCUTS: Record<string, ShortcutHandler> = {
   'Equal': zoomIn,      // + key
   'Minus': zoomOut,     // - key
   'f': zoomToFit,
+  'Backslash': toggleExcludeCutContent,
   
   // Clip editing
   'i': markInPoint,
   'o': markOutPoint,
   'Ctrl+b': toggleInOut,
+  's': splitClipAtPlayhead,
 };
 
 // Track if user is in an input field
@@ -72,12 +88,29 @@ function getShortcutKey(event: KeyboardEvent): string {
   if (event.ctrlKey || event.metaKey) parts.push('Ctrl');
   if (event.shiftKey) parts.push('Shift');
   if (event.altKey) parts.push('Alt');
-  
-  // Use event.code for Space to ensure reliable detection
-  const key = event.code === 'Space' ? 'Space' : event.key;
+
+  const key = normalizeShortcutKey(event);
   parts.push(key);
   
   return parts.join('+');
+}
+
+function normalizeShortcutKey(event: KeyboardEvent): string {
+  if (event.code === 'Space') return 'Space';
+  if (event.code === 'Equal') return 'Equal';
+  if (event.code === 'Minus') return 'Minus';
+  if (event.code === 'Backslash') return 'Backslash';
+
+  if (event.code.startsWith('Key') && event.code.length === 4) {
+    return event.code.slice(3).toLowerCase();
+  }
+
+  const key = event.key;
+  if (key.length === 1) {
+    return key.toLowerCase();
+  }
+
+  return key;
 }
 
 // Nudge playhead by frames
@@ -147,6 +180,39 @@ function handleArrowNavigation(direction: 'previous' | 'next', fallbackFrames: n
   }
 
   nudgePlayhead(fallbackFrames);
+}
+
+function clipContainsSplitPoint(clip: Clip, splitTime: number): boolean {
+  const duration = clip.out_point - clip.in_point;
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  const clipStart = clip.start_time;
+  const clipEnd = clip.start_time + duration;
+  const MIN_SEGMENT_DURATION = 0.05;
+  const splitEpsilon = 0.0001;
+  return (
+    splitTime > clipStart + MIN_SEGMENT_DURATION - splitEpsilon &&
+    splitTime < clipEnd - MIN_SEGMENT_DURATION + splitEpsilon
+  );
+}
+
+function getSplitTargetClipAtPlayhead(): Clip | null {
+  const playhead = timelineState.playheadTime;
+
+  for (const selectedClipId of timelineState.selectedClipIds) {
+    const selectedClip = getClipById(selectedClipId);
+    if (selectedClip && clipContainsSplitPoint(selectedClip, playhead)) {
+      return selectedClip;
+    }
+  }
+
+  const clips = getChapterScopedClips();
+  return clips.find((clip) => clipContainsSplitPoint(clip, playhead)) ?? null;
+}
+
+async function splitClipAtPlayhead() {
+  const clip = getSplitTargetClipAtPlayhead();
+  if (!clip) return;
+  await executeSplitClip(clip.id, timelineState.playheadTime);
 }
 
 // Handle delete key

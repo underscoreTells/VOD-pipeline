@@ -1,4 +1,3 @@
-import { app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
@@ -28,6 +27,7 @@ export async function detectFFmpeg(): Promise<FFmpegPathResult | null> {
     const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
     const resourcesPath = process.resourcesPath || process.cwd();
 
+    const userDataPath = await getElectronUserDataPath();
     const detectionOrder: Array<{ path: string; source: FFmpegPathResult['source'] }> = [
       {
         path: path.join(resourcesPath, 'binaries', platform, binaryName),
@@ -38,14 +38,17 @@ export async function detectFFmpeg(): Promise<FFmpegPathResult | null> {
         source: 'development',
       },
       {
-        path: path.join(app.getPath('userData'), 'binaries', binaryName),
-        source: 'userData',
-      },
-      {
         path: binaryName,
         source: 'system',
       },
     ];
+
+    if (userDataPath) {
+      detectionOrder.splice(2, 0, {
+        path: path.join(userDataPath, 'binaries', binaryName),
+        source: 'userData',
+      });
+    }
 
     for (const { path: testPath, source } of detectionOrder) {
       if (await isExecutable(testPath)) {
@@ -144,4 +147,13 @@ export function getFFprobePath(ffmpegPath: string): string {
   const ext = path.extname(ffmpegPath);
   const baseName = 'ffprobe';
   return path.join(dir, baseName + ext);
+}
+
+async function getElectronUserDataPath(): Promise<string | null> {
+  try {
+    const electron = await import('electron');
+    return electron.app?.getPath('userData') ?? null;
+  } catch {
+    return null;
+  }
 }

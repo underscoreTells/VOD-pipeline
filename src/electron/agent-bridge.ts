@@ -125,9 +125,13 @@ export class AgentBridge extends EventEmitter {
     });
 
     this.stdoutReader.on("message", this.handleMessage.bind(this));
-    this.stdoutReader.on("error", (error: Error) => {
+    this.stdoutReader.on("stream-error", (error: Error) => {
       console.error("[AgentBridge] stdout reader error:", error);
       this.emitBridgeError(error);
+    });
+
+    this.stdoutReader.on("parse-error", (error: Error) => {
+      console.warn("[AgentBridge] stdout parse error:", error);
     });
 
     this.readyPromise = new Promise((resolve, reject) => {
@@ -168,7 +172,7 @@ export class AgentBridge extends EventEmitter {
       // ES module compatible __dirname replacement
       const __filename = fileURLToPath(import.meta.url);
       const __dirname = path.dirname(__filename);
-      return path.join(__dirname, "../../src/agent/index.js");
+      return path.join(__dirname, "../agent/index.js");
     }
   }
 

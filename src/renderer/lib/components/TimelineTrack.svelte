@@ -10,6 +10,7 @@
     executeDeleteClip,
     executeMoveClip,
     executeResizeClip,
+    executeSplitClip,
     executeUpdateClipTiming,
     projectDetail,
   } from '../state/project-detail.svelte';
@@ -20,9 +21,11 @@
     type CollisionDragDirection,
   } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
+  import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
   
   interface Props {
     audioUrl: string;
+    missing?: boolean;
     assetId: number | null;
     laneLabel: string;
     editable?: boolean;
@@ -35,6 +38,7 @@
   
   let {
     audioUrl,
+    missing = false,
     assetId,
     laneLabel,
     editable = true,
@@ -59,11 +63,14 @@
   let scrollContainer: HTMLElement | null = null;
   let cleanupRenderListener: (() => void) | null = null;
   const clipRegions = new Map<number, any>();
-  let clipContextMenu = $state({
+  let contextMenu = $state({
     open: false,
     x: 0,
     y: 0,
+    mode: 'clip' as 'clip' | 'track',
     clipId: null as number | null,
+    cursorGlobalTime: null as number | null,
+    canSplit: false,
   });
 
   const WAVEFORM_TIER_LEVEL = 1;
@@ -130,6 +137,7 @@
 
   const MIN_SELECTION_SECONDS = 0.25;
   const MIN_CLIP_DURATION = 0.05;
+  const DEFAULT_CONTEXT_CLIP_DURATION = 5;
   const MIN_RENDER_REGION_PX = 2;
   const RENDER_VISIBILITY_EPSILON = 0.001;
   const CLICK_DRAG_THRESHOLD = 4;
@@ -235,7 +243,7 @@
     setTimeout(() => { isScrolling = false; }, 0);
   }
 
-  function getPointerTime(event: PointerEvent): number | null {
+  function getPointerTime(event: PointerEvent | MouseEvent): number | null {
     if (!chapterRange) return null;
     if (!waveSurfer) return null;
     const wrapper = waveSurfer.getWrapper();
@@ -370,15 +378,36 @@
     return { clipId, handle };
   }
 
-  function closeClipContextMenu() {
-    clipContextMenu.open = false;
-    clipContextMenu.clipId = null;
+  function closeContextMenu() {
+    contextMenu.open = false;
+    contextMenu.clipId = null;
+    contextMenu.cursorGlobalTime = null;
+    contextMenu.canSplit = false;
   }
 
-  function openClipContextMenu(event: MouseEvent, clipId: number) {
+  function canSplitClipAtGlobalTime(clip: Clip, splitTime: number): boolean {
+    const split = splitClipAtTimelineTime({
+      clipStartTime: clip.start_time,
+      inPoint: clip.in_point,
+      outPoint: clip.out_point,
+      splitTime,
+      minDuration: MIN_CLIP_DURATION,
+    });
+    return split !== null;
+  }
+
+  function openContextMenu(
+    event: MouseEvent,
+    options: {
+      mode: 'clip' | 'track';
+      clipId: number | null;
+      cursorGlobalTime: number;
+      canSplit?: boolean;
+    }
+  ) {
     const padding = 8;
-    const menuWidth = 180;
-    const menuHeight = 44;
+    const menuWidth = 220;
+    const menuHeight = options.mode === 'clip' ? 80 : 44;
     let x = event.clientX;
     let y = event.clientY;
 
@@ -389,17 +418,81 @@
       y = Math.max(padding, window.innerHeight - menuHeight - padding);
     }
 
-    clipContextMenu.open = true;
-    clipContextMenu.x = x;
-    clipContextMenu.y = y;
-    clipContextMenu.clipId = clipId;
+    contextMenu.open = true;
+    contextMenu.mode = options.mode;
+    contextMenu.x = x;
+    contextMenu.y = y;
+    contextMenu.clipId = options.clipId;
+    contextMenu.cursorGlobalTime = options.cursorGlobalTime;
+    contextMenu.canSplit = options.mode === 'clip' ? Boolean(options.canSplit) : false;
   }
 
   function handleClipContextDelete() {
-    if (clipContextMenu.clipId === null) return;
-    const clipId = clipContextMenu.clipId;
-    closeClipContextMenu();
+    if (contextMenu.clipId === null) return;
+    const clipId = contextMenu.clipId;
+    closeContextMenu();
     void executeDeleteClip(clipId);
+  }
+
+  function handleClipContextSplit() {
+    if (contextMenu.clipId === null) return;
+    if (contextMenu.cursorGlobalTime === null) return;
+    if (!contextMenu.canSplit) return;
+
+    const clipId = contextMenu.clipId;
+    const splitTime = contextMenu.cursorGlobalTime;
+    closeContextMenu();
+    void executeSplitClip(clipId, splitTime);
+  }
+
+  async function createClipAtCursor(cursorGlobalTime: number) {
+    if (!editable) return;
+    if (!projectDetail.projectId || !assetId) return;
+    if (!chapterRange) return;
+
+    const intervals = trackClips
+      .map((clip) => {
+        const duration = clip.out_point - clip.in_point;
+        if (!Number.isFinite(duration) || duration <= 0) return null;
+        const start = clip.start_time - chapterRange.start;
+        const end = start + duration;
+        return { start, end };
+      })
+      .filter((interval): interval is { start: number; end: number } => interval !== null);
+
+    const cursorLocalTime = clamp(cursorGlobalTime - chapterRange.start, 0, chapterRange.duration);
+    const range = buildDefaultClipRangeAtCursor(
+      cursorLocalTime,
+      intervals,
+      chapterRange.duration,
+      DEFAULT_CONTEXT_CLIP_DURATION,
+      MIN_CLIP_DURATION
+    );
+
+    if (!range) return;
+
+    const globalStart = chapterRange.start + range.start;
+    const globalIn = chapterRange.start + range.start;
+    const globalOut = chapterRange.start + range.end;
+
+    await createProjectClip(
+      projectDetail.projectId,
+      assetId,
+      createTrackIndex,
+      globalStart,
+      globalIn,
+      globalOut,
+      undefined,
+      undefined,
+      true
+    );
+  }
+
+  function handleTrackContextCreateClip() {
+    if (contextMenu.cursorGlobalTime === null) return;
+    const cursorTime = contextMenu.cursorGlobalTime;
+    closeContextMenu();
+    void createClipAtCursor(cursorTime);
   }
 
   function updateRegionVisual(clipId: number, localStart: number, localEnd: number) {
@@ -762,8 +855,8 @@
   function handleWaveformPointerDown(event: PointerEvent) {
     if (!scrollContainer || !isReady) return;
     if (!chapterRange) return;
-    if (clipContextMenu.open && event.button !== 2) {
-      closeClipContextMenu();
+    if (contextMenu.open && event.button !== 2) {
+      closeContextMenu();
     }
     const pointerTime = getPointerTime(event);
     if (pointerTime === null) return;
@@ -801,16 +894,38 @@
   function handleWaveformContextMenu(event: MouseEvent) {
     if (!editable) return;
     if (!scrollContainer || !isReady) return;
-    const { clipId } = getPointerTargets(event);
-    if (clipId === null) {
-      closeClipContextMenu();
+
+    const pointerTime = getPointerTime(event);
+    if (pointerTime === null) {
+      closeContextMenu();
       return;
     }
 
+    const { clipId } = getPointerTargets(event);
+    const cursorGlobalTime = chapterRange ? chapterRange.start + pointerTime : pointerTime;
+
     event.preventDefault();
     event.stopPropagation();
+
+    if (clipId === null) {
+      clearSelectionRegion();
+      openContextMenu(event, {
+        mode: 'track',
+        clipId: null,
+        cursorGlobalTime,
+      });
+      return;
+    }
+
+    const clip = getClipByIdLocal(clipId);
+    const canSplit = clip ? canSplitClipAtGlobalTime(clip, cursorGlobalTime) : false;
     selectClip(clipId, false);
-    openClipContextMenu(event, clipId);
+    openContextMenu(event, {
+      mode: 'clip',
+      clipId,
+      cursorGlobalTime,
+      canSplit,
+    });
   }
 
   async function loadWaveformCache() {
@@ -1022,15 +1137,15 @@
   });
 
   $effect(() => {
-    if (!clipContextMenu.open) return;
+    if (!contextMenu.open) return;
 
     const handleWindowClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('.timeline-clip-context-menu')) return;
-      closeClipContextMenu();
+      closeContextMenu();
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeClipContextMenu();
+      if (event.key === 'Escape') closeContextMenu();
     };
 
     window.addEventListener('click', handleWindowClick);
@@ -1154,33 +1269,53 @@
 <div class="track-container">
   <div class="track-header">
     <span class="track-label">{laneLabel}</span>
-    <span class="track-info">{editable ? `${trackClips.length} clips` : 'visual only'}</span>
+    <span class="track-info">{missing ? 'source unavailable' : editable ? `${trackClips.length} clips` : 'visual only'}</span>
   </div>
   <div
     class="waveform-container"
     class:visual-only={!editable}
+    class:missing={missing}
     class:panning={isPanning}
     class:selecting={isSelecting}
     bind:this={container}
-  ></div>
+  >
+    {#if missing}
+      <div class="missing-overlay">Original media unavailable</div>
+    {/if}
+  </div>
 
-  {#if editable && clipContextMenu.open}
+  {#if editable && contextMenu.open}
     <div
       class="timeline-clip-context-menu"
-      style={`top: ${clipContextMenu.y}px; left: ${clipContextMenu.x}px;`}
+      style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
       role="menu"
       tabindex="-1"
       onclick={(event) => event.stopPropagation()}
       onkeydown={(event) => {
         if (event.key === 'Escape') {
-          closeClipContextMenu();
+          closeContextMenu();
         }
       }}
       oncontextmenu={(event) => event.preventDefault()}
     >
-      <button class="timeline-context-item destructive" role="menuitem" onclick={handleClipContextDelete}>
-        Delete clip
-      </button>
+      {#if contextMenu.mode === 'track'}
+        <button class="timeline-context-item" role="menuitem" onclick={handleTrackContextCreateClip}>
+          Create clip at cursor
+        </button>
+      {:else}
+        <button
+          class="timeline-context-item"
+          class:disabled={!contextMenu.canSplit}
+          role="menuitem"
+          onclick={handleClipContextSplit}
+          disabled={!contextMenu.canSplit}
+        >
+          Split clip at cursor
+        </button>
+        <button class="timeline-context-item destructive" role="menuitem" onclick={handleClipContextDelete}>
+          Delete clip
+        </button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -1215,9 +1350,14 @@
   }
   
   .waveform-container {
+    position: relative;
     width: 100%;
     min-height: 100px;
     cursor: pointer;
+  }
+
+  .waveform-container.missing {
+    background: linear-gradient(180deg, #151515 0%, #101010 100%);
   }
 
   .waveform-container.visual-only {
@@ -1240,6 +1380,18 @@
 
   .waveform-container.selecting {
     cursor: crosshair;
+  }
+
+  .missing-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #b0b0b0;
+    font-size: 0.8rem;
+    pointer-events: none;
+    background: rgba(12, 12, 12, 0.55);
   }
 
   .timeline-clip-context-menu {
@@ -1268,6 +1420,19 @@
   .timeline-context-item:hover {
     background: #2a2a2a;
     color: #fff;
+  }
+
+  .timeline-context-item:disabled,
+  .timeline-context-item.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: #8a8a8a;
+  }
+
+  .timeline-context-item:disabled:hover,
+  .timeline-context-item.disabled:hover {
+    background: transparent;
+    color: #8a8a8a;
   }
 
   .timeline-context-item.destructive {

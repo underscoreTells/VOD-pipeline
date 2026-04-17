@@ -5,7 +5,7 @@
   import { formatTime, formatTimecode } from '../state/keyboard.svelte';
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
-  import { buildAssetUrl } from '../utils/media';
+  import { buildPlayableAssetUrl } from '../utils/media';
 
   const CLIP_END_EPSILON = 0.01;
   const NUDGE_FPS = 30;
@@ -30,8 +30,10 @@
   });
 
   const videoSrc = $derived.by(() => {
-    return selectedAsset ? buildAssetUrl(selectedAsset.id) : '';
+    return selectedAsset ? buildPlayableAssetUrl(selectedAsset) : '';
   });
+
+  const isSelectedAssetUnavailable = $derived(() => selectedAsset?.availability.exists === false);
   
   // Video player state
   let videoRef: HTMLVideoElement | null = $state(null);
@@ -309,22 +311,34 @@
     </div>
     
     <div class="video-container">
-      <video
-        bind:this={videoRef}
-        src={videoSrc}
-        onseeking={handleSeeking}
-        ontimeupdate={handleTimeUpdate}
-        onended={handleEnded}
-        onplay={handlePlay}
-        onpause={handlePause}
-        onloadedmetadata={handleVideoLoadedMetadata}
-        onerror={handleVideoError}
-        class="preview-video"
-        preload="metadata"
-        playsinline
-      >
-        <track kind="captions" />
-      </video>
+      {#if isSelectedAssetUnavailable()}
+        <div class="unavailable-state">
+          <p class="unavailable-title">Clip source file is unavailable</p>
+          <p class="unavailable-path">{selectedAsset?.availability.savedPath ?? selectedAsset?.file_path}</p>
+          {#if selectedAsset?.availability.nearestExistingAncestor}
+            <p class="unavailable-ancestor">
+              Nearest existing path: {selectedAsset.availability.nearestExistingAncestor}
+            </p>
+          {/if}
+        </div>
+      {:else}
+        <video
+          bind:this={videoRef}
+          src={videoSrc}
+          onseeking={handleSeeking}
+          ontimeupdate={handleTimeUpdate}
+          onended={handleEnded}
+          onplay={handlePlay}
+          onpause={handlePause}
+          onloadedmetadata={handleVideoLoadedMetadata}
+          onerror={handleVideoError}
+          class="preview-video"
+          preload="metadata"
+          playsinline
+        >
+          <track kind="captions" />
+        </video>
+      {/if}
     </div>
     
     <div class="clip-controls">
@@ -350,7 +364,7 @@
       
       <div class="playback-controls">
         <div class="playback-top-row">
-          <button class="play-toggle" onclick={togglePlayback}>
+          <button class="play-toggle" onclick={togglePlayback} disabled={isSelectedAssetUnavailable()}>
             {isPlaying ? 'Pause' : 'Play'}
           </button>
           <span class="playback-time">{formatTimecode(timelineCurrentTime)} / {formatTimecode(timelineOutTime)}</span>
@@ -362,7 +376,7 @@
           max={Math.max(0.01, clipDuration)}
           step="0.01"
           value={clipLocalTime}
-          disabled={clipDuration <= 0}
+          disabled={clipDuration <= 0 || isSelectedAssetUnavailable()}
           oninput={handleScrubInput}
         />
         <div class="playback-meta-row">
@@ -453,6 +467,34 @@
     width: 100%;
     height: 100%;
     display: block;
+  }
+
+  .unavailable-state {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    height: 100%;
+    padding: 1rem;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
+    color: #d4d4d4;
+  }
+
+  .unavailable-title {
+    margin: 0;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .unavailable-path,
+  .unavailable-ancestor {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: #a0a0a0;
+    word-break: break-all;
   }
   
   .clip-controls {

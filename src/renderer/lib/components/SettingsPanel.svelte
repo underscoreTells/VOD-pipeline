@@ -66,11 +66,31 @@
     if (key.length <= 8) return key.slice(0, 2) + "•".repeat(key.length - 4) + key.slice(-2);
     return key.slice(0, 4) + "•".repeat(key.length - 8) + key.slice(-4);
   }
+
+  function handleOverlayClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
+      closeSettings();
+    }
+  }
+
+  function handleOverlayKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSettings();
+    }
+  }
 </script>
 
 {#if settingsState.isSettingsOpen}
-  <div class="settings-overlay" onclick={closeSettings}>
-    <div class="settings-panel" onclick={(e) => e.stopPropagation()}>
+  <div
+    class="settings-overlay"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={handleOverlayClick}
+    onkeydown={handleOverlayKeydown}
+  >
+    <div class="settings-panel">
       <div class="settings-header">
         <h2>Settings</h2>
         <button class="close-btn" onclick={closeSettings}>×</button>
@@ -214,7 +234,27 @@
             </select>
             <p class="help-text">AI model used for generating chapter titles</p>
           </div>
-          
+
+          <div class="checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                bind:checked={settingsState.settings.autoClipNamingEnabled}
+              />
+              Auto-name manually created clips
+            </label>
+            <p class="help-text">Uses a small text model and transcript context when creating clips manually</p>
+          </div>
+
+          <div class="select-group">
+            <label for="clip-naming-model">Clip Naming Model:</label>
+            <select id="clip-naming-model" bind:value={settingsState.settings.autoClipNamingModel}>
+              <option value="gpt-5-nano">GPT-5 Nano (smallest)</option>
+              <option value="gpt-4o-mini">GPT-4o Mini (fallback)</option>
+            </select>
+            <p class="help-text">Requires an OpenAI API key</p>
+          </div>
+           
           <div class="checkbox-group">
             <label>
               <input 

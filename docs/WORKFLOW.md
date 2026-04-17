@@ -15,6 +15,7 @@ This document describes the methodology for working with AI agents on this proje
 - **Content**: Feature overview, task checklist, module tracking
 - **Updated by**: Agent suggests updates, human reviews and approves
 - **When updated**: At feature boundaries, task completions
+- **Companion doc**: `docs/architecture/current-state.md` tracks the implemented state separately from the roadmap
 
 ### docs/module-plans/*.md
 - **Purpose**: Detailed plans for each module (server-daemon, cli, web-ui)
@@ -64,6 +65,20 @@ This document describes the methodology for working with AI agents on this proje
 2. Each task completion: Update checkbox status in PLAN.md
 3. Feature complete: Move to next feature, update PLAN.md
 4. At end of feature, document decisions in module plan
+
+### Local Verification
+
+Run these before trusting the branch:
+
+```bash
+pnpm doctor
+pnpm verify
+pnpm test:integration
+```
+
+- `pnpm doctor` validates Node/pnpm/native-module prerequisites and reports optional media tooling status
+- `pnpm verify` is the default confidence pass for lint, typecheck, and unit tests
+- `pnpm test:integration` should either pass or skip for explicit prerequisite reasons
 
 ### Step 3: Complete Module
 1. All features in module complete

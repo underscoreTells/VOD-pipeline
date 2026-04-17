@@ -4,7 +4,11 @@ import {
   deleteClip as ipcDeleteClip,
   updateClip as ipcUpdateClip,
 } from './electron.svelte';
-import { timelineState, updateClip as updateTimelineClip } from './timeline.svelte';
+import {
+  timelineState,
+  createClip as createTimelineClip,
+  updateClip as updateTimelineClip,
+} from './timeline.svelte';
 import type { Clip } from '../../../shared/types/database';
 
 // Command pattern for undo/redo
@@ -398,6 +402,95 @@ export class DeleteClipCommand implements Command {
       await persistClipRestore(this.clipData.clip);
       this.restoreToTimelineState();
     }
+  }
+}
+
+export class SplitClipCommand implements Command {
+  private rightClipSnapshot: Clip | null = null;
+  private readonly splitOutPoint: number;
+
+  constructor(
+    public description: string,
+    private originalClip: Clip,
+    private splitTime: number
+  ) {
+    const splitOffset = this.splitTime - this.originalClip.start_time;
+    this.splitOutPoint = this.originalClip.in_point + splitOffset;
+  }
+
+  private removeRightClipFromTimeline() {
+    if (!this.rightClipSnapshot) return;
+    const rightClipId = this.rightClipSnapshot.id;
+
+    timelineState.clips = timelineState.clips.filter((clip) => clip.id !== rightClipId);
+    if (timelineState.selectedClipIds.has(rightClipId)) {
+      const nextSelectedIds = new Set(timelineState.selectedClipIds);
+      nextSelectedIds.delete(rightClipId);
+      timelineState.selectedClipIds = nextSelectedIds;
+    }
+  }
+
+  private addRightClipToTimeline(clip: Clip) {
+    const existing = timelineState.clips.some((item) => item.id === clip.id);
+    if (existing) return;
+    createTimelineClip(clip);
+  }
+
+  async execute() {
+    await persistClipUpdate(this.originalClip.id, {
+      out_point: this.splitOutPoint,
+    });
+    updateTimelineClip(this.originalClip.id, {
+      out_point: this.splitOutPoint,
+    });
+
+    try {
+      if (this.rightClipSnapshot) {
+        await persistClipRestore(this.rightClipSnapshot);
+        this.addRightClipToTimeline(this.rightClipSnapshot);
+        return;
+      }
+
+      const result = await ipcCreateClip({
+        projectId: this.originalClip.project_id,
+        assetId: this.originalClip.asset_id,
+        trackIndex: this.originalClip.track_index,
+        startTime: this.splitTime,
+        inPoint: this.splitOutPoint,
+        outPoint: this.originalClip.out_point,
+        role: this.originalClip.role ?? undefined,
+        description: this.originalClip.description ?? undefined,
+        isEssential: this.originalClip.is_essential,
+      });
+
+      if (!result.success || !result.data) {
+        throw new Error(result.error || `Failed to create split clip for clip ${this.originalClip.id}`);
+      }
+
+      this.rightClipSnapshot = cloneClipForHistory(result.data);
+      this.addRightClipToTimeline(result.data);
+    } catch (error) {
+      await persistClipUpdate(this.originalClip.id, {
+        out_point: this.originalClip.out_point,
+      });
+      updateTimelineClip(this.originalClip.id, {
+        out_point: this.originalClip.out_point,
+      });
+      throw error;
+    }
+  }
+
+  async undo() {
+    await persistClipUpdate(this.originalClip.id, {
+      out_point: this.originalClip.out_point,
+    });
+    updateTimelineClip(this.originalClip.id, {
+      out_point: this.originalClip.out_point,
+    });
+
+    if (!this.rightClipSnapshot) return;
+    await persistClipDelete(this.rightClipSnapshot.id);
+    this.removeRightClipFromTimeline();
   }
 }
 

@@ -3,9 +3,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import Database from 'better-sqlite3';
-import { createClip, getClip, setDatabaseForTesting } from '../../src/electron/database/db.js';
+import { createClip, getClip, setDatabaseForTesting } from '../../src/electron/database/index.js';
+import { combinePrerequisites, requireNativeModule, requireSupportedNode } from '../helpers/prerequisites.js';
 
-describe('Clip creation from selection', () => {
+const clipCreatePrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireNativeModule('better-sqlite3')
+);
+const describeClipCreate = clipCreatePrerequisite.ok ? describe : describe.skip;
+
+describeClipCreate('Clip creation from selection', () => {
   let tempDir: string;
   let db: Database.Database;
   let projectId: number;

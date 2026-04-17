@@ -3,22 +3,24 @@ import { spawn, ChildProcess } from "child_process";
 import path from "path";
 import { JSONStdinWriter, JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
 import type { AgentOutputMessage } from "../../src/shared/types/agent-ipc.js";
+import { combinePrerequisites, requireBuiltAgent, requireSupportedNode } from "../helpers/prerequisites.js";
 
-describe("Agent Spawn Integration", () => {
+const agentSpawnPrerequisite = combinePrerequisites(
+  requireSupportedNode(),
+  requireBuiltAgent()
+);
+const describeAgentSpawn = agentSpawnPrerequisite.ok ? describe : describe.skip;
+
+describeAgentSpawn("Agent Spawn Integration", () => {
   let agentProcess: ChildProcess | null = null;
   let stdinWriter: JSONStdinWriter | null = null;
   let stdoutReader: JSONStdoutReader | null = null;
   let messages: AgentOutputMessage[] = [];
 
-  const agentPath = path.resolve(__dirname, "../../build/src/agent/index.js");
+  const agentPath = path.resolve(__dirname, "../../dist/src/agent/index.js");
 
   beforeEach(async () => {
     messages = [];
-
-    if (!require("fs").existsSync(agentPath)) {
-      console.warn("Agent build not found, skipping integration test");
-      throw new Error("SKIP");
-    }
 
     agentProcess = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -127,7 +129,7 @@ describe("Agent Spawn Error Handling", () => {
   });
 
   it("should handle agent process crash", () => {
-    const crashPath = path.resolve(__dirname, "../../build/src/agent/crash.js");
+    const crashPath = path.resolve(__dirname, "../../dist/src/agent/crash.js");
     if (require("fs").existsSync(crashPath)) {
       const agent = spawn("node", [crashPath]);
       agent.on("exit", (code) => {
