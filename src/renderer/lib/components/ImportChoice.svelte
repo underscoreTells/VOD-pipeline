@@ -1,7 +1,6 @@
 <script lang="ts">
   import { chaptersState, setImportChoice, setIsImporting, autoCreateChaptersFromFiles } from "../state/chapters.svelte";
-  import { addAsset } from "../state/electron.svelte";
-  import { settingsState } from "../state/settings.svelte";
+  import { getPathForFile } from "../api/system.js";
 
   interface Props {
     projectId: number;
@@ -68,7 +67,7 @@
 
   async function getFilePath(file: File): Promise<string | null> {
     try {
-      return window.electronAPI.webUtils.getPathForFile(file);
+      return getPathForFile(file);
     } catch (error) {
       console.error("[ImportChoice] Failed to get file path:", error);
       return null;

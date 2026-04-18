@@ -3,7 +3,7 @@
   import WaveSurfer from 'wavesurfer.js';
   import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
-  import { getWaveform, onWaveformProgress } from '../state/electron.svelte';
+  import { getWaveform, onWaveformProgress } from '../api/waveforms.js';
   import { timelineState, selectClip, setPlayhead, setScroll } from '../state/timeline.svelte';
   import {
     createProjectClip,

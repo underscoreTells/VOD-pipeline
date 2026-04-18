@@ -1,1 +1,96 @@
-export { closeDatabase, initializeDatabase } from './db.js';
+import Database from 'better-sqlite3';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  applySchemaStatements,
+  ensureChapterProxyTable,
+  ensureChatConversationTables,
+  ensureDetailedTranscriptTable,
+  ensureSchemaColumns,
+} from './migrations.js';
+import {
+  getActiveDatabase,
+  getInitializationPromise,
+  setActiveDatabase,
+  setInitializationPromise,
+} from './state.js';
+
+export async function initializeDatabase(): Promise<Database.Database> {
+  const existingDatabase = getActiveDatabase();
+  if (existingDatabase) {
+    return existingDatabase;
+  }
+
+  const existingPromise = getInitializationPromise();
+  if (existingPromise) {
+    return await existingPromise;
+  }
+
+  const initializationPromise = (async () => {
+    const { app } = await import('electron');
+    const userDataPath = app.getPath('userData');
+    const dbPath = path.join(userDataPath, 'vod-pipeline.db');
+
+    console.log('Initializing database at:', dbPath);
+
+    const database = new Database(dbPath);
+    database.pragma('journal_mode = WAL');
+
+    const modulePath = fileURLToPath(import.meta.url);
+    const moduleDirname = path.dirname(modulePath);
+
+    const possiblePaths = [
+      path.join(moduleDirname, '../../database/schema.sql'),
+      path.join(moduleDirname, '../../../database/schema.sql'),
+      path.join(moduleDirname, '../../../../database/schema.sql'),
+      path.join(app.getAppPath(), 'database/schema.sql'),
+    ];
+
+    let schema: string | null = null;
+    for (const schemaPath of possiblePaths) {
+      if (fs.existsSync(schemaPath)) {
+        schema = fs.readFileSync(schemaPath, 'utf-8');
+        console.log('Database schema loaded from:', schemaPath);
+        break;
+      }
+    }
+
+    if (!schema) {
+      console.error('Schema file not found. Tried paths:', possiblePaths);
+      throw new Error('Database schema not found - cannot initialize database');
+    }
+
+    applySchemaStatements(database, schema, 'table');
+    ensureDetailedTranscriptTable(database);
+    ensureChatConversationTables(database);
+    ensureChapterProxyTable(database);
+    ensureSchemaColumns(database);
+    applySchemaStatements(database, schema, 'index');
+    console.log('Database schema initialized successfully');
+
+    return database;
+  })()
+    .then((database) => {
+      setActiveDatabase(database);
+      setInitializationPromise(null);
+      return database;
+    })
+    .catch((error) => {
+      setInitializationPromise(null);
+      throw error;
+    });
+
+  setInitializationPromise(initializationPromise);
+  return await initializationPromise;
+}
+
+export function closeDatabase(): void {
+  const database = getActiveDatabase();
+  if (!database) {
+    return;
+  }
+
+  database.close();
+  setActiveDatabase(null);
+}

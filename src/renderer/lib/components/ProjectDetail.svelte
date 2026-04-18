@@ -54,10 +54,30 @@
     onTranscriptionProgress,
     transcribeChapter as startChapterTranscription,
     getTranscriptionStatus,
-  } from '../state/electron.svelte';
+  } from '../api/transcription.js';
+  import { getPathForFile, showSaveDialog } from '../api/system.js';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
   import { syncAgentContext } from '../state/agent.svelte';
   import { toAgentChapterId } from './project-detail-helpers.js';
+  import {
+    createProjectChaptersFromDefinition,
+    importProjectFiles,
+  } from './project-detail-import.js';
+  import {
+    exportProjectWithDialog,
+  } from './project-detail-export.js';
+  import {
+    createProjectDetailLayoutController,
+  } from './project-detail-layout.js';
+  import {
+    transcribeMissingChaptersOnReopen,
+  } from './project-detail-transcription.js';
+  import {
+    createChapterWaveformScheduler,
+    getAssetAudioTrackCount,
+    getWaveformTrackIndices,
+    isMkvAsset,
+  } from './project-detail-waveforms.js';
   import type { Project, Asset } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
   
@@ -88,8 +108,6 @@
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
-  let waveformCheckToken = 0;
-  const waveformInFlight = new Set<string>();
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
@@ -110,53 +128,42 @@
   const MIX_TRACK_INDEX = 0;
   const MIX_WAVEFORM_TRACK_INDEX = -1;
 
-  async function checkTranscriptionAvailability(chapterIds: number[]): Promise<boolean> {
-    const statusResponse = await getTranscriptionStatus(true);
-    if (statusResponse.success && statusResponse.data?.available) {
-      return true;
-    }
+  const transcriptionDeps = {
+    getTranscriptionStatus,
+    startChapterTranscription,
+    setTranscriptionError,
+  };
 
-    const backendStatus = statusResponse.data;
-    const message = backendStatus?.error
-      || statusResponse.error
-      || 'Transcription backend is unavailable (missing Python/pip/faster-whisper).';
+  const waveformScheduler = createChapterWaveformScheduler({
+    resolveAsset: (assetId) => projectDetail.assets.find((item) => item.id === assetId) ?? null,
+    getAssetWaveform,
+    generateAssetWaveform,
+    isPlaybackActive: () => timelineState.isPlaying,
+  });
 
-    console.warn('[Transcription] Backend unavailable:', message);
-
-    for (const chapterId of chapterIds) {
-      setTranscriptionError(chapterId, message);
-    }
-
-    return false;
-  }
-
-  async function transcribeMissingChaptersOnReopen(chapterIds: number[]): Promise<void> {
-    if (chapterIds.length === 0) {
-      return;
-    }
-
-    const transcriptionReady = await checkTranscriptionAvailability(chapterIds);
-    if (!transcriptionReady) {
-      return;
-    }
-
-    for (const chapterId of chapterIds) {
-      try {
-        const result = await startChapterTranscription(chapterId, { skipIfExists: true });
-        if (result.success) {
-          continue;
-        }
-
-        const message = result.error || 'Failed to start transcription';
-        console.error('Failed to start transcription:', message);
-        setTranscriptionError(chapterId, message);
-      } catch (error) {
-        const message = (error as Error).message || 'Failed to start transcription';
-        console.error('Failed to start transcription:', error);
-        setTranscriptionError(chapterId, message);
-      }
-    }
-  }
+  const layoutController = createProjectDetailLayoutController({
+    getLeftWidth: () => layoutState.leftWidth,
+    setLeftWidth,
+    getRightWidth: () => layoutState.rightWidth,
+    setRightWidth,
+    getPreviewHeight: () => layoutState.previewHeight,
+    setPreviewHeight,
+    getClipPreviewWidth: () => layoutState.clipPreviewWidth,
+    setClipPreviewWidth,
+    persistLayout,
+    getEditorMainRef: () => editorMainRef,
+    getPreviewTopLayoutRef: () => previewTopLayoutRef,
+  }, {
+    resizeHandleSize: RESIZE_HANDLE_SIZE,
+    minLeftWidth: MIN_LEFT_WIDTH,
+    maxLeftWidth: MAX_LEFT_WIDTH,
+    minRightWidth: MIN_RIGHT_WIDTH,
+    maxRightWidth: MAX_RIGHT_WIDTH,
+    minPreviewHeight: MIN_PREVIEW_HEIGHT,
+    minTimelineHeight: MIN_TIMELINE_HEIGHT,
+    minClipPreviewWidth: MIN_CLIP_PREVIEW_WIDTH,
+    minChapterPreviewWidth: MIN_CHAPTER_PREVIEW_WIDTH,
+  });
   
   // Load project data and chapters on mount
   onMount(() => {
@@ -195,7 +202,6 @@
   // Handle VOD import
   async function handleVODImport(filePath: string) {
     try {
-      // Create asset for VOD
       const asset = await addAssetToProject(project.id, filePath);
       if (asset) {
         vodAssetForDefinition = asset;
@@ -211,52 +217,16 @@
   // Handle files import
   async function handleFilesImport(filePaths: string[]) {
     try {
-      const assets: Asset[] = [];
-      
-      // Create assets for all files
-      for (const filePath of filePaths) {
-        const asset = await addAssetToProject(project.id, filePath);
-        if (asset) {
-          assets.push(asset);
-        }
-      }
-      
-      // Auto-create chapters from files
-      if (assets.length > 0) {
-        const created = await autoCreateChaptersFromFiles(project.id, assets);
+      await importProjectFiles(project.id, filePaths, {
+        addAssetToProject,
+        autoCreateChaptersFromFiles,
+        createChapter,
+        linkAssetToChapter,
+        selectChapter,
+        autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
+        ...transcriptionDeps,
+      });
 
-        if (settingsState.settings.autoTranscribeOnImport) {
-          const chapterIds = created.map((chapter) => chapter.id);
-          const transcriptionReady = await checkTranscriptionAvailability(chapterIds);
-          if (!transcriptionReady) {
-            setIsImporting(false);
-            if (created.length > 0) {
-              selectChapter(created[0].id);
-            }
-            return;
-          }
-
-          for (const chapter of created) {
-            void startChapterTranscription(chapter.id)
-              .then((result) => {
-                if (result.success) return;
-                const message = result.error || 'Failed to start transcription';
-                console.error('Failed to start transcription:', message);
-                setTranscriptionError(chapter.id, message);
-              })
-              .catch((error: Error) => {
-                const message = error.message || 'Failed to start transcription';
-                console.error('Failed to start transcription:', error);
-                setTranscriptionError(chapter.id, message);
-              });
-          }
-        }
-
-        if (created.length > 0) {
-          selectChapter(created[0].id);
-        }
-      }
-      
       setIsImporting(false);
     } catch (error) {
       console.error('Failed to import files:', error);
@@ -268,54 +238,25 @@
   // Handle chapter creation from ChapterDefinition
   async function handleChaptersDefined(chapterInputs: Array<{ title: string; startTime: number; endTime: number }>) {
     if (!vodAssetForDefinition) return;
-    let firstChapterId: number | null = null;
     try {
-      for (const input of chapterInputs) {
-        // Create chapter
-        const chapter = await createChapter(
-          project.id,
-          input.title,
-          input.startTime,
-          input.endTime
-        );
-        
-        if (chapter) {
-          if (!firstChapterId) {
-            firstChapterId = chapter.id;
-          }
-          // Link VOD asset to chapter
-          await linkAssetToChapter(chapter.id, vodAssetForDefinition.id);
-          
-          // Start transcription if enabled
-          if (settingsState.settings.autoTranscribeOnImport) {
-            const transcriptionReady = await checkTranscriptionAvailability([chapter.id]);
-            if (!transcriptionReady) {
-              continue;
-            }
-
-            // Start transcription asynchronously
-            void startChapterTranscription(chapter.id)
-              .then((result) => {
-                if (result.success) return;
-                const message = result.error || 'Failed to start transcription';
-                console.error('Failed to start transcription:', message);
-                setTranscriptionError(chapter.id, message);
-              })
-              .catch((error: Error) => {
-                const message = error.message || 'Failed to start transcription';
-                console.error('Failed to start transcription:', error);
-                setTranscriptionError(chapter.id, message);
-              });
-          }
+      await createProjectChaptersFromDefinition(
+        project.id,
+        vodAssetForDefinition,
+        chapterInputs,
+        {
+          addAssetToProject,
+          autoCreateChaptersFromFiles,
+          createChapter,
+          linkAssetToChapter,
+          selectChapter,
+          autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
+          ...transcriptionDeps,
         }
-      }
-      
+      );
+
       showChapterDefinition = false;
       vodAssetForDefinition = null;
       setIsImporting(false);
-      if (firstChapterId) {
-        selectChapter(firstChapterId);
-      }
     } catch (error) {
       console.error('Failed to create chapters:', error);
       setError(`Failed to create chapters: ${(error as Error).message}`);
@@ -357,31 +298,9 @@
     missingProjectAssets.some((asset) => looksLikeExternalStoragePath(asset.availability.nearestExistingAncestor))
   );
 
-  function getAssetAudioTrackCount(asset: Asset | null): number {
-    const trackCount = asset?.metadata?.audioTracks?.length;
-    if (typeof trackCount === 'number' && Number.isInteger(trackCount) && trackCount > 0) {
-      return trackCount;
-    }
-    return 1;
-  }
-
-  function isMkvAsset(asset: Asset | null): boolean {
-    return Boolean(asset?.file_path?.toLowerCase().endsWith('.mkv'));
-  }
-
   function getAssetDisplayName(asset: Asset): string {
     const segments = asset.file_path.split(/[\/\\]/);
     return segments[segments.length - 1] || `Asset ${asset.id}`;
-  }
-
-  function getWaveformTrackIndices(asset: Asset | null, includeSourceTracks: boolean): number[] {
-    const count = getAssetAudioTrackCount(asset);
-    if (!includeSourceTracks || count <= 1) {
-      return [MIX_WAVEFORM_TRACK_INDEX];
-    }
-
-    const sourceTracks = Array.from({ length: count }, (_, index) => index);
-    return [MIX_WAVEFORM_TRACK_INDEX, ...sourceTracks];
   }
 
   const chapterPreviewAsset = $derived.by(() =>
@@ -407,73 +326,6 @@
     }
   });
 
-  async function ensureChapterWaveforms(assetIds: number[], includeSourceTracks: boolean) {
-    const token = ++waveformCheckToken;
-    for (const assetId of assetIds) {
-      if (token !== waveformCheckToken) return;
-      const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
-      if (asset?.availability.exists === false) {
-        continue;
-      }
-      const sourceTrackCount = getAssetAudioTrackCount(asset);
-      const trackIndices = getWaveformTrackIndices(asset, includeSourceTracks);
-
-      const shouldBatchGenerateMkvTracks =
-        includeSourceTracks &&
-        sourceTrackCount > 1 &&
-        isMkvAsset(asset);
-
-      if (shouldBatchGenerateMkvTracks) {
-        const batchKey = `${assetId}:${MIX_WAVEFORM_TRACK_INDEX}:batch`;
-        if (waveformInFlight.has(batchKey)) continue;
-
-        let hasMissingTrack = false;
-        for (const trackIndex of trackIndices) {
-          const cached = await getAssetWaveform(assetId, trackIndex, 1);
-          if (token !== waveformCheckToken) return;
-          if (!cached) {
-            hasMissingTrack = true;
-            break;
-          }
-        }
-
-        if (!hasMissingTrack) continue;
-
-        waveformInFlight.add(batchKey);
-        try {
-          await generateAssetWaveform(assetId, MIX_WAVEFORM_TRACK_INDEX, {
-            includeSourceTracks: true,
-            playbackActive: timelineState.isPlaying,
-          });
-        } finally {
-          waveformInFlight.delete(batchKey);
-        }
-
-        continue;
-      }
-
-      for (const trackIndex of trackIndices) {
-        if (token !== waveformCheckToken) return;
-        const key = `${assetId}:${trackIndex}`;
-        if (waveformInFlight.has(key)) continue;
-
-        const cached = await getAssetWaveform(assetId, trackIndex, 1);
-        if (token !== waveformCheckToken) return;
-        if (cached) continue;
-
-        waveformInFlight.add(key);
-        try {
-          await generateAssetWaveform(assetId, trackIndex, {
-            includeSourceTracks: false,
-            playbackActive: timelineState.isPlaying,
-          });
-        } finally {
-          waveformInFlight.delete(key);
-        }
-      }
-    }
-  }
-
   $effect(() => {
     if (selectedChapter && !hasChapterAssets) {
       void loadAssetsForChapter(selectedChapter.id);
@@ -493,7 +345,7 @@
     }
 
     scheduledMissingChapterTranscription = true;
-    void transcribeMissingChaptersOnReopen(chapterIds);
+    void transcribeMissingChaptersOnReopen(chapterIds, transcriptionDeps);
   });
 
   // Update agent chapter context when selection changes
@@ -512,7 +364,11 @@
   $effect(() => {
     const includeSourceTracks = showSourceTracks && canShowSourceTracks;
     if (timelineWaveformAssetIds.length > 0) {
-      void ensureChapterWaveforms([...timelineWaveformAssetIds], includeSourceTracks);
+      void waveformScheduler.ensureChapterWaveforms(
+        [...timelineWaveformAssetIds],
+        includeSourceTracks,
+        MIX_WAVEFORM_TRACK_INDEX
+      );
     }
   });
   
@@ -534,12 +390,10 @@
     const files = e.dataTransfer?.files;
     if (!files) return;
     
-    const webUtils = window.electronAPI?.webUtils;
-    
     for (const file of files) {
       if (file.type.startsWith('video/')) {
         try {
-          const filePath = webUtils?.getPathForFile ? webUtils.getPathForFile(file) : (file as any).path;
+          const filePath = getPathForFile(file);
           if (filePath) {
             // Add as individual file chapter
             const asset = await addAssetToProject(project.id, filePath);
@@ -560,27 +414,44 @@
   
   // Export project
   async function handleExport() {
-    const format = projectDetail.exportFormats.find(f => f.id === selectedExportFormat);
-    if (!format) return;
-    
     try {
-      const result = await window.electronAPI.dialog.showSaveDialog({
-        defaultPath: `${project.name}${format.extension}`,
-        filters: [{ name: format.name, extensions: [format.extension.replace('.', '')] }]
-      });
-      
-      if (!result.canceled && result.filePath) {
-        const success = await exportProjectToFile(project.id, selectedExportFormat, result.filePath);
-        if (success) {
-          showExportDialog = false;
-          alert('Export completed successfully!');
+      const success = await exportProjectWithDialog(
+        project.id,
+        project.name,
+        selectedExportFormat,
+        projectDetail.exportFormats,
+        {
+          showSaveDialog,
+          exportProjectToFile,
         }
+      );
+
+      if (success) {
+        showExportDialog = false;
+        alert('Export completed successfully!');
       }
     } catch (error) {
       console.error('Export failed:', error);
       setError(`Export failed: ${(error as Error).message}`);
     }
   }
+
+  $effect(() => {
+    if (!showClipPreviewPanel || !previewTopLayoutRef) return;
+
+    layoutController.clampClipPreviewWidth();
+
+    const observer = new ResizeObserver(() => {
+      if (!showClipPreviewPanel) return;
+      layoutController.clampClipPreviewWidth();
+    });
+
+    observer.observe(previewTopLayoutRef);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
   
   const timelineLanes = $derived.by(() => {
     if (selectedChapterAssets.length === 0) {
@@ -648,128 +519,12 @@
     if (!selectedChapter) return null;
     return Math.max(0.01, selectedChapter.end_time - selectedChapter.start_time);
   });
-
-  function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  function startPointerDrag(
-    event: PointerEvent,
-    cursor: 'col-resize' | 'row-resize',
-    onMove: (moveEvent: PointerEvent) => void,
-    onEnd?: () => void
-  ) {
-    event.preventDefault();
-    const previousCursor = document.body.style.cursor;
-    const previousSelect = document.body.style.userSelect;
-    document.body.style.cursor = cursor;
-    document.body.style.userSelect = 'none';
-
-    const handleMove = (moveEvent: PointerEvent) => {
-      onMove(moveEvent);
-    };
-
-    const handleUp = () => {
-      document.body.style.cursor = previousCursor;
-      document.body.style.userSelect = previousSelect;
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
-      onEnd?.();
-    };
-
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp);
-  }
-
-  function handleLeftResize(event: PointerEvent) {
-    const startX = event.clientX;
-    const startWidth = layoutState.leftWidth;
-    startPointerDrag(event, 'col-resize', (moveEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const next = clamp(startWidth + delta, MIN_LEFT_WIDTH, MAX_LEFT_WIDTH);
-      setLeftWidth(next);
-    }, persistLayout);
-  }
-
-  function handleRightResize(event: PointerEvent) {
-    const startX = event.clientX;
-    const startWidth = layoutState.rightWidth;
-    startPointerDrag(event, 'col-resize', (moveEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const next = clamp(startWidth - delta, MIN_RIGHT_WIDTH, MAX_RIGHT_WIDTH);
-      setRightWidth(next);
-    }, persistLayout);
-  }
-
-  function handlePreviewResize(event: PointerEvent) {
-    if (!editorMainRef) return;
-    const startY = event.clientY;
-    const startHeight = layoutState.previewHeight;
-    const containerHeight = editorMainRef.clientHeight;
-    const maxHeight = Math.max(
-      MIN_PREVIEW_HEIGHT,
-      containerHeight - MIN_TIMELINE_HEIGHT - RESIZE_HANDLE_SIZE
-    );
-    startPointerDrag(event, 'row-resize', (moveEvent) => {
-      const delta = moveEvent.clientY - startY;
-      const next = clamp(startHeight + delta, MIN_PREVIEW_HEIGHT, maxHeight);
-      setPreviewHeight(next);
-    }, persistLayout);
-  }
-
-  function getMaxClipPreviewWidth(): number {
-    if (!previewTopLayoutRef) {
-      return Math.max(MIN_CLIP_PREVIEW_WIDTH, layoutState.clipPreviewWidth);
-    }
-
-    const availableWidth = previewTopLayoutRef.clientWidth;
-    const max = availableWidth - MIN_CHAPTER_PREVIEW_WIDTH - RESIZE_HANDLE_SIZE;
-    return Math.max(MIN_CLIP_PREVIEW_WIDTH, max);
-  }
-
-  function clampClipPreviewWidth() {
-    const maxWidth = getMaxClipPreviewWidth();
-    const nextWidth = clamp(layoutState.clipPreviewWidth, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
-    if (nextWidth !== layoutState.clipPreviewWidth) {
-      setClipPreviewWidth(nextWidth);
-      persistLayout();
-    }
-  }
-
-  function handleClipPreviewResize(event: PointerEvent) {
-    if (!previewTopLayoutRef) return;
-    const startX = event.clientX;
-    const startWidth = layoutState.clipPreviewWidth;
-
-    startPointerDrag(event, 'col-resize', (moveEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const maxWidth = getMaxClipPreviewWidth();
-      const next = clamp(startWidth + delta, MIN_CLIP_PREVIEW_WIDTH, maxWidth);
-      setClipPreviewWidth(next);
-    }, persistLayout);
-  }
-
-  $effect(() => {
-    if (!showClipPreviewPanel || !previewTopLayoutRef) return;
-
-    clampClipPreviewWidth();
-
-    const observer = new ResizeObserver(() => {
-      if (!showClipPreviewPanel) return;
-      clampClipPreviewWidth();
-    });
-
-    observer.observe(previewTopLayoutRef);
-
-    return () => {
-      observer.disconnect();
-    };
-  });
 </script>
 
 <div 
   class="project-detail"
   class:dragging={isDragging}
+  role="presentation"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
@@ -876,7 +631,7 @@
             class="resize-handle-vertical"
             role="separator"
             aria-orientation="vertical"
-            onpointerdown={handleLeftResize}
+            onpointerdown={layoutController.handleLeftResize}
           ></div>
         {/if}
         
@@ -903,7 +658,7 @@
                       class="resize-handle-vertical clip-preview-resize"
                       role="separator"
                       aria-orientation="vertical"
-                      onpointerdown={handleClipPreviewResize}
+                      onpointerdown={layoutController.handleClipPreviewResize}
                     ></div>
                   {/if}
 
@@ -920,7 +675,7 @@
                 class="resize-handle-horizontal"
                 role="separator"
                 aria-orientation="horizontal"
-                onpointerdown={handlePreviewResize}
+                onpointerdown={layoutController.handlePreviewResize}
               ></div>
 
               {#if chaptersState.selectedChapterId}
@@ -965,7 +720,7 @@
                 class="resize-handle-vertical"
                 role="separator"
                 aria-orientation="vertical"
-                onpointerdown={handleRightResize}
+                onpointerdown={layoutController.handleRightResize}
               ></div>
               <aside class="editor-side" style="width: {layoutState.rightWidth}px">
                 <div class="side-panel chat-panel-wrapper full-height">
@@ -994,13 +749,33 @@
   
   <!-- Export Dialog -->
   {#if showExportDialog}
-    <div class="dialog-overlay" onclick={() => showExportDialog = false}>
-      <div class="dialog" onclick={(e) => e.stopPropagation()}>
+    <div
+      class="dialog-overlay"
+      role="button"
+      tabindex="0"
+      aria-label="Close export dialog"
+      onclick={() => showExportDialog = false}
+      onkeydown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+          event.preventDefault();
+          showExportDialog = false;
+        }
+      }}
+    >
+      <div
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Export project"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
         <h3>Export Project</h3>
         <p class="dialog-description">Export your timeline to use in professional NLE software</p>
         
         <div class="format-list">
-          {#each projectDetail.exportFormats as format}
+          {#each projectDetail.exportFormats as format (format.id)}
             <label class="format-option" class:selected={selectedExportFormat === format.id}>
               <input 
                 type="radio" 
