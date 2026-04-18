@@ -58,6 +58,7 @@ export interface AgentSuggestionDraft {
 
 export interface AgentChatData {
   message: string;
+  thinkingMarkdown?: string;
   threadId?: string;
   suggestions?: Suggestion[];
   timelineActions?: TimelineAction[];
@@ -148,6 +149,7 @@ export interface ProgressOutputMessage {
   progress: number;
   nodeName?: string;
   chapterId?: string;
+  message?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -157,6 +159,7 @@ export interface TokenOutputMessage {
   content: string;
   role: string;
   nodeName: string;
+  visibility?: "chat" | "hidden";
   metadata?: Record<string, unknown>;
 }
 
@@ -175,6 +178,33 @@ export interface ErrorOutputMessage {
   code?: string;
   details?: Record<string, unknown>;
 }
+
+export interface AgentStreamContext {
+  clientRequestId: string;
+  projectId: string;
+  chapterId: string;
+  conversationId: number;
+  passIndex: number;
+}
+
+export interface AgentStreamProgressEvent extends AgentStreamContext {
+  type: "progress";
+  status: string;
+  progress: number;
+  nodeName?: string;
+  message?: string;
+  resetDraft?: boolean;
+}
+
+export interface AgentStreamTokenEvent extends AgentStreamContext {
+  type: "token";
+  content: string;
+  role: string;
+  nodeName: string;
+  visibility?: "chat" | "hidden";
+}
+
+export type AgentStreamEvent = AgentStreamProgressEvent | AgentStreamTokenEvent;
 
 export interface Message {
   role: string;

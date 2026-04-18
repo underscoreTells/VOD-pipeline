@@ -133,7 +133,18 @@ export interface ChatConversationMessage {
   conversation_id: number;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  thinking_markdown?: string | null;
+  trace_json?: string | null;
   created_at: string;
+}
+
+export interface ExecutionTraceEntry {
+  id: string;
+  status: string;
+  label: string;
+  nodeName?: string;
+  passIndex?: number;
+  createdAt: string;
 }
 
 // Input types (for creating new records)

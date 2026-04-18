@@ -8,6 +8,11 @@ import { createChapterSubgraph } from "./chapter-subgraph.js";
 import { narrativeAnalysisPrompt } from "../prompts/narrative-analysis.js";
 import { storyCohesionPrompt } from "../prompts/story-cohesion.js";
 import { exportGenerationPrompt } from "../prompts/export-generation.js";
+import {
+  parseGroundedChatResponse,
+  parseTimelineEditResponse,
+  parseVisualAnalysisResponse,
+} from "../output-parsing.js";
 import { createVideoMessage, type VideoProvider } from "../utils/video-messages.js";
 import type { LLMProviderType } from "../providers/index.js";
 import type {
@@ -157,11 +162,8 @@ async function chatNode(state: typeof MainState.State, config: any) {
   let response;
 
   if (state.currentChapterId && state.chapterContext) {
-    const groundedSystemPrompt = buildChapterGroundingSystemPrompt(state);
-    response = await llm.invoke([
-      new SystemMessage(groundedSystemPrompt),
-      ...baseMessages,
-    ] as any);
+    const groundedSystemPrompt = buildGroundedChatSystemPrompt(state);
+    response = await llm.invoke([new SystemMessage(groundedSystemPrompt), ...baseMessages] as any);
   } else {
     response = await llm.invoke(baseMessages as any);
   }
@@ -171,6 +173,12 @@ async function chatNode(state: typeof MainState.State, config: any) {
       ? response.content
       : JSON.stringify(response.content ?? "");
 
+  const groundedResponse = state.currentChapterId && state.chapterContext
+    ? parseGroundedChatResponse(responseContent)
+    : null;
+  const assistantResponse = groundedResponse?.assistantResponse ?? responseContent;
+  const thinkingMarkdown = groundedResponse?.thinkingMarkdown || undefined;
+
   config.writer?.({
     type: "progress",
     status: "processing_chat_complete",
@@ -179,8 +187,9 @@ async function chatNode(state: typeof MainState.State, config: any) {
   });
 
   return {
-    messages: [response],
-    assistantResponse: responseContent,
+    messages: [new AIMessage(assistantResponse)],
+    assistantResponse,
+    thinkingMarkdown,
     timelineActions: undefined,
     transcriptDetailRequests: undefined,
   };
@@ -255,13 +264,13 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       message: "Analysis complete",
     });
 
-    // Parse suggestions from response
-    const suggestions = extractSuggestionsFromResponse(content);
+    const parsedResponse = parseVisualAnalysisResponse(content);
 
     return {
-      messages: [new AIMessage(content)],
-      assistantResponse: content,
-      suggestions: suggestions.length > 0 ? suggestions : undefined,
+      messages: [new AIMessage(parsedResponse.assistantResponse)],
+      assistantResponse: parsedResponse.assistantResponse,
+      thinkingMarkdown: parsedResponse.thinkingMarkdown || undefined,
+      suggestions: parsedResponse.suggestions.length > 0 ? parsedResponse.suggestions : undefined,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
       lastAnalyzedMessageIndex: lastHumanMessageIndex,
@@ -285,6 +294,7 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
     return {
       messages: [new AIMessage(errorContent)],
       assistantResponse: errorContent,
+      thinkingMarkdown: undefined,
       suggestions: undefined,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
@@ -316,86 +326,24 @@ For each suggestion, provide:
 - Brief description of what's happening
 - Reasoning (why keep or cut this section)
 
-Format suggestions as JSON:
-SUGGESTION: {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
+Respond in this exact format:
+
+ASSISTANT_RESPONSE:
+<Short natural-language answer for the user. Do not include raw JSON or SUGGESTION blocks here.>
+
+THINKING_MARKDOWN:
+<Detailed markdown analysis, rationale, verdict notes, and any section-by-section reasoning. Do not include raw JSON here.>
+
+SUGGESTIONS_JSON:
+[
+  {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
+]
 
 Be concise and actionable. Focus on the most important cuts.
 
 If transcript context is provided in a separate text block, use it to align dialogue timing and verify narrative beats.`;
 
   return prompt;
-}
-
-function extractSuggestionsFromResponse(content: string): any[] {
-  const suggestions: any[] = [];
-  
-  // Look for SUGGESTION: followed by JSON object
-  // Use a more robust approach: find "SUGGESTION:" and then parse the JSON that follows
-  const suggestionMarker = "SUGGESTION:";
-  let index = content.indexOf(suggestionMarker);
-  
-  while (index !== -1) {
-    // Move past the marker
-    const jsonStart = index + suggestionMarker.length;
-    
-    // Find the JSON object by tracking braces
-    let braceCount = 0;
-    let jsonEnd = jsonStart;
-    let inString = false;
-    let escaped = false;
-    
-    for (let i = jsonStart; i < content.length; i++) {
-      const char = content[i];
-      
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      
-      if (char === '"' && !escaped) {
-        inString = !inString;
-        continue;
-      }
-      
-      if (!inString) {
-        if (char === "{") {
-          braceCount++;
-          if (braceCount === 1) {
-            jsonEnd = i;
-          }
-        } else if (char === "}") {
-          braceCount--;
-          if (braceCount === 0) {
-            jsonEnd = i + 1;
-            break;
-          }
-        }
-      }
-    }
-    
-    // Extract and parse the JSON
-    if (jsonEnd > jsonStart) {
-      const jsonStr = content.slice(jsonStart, jsonEnd).trim();
-      try {
-        const suggestion = JSON.parse(jsonStr);
-        if (suggestion.in_point !== undefined && suggestion.out_point !== undefined) {
-          suggestions.push(suggestion);
-        }
-      } catch (e) {
-        // Ignore malformed JSON - continue searching
-      }
-    }
-    
-    // Look for next suggestion
-    index = content.indexOf(suggestionMarker, jsonEnd > jsonStart ? jsonEnd : index + 1);
-  }
-  
-  return suggestions;
 }
 
 function getMessageType(message: unknown): string | undefined {
@@ -510,79 +458,18 @@ Transcript excerpt:
 ${transcriptExcerpt || "No transcript excerpt loaded."}`;
 }
 
-function extractTextAfterMarker(content: string, marker: string, fallback: string): string {
-  const markerIndex = content.indexOf(marker);
-  if (markerIndex === -1) {
-    return fallback;
-  }
+function buildGroundedChatSystemPrompt(state: typeof MainState.State): string {
+  return `${buildChapterGroundingSystemPrompt(state)}
 
-  const possibleMarkers = ["TIMELINE_ACTIONS_JSON:", "TRANSCRIPT_DETAIL_REQUESTS_JSON:"];
-  const nextMarkerIndex = possibleMarkers
-    .map((nextMarker) => content.indexOf(nextMarker, markerIndex + marker.length))
-    .filter((index) => index !== -1)
-    .sort((a, b) => a - b)[0] ?? -1;
+Return exactly two sections:
 
-  const section = nextMarkerIndex === -1
-    ? content.slice(markerIndex + marker.length)
-    : content.slice(markerIndex + marker.length, nextMarkerIndex);
+ASSISTANT_RESPONSE:
+<Short final answer for the chat bubble. Keep it concise and user-facing.>
 
-  const normalized = section.trim();
-  return normalized.length > 0 ? normalized : fallback;
+THINKING_MARKDOWN:
+<Detailed markdown reasoning, analysis, rationale, and section-by-section notes that support the answer. Do not include raw JSON.>`;
 }
 
-function extractJsonArrayAfterMarker(content: string, marker: string): unknown[] {
-  const markerIndex = content.indexOf(marker);
-  if (markerIndex === -1) return [];
-
-  const searchStart = markerIndex + marker.length;
-  const arrayStart = content.indexOf("[", searchStart);
-  if (arrayStart === -1) return [];
-
-  let inString = false;
-  let escaped = false;
-  let depth = 0;
-
-  for (let i = arrayStart; i < content.length; i += 1) {
-    const char = content[i];
-
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) continue;
-
-    if (char === "[") {
-      depth += 1;
-      continue;
-    }
-
-    if (char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        const raw = content.slice(arrayStart, i + 1);
-        try {
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed : [];
-        } catch {
-          return [];
-        }
-      }
-    }
-  }
-
-  return [];
-}
 
 function parseTimelineActions(actionsRaw: unknown[]): TimelineAction[] {
   const validated: TimelineAction[] = [];
@@ -739,6 +626,9 @@ Return exactly three sections:
 ASSISTANT_RESPONSE:
 <Short natural language response for the user. Mention that these are proposals.>
 
+THINKING_MARKDOWN:
+<Detailed markdown rationale, diagnostics, tradeoffs, and notes about why these edit proposals help. Do not include raw JSON.>
+
 TIMELINE_ACTIONS_JSON:
 <A valid JSON array. No markdown fences.>
 
@@ -810,6 +700,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
     return {
       messages: [new AIMessage(fallback)],
       assistantResponse: fallback,
+      thinkingMarkdown: undefined,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
     };
@@ -820,6 +711,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
     return {
       messages: [new AIMessage(fallback)],
       assistantResponse: fallback,
+      thinkingMarkdown: undefined,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
     };
@@ -844,15 +736,9 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
         ? response.content
         : JSON.stringify(response.content ?? "");
 
-    const assistantResponse = extractTextAfterMarker(
-      content,
-      "ASSISTANT_RESPONSE:",
-      content.trim() || "I reviewed your request and prepared timeline proposals."
-    );
-    const rawActions = extractJsonArrayAfterMarker(content, "TIMELINE_ACTIONS_JSON:");
-    const rawDetailRequests = extractJsonArrayAfterMarker(content, "TRANSCRIPT_DETAIL_REQUESTS_JSON:");
-    const timelineActions = parseTimelineActions(rawActions);
-    const requestedDetails = parseTranscriptDetailRequests(rawDetailRequests);
+    const parsedResponse = parseTimelineEditResponse(content);
+    const timelineActions = parseTimelineActions(parsedResponse.timelineActions);
+    const requestedDetails = parseTranscriptDetailRequests(parsedResponse.transcriptDetailRequests);
     const hasDetailedTranscripts = Array.isArray(state.detailedTranscripts) && state.detailedTranscripts.length > 0;
     const transcriptDetailRequests = hasDetailedTranscripts ? [] : requestedDetails;
     const finalActions = transcriptDetailRequests.length > 0 ? [] : timelineActions;
@@ -865,8 +751,9 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
     });
 
     return {
-      messages: [new AIMessage(assistantResponse)],
-      assistantResponse,
+      messages: [new AIMessage(parsedResponse.assistantResponse)],
+      assistantResponse: parsedResponse.assistantResponse,
+      thinkingMarkdown: parsedResponse.thinkingMarkdown || undefined,
       timelineActions: finalActions.length > 0 ? finalActions : undefined,
       transcriptDetailRequests:
         transcriptDetailRequests.length > 0 ? transcriptDetailRequests : undefined,
@@ -880,6 +767,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
     return {
       messages: [new AIMessage(message)],
       assistantResponse: message,
+      thinkingMarkdown: undefined,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
       suggestions: undefined,

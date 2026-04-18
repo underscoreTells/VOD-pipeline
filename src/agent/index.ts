@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 import type { AgentInputMessage, DetailedTranscriptWindow } from "../shared/types/agent-ipc.js";
 import type { LLMProviderType } from "./providers/index.js";
+import { getLangGraphTokenNodeName, getLangGraphTokenVisibility } from "./streaming.js";
 
 const activeRequests = new Map<string, AbortController>();
 
@@ -271,6 +272,11 @@ function buildChatGraphInput(message: Extract<AgentInputMessage, { type: "chat" 
     selectedProvider: provider,
     selectedClipIds: asNumberArray(metadata.selectedClipIds),
     playheadTime,
+    assistantResponse: undefined,
+    thinkingMarkdown: undefined,
+    suggestions: undefined,
+    timelineActions: undefined,
+    transcriptDetailRequests: undefined,
   };
 
   if (chapterId) {
@@ -498,12 +504,14 @@ async function streamTokens(
   const [messageChunk, metadata] = Array.isArray(chunk) ? chunk : [chunk, {}];
 
   if (messageChunk?.content && typeof messageChunk.content === "string") {
+    const nodeName = getLangGraphTokenNodeName(metadata);
     writer.write({
       type: "token",
       requestId,
       content: messageChunk.content,
       role: messageChunk.role || "assistant",
-      nodeName: metadata?.nodeName || "unknown",
+      nodeName,
+      visibility: getLangGraphTokenVisibility(nodeName),
     });
   }
 }

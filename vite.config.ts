@@ -3,9 +3,20 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { resolve } from 'path';
 
 const __dirname = new URL('.', import.meta.url).pathname;
+const legacySvelteMarkdownPattern = /node_modules\/svelte-markdown\/.+\.svelte$/;
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [
+    svelte({
+      dynamicCompileOptions: ({ filename }) => {
+        if (legacySvelteMarkdownPattern.test(filename)) {
+          return { runes: false };
+        }
+
+        return undefined;
+      },
+    }),
+  ],
   root: 'src/renderer',
   base: './',
   build: {

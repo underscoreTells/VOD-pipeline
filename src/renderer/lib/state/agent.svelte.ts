@@ -13,6 +13,7 @@ export {
   setChapterContext,
   setProjectContext,
   setProvider,
+  syncAgentContext,
 } from './agent-session.svelte.js';
 export { sendChatMessage } from './agent-streaming.svelte.js';
 export {

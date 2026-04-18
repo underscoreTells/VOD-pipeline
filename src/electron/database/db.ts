@@ -178,6 +178,8 @@ function ensureChatConversationTables(database: Database.Database): void {
       conversation_id INTEGER NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
+      thinking_markdown TEXT,
+      trace_json TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
     );
@@ -191,6 +193,9 @@ function ensureChatConversationTables(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
       ON chat_messages(created_at);
   `);
+
+  ensureColumn(database, 'chat_messages', 'thinking_markdown', 'TEXT');
+  ensureColumn(database, 'chat_messages', 'trace_json', 'TEXT');
 }
 
 function ensureChapterProxyTable(database: Database.Database): void {
@@ -1687,9 +1692,16 @@ export async function createChatMessage(input: CreateChatConversationMessageInpu
   const now = new Date().toISOString();
 
   const result = database.prepare(
-    `INSERT INTO chat_messages (conversation_id, role, content, created_at)
-     VALUES (?, ?, ?, ?)`
-  ).run(input.conversation_id, input.role, input.content, now);
+    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.conversation_id,
+    input.role,
+    input.content,
+    input.thinking_markdown ?? null,
+    input.trace_json ?? null,
+    now
+  );
 
   database.prepare(
     'UPDATE chat_conversations SET updated_at = ? WHERE id = ?'
@@ -1700,6 +1712,8 @@ export async function createChatMessage(input: CreateChatConversationMessageInpu
     conversation_id: input.conversation_id,
     role: input.role,
     content: input.content,
+    thinking_markdown: input.thinking_markdown ?? null,
+    trace_json: input.trace_json ?? null,
     created_at: now,
   };
 }
@@ -1707,7 +1721,7 @@ export async function createChatMessage(input: CreateChatConversationMessageInpu
 export async function getChatMessagesByConversation(conversationId: number): Promise<ChatConversationMessage[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    `SELECT id, conversation_id, role, content, created_at
+    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
      FROM chat_messages
      WHERE conversation_id = ?
      ORDER BY created_at ASC, id ASC`

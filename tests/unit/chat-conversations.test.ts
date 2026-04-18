@@ -119,11 +119,22 @@ describeNative("Chat conversation persistence", () => {
       conversation_id: conversation.id,
       role: "user",
       content: "hello",
+      thinking_markdown: null,
+      trace_json: null,
     });
     await createChatMessage({
       conversation_id: conversation.id,
       role: "assistant",
       content: "world",
+      thinking_markdown: "## Reasoning\n\nThe response is grounded in the chapter context.",
+      trace_json: JSON.stringify([
+        {
+          id: "trace-1",
+          status: "processing_chat",
+          label: "Thinking...",
+          createdAt: "2026-04-18T12:00:00.000Z",
+        },
+      ]),
     });
 
     const messages = await getChatMessagesByConversation(conversation.id);
@@ -132,6 +143,8 @@ describeNative("Chat conversation persistence", () => {
     expect(messages[0].content).toBe("hello");
     expect(messages[1].role).toBe("assistant");
     expect(messages[1].content).toBe("world");
+    expect(messages[1].thinking_markdown).toBe("## Reasoning\n\nThe response is grounded in the chapter context.");
+    expect(messages[1].trace_json).toContain("trace-1");
   });
 
   it("deletes conversation with cascading messages", async () => {
@@ -147,6 +160,8 @@ describeNative("Chat conversation persistence", () => {
       conversation_id: conversation.id,
       role: "user",
       content: "to be deleted",
+      thinking_markdown: null,
+      trace_json: null,
     });
 
     const deleted = await deleteChatConversation(conversation.id);

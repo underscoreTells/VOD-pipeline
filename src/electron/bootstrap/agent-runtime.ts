@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron';
 import { getAgentBridge } from '../agent-bridge.js';
 import { createLogger } from '../logger.js';
+import type { AgentStreamEvent } from '../../shared/types/agent-ipc.js';
 
 const logger = createLogger('AgentRuntime');
 
@@ -15,7 +16,7 @@ export async function startAgentRuntime(getWindow: () => BrowserWindow | null): 
     logger.info('Starting agent bridge...');
     agentBridge = getAgentBridge();
 
-    agentBridge.on('stream', (message) => {
+    agentBridge.on('stream', (message: AgentStreamEvent) => {
       getWindow()?.webContents.send('agent:stream', message);
     });
 

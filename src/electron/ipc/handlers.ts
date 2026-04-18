@@ -76,8 +76,16 @@ import { transcribe, WhisperError, getWhisperRuntimeStatus } from '../../pipelin
 import { app } from 'electron';
 import { randomUUID } from 'crypto';
 import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export/index.js';
-import type { Asset, AssetMetadata, Clip, DetailedTranscript, Suggestion } from '../../shared/types/database.js';
-import type { AgentChatData, TimelineAction } from '../../shared/types/agent-ipc.js';
+import type { Asset, AssetMetadata, Clip, DetailedTranscript, ExecutionTraceEntry, Suggestion } from '../../shared/types/database.js';
+import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../../shared/types/agent-ipc.js';
+import {
+  sanitizeAssistantContent,
+  sanitizeThinkingMarkdown,
+} from '../../shared/utils/assistant-content.js';
+import {
+  appendExecutionTraceEntry,
+  serializeExecutionTrace,
+} from '../../shared/utils/execution-trace.js';
 import type { ExportFormat } from '../../pipeline/export/index.js';
 
 // Helper to create consistent error responses
@@ -596,7 +604,7 @@ function deriveConversationTitle(message: string): string {
 function extractAssistantMessage(result: Record<string, unknown>): string {
   const explicit = result.assistantResponse;
   if (typeof explicit === 'string' && explicit.trim().length > 0) {
-    return explicit;
+    return sanitizeAssistantContent(explicit);
   }
 
   const messages = Array.isArray(result.messages) ? result.messages : [];
@@ -609,12 +617,66 @@ function extractAssistantMessage(result: Record<string, unknown>): string {
       const record = message as Record<string, unknown>;
       const content = record.content;
       if (typeof content === 'string' && content.trim().length > 0) {
-        return content;
+        return sanitizeAssistantContent(content);
       }
     }
   }
 
   return 'Analysis complete';
+}
+
+function extractThinkingMarkdown(result: Record<string, unknown>): string | null {
+  const explicit = result.thinkingMarkdown;
+  if (typeof explicit !== 'string') {
+    return null;
+  }
+
+  const sanitized = sanitizeThinkingMarkdown(explicit);
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+interface HiddenReasoningChunk {
+  passIndex: number;
+  nodeName: string;
+  content: string;
+}
+
+function appendHiddenReasoningChunk(
+  chunks: HiddenReasoningChunk[],
+  event: { content: string; nodeName?: string },
+  passIndex: number
+): HiddenReasoningChunk[] {
+  if (!event.content) {
+    return chunks;
+  }
+
+  const nodeName = event.nodeName || 'unknown';
+  const nextChunks = [...chunks];
+  const lastChunk = nextChunks[nextChunks.length - 1];
+
+  if (lastChunk && lastChunk.passIndex === passIndex && lastChunk.nodeName === nodeName) {
+    lastChunk.content += event.content;
+    return nextChunks;
+  }
+
+  nextChunks.push({
+    passIndex,
+    nodeName,
+    content: event.content,
+  });
+  return nextChunks;
+}
+
+function serializeHiddenReasoning(chunks: HiddenReasoningChunk[]): string | null {
+  const sections = chunks
+    .map((chunk) => sanitizeThinkingMarkdown(chunk.content))
+    .filter((chunk) => chunk.length > 0);
+
+  if (sections.length === 0) {
+    return null;
+  }
+
+  return sections.join('\n\n').trim() || null;
 }
 
 function normalizeTimelineActions(value: unknown): TimelineAction[] {
@@ -797,11 +859,13 @@ function parseAgentGraphResult(
   chapterAssetIds: number[]
 ): {
   message: string;
+  thinkingMarkdown: string | null;
   timelineActions: TimelineAction[];
   suggestionDrafts: PersistableSuggestionDraft[];
   transcriptDetailRequests: TranscriptDetailRequest[];
 } {
   const message = extractAssistantMessage(result);
+  const thinkingMarkdown = extractThinkingMarkdown(result);
   const timelineActions = normalizeTimelineActions(result.timelineActions);
   const suggestionDrafts = [
     ...normalizeSuggestionDrafts(result.suggestions),
@@ -814,6 +878,7 @@ function parseAgentGraphResult(
 
   return {
     message,
+    thinkingMarkdown,
     timelineActions,
     suggestionDrafts,
     transcriptDetailRequests,
@@ -2766,7 +2831,9 @@ export function registerIpcHandlers() {
   });
 
   // Agent handler
-  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, payload) => {
+  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (event, payload) => {
+    const clientRequestId =
+      typeof payload?.clientRequestId === 'string' ? payload.clientRequestId.trim() : '';
     const projectId = toNumberOrNull(payload?.projectId);
     const conversationId = toNumberOrNull(payload?.conversationId);
     const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
@@ -2782,6 +2849,9 @@ export function registerIpcHandlers() {
     console.log('IPC: agent:chat', projectId, conversationId, provider, message);
 
     try {
+      if (!clientRequestId) {
+        return createErrorResponse('Client request ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
       if (!projectId) {
         return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
@@ -2824,6 +2894,8 @@ export function registerIpcHandlers() {
         conversation_id: conversation.id,
         role: 'user',
         content: message,
+        thinking_markdown: null,
+        trace_json: null,
       });
 
       const existingMessages = await getChatMessagesByConversation(conversation.id);
@@ -2860,7 +2932,12 @@ export function registerIpcHandlers() {
       const latestUserTurn = [{ role: 'user', content: message }];
       const conversationHistory = conversation.thread_id?.trim()
         ? latestUserTurn
-        : existingMessages.map((item) => ({ role: item.role, content: item.content }));
+        : existingMessages.map((item) => ({
+            role: item.role,
+            content: item.role === 'assistant'
+              ? sanitizeAssistantContent(item.content)
+              : item.content,
+          }));
       const guardedInitialPayload = applyNearLimitTokenGuard(
         conversationHistory,
         initialContext,
@@ -2876,10 +2953,13 @@ export function registerIpcHandlers() {
 
       const agentBridge = getAgentBridge();
       await agentBridge.ensureStarted();
+      let executionTrace: ExecutionTraceEntry[] = [];
+      let hiddenReasoningChunks: HiddenReasoningChunk[] = [];
 
       const sendChatPass = async (
         messagesPayload: Array<{ role: string; content: string }>,
-        contextPayload?: Awaited<ReturnType<typeof buildAgentChatContext>>
+        contextPayload: Awaited<ReturnType<typeof buildAgentChatContext>> | undefined,
+        passIndex: number
       ): Promise<Record<string, unknown>> => {
         const response = await agentBridge.send({
           type: 'chat',
@@ -2893,6 +2973,31 @@ export function registerIpcHandlers() {
             playheadTime,
             agentConfig,
             context: contextPayload,
+          },
+        }, {
+          streamContext: {
+            clientRequestId,
+            projectId: String(projectId),
+            chapterId: String(chapter.id),
+            conversationId: conversation.id,
+            passIndex,
+          },
+          onStreamEvent: (streamMessage) => {
+            if (streamMessage.type === 'token' && streamMessage.visibility === 'hidden') {
+              hiddenReasoningChunks = appendHiddenReasoningChunk(hiddenReasoningChunks, streamMessage, passIndex);
+              return;
+            }
+
+            if (streamMessage.type !== 'progress') {
+              return;
+            }
+
+            executionTrace = appendExecutionTraceEntry(executionTrace, {
+              status: streamMessage.status,
+              message: streamMessage.message,
+              nodeName: streamMessage.nodeName,
+              passIndex,
+            });
           },
         });
 
@@ -2908,11 +3013,26 @@ export function registerIpcHandlers() {
           : {};
       };
 
-      const firstPassResult = await sendChatPass(guardedInitialPayload.messages, initialContext);
+      const firstPassResult = await sendChatPass(guardedInitialPayload.messages, initialContext, 1);
       let finalPassResult = firstPassResult;
 
       const firstParsed = parseAgentGraphResult(firstPassResult, chapterDuration, chapterAssetIds);
       if (firstParsed.transcriptDetailRequests.length > 0) {
+        const detailedTranscriptEvent: AgentStreamEvent = {
+          type: 'progress',
+          clientRequestId,
+          projectId: String(projectId),
+          chapterId: String(chapter.id),
+          conversationId: conversation.id,
+          passIndex: 2,
+          status: 'loading_detailed_transcript_context',
+          progress: 0,
+          message: 'Fetching detailed transcript for a better answer...',
+          resetDraft: true,
+        };
+        event.sender.send(IPC_CHANNELS.AGENT_STREAM, detailedTranscriptEvent);
+        executionTrace = appendExecutionTraceEntry(executionTrace, detailedTranscriptEvent);
+
         const detailedTranscripts = await generateDetailedTranscriptsForRequests(
           chapter,
           chapterAssetIds,
@@ -2932,7 +3052,7 @@ export function registerIpcHandlers() {
             );
           }
 
-          finalPassResult = await sendChatPass(guardedDetailedPayload.messages, detailedContext);
+          finalPassResult = await sendChatPass(guardedDetailedPayload.messages, detailedContext, 2);
         }
       }
 
@@ -2944,16 +3064,20 @@ export function registerIpcHandlers() {
       );
 
       const assistantMessage = finalParsed.message || 'Analysis complete';
+      const thinkingMarkdown = finalParsed.thinkingMarkdown ?? serializeHiddenReasoning(hiddenReasoningChunks);
       await createChatMessage({
         conversation_id: conversation.id,
         role: 'assistant',
         content: assistantMessage,
+        thinking_markdown: thinkingMarkdown,
+        trace_json: serializeExecutionTrace(executionTrace),
       });
 
       hydratedConversationIds.add(conversation.id);
 
       const normalized: AgentChatData = {
         message: assistantMessage,
+        thinkingMarkdown: thinkingMarkdown ?? undefined,
         threadId,
         suggestions: persistedSuggestions,
         timelineActions: undefined,

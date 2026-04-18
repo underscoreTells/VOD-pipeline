@@ -56,7 +56,8 @@
     getTranscriptionStatus,
   } from '../state/electron.svelte';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
-  import { setProjectContext, setChapterContext } from '../state/agent.svelte';
+  import { syncAgentContext } from '../state/agent.svelte';
+  import { toAgentChapterId } from './project-detail-helpers.js';
   import type { Project, Asset } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
   
@@ -93,6 +94,7 @@
   let editorMainRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
   let previousSelectedChapterId: number | null = null;
+  let previousAgentContextKey = $state<string | null>(null);
   let initialChapterLoadEvaluated = $state(false);
   let scheduledMissingChapterTranscription = $state(false);
 
@@ -163,9 +165,6 @@
     loadChapters(project.id);
     cleanupKeyboard = initKeyboardShortcuts();
     
-    // Set agent project context
-    setProjectContext(String(project.id));
-    
     // Set up transcription progress listener
     cleanupTranscription = onTranscriptionProgress((event: { chapterId: number; progress: { percent: number; status: string } }) => {
       setTranscriptionProgress(event.chapterId, event.progress);
@@ -185,8 +184,7 @@
     saveProjectTimelineState();
     clearProjectDetail();
     clearChaptersState();
-    setProjectContext(null);
-    void setChapterContext(null, null);
+    void syncAgentContext(null, null);
   });
   
   // Check if project has content (assets or chapters)
@@ -500,8 +498,15 @@
 
   // Update agent chapter context when selection changes
   $effect(() => {
-    const chapterId = selectedChapter?.id ? String(selectedChapter.id) : null;
-    void setChapterContext(chapterId, null);
+    const projectId = String(project.id);
+    const chapterId = toAgentChapterId(selectedChapter?.id ?? null);
+    const nextAgentContextKey = `${projectId}:${chapterId ?? "none"}`;
+    if (previousAgentContextKey === nextAgentContextKey) {
+      return;
+    }
+
+    previousAgentContextKey = nextAgentContextKey;
+    void syncAgentContext(projectId, chapterId);
   });
 
   $effect(() => {

@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   conversation_id INTEGER NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
   content TEXT NOT NULL,
+  thinking_markdown TEXT,
+  trace_json TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
 );

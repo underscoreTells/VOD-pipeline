@@ -1,8 +1,9 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '../logger.js';
+import { getExternalHttpUrl } from './window-navigation.js';
 
 const logger = createLogger('Window');
 const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +35,28 @@ export function createMainWindow(): BrowserWindow {
 
   mainWindow.webContents.on('preload-error', (_event, failingPreloadPath, error) => {
     logger.error(`Failed to load preload ${failingPreloadPath}:`, error);
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const externalUrl = getExternalHttpUrl(url);
+    if (externalUrl) {
+      void shell.openExternal(externalUrl);
+    }
+
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow?.webContents.getURL()) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const externalUrl = getExternalHttpUrl(url);
+    if (externalUrl) {
+      void shell.openExternal(externalUrl);
+    }
   });
 
   if (isDev) {

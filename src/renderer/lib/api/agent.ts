@@ -5,6 +5,8 @@ export {
   deleteAgentConversation,
   getAgentConversationMessages,
   listAgentConversations,
+  onAgentError,
+  onAgentStream,
 } from '../state/electron.svelte.js';
 
 export function getSuggestions(chapterId: string) {

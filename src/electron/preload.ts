@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, dialog } from 'electron';
 import type { Asset, Clip, TimelineState, Suggestion, Chapter, ChatConversation, ChatConversationMessage } from '../shared/types/database';
-import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../shared/types/agent-ipc';
+import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../shared/types/agent-ipc';
 import type { ProjectAsset } from '../shared/contracts/ipc.js';
 
 // ============================================================================
@@ -29,7 +29,7 @@ type WaveformProgressCallback = (data: {
   progress: { tier: number; percent: number; status: string; trackIndex?: number };
 }) => void;
 type TranscriptionProgressCallback = (data: { chapterId: number; progress: { percent: number; status: string } }) => void;
-type AgentStreamCallback = (data: AgentOutputMessage) => void;
+type AgentStreamCallback = (data: AgentStreamEvent) => void;
 type AgentErrorCallback = (data: { error: string }) => void;
 
 // ============================================================================
@@ -297,6 +297,7 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: {
+      clientRequestId: string;
       projectId: string;
       conversationId: number;
       message: string;
@@ -444,7 +445,7 @@ const electronAPI: ElectronAPI = {
     applyActions: (params) =>
       ipcRenderer.invoke('agent:apply-actions', params),
     onStream: (callback) => {
-      const handler = (_: any, data: AgentOutputMessage) => callback(data);
+      const handler = (_: any, data: AgentStreamEvent) => callback(data);
       ipcRenderer.on('agent:stream', handler);
       return () => ipcRenderer.removeListener('agent:stream', handler);
     },

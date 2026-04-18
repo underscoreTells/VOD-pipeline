@@ -1,5 +1,5 @@
 import type { Asset, ChatConversation, ChatConversationMessage, Clip, Suggestion, TimelineState } from '../../../shared/types/database';
-import type { AgentChatData, AgentOutputMessage, TimelineAction } from '../../../shared/types/agent-ipc';
+import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../../../shared/types/agent-ipc';
 import type { ProjectAsset } from '../../../shared/contracts/ipc.js';
 
 // ============================================================================
@@ -61,6 +61,7 @@ export async function deleteProject(id: number): Promise<DeleteProjectResult> {
 // ============================================================================
 
 export interface AgentChatParams {
+  clientRequestId: string;
   projectId: string;
   conversationId: number;
   message: string;
@@ -147,14 +148,14 @@ export async function applyAgentActions(params: {
   return await window.electronAPI.agent.applyActions(params);
 }
 
-const agentStreamSubscribers = new Set<(message: AgentOutputMessage) => void>();
+const agentStreamSubscribers = new Set<(message: AgentStreamEvent) => void>();
 let agentStreamUnsubscribe: (() => void) | null = null;
 
-export function onAgentStream(callback: (message: AgentOutputMessage) => void): () => void {
+export function onAgentStream(callback: (message: AgentStreamEvent) => void): () => void {
   agentStreamSubscribers.add(callback);
 
   if (!agentStreamUnsubscribe) {
-    agentStreamUnsubscribe = window.electronAPI.agent.onStream((message: AgentOutputMessage) => {
+    agentStreamUnsubscribe = window.electronAPI.agent.onStream((message: AgentStreamEvent) => {
       for (const subscriber of agentStreamSubscribers) {
         subscriber(message);
       }
@@ -577,6 +578,7 @@ declare global {
       };
       agent: {
         chat: (params: {
+          clientRequestId: string;
           projectId: string;
           conversationId: number;
           message: string;
@@ -601,7 +603,7 @@ declare global {
         getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;
         deleteConversation: (conversationId: number) => Promise<{ success: boolean; error?: string }>;
         applyActions: (params: { projectId: string; chapterId?: string; actions: TimelineAction[] }) => Promise<AgentApplyActionsResult>;
-        onStream: (callback: (message: AgentOutputMessage) => void) => () => void;
+        onStream: (callback: (message: AgentStreamEvent) => void) => () => void;
         onError: (callback: (payload: { error: string }) => void) => () => void;
         getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
         previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
