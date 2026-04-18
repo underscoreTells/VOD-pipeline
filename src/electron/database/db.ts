@@ -75,8 +75,12 @@ export async function initializeDatabase(): Promise<Database.Database> {
     }
 
     if (schema) {
-      database.exec(schema);
+      applySchemaStatements(database, schema, 'table');
+      ensureDetailedTranscriptTable(database);
+      ensureChatConversationTables(database);
+      ensureChapterProxyTable(database);
       ensureSchemaColumns(database);
+      applySchemaStatements(database, schema, 'index');
       console.log('Database schema initialized successfully');
     } else {
       console.error('Schema file not found. Tried paths:', possiblePaths);
@@ -103,6 +107,8 @@ function ensureSchemaColumns(database: Database.Database) {
     { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'display_order', definition: 'INTEGER DEFAULT 0' },
+    { table: 'suggestions', column: 'conversation_id', definition: 'INTEGER REFERENCES chat_conversations(id) ON DELETE CASCADE' },
+    { table: 'suggestions', column: 'chat_message_id', definition: 'INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE' },
     { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
     { table: 'suggestions', column: 'action_type', definition: "TEXT DEFAULT 'create_clip'" },
     { table: 'suggestions', column: 'target_clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
@@ -125,10 +131,12 @@ function ensureSchemaColumns(database: Database.Database) {
       `This will cause INSERT statements to fail with "no such column" errors.`
     );
   }
-
-  ensureDetailedTranscriptTable(database);
-  ensureChatConversationTables(database);
-  ensureChapterProxyTable(database);
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_suggestions_conversation_id
+      ON suggestions(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_chat_message_id
+      ON suggestions(chat_message_id);
+  `);
 }
 
 function ensureDetailedTranscriptTable(database: Database.Database): void {
@@ -249,6 +257,38 @@ function ensureColumn(
     console.error(`Database migration failed for ${table}.${column}:`, error);
     return false;
   }
+}
+
+function applySchemaStatements(
+  database: Database.Database,
+  schema: string,
+  statementType: 'table' | 'index'
+): void {
+  const statements = schema
+    .split(/;\s*(?:\r?\n|$)/)
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+    .filter((statement) => getSchemaStatementType(statement) === statementType);
+
+  if (statements.length === 0) {
+    return;
+  }
+
+  database.exec(`${statements.join(';\n')};`);
+}
+
+function getSchemaStatementType(statement: string): 'table' | 'index' | 'other' {
+  const normalized = statement.replace(/^--.*$/gm, '').trimStart().toUpperCase();
+
+  if (normalized.startsWith('CREATE TABLE')) {
+    return 'table';
+  }
+
+  if (normalized.startsWith('CREATE INDEX')) {
+    return 'index';
+  }
+
+  return 'other';
 }
 
 export async function getDatabase(): Promise<Database.Database> {
@@ -1989,6 +2029,8 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
   const result = database.prepare(
     `INSERT INTO suggestions (
       chapter_id,
+      conversation_id,
+      chat_message_id,
       in_point,
       out_point,
       description,
@@ -2002,9 +2044,11 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
       display_order,
       clip_id
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     suggestion.chapter_id,
+    suggestion.conversation_id ?? null,
+    suggestion.chat_message_id ?? null,
     suggestion.in_point,
     suggestion.out_point,
     suggestion.description,
@@ -2022,6 +2066,8 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
   return {
     id: result.lastInsertRowid as number,
     ...suggestion,
+    conversation_id: suggestion.conversation_id ?? null,
+    chat_message_id: suggestion.chat_message_id ?? null,
     action_type: normalizedActionType,
     target_clip_id: normalizedTargetClipId,
     action_payload_json: normalizedActionPayload,
@@ -2035,6 +2081,12 @@ export async function createSuggestion(suggestion: CreateSuggestionInput): Promi
 function normalizeSuggestionRecord(row: Suggestion): Suggestion {
   return {
     ...row,
+    conversation_id: typeof row.conversation_id === 'number' && Number.isFinite(row.conversation_id)
+      ? row.conversation_id
+      : null,
+    chat_message_id: typeof row.chat_message_id === 'number' && Number.isFinite(row.chat_message_id)
+      ? row.chat_message_id
+      : null,
     action_type: row.action_type === 'update_clip' ? 'update_clip' : 'create_clip',
     target_clip_id: typeof row.target_clip_id === 'number' && Number.isFinite(row.target_clip_id)
       ? row.target_clip_id
@@ -2047,7 +2099,7 @@ function normalizeSuggestionRecord(row: Suggestion): Suggestion {
 export async function getSuggestion(id: number): Promise<Suggestion | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
             action_type, target_clip_id, action_payload_json, preview_snapshot_json,
             status, display_order, created_at, applied_at, clip_id
      FROM suggestions
@@ -2060,7 +2112,7 @@ export async function getSuggestion(id: number): Promise<Suggestion | null> {
 export async function getSuggestionsByChapter(chapterId: number, status?: Suggestion['status']): Promise<Suggestion[]> {
   const database = await getDatabase();
   
-  let query = `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+  let query = `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
                       action_type, target_clip_id, action_payload_json, preview_snapshot_json,
                       status, display_order, created_at, applied_at, clip_id
                FROM suggestions
@@ -2078,10 +2130,40 @@ export async function getSuggestionsByChapter(chapterId: number, status?: Sugges
   return results.map(normalizeSuggestionRecord);
 }
 
+export async function getSuggestionsByConversation(
+  conversationId: number,
+  chapterId?: number,
+  status?: Suggestion['status']
+): Promise<Suggestion[]> {
+  const database = await getDatabase();
+
+  let query = `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
+                      action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+                      status, display_order, created_at, applied_at, clip_id
+               FROM suggestions
+               WHERE conversation_id = ?`;
+  const params: unknown[] = [conversationId];
+
+  if (typeof chapterId === 'number' && Number.isFinite(chapterId)) {
+    query += ' AND chapter_id = ?';
+    params.push(chapterId);
+  }
+
+  if (status) {
+    query += ' AND status = ?';
+    params.push(status);
+  }
+
+  query += ' ORDER BY display_order ASC, created_at DESC';
+
+  const results = database.prepare(query).all(...params) as Suggestion[];
+  return results.map(normalizeSuggestionRecord);
+}
+
 export async function getSuggestionsByProvider(chapterId: number, provider: 'gemini' | 'kimi'): Promise<Suggestion[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    `SELECT id, chapter_id, in_point, out_point, description, reasoning, provider,
+    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
             action_type, target_clip_id, action_payload_json, preview_snapshot_json,
             status, display_order, created_at, applied_at, clip_id
      FROM suggestions

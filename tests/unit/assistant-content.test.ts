@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseStructuredAssistantPreview,
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
   stripLegacySuggestionBlocks,
@@ -41,5 +42,30 @@ SUGGESTIONS_JSON:
 [{"in_point": 10, "out_point": 20}]`;
 
     expect(sanitizeThinkingMarkdown(content)).toBe("## Reasoning\n\nKeep the payoff, then cut the reset.");
+  });
+
+  it("parses structured streaming preview into bubble content and thinking content", () => {
+    const preview = parseStructuredAssistantPreview(`ASSISTANT_RESPONSE:
+Keep the payoff and trim the reset.
+
+THINKING_MARKDOWN:
+## Reasoning
+
+The payoff lands and the reset drags.
+
+SUGGESTIONS_JSO`);
+
+    expect(preview.assistantResponse).toBe("Keep the payoff and trim the reset.");
+    expect(preview.thinkingMarkdown).toBe("## Reasoning\n\nThe payoff lands and the reset drags.");
+  });
+
+  it("hides partial marker fragments from the visible preview", () => {
+    const preview = parseStructuredAssistantPreview(`ASSISTANT_RESPONSE:
+Keep the intro.
+
+THINKING_MARKD`);
+
+    expect(preview.assistantResponse).toBe("Keep the intro.");
+    expect(preview.thinkingMarkdown).toBeNull();
   });
 });

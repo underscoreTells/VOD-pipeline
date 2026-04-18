@@ -9,8 +9,8 @@ export {
   onAgentStream,
 } from '../state/electron.svelte.js';
 
-export function getSuggestions(chapterId: string) {
-  return window.electronAPI.agent.getSuggestions(chapterId);
+export function getSuggestions(params: { chapterId: string; conversationId: number }) {
+  return window.electronAPI.agent.getSuggestions(params);
 }
 
 export function previewSuggestion(suggestionId: number) {
@@ -25,8 +25,8 @@ export function applySuggestion(suggestionId: number) {
   return window.electronAPI.agent.applySuggestion(suggestionId);
 }
 
-export function applyAllSuggestions(chapterId: string) {
-  return window.electronAPI.agent.applyAllSuggestions(chapterId);
+export function applyAllSuggestions(params: { chapterId: string; conversationId: number }) {
+  return window.electronAPI.agent.applyAllSuggestions(params);
 }
 
 export function rejectSuggestion(suggestionId: number) {

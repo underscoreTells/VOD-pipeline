@@ -1,6 +1,7 @@
 export {
   clearPendingSuggestions,
   createSuggestion,
+  getSuggestionsByConversation,
   deleteSuggestion,
   deleteSuggestionsByChapter,
   getSuggestion,

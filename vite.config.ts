@@ -4,6 +4,7 @@ import { resolve } from 'path';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 const legacySvelteMarkdownPattern = /node_modules\/svelte-markdown\/.+\.svelte$/;
+const devServerPort = Number.parseInt(process.env.VITE_DEV_SERVER_PORT ?? '5173', 10);
 
 export default defineConfig({
   plugins: [
@@ -30,7 +31,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: Number.isNaN(devServerPort) ? 5173 : devServerPort,
     strictPort: true,
   },
   clearScreen: false,

@@ -324,12 +324,12 @@ export interface ElectronAPI {
     applyActions: (params: { projectId: string; chapterId?: string; actions: TimelineAction[] }) => Promise<AgentApplyActionsResult>;
     onStream: (callback: AgentStreamCallback) => () => void;
     onError: (callback: AgentErrorCallback) => () => void;
-    getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
+    getSuggestions: (params: { chapterId: string; conversationId: number }) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
     previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
     cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
     applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
     rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
-    applyAllSuggestions: (chapterId: string) => Promise<{
+    applyAllSuggestions: (params: { chapterId: string; conversationId: number }) => Promise<{
       success: boolean;
       data?: {
         appliedCount: number;
@@ -454,8 +454,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('agent:error', handler);
       return () => ipcRenderer.removeListener('agent:error', handler);
     },
-    getSuggestions: (chapterId) =>
-      ipcRenderer.invoke('suggestion:get-by-chapter', { chapterId }),
+    getSuggestions: (params) =>
+      ipcRenderer.invoke('suggestion:get-by-chapter', params),
     previewSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:preview', { id: suggestionId }),
     cancelSuggestionPreview: (suggestionId) =>
@@ -464,8 +464,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
-    applyAllSuggestions: (chapterId) =>
-      ipcRenderer.invoke('suggestion:apply-all', { chapterId }),
+    applyAllSuggestions: (params) =>
+      ipcRenderer.invoke('suggestion:apply-all', params),
   },
   settings: {
     encrypt: async (text) => {

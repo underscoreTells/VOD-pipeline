@@ -605,12 +605,12 @@ declare global {
         applyActions: (params: { projectId: string; chapterId?: string; actions: TimelineAction[] }) => Promise<AgentApplyActionsResult>;
         onStream: (callback: (message: AgentStreamEvent) => void) => () => void;
         onError: (callback: (payload: { error: string }) => void) => () => void;
-        getSuggestions: (chapterId: string) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
+        getSuggestions: (params: { chapterId: string; conversationId: number }) => Promise<{ success: boolean; data?: Suggestion[]; error?: string }>;
         previewSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { previewed: boolean; clip?: Clip }; error?: string }>;
         cancelSuggestionPreview: (suggestionId: number) => Promise<{ success: boolean; data?: { cancelled: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
         applySuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { applied: boolean; clip?: Clip }; error?: string }>;
         rejectSuggestion: (suggestionId: number) => Promise<{ success: boolean; data?: { rejected: boolean; removedClipId?: number; clip?: Clip }; error?: string }>;
-        applyAllSuggestions: (chapterId: string) => Promise<{
+        applyAllSuggestions: (params: { chapterId: string; conversationId: number }) => Promise<{
           success: boolean;
           data?: {
             appliedCount: number;

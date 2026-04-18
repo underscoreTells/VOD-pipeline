@@ -16,7 +16,7 @@ export function getLangGraphTokenNodeName(metadata: unknown): string {
   return "unknown";
 }
 
-const HIDDEN_TOKEN_NODES = new Set(["visual_analysis", "timeline_edit"]);
+const HIDDEN_TOKEN_NODES = new Set(["chat_node", "visual_analysis", "timeline_edit"]);
 
 export function getLangGraphTokenVisibility(nodeName: string): "chat" | "hidden" {
   return HIDDEN_TOKEN_NODES.has(nodeName) ? "hidden" : "chat";

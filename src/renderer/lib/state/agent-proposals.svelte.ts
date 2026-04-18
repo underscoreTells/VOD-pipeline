@@ -100,9 +100,9 @@ export function rejectTimelineProposal(proposalId: string) {
   proposal.error = null;
 }
 
-export async function loadSuggestions(chapterId: string) {
+export async function loadSuggestions(chapterId: string, conversationId: number) {
   try {
-    const response = await getSuggestions(chapterId);
+    const response = await getSuggestions({ chapterId, conversationId });
     if (response.success && response.data) {
       agentState.suggestions = response.data as Suggestion[];
     }
@@ -188,12 +188,15 @@ export async function applySuggestion(suggestionId: number) {
 }
 
 export async function applyAllSuggestions() {
-  if (!agentState.currentChapterId) {
-    return { success: false, error: 'No chapter selected' };
+  if (!agentState.currentChapterId || !agentState.selectedConversationId) {
+    return { success: false, error: 'No conversation selected' };
   }
 
   try {
-    const response = await applyAllAgentSuggestions(agentState.currentChapterId);
+    const response = await applyAllAgentSuggestions({
+      chapterId: agentState.currentChapterId,
+      conversationId: agentState.selectedConversationId,
+    });
     if (!response.success || !response.data) {
       return { success: false, error: response.error || 'Failed to apply suggestions' };
     }

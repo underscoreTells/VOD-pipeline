@@ -253,6 +253,8 @@ export type CreateChapterProxyInput = Omit<ChapterProxy, 'id' | 'created_at' | '
 export interface Suggestion {
   id: number;
   chapter_id: number;
+  conversation_id: number | null;
+  chat_message_id: number | null;
   in_point: number;
   out_point: number;
   description: string | null;

@@ -42,7 +42,21 @@ export function appendTraceEventToDraft(
   return updateDraftMessage(messages, clientRequestId, (message) => ({
     ...message,
     content: event.resetDraft ? "" : message.content,
+    thinkingMarkdown: event.resetDraft ? null : message.thinkingMarkdown,
     trace: appendExecutionTraceEntry(message.trace, event),
+  }));
+}
+
+export function updateDraftPreview(
+  messages: ChatMessage[],
+  clientRequestId: string,
+  content: string,
+  thinkingMarkdown: string | null
+): ChatMessage[] {
+  return updateDraftMessage(messages, clientRequestId, (message) => ({
+    ...message,
+    content,
+    thinkingMarkdown,
   }));
 }
 

@@ -118,7 +118,7 @@ export function buildProviderEnvFromSettings() {
 export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
   return messages.map((item) => ({
     role: item.role,
-    content: item.role === "assistant" && !item.trace_json
+    content: item.role === "assistant"
       ? sanitizeAssistantContent(item.content)
       : item.content,
     thinkingMarkdown: item.role === "assistant" && typeof item.thinking_markdown === "string"
@@ -159,6 +159,34 @@ function clearChapterConversationState(clearSuggestions: boolean): void {
   }
 }
 
+async function loadConversationSuggestions(
+  chapterId: string,
+  conversationId: number,
+  requestToken?: number,
+  requestContextKey?: string
+): Promise<void> {
+  const response = await getSuggestions({
+    chapterId,
+    conversationId,
+  });
+
+  if (
+    requestToken !== undefined &&
+    requestContextKey !== undefined &&
+    !isCurrentConversationContextRequest(requestToken, requestContextKey)
+  ) {
+    return;
+  }
+
+  if (!response.success) {
+    agentState.error = response.error || "Failed to load suggestions";
+    agentState.suggestions = [];
+    return;
+  }
+
+  agentState.suggestions = response.data ?? [];
+}
+
 async function loadChapterConversations(options: {
   chapterId: string;
   preserveSelection: boolean;
@@ -196,6 +224,7 @@ async function loadChapterConversations(options: {
     agentState.selectedConversationId = null;
     agentState.messages = [];
     agentState.timelineProposals = [];
+    agentState.suggestions = [];
     return;
   }
 
@@ -249,6 +278,7 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
   agentState.selectedConversationId = conversation.id;
   agentState.messages = [];
   agentState.timelineProposals = [];
+  agentState.suggestions = [];
   agentState.error = null;
   return conversation;
 }
@@ -279,15 +309,6 @@ export async function syncAgentContext(
   agentState.isLoadingConversations = true;
 
   try {
-    const suggestionsResponse = await getSuggestions(chapterId);
-    if (!isCurrentConversationContextRequest(token, nextContextKey)) {
-      return;
-    }
-
-    if (suggestionsResponse.success && suggestionsResponse.data) {
-      agentState.suggestions = suggestionsResponse.data;
-    }
-
     await loadChapterConversations({
       chapterId,
       preserveSelection: false,
@@ -350,6 +371,18 @@ export async function selectConversation(
   agentState.selectedConversationId = conversationId;
   agentState.messages = mapConversationMessages(response.data);
   agentState.timelineProposals = [];
+  agentState.suggestions = [];
+
+  if (!agentState.currentChapterId) {
+    return true;
+  }
+
+  await loadConversationSuggestions(
+    agentState.currentChapterId,
+    conversationId,
+    options?.requestToken,
+    options?.requestContextKey
+  );
   return true;
 }
 
@@ -373,6 +406,7 @@ export async function removeConversation(conversationId: number) {
       agentState.selectedConversationId = null;
       agentState.messages = [];
       agentState.timelineProposals = [];
+      agentState.suggestions = [];
     }
   }
 

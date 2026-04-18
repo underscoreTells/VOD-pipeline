@@ -27,62 +27,38 @@ interface CreateMainGraphOptions {
 
 const CLIP_ROLE_VALUES = ["setup", "escalation", "twist", "payoff", "transition"] as const;
 
-const timelineEditIntentKeywords = [
-  "create clip",
-  "make clip",
-  "add clip",
-  "new clip",
-  "edit clip",
-  "update clip",
-  "move clip",
-  "trim clip",
-  "trim",
-  "cut",
-  "shorten",
-  "extend",
-  "retime",
-  "timeline",
-  "in point",
-  "out point",
-  "continuity",
-  "transition",
-  "flow",
-  "pacing",
-  "refine",
-  "revise",
-  "tighten",
-  "rework",
-  "bridge",
-  "cliffhanger",
-  "story beat",
-  "chapter",
-  "those clips",
-  "these clips",
-  "good start",
-  "next chapter",
+const explicitTimelineEditPatterns = [
+  /\b(?:create|make|add|insert)\s+(?:a\s+)?clip\b/,
+  /\b(?:edit|update|move|retime)\s+(?:the\s+)?clip\b/,
+  /\b(?:trim|cut|shorten|extend|tighten|remove)\b.*\b(?:clip|timeline|intro|outro|section|segment|sequence|transition|continuity|pacing|dead air|repetition)\b/,
+  /\b(?:what|which)\s+(?:can|should)\s+(?:i|we)\s+(?:cut|trim|tighten|keep)\b/,
+  /\b(?:suggest|propose|make)\s+(?:some\s+)?(?:cuts?|edits?|clips?|timeline changes?)\b/,
+  /\b(?:fix|improve|smooth|bridge)\b.*\b(?:transition|continuity|flow|pacing)\b/,
+  /\b(?:adjust|change|improve)\b.*\b(?:timeline|pacing|flow|transition|continuity)\b/,
+  /\b(?:end|start)\s+(?:with|on)\b/,
 ];
 
-const timelineEditFollowupKeywords = [
-  "continuity",
-  "transition",
-  "flow",
-  "pacing",
-  "hook",
-  "payoff",
-  "callback",
-  "refine",
-  "tighten",
-  "rework",
-  "those clips",
-  "these clips",
-  "good start",
-  "make this",
-  "more aggressive",
-  "less aggressive",
-  "end with",
-  "next chapter",
-  "bridge",
-  "cliffhanger",
+const timelineEditFollowupPatterns = [
+  /\bgood start\b/,
+  /\bthose clips\b/,
+  /\bthese clips\b/,
+  /\brefine\b/,
+  /\btighten\b/,
+  /\brework\b/,
+  /\bbridge\b/,
+  /\bcliffhanger\b/,
+  /\bnext chapter\b/,
+  /\bmake (?:it|this)\b/,
+  /\b(?:more|less) aggressive\b/,
+  /\bend with\b/,
+  /\bmake (?:the )?(?:hook|payoff|callback)\b/,
+];
+
+const suggestionRequestPatterns = [
+  /\b(?:what|which)\s+(?:can|should)\s+(?:i|we)\s+(?:cut|trim|keep)\b/,
+  /\b(?:suggest|propose)\s+(?:some\s+)?(?:cuts?|keeps?|edits?)\b/,
+  /\b(?:what|which)\s+(?:sections?|parts?|moments?)\s+(?:should|can)\s+(?:stay|go)\b/,
+  /\b(?:trim|cut|tighten|remove)\b.*\b(?:video|chapter|section|segment|sequence|moment|dead air|repetition)\b/,
 ];
 
 const genericCapabilityKeywords = [
@@ -93,17 +69,6 @@ const genericCapabilityKeywords = [
   "provider",
   "help menu",
   "settings",
-];
-
-const acknowledgementKeywords = [
-  "thanks",
-  "thank you",
-  "sounds good",
-  "got it",
-  "cool",
-  "nice",
-  "perfect",
-  "great",
 ];
 
 const timelineActionSchema = z.discriminatedUnion("type", [
@@ -190,6 +155,8 @@ async function chatNode(state: typeof MainState.State, config: any) {
     messages: [new AIMessage(assistantResponse)],
     assistantResponse,
     thinkingMarkdown,
+    routingProposalContext: Boolean(state.lastProposalContext),
+    lastProposalContext: false,
     timelineActions: undefined,
     transcriptDetailRequests: undefined,
   };
@@ -218,8 +185,10 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       ? lastHumanMessage.content 
       : "Analyze this video chapter";
 
+    const allowSuggestions = shouldGenerateVisualSuggestions(userQuery.toLowerCase());
+
     // Build the analysis prompt
-    const analysisPrompt = buildVisualAnalysisPrompt(userQuery);
+    const analysisPrompt = buildVisualAnalysisPrompt(userQuery, allowSuggestions);
 
     config.writer?.({
       type: "progress",
@@ -270,7 +239,10 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       messages: [new AIMessage(parsedResponse.assistantResponse)],
       assistantResponse: parsedResponse.assistantResponse,
       thinkingMarkdown: parsedResponse.thinkingMarkdown || undefined,
-      suggestions: parsedResponse.suggestions.length > 0 ? parsedResponse.suggestions : undefined,
+      suggestions: allowSuggestions && parsedResponse.suggestions.length > 0
+        ? parsedResponse.suggestions
+        : undefined,
+      lastProposalContext: allowSuggestions && parsedResponse.suggestions.length > 0,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
       lastAnalyzedMessageIndex: lastHumanMessageIndex,
@@ -296,6 +268,7 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
       assistantResponse: errorContent,
       thinkingMarkdown: undefined,
       suggestions: undefined,
+      lastProposalContext: false,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
       // Set lastAnalyzedMessageIndex even on error to prevent repeated retriggering
@@ -304,7 +277,7 @@ async function visualAnalysisNode(state: typeof MainState.State, config: any) {
   }
 }
 
-function buildVisualAnalysisPrompt(userQuery: string): string {
+function buildVisualAnalysisPrompt(userQuery: string, allowSuggestions: boolean): string {
   let prompt = `You are a professional video editor analyzing a video chapter.
 
 User question: ${userQuery}
@@ -317,29 +290,30 @@ Primary goal:
 Secondary goal:
 - Keep funny moments that improve engagement and pacing, but do not let humor derail story momentum.
 
-Identify:
-1. Sections to KEEP (story-critical beats, meaningful transitions, and high-value humor)
-2. Sections to CUT (dead air, repetition, off-topic tangents, or humor that stalls progression)
-
-For each suggestion, provide:
-- Time range (start → end in seconds)
-- Brief description of what's happening
-- Reasoning (why keep or cut this section)
+${allowSuggestions
+  ? `If the user is asking what to keep, cut, tighten, or edit:
+- Identify the most important sections to KEEP or CUT.
+- For each suggestion, provide a time range, a brief description, and the reasoning.
+- Keep the suggestion list focused and practical.`
+  : `If the user is asking for analysis, explanation, recap, or diagnosis rather than edit advice:
+- Do not make cut/keep recommendations.
+- Return SUGGESTIONS_JSON: [].
+- Focus on describing what happens, why it matters, and how it affects story progression.`}
 
 Respond in this exact format:
 
 ASSISTANT_RESPONSE:
-<Short natural-language answer for the user. Do not include raw JSON or SUGGESTION blocks here.>
+<Complete user-facing answer for the chat bubble. Do not summarize away important analysis. Do not include raw JSON or suggestion blocks here.>
 
 THINKING_MARKDOWN:
-<Detailed markdown analysis, rationale, verdict notes, and any section-by-section reasoning. Do not include raw JSON here.>
+<Optional hidden markdown notes, rationale, or section-by-section reasoning that do not repeat the full answer. Leave blank if there is nothing extra to add. Do not include raw JSON here.>
 
 SUGGESTIONS_JSON:
 [
   {"in_point": 120.5, "out_point": 180.0, "description": "Setup scene", "reasoning": "Establishes challenge and builds tension"}
 ]
 
-Be concise and actionable. Focus on the most important cuts.
+Be concrete and actionable. Put the full answer in ASSISTANT_RESPONSE.
 
 If transcript context is provided in a separate text block, use it to align dialogue timing and verify narrative beats.`;
 
@@ -399,7 +373,7 @@ function getLastHumanMessage(state: typeof MainState.State): { content?: unknown
 }
 
 function hasTimelineEditIntent(content: string): boolean {
-  return timelineEditIntentKeywords.some((keyword) => content.includes(keyword));
+  return explicitTimelineEditPatterns.some((pattern) => pattern.test(content));
 }
 
 function isGenericCapabilityQuery(content: string): boolean {
@@ -407,11 +381,11 @@ function isGenericCapabilityQuery(content: string): boolean {
 }
 
 function hasTimelineEditFollowupIntent(content: string): boolean {
-  return timelineEditFollowupKeywords.some((keyword) => content.includes(keyword));
+  return timelineEditFollowupPatterns.some((pattern) => pattern.test(content));
 }
 
-function isBriefAcknowledgement(content: string): boolean {
-  return acknowledgementKeywords.some((keyword) => content === keyword || content.startsWith(`${keyword} `));
+function shouldGenerateVisualSuggestions(content: string): boolean {
+  return suggestionRequestPatterns.some((pattern) => pattern.test(content));
 }
 
 function buildChapterGroundingSystemPrompt(state: typeof MainState.State): string {
@@ -464,10 +438,10 @@ function buildGroundedChatSystemPrompt(state: typeof MainState.State): string {
 Return exactly two sections:
 
 ASSISTANT_RESPONSE:
-<Short final answer for the chat bubble. Keep it concise and user-facing.>
+<Complete user-facing answer for the chat bubble. Include the full answer, not a summary placeholder.>
 
 THINKING_MARKDOWN:
-<Detailed markdown reasoning, analysis, rationale, and section-by-section notes that support the answer. Do not include raw JSON.>`;
+<Optional hidden markdown notes that add rationale or supporting detail without repeating the full answer. Leave blank if there is nothing extra to add. Do not include raw JSON.>`;
 }
 
 
@@ -624,10 +598,10 @@ ${detailedTranscriptPromptBlock}
 Return exactly three sections:
 
 ASSISTANT_RESPONSE:
-<Short natural language response for the user. Mention that these are proposals.>
+<Complete user-facing answer for the chat bubble. Mention that these are proposals when proposals are present.>
 
 THINKING_MARKDOWN:
-<Detailed markdown rationale, diagnostics, tradeoffs, and notes about why these edit proposals help. Do not include raw JSON.>
+<Optional hidden markdown notes about rationale, diagnostics, or tradeoffs that do not restate the full answer. Leave blank if there is nothing extra to add. Do not include raw JSON.>
 
 TIMELINE_ACTIONS_JSON:
 <A valid JSON array. No markdown fences.>
@@ -675,6 +649,8 @@ Action schema:
 
 Rules:
 - Use chapter-local seconds only (0 to ${chapterDuration?.toFixed(2) ?? "unknown"}).
+- Only propose timeline edits when the user explicitly asks to change the cut, timeline, pacing, continuity, transitions, or existing clip proposals.
+- If the user is mainly asking for analysis, explanation, recap, summary, or discussion rather than an edit request, return [] for both TIMELINE_ACTIONS_JSON and TRANSCRIPT_DETAIL_REQUESTS_JSON.
 - If request is unclear or non-editing, return [] for both TIMELINE_ACTIONS_JSON and TRANSCRIPT_DETAIL_REQUESTS_JSON.
 - Never invent clipId values not listed in context.
 - For create_clip, outPoint must be > inPoint.
@@ -701,6 +677,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
       messages: [new AIMessage(fallback)],
       assistantResponse: fallback,
       thinkingMarkdown: undefined,
+      lastProposalContext: false,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
     };
@@ -712,6 +689,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
       messages: [new AIMessage(fallback)],
       assistantResponse: fallback,
       thinkingMarkdown: undefined,
+      lastProposalContext: false,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
     };
@@ -755,6 +733,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
       assistantResponse: parsedResponse.assistantResponse,
       thinkingMarkdown: parsedResponse.thinkingMarkdown || undefined,
       timelineActions: finalActions.length > 0 ? finalActions : undefined,
+      lastProposalContext: finalActions.length > 0,
       transcriptDetailRequests:
         transcriptDetailRequests.length > 0 ? transcriptDetailRequests : undefined,
       suggestions: undefined,
@@ -768,6 +747,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
       messages: [new AIMessage(message)],
       assistantResponse: message,
       thinkingMarkdown: undefined,
+      lastProposalContext: false,
       timelineActions: undefined,
       transcriptDetailRequests: undefined,
       suggestions: undefined,
@@ -775,7 +755,7 @@ async function timelineEditNode(state: typeof MainState.State, config: any) {
   }
 }
 
-function shouldContinueChat(state: typeof MainState.State): string {
+export function shouldContinueChat(state: typeof MainState.State): string {
   const lastHumanMessage = getLastHumanMessage(state);
   const content = lastHumanMessage && typeof lastHumanMessage.content === "string"
     ? lastHumanMessage.content.toLowerCase()
@@ -816,22 +796,8 @@ function shouldContinueChat(state: typeof MainState.State): string {
     return "timeline_edit";
   }
 
-  if (hasChapterContext && hasTimelineEditFollowupIntent(content)) {
+  if (hasChapterContext && state.routingProposalContext && hasTimelineEditFollowupIntent(content)) {
     return "timeline_edit";
-  }
-
-  if (hasChapterContext && !isGenericCapabilityQuery(content)) {
-    const chapterLanguageSignals = ["clip", "chapter", "edit", "cut", "sequence", "story", "beat", "transition"];
-    if (chapterLanguageSignals.some((signal) => content.includes(signal))) {
-      return "timeline_edit";
-    }
-  }
-
-  if (hasChapterContext && content.length > 0 && !isGenericCapabilityQuery(content)) {
-    const shortFollowup = content.length <= 220;
-    if (shortFollowup && !isBriefAcknowledgement(content)) {
-      return "timeline_edit";
-    }
   }
 
   return "done";

@@ -27,8 +27,8 @@ describe("agent streaming helpers", () => {
   });
 
   it("hides streamed tokens for structured-output nodes", () => {
+    expect(getLangGraphTokenVisibility("chat_node")).toBe("hidden");
     expect(getLangGraphTokenVisibility("visual_analysis")).toBe("hidden");
     expect(getLangGraphTokenVisibility("timeline_edit")).toBe("hidden");
-    expect(getLangGraphTokenVisibility("chat_node")).toBe("chat");
   });
 });

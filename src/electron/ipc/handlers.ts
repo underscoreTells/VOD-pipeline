@@ -56,7 +56,7 @@ import {
   updateChapterProxyMetadata,
   createSuggestion,
   getSuggestion,
-  getSuggestionsByChapter,
+  getSuggestionsByConversation,
   applySuggestionWithClip,
   previewSuggestionWithClip,
   cancelSuggestionPreview,
@@ -79,6 +79,7 @@ import { generateFCPXML, generateJSON, generateEDL } from '../../pipeline/export
 import type { Asset, AssetMetadata, Clip, DetailedTranscript, ExecutionTraceEntry, Suggestion } from '../../shared/types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../../shared/types/agent-ipc.js';
 import {
+  parseStructuredAssistantPreview,
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from '../../shared/utils/assistant-content.js';
@@ -669,7 +670,7 @@ function appendHiddenReasoningChunk(
 
 function serializeHiddenReasoning(chunks: HiddenReasoningChunk[]): string | null {
   const sections = chunks
-    .map((chunk) => sanitizeThinkingMarkdown(chunk.content))
+    .map((chunk) => parseStructuredAssistantPreview(chunk.content).thinkingMarkdown ?? "")
     .filter((chunk) => chunk.length > 0);
 
   if (sections.length === 0) {
@@ -903,12 +904,14 @@ function normalizeConversationProvider(
 
 async function persistAgentSuggestions(
   chapterId: number,
+  conversationId: number,
+  chatMessageId: number,
   provider: unknown,
   suggestions: PersistableSuggestionDraft[]
 ) {
   if (suggestions.length === 0) return [];
 
-  const existing = await getSuggestionsByChapter(chapterId);
+  const existing = await getSuggestionsByConversation(conversationId, chapterId);
   const chapter = await getChapter(chapterId);
   if (!chapter) {
     return [];
@@ -962,6 +965,8 @@ async function persistAgentSuggestions(
 
     const createdSuggestion = await createSuggestion({
       chapter_id: chapterId,
+      conversation_id: conversationId,
+      chat_message_id: chatMessageId,
       in_point: localInPoint,
       out_point: localOutPoint,
       description: suggestion.description,
@@ -3057,21 +3062,22 @@ export function registerIpcHandlers() {
       }
 
       const finalParsed = parseAgentGraphResult(finalPassResult, chapterDuration, chapterAssetIds);
-      const persistedSuggestions = await persistAgentSuggestions(
-        chapter.id,
-        effectiveProvider,
-        finalParsed.suggestionDrafts
-      );
-
       const assistantMessage = finalParsed.message || 'Analysis complete';
       const thinkingMarkdown = finalParsed.thinkingMarkdown ?? serializeHiddenReasoning(hiddenReasoningChunks);
-      await createChatMessage({
+      const persistedAssistantMessage = await createChatMessage({
         conversation_id: conversation.id,
         role: 'assistant',
         content: assistantMessage,
         thinking_markdown: thinkingMarkdown,
         trace_json: serializeExecutionTrace(executionTrace),
       });
+      const persistedSuggestions = await persistAgentSuggestions(
+        chapter.id,
+        conversation.id,
+        persistedAssistantMessage.id,
+        effectiveProvider,
+        finalParsed.suggestionDrafts
+      );
 
       hydratedConversationIds.add(conversation.id);
 
@@ -3851,6 +3857,8 @@ export function registerIpcHandlers() {
 
       const suggestion = await createSuggestion({
         chapter_id: chapterId,
+        conversation_id: null,
+        chat_message_id: null,
         in_point: inPoint,
         out_point: outPoint,
         description: description ?? null,
@@ -3871,14 +3879,14 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.SUGGESTION_GET_BY_CHAPTER, async (_, { chapterId, status }) => {
-    console.log('IPC: suggestion:get-by-chapter', chapterId, status);
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_GET_BY_CHAPTER, async (_, { chapterId, conversationId, status }) => {
+    console.log('IPC: suggestion:get-by-chapter', chapterId, conversationId, status);
     try {
-      if (!chapterId) {
-        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      if (!chapterId || !conversationId) {
+        return createErrorResponse('Chapter ID and conversation ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const suggestions = await getSuggestionsByChapter(chapterId, status);
+      const suggestions = await getSuggestionsByConversation(conversationId, chapterId, status);
       return createSuccessResponse(suggestions);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -3990,14 +3998,14 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY_ALL, async (_, { chapterId }) => {
-    console.log('IPC: suggestion:apply-all', chapterId);
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY_ALL, async (_, { chapterId, conversationId }) => {
+    console.log('IPC: suggestion:apply-all', chapterId, conversationId);
     try {
-      if (!chapterId) {
-        return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      if (!chapterId || !conversationId) {
+        return createErrorResponse('Chapter ID and conversation ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const pendingSuggestions = await getSuggestionsByChapter(chapterId, 'pending');
+      const pendingSuggestions = await getSuggestionsByConversation(conversationId, chapterId, 'pending');
       const results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }> = [];
 
       for (const suggestion of pendingSuggestions) {

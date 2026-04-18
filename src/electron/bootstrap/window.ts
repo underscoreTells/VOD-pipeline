@@ -67,7 +67,9 @@ export function createMainWindow(): BrowserWindow {
   }
 
   if (isDev) {
-    void mainWindow.loadURL('http://localhost:5173');
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
+    logger.debug('Loading renderer from:', devServerUrl);
+    void mainWindow.loadURL(devServerUrl);
     if (process.env.ELECTRON_OPEN_DEVTOOLS === 'true') {
       mainWindow.webContents.openDevTools();
     }

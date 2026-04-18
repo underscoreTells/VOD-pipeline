@@ -59,6 +59,8 @@ export const MainState = Annotation.Root({
   transcriptDetailRequests: Annotation<TranscriptDetailRequest[] | undefined>,
   assistantResponse: Annotation<string | undefined>,
   thinkingMarkdown: Annotation<string | undefined>,
+  routingProposalContext: Annotation<boolean | undefined>,
+  lastProposalContext: Annotation<boolean | undefined>,
   // Track last analyzed message to prevent repeated analysis loops
   lastAnalyzedMessageIndex: Annotation<number | undefined>,
 });

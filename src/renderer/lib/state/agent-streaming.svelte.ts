@@ -15,9 +15,11 @@ import {
   createDraftAssistantMessage,
   failDraftMessage,
   finalizeDraftMessage,
+  updateDraftPreview,
 } from "./agent-streaming-helpers.js";
 import { timelineState } from "./timeline.svelte";
 import {
+  parseStructuredAssistantPreview,
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
@@ -29,6 +31,7 @@ interface PendingDraft {
 }
 
 const pendingDrafts = new Map<string, PendingDraft>();
+const structuredDraftBuffers = new Map<string, { raw: string }>();
 let streamUnsubscribe: (() => void) | null = null;
 let errorUnsubscribe: (() => void) | null = null;
 
@@ -46,6 +49,21 @@ function ensureStreamingSubscriptions(): void {
           return;
         }
 
+        if (event.visibility === "hidden") {
+          const existing = structuredDraftBuffers.get(event.clientRequestId);
+          const raw = `${existing?.raw ?? ""}${event.content}`;
+          structuredDraftBuffers.set(event.clientRequestId, { raw });
+
+          const preview = parseStructuredAssistantPreview(raw);
+          agentState.messages = updateDraftPreview(
+            agentState.messages,
+            event.clientRequestId,
+            preview.assistantResponse,
+            preview.thinkingMarkdown
+          );
+          return;
+        }
+
         agentState.messages = appendTokenToDraft(
           agentState.messages,
           event.clientRequestId,
@@ -53,6 +71,10 @@ function ensureStreamingSubscriptions(): void {
           event.visibility ?? "chat"
         );
         return;
+      }
+
+      if (event.resetDraft) {
+        structuredDraftBuffers.delete(event.clientRequestId);
       }
 
       agentState.messages = appendTraceEventToDraft(
@@ -129,6 +151,7 @@ export async function sendChatMessage(message: string) {
     conversationId,
     messageId: assistantDraft.id,
   });
+  structuredDraftBuffers.set(clientRequestId, { raw: "" });
 
   agentState.messages = [...agentState.messages, userMessage, assistantDraft];
   agentState.isStreaming = true;
@@ -190,6 +213,7 @@ export async function sendChatMessage(message: string) {
     );
   } finally {
     pendingDrafts.delete(clientRequestId);
+    structuredDraftBuffers.delete(clientRequestId);
     agentState.isStreaming = false;
   }
 }

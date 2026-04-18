@@ -6,6 +6,7 @@ import {
   createDraftAssistantMessage,
   failDraftMessage,
   finalizeDraftMessage,
+  updateDraftPreview,
 } from "../../src/renderer/lib/state/agent-streaming-helpers.js";
 
 function createMessages(): ChatMessage[] {
@@ -71,6 +72,7 @@ describe("agent streaming helpers", () => {
       {
         ...createDraftAssistantMessage("request-1", new Date()),
         content: "first pass",
+        thinkingMarkdown: "## Reasoning\n\nFirst pass notes.",
       },
     ];
 
@@ -87,6 +89,7 @@ describe("agent streaming helpers", () => {
     );
 
     expect(updated[1]?.content).toBe("");
+    expect(updated[1]?.thinkingMarkdown).toBeNull();
     expect(updated[1]?.trace).toHaveLength(1);
     expect(updated[1]?.trace[0]).toMatchObject({
       status: "loading_detailed_transcript_context",
@@ -132,6 +135,22 @@ describe("agent streaming helpers", () => {
       content: "final text",
       thinkingMarkdown: "## Reasoning\n\nBecause it works.",
       isStreaming: false,
+    });
+  });
+
+  it("updates the draft preview content and thinking independently", () => {
+    const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
+
+    const updated = updateDraftPreview(
+      messages,
+      "request-1",
+      "full streamed answer",
+      "## Reasoning\n\nHidden notes"
+    );
+
+    expect(updated[1]).toMatchObject({
+      content: "full streamed answer",
+      thinkingMarkdown: "## Reasoning\n\nHidden notes",
     });
   });
 
