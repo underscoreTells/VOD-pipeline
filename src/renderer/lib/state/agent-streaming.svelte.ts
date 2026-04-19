@@ -1,5 +1,5 @@
+import { SvelteDate, SvelteMap } from "svelte/reactivity";
 import { v4 as uuidv4 } from "uuid";
-import type { TimelineAction } from "../../../shared/types/agent-ipc.js";
 import { agentChat, onAgentError, onAgentStream } from "../api/agent.js";
 import {
   agentState,
@@ -7,19 +7,16 @@ import {
   ensureActiveConversation,
   refreshConversationListMetadata,
   type ChatMessage,
-  type TimelineActionProposal,
 } from "./agent-session.svelte.js";
 import {
+  appendAssistantTextDeltaToDraft,
   appendTraceEventToDraft,
-  appendTokenToDraft,
   createDraftAssistantMessage,
   failDraftMessage,
   finalizeDraftMessage,
-  updateDraftPreview,
 } from "./agent-streaming-helpers.js";
 import { timelineState } from "./timeline.svelte";
 import {
-  parseStructuredAssistantPreview,
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
@@ -27,11 +24,9 @@ import {
 interface PendingDraft {
   clientRequestId: string;
   conversationId: number;
-  messageId: string;
 }
 
-const pendingDrafts = new Map<string, PendingDraft>();
-const structuredDraftBuffers = new Map<string, { raw: string }>();
+const pendingDrafts = new SvelteMap<string, PendingDraft>();
 let streamUnsubscribe: (() => void) | null = null;
 let errorUnsubscribe: (() => void) | null = null;
 
@@ -43,38 +38,32 @@ function ensureStreamingSubscriptions(): void {
         return;
       }
 
-      if (event.type === "token") {
+      if (event.type === "assistant_text_delta") {
         const normalizedRole = event.role.toLowerCase();
         if (normalizedRole !== "assistant" && normalizedRole !== "ai") {
           return;
         }
 
-        if (event.visibility === "hidden") {
-          const existing = structuredDraftBuffers.get(event.clientRequestId);
-          const raw = `${existing?.raw ?? ""}${event.content}`;
-          structuredDraftBuffers.set(event.clientRequestId, { raw });
-
-          const preview = parseStructuredAssistantPreview(raw);
-          agentState.messages = updateDraftPreview(
-            agentState.messages,
-            event.clientRequestId,
-            preview.assistantResponse,
-            preview.thinkingMarkdown
-          );
-          return;
-        }
-
-        agentState.messages = appendTokenToDraft(
+        agentState.messages = appendAssistantTextDeltaToDraft(
           agentState.messages,
           event.clientRequestId,
-          event.content,
-          event.visibility ?? "chat"
+          event.delta
         );
         return;
       }
 
-      if (event.resetDraft) {
-        structuredDraftBuffers.delete(event.clientRequestId);
+      if (event.type === "tool_state") {
+        agentState.messages = appendTraceEventToDraft(
+          agentState.messages,
+          event.clientRequestId,
+          {
+            status: `tool_${event.state}`,
+            message: event.message ?? event.error ?? `${event.toolName} ${event.state}`,
+            nodeName: event.toolName,
+            passIndex: event.passIndex,
+          }
+        );
+        return;
       }
 
       agentState.messages = appendTraceEventToDraft(
@@ -92,23 +81,6 @@ function ensureStreamingSubscriptions(): void {
   }
 }
 
-function createTimelineProposals(
-  messageId: string,
-  actions: TimelineAction[] | undefined
-): TimelineActionProposal[] {
-  if (!Array.isArray(actions) || actions.length === 0) {
-    return [];
-  }
-
-  return actions.map((action) => ({
-    id: uuidv4(),
-    messageId,
-    action,
-    status: "pending",
-    error: null,
-  }));
-}
-
 function buildUserMessage(message: string): ChatMessage {
   return {
     role: "user",
@@ -116,7 +88,7 @@ function buildUserMessage(message: string): ChatMessage {
     thinkingMarkdown: null,
     trace: [],
     id: uuidv4(),
-    timestamp: new Date(),
+    timestamp: new SvelteDate(),
   };
 }
 
@@ -144,14 +116,12 @@ export async function sendChatMessage(message: string) {
 
   const clientRequestId = uuidv4();
   const userMessage = buildUserMessage(message);
-  const assistantDraft = createDraftAssistantMessage(clientRequestId, new Date());
+  const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
 
   pendingDrafts.set(clientRequestId, {
     clientRequestId,
     conversationId,
-    messageId: assistantDraft.id,
   });
-  structuredDraftBuffers.set(clientRequestId, { raw: "" });
 
   agentState.messages = [...agentState.messages, userMessage, assistantDraft];
   agentState.isStreaming = true;
@@ -187,12 +157,6 @@ export async function sendChatMessage(message: string) {
         agentState.suggestions.push(...result.suggestions);
       }
 
-      const pending = pendingDrafts.get(clientRequestId);
-      const proposals = createTimelineProposals(pending?.messageId ?? assistantDraft.id, result.timelineActions);
-      if (proposals.length > 0) {
-        agentState.timelineProposals = [...agentState.timelineProposals, ...proposals];
-      }
-
       await refreshConversationListMetadata();
     } else {
       const errorMessage = response.error || "Unknown error";
@@ -213,7 +177,6 @@ export async function sendChatMessage(message: string) {
     );
   } finally {
     pendingDrafts.delete(clientRequestId);
-    structuredDraftBuffers.delete(clientRequestId);
     agentState.isStreaming = false;
   }
 }

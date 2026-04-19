@@ -66,6 +66,7 @@ export interface AgentChatResult {
   success: boolean;
   data?: AgentChatData;
   error?: string;
+  code?: string;
 }
 
 export interface AgentConversationListResult {

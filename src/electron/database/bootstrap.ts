@@ -28,9 +28,21 @@ export async function initializeDatabase(): Promise<Database.Database> {
   }
 
   const initializationPromise = (async () => {
-    const { app } = await import('electron');
-    const userDataPath = app.getPath('userData');
-    const dbPath = path.join(userDataPath, 'vod-pipeline.db');
+    const configuredDbPath = process.env.VOD_PIPELINE_DB_PATH?.trim();
+    let dbPath = configuredDbPath ?? '';
+    let appPath: string | null = null;
+
+    if (!dbPath) {
+      const electronModule = await import('electron');
+      const app = electronModule.app;
+      if (!app) {
+        throw new Error('Electron app is unavailable and VOD_PIPELINE_DB_PATH is not set');
+      }
+
+      const userDataPath = app.getPath('userData');
+      dbPath = path.join(userDataPath, 'vod-pipeline.db');
+      appPath = app.getAppPath();
+    }
 
     console.log('Initializing database at:', dbPath);
 
@@ -44,7 +56,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
       path.join(moduleDirname, '../../database/schema.sql'),
       path.join(moduleDirname, '../../../database/schema.sql'),
       path.join(moduleDirname, '../../../../database/schema.sql'),
-      path.join(app.getAppPath(), 'database/schema.sql'),
+      ...(appPath ? [path.join(appPath, 'database/schema.sql')] : []),
     ];
 
     let schema: string | null = null;

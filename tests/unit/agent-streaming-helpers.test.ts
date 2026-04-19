@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../../src/renderer/lib/state/agent-session.svelte.js";
 import {
+  appendAssistantTextDeltaToDraft,
   appendTraceEventToDraft,
-  appendTokenToDraft,
   createDraftAssistantMessage,
   failDraftMessage,
   finalizeDraftMessage,
-  updateDraftPreview,
+  getVisibleStreamingStatusLabel,
 } from "../../src/renderer/lib/state/agent-streaming-helpers.js";
 
 function createMessages(): ChatMessage[] {
@@ -40,62 +40,39 @@ describe("agent streaming helpers", () => {
     });
   });
 
-  it("appends matching token content to an existing draft", () => {
+  it("appends matching assistant text deltas to an existing draft", () => {
     const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
 
-    const updated = appendTokenToDraft(messages, "request-1", "streamed");
+    const updated = appendAssistantTextDeltaToDraft(messages, "request-1", "streamed");
 
     expect(updated[1]?.content).toBe("streamed");
   });
 
-  it("ignores token updates for unknown request ids", () => {
+  it("ignores text deltas for unknown request ids", () => {
     const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
 
-    const updated = appendTokenToDraft(messages, "request-2", "ignored");
+    const updated = appendAssistantTextDeltaToDraft(messages, "request-2", "ignored");
 
     expect(updated).toBe(messages);
     expect(updated[1]?.content).toBe("");
   });
 
-  it("ignores hidden token updates", () => {
+  it("appends trace entries for status or tool-state events", () => {
     const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
 
-    const updated = appendTokenToDraft(messages, "request-1", "hidden", "hidden");
+    const updated = appendTraceEventToDraft(messages, "request-1", {
+      status: "tool_completed",
+      message: "draftRoughCutProposals completed",
+      nodeName: "draftRoughCutProposals",
+      passIndex: 1,
+    });
 
-    expect(updated).toBe(messages);
-    expect(updated[1]?.content).toBe("");
-  });
-
-  it("resets the draft body when a progress event requests it and appends trace entries", () => {
-    const messages = [
-      ...createMessages(),
-      {
-        ...createDraftAssistantMessage("request-1", new Date()),
-        content: "first pass",
-        thinkingMarkdown: "## Reasoning\n\nFirst pass notes.",
-      },
-    ];
-
-    const updated = appendTraceEventToDraft(
-      messages,
-      "request-1",
-      {
-        status: "loading_detailed_transcript_context",
-        message: "Fetching detailed transcript for a better answer...",
-        nodeName: "timeline_edit",
-        passIndex: 2,
-        resetDraft: true,
-      }
-    );
-
-    expect(updated[1]?.content).toBe("");
-    expect(updated[1]?.thinkingMarkdown).toBeNull();
     expect(updated[1]?.trace).toHaveLength(1);
     expect(updated[1]?.trace[0]).toMatchObject({
-      status: "loading_detailed_transcript_context",
-      label: "Fetching detailed transcript for a better answer...",
-      nodeName: "timeline_edit",
-      passIndex: 2,
+      status: "tool_completed",
+      label: "draftRoughCutProposals completed",
+      nodeName: "draftRoughCutProposals",
+      passIndex: 1,
     });
   });
 
@@ -104,15 +81,32 @@ describe("agent streaming helpers", () => {
     const event = {
       status: "processing_chat",
       message: "Thinking...",
-      nodeName: "chat_node",
+      nodeName: "conversation_runner",
       passIndex: 1,
-      resetDraft: false,
     } as const;
 
     const first = appendTraceEventToDraft(messages, "request-1", event);
     const second = appendTraceEventToDraft(first, "request-1", event);
 
     expect(second[1]?.trace).toHaveLength(1);
+  });
+
+  it("exposes the latest visible streaming status label for a draft", () => {
+    const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
+    const updated = appendTraceEventToDraft(messages, "request-1", {
+      status: "tool_running",
+      message: "Drafting rough-cut proposals...",
+      nodeName: "draftRoughCutProposals",
+      passIndex: 1,
+    });
+
+    expect(getVisibleStreamingStatusLabel(updated[1]!)).toBe("Drafting rough-cut proposals...");
+  });
+
+  it("falls back to a generic thinking label before trace events arrive", () => {
+    const draft = createDraftAssistantMessage("request-1", new Date());
+
+    expect(getVisibleStreamingStatusLabel(draft)).toBe("Thinking...");
   });
 
   it("finalizes by overwriting streamed text with the final assistant text", () => {
@@ -128,29 +122,13 @@ describe("agent streaming helpers", () => {
       messages,
       "request-1",
       "final text",
-      "## Reasoning\n\nBecause it works."
+      null
     );
 
     expect(updated[1]).toMatchObject({
       content: "final text",
-      thinkingMarkdown: "## Reasoning\n\nBecause it works.",
+      thinkingMarkdown: null,
       isStreaming: false,
-    });
-  });
-
-  it("updates the draft preview content and thinking independently", () => {
-    const messages = [...createMessages(), createDraftAssistantMessage("request-1", new Date())];
-
-    const updated = updateDraftPreview(
-      messages,
-      "request-1",
-      "full streamed answer",
-      "## Reasoning\n\nHidden notes"
-    );
-
-    expect(updated[1]).toMatchObject({
-      content: "full streamed answer",
-      thinkingMarkdown: "## Reasoning\n\nHidden notes",
     });
   });
 

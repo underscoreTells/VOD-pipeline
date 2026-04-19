@@ -12,45 +12,35 @@ import {
   getChapterProxyByChapterAsset,
   getClip,
   getClipsByProject,
-  getDetailedTranscriptWindow,
   getSuggestionsByConversation,
   getTranscriptsByChapter,
   getWaveform,
   updateChapterProxyMetadata,
   updateChapterProxyStatus,
-  upsertDetailedTranscript,
 } from '../database/index.js';
-import type { Asset, Clip, DetailedTranscript, Suggestion } from '../../shared/types/database.js';
-import type { TimelineAction } from '../../shared/types/agent-ipc.js';
+import type { Asset, Clip, Suggestion } from '../../shared/types/database.js';
+import type {
+  DetailedTranscriptWindow,
+  TimelineAction,
+  TranscriptDetailRequest,
+} from '../../shared/types/agent-ipc.js';
 import {
-  parseStructuredAssistantPreview,
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from '../../shared/utils/assistant-content.js';
 import {
-  extractAudio,
+  generateDetailedTranscriptsForRequests,
+  normalizeTranscriptDetailRequests,
+} from '../../shared/utils/detailed-transcript-tools.js';
+import {
   generateAIProxy,
   generateChapterReverseProxy,
   getVideoMetadata,
 } from '../../pipeline/ffmpeg.js';
-import { transcribe } from '../../pipeline/whisper.js';
 import {
   generateWaveformTiers,
   generateWaveformTiersForMkvTracks,
 } from '../../pipeline/waveform.js';
-
-const VIDEO_INTENT_KEYWORDS = [
-  'watch',
-  'video',
-  'visual',
-  'see',
-  'look',
-  'analyze video',
-  "what's in the video",
-  'what happens',
-  'show me',
-  'review video',
-];
 
 const PROVIDER_CONTEXT_TOKEN_LIMITS: Record<'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi', number> = {
   gemini: 1_000_000,
@@ -71,11 +61,6 @@ const TOKEN_GUARD_MIN_MESSAGES_AFTER_TRIM = 6;
 const OVERVIEW_TRANSCRIPT_CHUNK_SECONDS = 15;
 const OVERVIEW_TRANSCRIPT_MAX_LINES = 320;
 const OVERVIEW_TRANSCRIPT_MAX_CHARS = 30000;
-const MAX_DETAILED_TRANSCRIPT_REQUESTS = 3;
-const MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS = 90;
-const DETAILED_TRANSCRIPT_MODEL = 'small';
-const DETAILED_TRANSCRIPT_COMPUTE_TYPE: 'int8' | 'float16' = 'int8';
-const DETAILED_TRANSCRIPT_WORD_TIMESTAMPS = true;
 
 export function toNumberOrNull(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -258,13 +243,6 @@ export function applyNearLimitTokenGuard(
   };
 }
 
-export const hydratedConversationIds = new Set<number>();
-
-export function hasVideoIntent(content: string): boolean {
-  const normalized = content.toLowerCase();
-  return VIDEO_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
-}
-
 export function deriveConversationTitle(message: string): string {
   const normalized = message.replace(/\s+/g, ' ').trim();
   if (!normalized) {
@@ -308,50 +286,6 @@ function extractThinkingMarkdown(result: Record<string, unknown>): string | null
 
   const sanitized = sanitizeThinkingMarkdown(explicit);
   return sanitized.length > 0 ? sanitized : null;
-}
-
-export interface HiddenReasoningChunk {
-  passIndex: number;
-  nodeName: string;
-  content: string;
-}
-
-export function appendHiddenReasoningChunk(
-  chunks: HiddenReasoningChunk[],
-  event: { content: string; nodeName?: string },
-  passIndex: number
-): HiddenReasoningChunk[] {
-  if (!event.content) {
-    return chunks;
-  }
-
-  const nodeName = event.nodeName || 'unknown';
-  const nextChunks = [...chunks];
-  const lastChunk = nextChunks[nextChunks.length - 1];
-
-  if (lastChunk && lastChunk.passIndex === passIndex && lastChunk.nodeName === nodeName) {
-    lastChunk.content += event.content;
-    return nextChunks;
-  }
-
-  nextChunks.push({
-    passIndex,
-    nodeName,
-    content: event.content,
-  });
-  return nextChunks;
-}
-
-export function serializeHiddenReasoning(chunks: HiddenReasoningChunk[]): string | null {
-  const sections = chunks
-    .map((chunk) => parseStructuredAssistantPreview(chunk.content).thinkingMarkdown ?? '')
-    .filter((chunk) => chunk.length > 0);
-
-  if (sections.length === 0) {
-    return null;
-  }
-
-  return sections.join('\n\n').trim() || null;
 }
 
 export function normalizeTimelineActions(value: unknown): TimelineAction[] {
@@ -528,22 +462,6 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
     .filter((item): item is PersistableSuggestionDraft => Boolean(item));
 }
 
-interface TranscriptDetailRequest {
-  windowStart: number;
-  windowEnd: number;
-  assetId?: number;
-  reason?: string;
-}
-
-interface DetailedTranscriptContextWindow {
-  assetId: number;
-  windowStart: number;
-  windowEnd: number;
-  reason?: string;
-  text: string;
-  segments: DetailedTranscript['segments_json'];
-}
-
 export function parseAgentGraphResult(
   result: Record<string, unknown>,
   chapterDuration: number | null,
@@ -551,15 +469,19 @@ export function parseAgentGraphResult(
 ): {
   message: string;
   thinkingMarkdown: string | null;
+  outcome: 'discussion' | 'clarification' | 'proposal';
   timelineActions: TimelineAction[];
   suggestionDrafts: PersistableSuggestionDraft[];
   transcriptDetailRequests: TranscriptDetailRequest[];
 } {
   const message = extractAssistantMessage(result);
   const thinkingMarkdown = extractThinkingMarkdown(result);
+  const outcome = result.outcome === 'proposal' || result.outcome === 'clarification'
+    ? result.outcome
+    : 'discussion';
   const timelineActions = normalizeTimelineActions(result.timelineActions);
   const suggestionDrafts = [
-    ...normalizeSuggestionDrafts(result.suggestions),
+    ...normalizeSuggestionDrafts(result.suggestionDrafts),
     ...timelineActionsToSuggestionDrafts(timelineActions),
   ];
   const transcriptDetailRequests =
@@ -570,6 +492,7 @@ export function parseAgentGraphResult(
   return {
     message,
     thinkingMarkdown,
+    outcome,
     timelineActions,
     suggestionDrafts,
     transcriptDetailRequests,
@@ -665,10 +588,6 @@ export async function persistAgentSuggestions(
   return created;
 }
 
-function roundSeconds(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 function normalizeChapterLocalSegment(
   segment: { start_time: number; end_time: number; text: string },
   chapterStart: number,
@@ -737,190 +656,6 @@ function formatOverviewTranscript(
     });
 
   return lines.join('\n').slice(0, OVERVIEW_TRANSCRIPT_MAX_CHARS);
-}
-
-function normalizeTranscriptDetailRequests(
-  value: unknown,
-  chapterDuration: number,
-  chapterAssetIds: number[]
-): TranscriptDetailRequest[] {
-  if (!Array.isArray(value)) return [];
-
-  const chapterAssetSet = new Set(chapterAssetIds);
-  const dedupe = new Set<string>();
-  const requests: TranscriptDetailRequest[] = [];
-
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as Record<string, unknown>;
-
-    const startRaw = typeof record.windowStart === 'number' ? record.windowStart : NaN;
-    const endRaw = typeof record.windowEnd === 'number' ? record.windowEnd : NaN;
-    if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) continue;
-
-    const start = clamp(startRaw, 0, chapterDuration);
-    let end = clamp(endRaw, 0, chapterDuration);
-    if (end <= start) continue;
-
-    if (end - start > MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS) {
-      end = Math.min(chapterDuration, start + MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS);
-    }
-
-    const normalizedStart = roundSeconds(start);
-    const normalizedEnd = roundSeconds(end);
-    if (normalizedEnd <= normalizedStart) continue;
-
-    let assetId: number | undefined;
-    if (typeof record.assetId === 'number' && Number.isFinite(record.assetId) && chapterAssetSet.has(record.assetId)) {
-      assetId = record.assetId;
-    }
-
-    const reason =
-      typeof record.reason === 'string' && record.reason.trim().length > 0
-        ? record.reason.trim().slice(0, 240)
-        : undefined;
-
-    const key = `${assetId ?? 'auto'}:${normalizedStart}-${normalizedEnd}`;
-    if (dedupe.has(key)) continue;
-    dedupe.add(key);
-
-    requests.push({
-      windowStart: normalizedStart,
-      windowEnd: normalizedEnd,
-      assetId,
-      reason,
-    });
-
-    if (requests.length >= MAX_DETAILED_TRANSCRIPT_REQUESTS) {
-      break;
-    }
-  }
-
-  return requests;
-}
-
-function mapDetailedTranscriptForContext(
-  detailed: DetailedTranscript,
-  reason?: string
-): DetailedTranscriptContextWindow {
-  return {
-    assetId: detailed.asset_id,
-    windowStart: detailed.window_start,
-    windowEnd: detailed.window_end,
-    reason,
-    text: detailed.text,
-    segments: detailed.segments_json,
-  };
-}
-
-export async function generateDetailedTranscriptsForRequests(
-  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
-  chapterAssetIds: number[],
-  requests: TranscriptDetailRequest[]
-): Promise<DetailedTranscriptContextWindow[]> {
-  if (requests.length === 0) return [];
-
-  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-  const chapterAssetSet = new Set(chapterAssetIds);
-  const windows: DetailedTranscriptContextWindow[] = [];
-
-  for (const request of requests) {
-    const assetId = request.assetId ?? chapterAssetIds[0];
-    if (!assetId || !chapterAssetSet.has(assetId)) {
-      continue;
-    }
-
-    const windowStart = roundSeconds(clamp(request.windowStart, 0, chapterDuration));
-    const requestedEnd = roundSeconds(clamp(request.windowEnd, 0, chapterDuration));
-    const maxEnd = windowStart + MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS;
-    const windowEnd = roundSeconds(Math.min(requestedEnd, chapterDuration, maxEnd));
-    if (windowEnd <= windowStart) continue;
-
-    const cached = await getDetailedTranscriptWindow(
-      chapter.id,
-      assetId,
-      windowStart,
-      windowEnd,
-      DETAILED_TRANSCRIPT_MODEL,
-      DETAILED_TRANSCRIPT_COMPUTE_TYPE,
-      DETAILED_TRANSCRIPT_WORD_TIMESTAMPS
-    );
-
-    if (cached) {
-      windows.push(mapDetailedTranscriptForContext(cached, request.reason));
-      continue;
-    }
-
-    const asset = await getAsset(assetId);
-    if (!asset) {
-      continue;
-    }
-
-    const tempAudioPath = path.join(
-      os.tmpdir(),
-      `vod-pipeline-detailed-${chapter.id}-${assetId}-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`
-    );
-
-    try {
-      const globalStart = roundSeconds(chapter.start_time + windowStart);
-      const globalEnd = roundSeconds(chapter.start_time + windowEnd);
-
-      await extractAudio(asset.file_path, tempAudioPath, {
-        trackIndex: 0,
-        sampleRate: 16000,
-        channels: 1,
-        startTime: globalStart,
-        endTime: globalEnd,
-      });
-
-      const transcription = await transcribe({
-        audioPath: tempAudioPath,
-        model: DETAILED_TRANSCRIPT_MODEL,
-        computeType: DETAILED_TRANSCRIPT_COMPUTE_TYPE,
-        wordTimestamps: DETAILED_TRANSCRIPT_WORD_TIMESTAMPS,
-      });
-
-      const detailedSegments = transcription.segments.map((segment, index) => ({
-        id: typeof segment.id === 'number' && Number.isFinite(segment.id) ? segment.id : index,
-        start: roundSeconds(windowStart + segment.start),
-        end: roundSeconds(windowStart + segment.end),
-        text: segment.text,
-        words: Array.isArray(segment.words)
-          ? segment.words.map((word) => ({
-              word: word.word,
-              start: roundSeconds(windowStart + word.start),
-              end: roundSeconds(windowStart + word.end),
-              probability: word.probability,
-            }))
-          : undefined,
-      }));
-
-      const saved = await upsertDetailedTranscript({
-        chapter_id: chapter.id,
-        asset_id: assetId,
-        window_start: windowStart,
-        window_end: windowEnd,
-        model: DETAILED_TRANSCRIPT_MODEL,
-        compute_type: DETAILED_TRANSCRIPT_COMPUTE_TYPE,
-        word_timestamps: DETAILED_TRANSCRIPT_WORD_TIMESTAMPS,
-        text: transcription.text,
-        segments_json: detailedSegments,
-      });
-
-      windows.push(mapDetailedTranscriptForContext(saved, request.reason));
-    } catch (error) {
-      console.warn(
-        `[AgentChat] Failed to generate detailed transcript for chapter=${chapter.id} asset=${assetId} window=${windowStart}-${windowEnd}:`,
-        error
-      );
-    } finally {
-      if (fs.existsSync(tempAudioPath)) {
-        fs.unlinkSync(tempAudioPath);
-      }
-    }
-  }
-
-  return windows.sort((a, b) => a.windowStart - b.windowStart);
 }
 
 function getProxyDirectoryPath(): string {
@@ -1631,7 +1366,7 @@ export async function buildAgentChatContext(
   projectId: number,
   chapterId?: number,
   options?: {
-    detailedTranscripts?: DetailedTranscriptContextWindow[];
+    detailedTranscripts?: DetailedTranscriptWindow[];
     ensureChapterProxyReady?: boolean;
   }
 ) {

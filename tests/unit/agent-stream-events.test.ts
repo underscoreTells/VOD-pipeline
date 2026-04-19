@@ -14,50 +14,70 @@ const context: AgentStreamContext = {
 };
 
 describe("agent stream event enrichment", () => {
-  it("enriches progress messages with renderer stream context", () => {
+  it("enriches status messages with renderer stream context", () => {
     const message: AgentOutputMessage = {
-      type: "progress",
+      type: "status",
       requestId: "worker-1",
       status: "processing_chat",
       progress: 25,
-      nodeName: "chat_node",
+      nodeName: "conversation_runner",
       message: "Thinking...",
     };
 
     expect(enrichAgentStreamEvent(message, context)).toEqual({
-      type: "progress",
+      type: "status",
       ...context,
       status: "processing_chat",
       progress: 25,
-      nodeName: "chat_node",
+      nodeName: "conversation_runner",
       message: "Thinking...",
     });
   });
 
-  it("enriches token messages with renderer stream context", () => {
+  it("enriches assistant text deltas with renderer stream context", () => {
     const message: AgentOutputMessage = {
-      type: "token",
+      type: "assistant_text_delta",
       requestId: "worker-2",
-      content: "hello",
+      delta: "hello",
       role: "assistant",
-      nodeName: "chat_node",
-      visibility: "hidden",
     };
 
     expect(enrichAgentStreamEvent(message, context)).toEqual({
-      type: "token",
+      type: "assistant_text_delta",
       ...context,
-      content: "hello",
+      delta: "hello",
       role: "assistant",
-      nodeName: "chat_node",
-      visibility: "hidden",
     });
   });
 
-  it("returns null for graph-complete messages", () => {
+  it("enriches tool state messages with renderer stream context", () => {
     const message: AgentOutputMessage = {
-      type: "graph-complete",
+      type: "tool_state",
       requestId: "worker-3",
+      toolCallId: "tool-1",
+      toolName: "draftRoughCutProposals",
+      state: "completed",
+      message: "saved",
+      output: '{"acceptedCount":1}',
+    };
+
+    expect(enrichAgentStreamEvent(message, context)).toEqual({
+      type: "tool_state",
+      ...context,
+      toolCallId: "tool-1",
+      toolName: "draftRoughCutProposals",
+      state: "completed",
+      message: "saved",
+      output: '{"acceptedCount":1}',
+      input: undefined,
+      error: undefined,
+    });
+  });
+
+  it("returns null for turn-complete messages", () => {
+    const message: AgentOutputMessage = {
+      type: "turn_complete",
+      requestId: "worker-4",
       result: {},
       threadId: "thread-1",
     };
@@ -68,7 +88,7 @@ describe("agent stream event enrichment", () => {
   it("returns null for error messages", () => {
     const message: AgentOutputMessage = {
       type: "error",
-      requestId: "worker-4",
+      requestId: "worker-5",
       error: "boom",
     };
 

@@ -12,6 +12,7 @@
     cancelSuggestionPreviewAction,
     rejectSuggestion,
   } from "../state/agent.svelte";
+  import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
   import MarkdownContent from "./MarkdownContent.svelte";
   import { collapseChat } from "../state/layout.svelte";
   
@@ -120,6 +121,17 @@
 
   function hasThinkingDetails(message: { trace: unknown[]; thinkingMarkdown?: string | null }) {
     return message.trace.length > 0 || Boolean(message.thinkingMarkdown?.trim());
+  }
+
+  function getVisibleStreamingStatusMeta(message: {
+    isStreaming?: boolean;
+    trace: Array<{ nodeName?: string; passIndex?: number }>;
+  }) {
+    if (!message.isStreaming || message.trace.length === 0) {
+      return null;
+    }
+
+    return formatTraceMeta(message.trace[message.trace.length - 1] ?? {});
   }
 
   async function handleCreateConversation() {
@@ -264,6 +276,15 @@
             <span class="role">{msg.role === "user" ? "You" : "AI"}</span>
             <span class="time">{formatTime(msg.timestamp)}</span>
           </div>
+          {#if getVisibleStreamingStatusLabel(msg)}
+            <div class="message-live-status" aria-live="polite">
+              <span class="live-status-dot"></span>
+              <span class="live-status-label">{getVisibleStreamingStatusLabel(msg)}</span>
+              {#if getVisibleStreamingStatusMeta(msg)}
+                <span class="live-status-meta">{getVisibleStreamingStatusMeta(msg)}</span>
+              {/if}
+            </div>
+          {/if}
           {#if msg.content}
             <div class="message-content">
               <MarkdownContent content={msg.content} role={msg.role} />
@@ -528,6 +549,50 @@
   
   .message-content {
     min-width: 0;
+  }
+
+  .message-live-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 0;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.36);
+    color: #dbeafe;
+    font-size: 12px;
+  }
+
+  .live-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #60a5fa;
+    box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.16);
+    animation: live-status-pulse 1.2s ease-in-out infinite;
+    flex: 0 0 auto;
+  }
+
+  .live-status-label {
+    font-weight: 600;
+  }
+
+  .live-status-meta {
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  @keyframes live-status-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.72;
+      transform: scale(0.92);
+    }
   }
 
   .message-trace {

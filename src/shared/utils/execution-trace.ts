@@ -56,6 +56,16 @@ export function appendExecutionTraceEntry(
   return [...entries, entry];
 }
 
+export function getLatestExecutionTraceEntry(
+  entries: ExecutionTraceEntry[]
+): ExecutionTraceEntry | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return entries[entries.length - 1] ?? null;
+}
+
 export function parseExecutionTraceJson(value: string | null | undefined): ExecutionTraceEntry[] {
   if (!value) {
     return [];

@@ -85,12 +85,14 @@ export class AgentBridge extends EventEmitter {
     const agentPath = this.getAgentPath();
 
     const checkpointerDbPath = path.join(app.getPath("userData"), "agent-checkpoints.db");
+    const appDatabasePath = path.join(app.getPath("userData"), "vod-pipeline.db");
 
     this.process = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         AGENT_CHECKPOINTER_DB_PATH: checkpointerDbPath,
+        VOD_PIPELINE_DB_PATH: appDatabasePath,
       },
     });
 
@@ -191,7 +193,11 @@ export class AgentBridge extends EventEmitter {
 
     const pending = this.pendingRequests.get(message.requestId);
 
-    if (message.type === "progress" || message.type === "token") {
+    if (
+      message.type === "status" ||
+      message.type === "assistant_text_delta" ||
+      message.type === "tool_state"
+    ) {
       if (!pending) {
         console.warn(
           `[AgentBridge] No pending request for stream requestId=${message.requestId}`
@@ -217,7 +223,7 @@ export class AgentBridge extends EventEmitter {
     clearTimeout(pending.timeout);
     this.pendingRequests.delete(message.requestId);
 
-    if (message.type === "graph-complete" || message.type === "error") {
+    if (message.type === "turn_complete" || message.type === "error") {
       pending.resolve(message);
     } else {
       pending.reject(new Error(`Unexpected response type: ${message.type}`));

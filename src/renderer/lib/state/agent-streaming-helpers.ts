@@ -1,5 +1,8 @@
-import type { AgentStreamProgressEvent } from "../../../shared/types/agent-ipc.js";
-import { appendExecutionTraceEntry } from "../../../shared/utils/execution-trace.js";
+import type { AgentStreamStatusEvent } from "../../../shared/types/agent-ipc.js";
+import {
+  appendExecutionTraceEntry,
+  getLatestExecutionTraceEntry,
+} from "../../../shared/utils/execution-trace.js";
 import type { ChatMessage } from "./agent-session.svelte.js";
 
 export function createDraftAssistantMessage(
@@ -18,46 +21,36 @@ export function createDraftAssistantMessage(
   };
 }
 
-export function appendTokenToDraft(
+export function appendAssistantTextDeltaToDraft(
   messages: ChatMessage[],
   clientRequestId: string,
-  token: string,
-  visibility: "chat" | "hidden" = "chat"
+  delta: string
 ): ChatMessage[] {
-  if (visibility === "hidden") {
-    return messages;
-  }
-
   return updateDraftMessage(messages, clientRequestId, (message) => ({
     ...message,
-    content: `${message.content}${token}`,
+    content: `${message.content}${delta}`,
   }));
 }
 
 export function appendTraceEventToDraft(
   messages: ChatMessage[],
   clientRequestId: string,
-  event: Pick<AgentStreamProgressEvent, "status" | "message" | "nodeName" | "passIndex" | "resetDraft">
+  event: Pick<AgentStreamStatusEvent, "status" | "message" | "nodeName" | "passIndex">
 ): ChatMessage[] {
   return updateDraftMessage(messages, clientRequestId, (message) => ({
     ...message,
-    content: event.resetDraft ? "" : message.content,
-    thinkingMarkdown: event.resetDraft ? null : message.thinkingMarkdown,
     trace: appendExecutionTraceEntry(message.trace, event),
   }));
 }
 
-export function updateDraftPreview(
-  messages: ChatMessage[],
-  clientRequestId: string,
-  content: string,
-  thinkingMarkdown: string | null
-): ChatMessage[] {
-  return updateDraftMessage(messages, clientRequestId, (message) => ({
-    ...message,
-    content,
-    thinkingMarkdown,
-  }));
+export function getVisibleStreamingStatusLabel(
+  message: Pick<ChatMessage, "isStreaming" | "trace">
+): string | null {
+  if (!message.isStreaming) {
+    return null;
+  }
+
+  return getLatestExecutionTraceEntry(message.trace)?.label ?? "Thinking...";
 }
 
 export function finalizeDraftMessage(
