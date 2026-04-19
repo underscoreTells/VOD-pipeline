@@ -13,19 +13,21 @@ import {
   getChatMessagesByConversation,
   getClip,
   getProject,
+  getSuggestionsByConversation,
   updateChatConversation,
   updateClip,
 } from '../../database/index.js';
 import type {
   Clip,
   ExecutionTraceEntry,
+  Suggestion,
 } from '../../../shared/types/database.js';
 import type {
   AgentChatData,
-  AgentStreamEvent,
   TimelineAction,
 } from '../../../shared/types/agent-ipc.js';
 import { getAgentBridge } from '../../agent-bridge.js';
+import { getBackendRuntimeStaleness } from '../../dev-runtime.js';
 import { createLogger } from '../../logger.js';
 import {
   appendExecutionTraceEntry,
@@ -35,23 +37,36 @@ import { sanitizeAssistantContent } from '../../../shared/utils/assistant-conten
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
-  appendHiddenReasoningChunk,
   applyNearLimitTokenGuard,
   buildAgentChatContext,
   deriveConversationTitle,
-  generateDetailedTranscriptsForRequests,
-  hasVideoIntent,
-  hydratedConversationIds,
   normalizeConversationProvider,
   normalizeTimelineActions,
   parseAgentGraphResult,
   persistAgentSuggestions,
   scheduleChapterMediaPrewarm,
-  serializeHiddenReasoning,
   toNumberOrNull,
 } from '../handler-support.js';
 
 const logger = createLogger('AgentHandlers');
+
+function summarizeSuggestions(suggestions: Suggestion[]): string {
+  if (suggestions.length === 0) {
+    return '- none';
+  }
+
+  return suggestions
+    .slice(0, 12)
+    .map((suggestion) => {
+      const prefix = suggestion.action_type === 'update_clip'
+        ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`
+        : 'create proposal';
+      return `- ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
+        2
+      )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();
+    })
+    .join('\n');
+}
 
 export const AGENT_HANDLER_CHANNELS = [
   IPC_CHANNELS.AGENT_CONVERSATION_CREATE,
@@ -64,12 +79,6 @@ export const AGENT_HANDLER_CHANNELS = [
 
 export function registerAgentHandlers(): void {
   const agentBridge = getAgentBridge();
-  agentBridge.on('exit', () => {
-    hydratedConversationIds.clear();
-  });
-  agentBridge.on('error', () => {
-    hydratedConversationIds.clear();
-  });
 
   ipcMain.handle(IPC_CHANNELS.AGENT_CONVERSATION_CREATE, async (_, payload) => {
     const projectId = toNumberOrNull(payload?.projectId);
@@ -168,14 +177,13 @@ export function registerAgentHandlers(): void {
         return createErrorResponse('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
-      hydratedConversationIds.delete(conversationId);
       return createSuccessResponse(null);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (event, payload) => {
+  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (_, payload) => {
     const clientRequestId =
       typeof payload?.clientRequestId === 'string' ? payload.clientRequestId.trim() : '';
     const projectId = toNumberOrNull(payload?.projectId);
@@ -228,6 +236,20 @@ export function registerAgentHandlers(): void {
       }
 
       const effectiveProvider = provider ?? conversation.provider ?? undefined;
+      const staleRuntime = await getBackendRuntimeStaleness();
+      if (staleRuntime) {
+        logger.warn(
+          'agent:chat stale dev runtime',
+          staleRuntime.runtimeSessionId,
+          staleRuntime.startupFingerprint,
+          staleRuntime.currentFingerprint
+        );
+        return createErrorResponse(
+          'Backend code changed since this Electron session started. Restarting is required.',
+          IPC_ERROR_CODES.STALE_DEV_RUNTIME
+        );
+      }
+
       if (provider && provider !== conversation.provider) {
         await updateChatConversation(conversation.id, {
           provider: normalizeConversationProvider(provider),
@@ -256,12 +278,16 @@ export function registerAgentHandlers(): void {
 
       const chapterAssetIds = await getAssetsForChapter(chapter.id);
       const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-      const wantsVideoContext = hasVideoIntent(message);
+      const existingSuggestions = await getSuggestionsByConversation(conversation.id, chapter.id);
       const initialContext = await buildAgentChatContext(projectId, chapter.id, {
         ensureChapterProxyReady: false,
       });
+      const contextWithSuggestions = {
+        ...initialContext,
+        suggestionSummary: summarizeSuggestions(existingSuggestions),
+      };
 
-      if (wantsVideoContext && chapterAssetIds.length > 0) {
+      if (chapterAssetIds.length > 0 && !initialContext.proxyPath) {
         const primaryAssetId = chapterAssetIds[0];
         void scheduleChapterMediaPrewarm(chapter.id, primaryAssetId).catch((error) => {
           console.warn(
@@ -271,18 +297,16 @@ export function registerAgentHandlers(): void {
         });
       }
 
-      const latestUserTurn = [{ role: 'user', content: message }];
-      const conversationHistory = conversation.thread_id?.trim()
-        ? latestUserTurn
-        : existingMessages.map((item) => ({
-            role: item.role,
-            content: item.role === 'assistant'
-              ? sanitizeAssistantContent(item.content)
-              : item.content,
-          }));
+      const conversationHistory = existingMessages.map((item) => ({
+        role: item.role,
+        content: item.role === 'assistant'
+          ? sanitizeAssistantContent(item.content)
+          : item.content,
+      }));
+
       const guardedInitialPayload = applyNearLimitTokenGuard(
         conversationHistory,
-        initialContext,
+        contextWithSuggestions,
         effectiveProvider
       );
 
@@ -297,113 +321,67 @@ export function registerAgentHandlers(): void {
 
       await agentBridge.ensureStarted();
       let executionTrace: ExecutionTraceEntry[] = [];
-      let hiddenReasoningChunks: import('../handler-support.js').HiddenReasoningChunk[] = [];
-
-      const sendChatPass = async (
-        messagesPayload: Array<{ role: string; content: string }>,
-        contextPayload: Awaited<ReturnType<typeof buildAgentChatContext>> | undefined,
-        passIndex: number
-      ): Promise<Record<string, unknown>> => {
-        const response = await agentBridge.send({
-          type: 'chat',
-          threadId,
-          messages: messagesPayload,
-          metadata: {
-            projectId: String(projectId),
-            provider: effectiveProvider,
-            chapterId: String(chapter.id),
-            selectedClipIds,
-            playheadTime,
-            agentConfig,
-            context: contextPayload,
-          },
-        }, {
-          streamContext: {
-            clientRequestId,
-            projectId: String(projectId),
-            chapterId: String(chapter.id),
-            conversationId: conversation.id,
-            passIndex,
-          },
-          onStreamEvent: (streamMessage) => {
-            if (streamMessage.type === 'token' && streamMessage.visibility === 'hidden') {
-              hiddenReasoningChunks = appendHiddenReasoningChunk(hiddenReasoningChunks, streamMessage, passIndex);
-              return;
-            }
-
-            if (streamMessage.type !== 'progress') {
-              return;
-            }
-
-            executionTrace = appendExecutionTraceEntry(executionTrace, {
-              status: streamMessage.status,
-              message: streamMessage.message,
-              nodeName: streamMessage.nodeName,
-              passIndex,
-            });
-          },
-        });
-
-        if (response.type === 'error') {
-          throw new Error(response.error);
-        }
-        if (response.type !== 'graph-complete') {
-          throw new Error('Unexpected agent response type');
-        }
-
-        return response.result && typeof response.result === 'object'
-          ? (response.result as Record<string, unknown>)
-          : {};
-      };
-
-      const firstPassResult = await sendChatPass(guardedInitialPayload.messages, initialContext, 1);
-      let finalPassResult = firstPassResult;
-
-      const firstParsed = parseAgentGraphResult(firstPassResult, chapterDuration, chapterAssetIds);
-      if (firstParsed.transcriptDetailRequests.length > 0) {
-        const detailedTranscriptEvent: AgentStreamEvent = {
-          type: 'progress',
+      const response = await agentBridge.send({
+        type: 'chat',
+        threadId,
+        messages: guardedInitialPayload.messages,
+        metadata: {
+          projectId: String(projectId),
+          provider: effectiveProvider,
+          chapterId: String(chapter.id),
+          selectedClipIds,
+          playheadTime,
+          agentConfig,
+          context: contextWithSuggestions,
+        },
+      }, {
+        streamContext: {
           clientRequestId,
           projectId: String(projectId),
           chapterId: String(chapter.id),
           conversationId: conversation.id,
-          passIndex: 2,
-          status: 'loading_detailed_transcript_context',
-          progress: 0,
-          message: 'Fetching detailed transcript for a better answer...',
-          resetDraft: true,
-        };
-        event.sender.send(IPC_CHANNELS.AGENT_STREAM, detailedTranscriptEvent);
-        executionTrace = appendExecutionTraceEntry(executionTrace, detailedTranscriptEvent);
-
-        const detailedTranscripts = await generateDetailedTranscriptsForRequests(
-          chapter,
-          chapterAssetIds,
-          firstParsed.transcriptDetailRequests
-        );
-
-        if (detailedTranscripts.length > 0) {
-          const detailedContext = await buildAgentChatContext(projectId, chapter.id, {
-            detailedTranscripts,
-          });
-          const guardedDetailedPayload = applyNearLimitTokenGuard([], detailedContext, effectiveProvider);
-
-          if (guardedDetailedPayload.compressed) {
-            logger.info(
-              'agent:token-guard-detailed',
-              conversation.id,
-              effectiveProvider || 'default',
-              `${guardedDetailedPayload.estimatedTotalTokens}/${guardedDetailedPayload.effectiveContextLimit}`
-            );
+          passIndex: 1,
+        },
+        onStreamEvent: (streamMessage) => {
+          if (streamMessage.type === 'assistant_text_delta') {
+            return;
           }
 
-          finalPassResult = await sendChatPass(guardedDetailedPayload.messages, detailedContext, 2);
-        }
+          if (streamMessage.type === 'tool_state') {
+            executionTrace = appendExecutionTraceEntry(executionTrace, {
+              status: `tool_${streamMessage.state}`,
+              message:
+                streamMessage.message ??
+                streamMessage.error ??
+                `${streamMessage.toolName} ${streamMessage.state}`,
+              nodeName: streamMessage.toolName,
+              passIndex: 1,
+            });
+            return;
+          }
+
+          executionTrace = appendExecutionTraceEntry(executionTrace, {
+            status: streamMessage.status,
+            message: streamMessage.message,
+            nodeName: streamMessage.nodeName,
+            passIndex: 1,
+          });
+        },
+      });
+
+      if (response.type === 'error') {
+        throw new Error(response.error);
+      }
+      if (response.type !== 'turn_complete') {
+        throw new Error('Unexpected agent response type');
       }
 
-      const finalParsed = parseAgentGraphResult(finalPassResult, chapterDuration, chapterAssetIds);
+      const finalResult = response.result && typeof response.result === 'object'
+        ? (response.result as Record<string, unknown>)
+        : {};
+      const finalParsed = parseAgentGraphResult(finalResult, chapterDuration, chapterAssetIds);
       const assistantMessage = finalParsed.message || 'Analysis complete';
-      const thinkingMarkdown = finalParsed.thinkingMarkdown ?? serializeHiddenReasoning(hiddenReasoningChunks);
+      const thinkingMarkdown = finalParsed.thinkingMarkdown;
       const persistedAssistantMessage = await createChatMessage({
         conversation_id: conversation.id,
         role: 'assistant',
@@ -419,14 +397,12 @@ export function registerAgentHandlers(): void {
         finalParsed.suggestionDrafts
       );
 
-      hydratedConversationIds.add(conversation.id);
-
       const normalized: AgentChatData = {
         message: assistantMessage,
         thinkingMarkdown: thinkingMarkdown ?? undefined,
         threadId,
         suggestions: persistedSuggestions,
-        timelineActions: undefined,
+        outcome: finalParsed.outcome,
       };
 
       return createSuccessResponse(normalized);

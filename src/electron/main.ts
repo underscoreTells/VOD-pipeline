@@ -5,6 +5,7 @@ import { initializeDependencies } from './bootstrap/dependencies.js';
 import { loadEnvironment } from './bootstrap/env.js';
 import { createMainWindow, getMainWindow } from './bootstrap/window.js';
 import { initializeDatabase, closeDatabase } from './database/index.js';
+import { initializeDevRuntimeState } from './dev-runtime.js';
 import { registerIpcHandlers } from './ipc/register.js';
 import { createLogger } from './logger.js';
 import { registerMediaProtocol, registerMediaProtocolScheme } from './media-protocol.js';
@@ -22,6 +23,7 @@ app.whenReady().then(async () => {
   logger.info('Development mode:', process.env.NODE_ENV !== 'production');
 
   await initializeDatabase();
+  await initializeDevRuntimeState();
   registerIpcHandlers();
   registerMediaProtocol();
   await initializeDependencies();

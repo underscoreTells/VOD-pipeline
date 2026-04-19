@@ -65,5 +65,49 @@ describe("chat panel thinking disclosure", () => {
     expect(body).toContain(">Steps</div>");
     expect(body).toContain(">Reasoning</div>");
     expect(body).toMatch(/thinking-markdown[\s\S]*?The intro sets up the goal/);
+    expect(body).not.toContain("message-live-status");
+  });
+
+  it("renders a visible live status row for streaming assistant drafts", () => {
+    resetAgentState();
+    agentState.conversations = [
+      {
+        id: 12,
+        project_id: 1,
+        chapter_id: 2,
+        title: "Conversation 12",
+        provider: "gemini",
+        thread_id: "thread-12",
+        created_at: "2026-04-18T12:00:00.000Z",
+        updated_at: "2026-04-18T12:00:00.000Z",
+      },
+    ];
+    agentState.selectedConversationId = 12;
+    agentState.messages = [
+      {
+        role: "assistant",
+        content: "",
+        thinkingMarkdown: null,
+        trace: [
+          {
+            id: "trace-1",
+            status: "tool_running",
+            label: "Drafting rough-cut proposals...",
+            nodeName: "draftRoughCutProposals",
+            passIndex: 1,
+            createdAt: "2026-04-18T12:00:00.000Z",
+          },
+        ],
+        id: "assistant-1",
+        timestamp: new Date("2026-04-18T12:00:01.000Z"),
+        isStreaming: true,
+      },
+    ];
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("message-live-status");
+    expect(body).toContain("Drafting rough-cut proposals...");
+    expect(body).toContain("Pass 1 · draftRoughCutProposals");
   });
 });

@@ -12,9 +12,9 @@ export function enrichAgentStreamEvent(
     return null;
   }
 
-  if (message.type === "progress") {
+  if (message.type === "status") {
     return {
-      type: "progress",
+      type: "status",
       ...context,
       status: message.status,
       progress: message.progress,
@@ -23,14 +23,26 @@ export function enrichAgentStreamEvent(
     };
   }
 
-  if (message.type === "token") {
+  if (message.type === "assistant_text_delta") {
     return {
-      type: "token",
+      type: "assistant_text_delta",
       ...context,
-      content: message.content,
+      delta: message.delta,
       role: message.role,
-      nodeName: message.nodeName,
-      visibility: message.visibility,
+    };
+  }
+
+  if (message.type === "tool_state") {
+    return {
+      type: "tool_state",
+      ...context,
+      toolCallId: message.toolCallId,
+      toolName: message.toolName,
+      state: message.state,
+      message: message.message,
+      input: message.input,
+      output: message.output,
+      error: message.error,
     };
   }
 

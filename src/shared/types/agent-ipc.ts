@@ -56,11 +56,23 @@ export interface AgentSuggestionDraft {
   reasoning?: string;
 }
 
+export interface ConversationTurnResult {
+  assistantResponse?: string;
+  thinkingMarkdown?: string;
+  outcome: "discussion" | "clarification" | "proposal";
+  suggestionDrafts?: AgentSuggestionDraft[];
+  // Deprecated for renderer-facing chat flows. Persisted suggestions are canonical.
+  timelineActions?: TimelineAction[];
+  transcriptDetailRequests?: TranscriptDetailRequest[];
+}
+
 export interface AgentChatData {
   message: string;
   thinkingMarkdown?: string;
   threadId?: string;
   suggestions?: Suggestion[];
+  outcome?: ConversationTurnResult["outcome"];
+  // Deprecated for renderer-facing chat flows. Persisted suggestions are canonical.
   timelineActions?: TimelineAction[];
 }
 
@@ -131,9 +143,10 @@ export interface StopInputMessageWithoutId {
 
 export type AgentOutputMessage =
   | ReadyOutputMessage
-  | ProgressOutputMessage
-  | TokenOutputMessage
-  | GraphCompleteOutputMessage
+  | StatusOutputMessage
+  | AssistantTextDeltaOutputMessage
+  | ToolStateOutputMessage
+  | TurnCompleteOutputMessage
   | ErrorOutputMessage;
 
 export interface ReadyOutputMessage {
@@ -142,29 +155,40 @@ export interface ReadyOutputMessage {
   metadata?: Record<string, unknown>;
 }
 
-export interface ProgressOutputMessage {
-  type: "progress";
+export interface StatusOutputMessage {
+  type: "status";
   requestId: string;
   status: string;
-  progress: number;
+  progress?: number;
   nodeName?: string;
   chapterId?: string;
   message?: string;
   metadata?: Record<string, unknown>;
 }
 
-export interface TokenOutputMessage {
-  type: "token";
+export interface AssistantTextDeltaOutputMessage {
+  type: "assistant_text_delta";
   requestId: string;
-  content: string;
+  delta: string;
   role: string;
-  nodeName: string;
-  visibility?: "chat" | "hidden";
   metadata?: Record<string, unknown>;
 }
 
-export interface GraphCompleteOutputMessage {
-  type: "graph-complete";
+export interface ToolStateOutputMessage {
+  type: "tool_state";
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  state: "pending" | "running" | "completed" | "error";
+  message?: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TurnCompleteOutputMessage {
+  type: "turn_complete";
   requestId: string;
   result: Record<string, unknown>;
   threadId: string;
@@ -187,24 +211,35 @@ export interface AgentStreamContext {
   passIndex: number;
 }
 
-export interface AgentStreamProgressEvent extends AgentStreamContext {
-  type: "progress";
+export interface AgentStreamStatusEvent extends AgentStreamContext {
+  type: "status";
   status: string;
-  progress: number;
+  progress?: number;
   nodeName?: string;
   message?: string;
-  resetDraft?: boolean;
 }
 
-export interface AgentStreamTokenEvent extends AgentStreamContext {
-  type: "token";
-  content: string;
+export interface AgentStreamAssistantTextDeltaEvent extends AgentStreamContext {
+  type: "assistant_text_delta";
+  delta: string;
   role: string;
-  nodeName: string;
-  visibility?: "chat" | "hidden";
 }
 
-export type AgentStreamEvent = AgentStreamProgressEvent | AgentStreamTokenEvent;
+export interface AgentStreamToolStateEvent extends AgentStreamContext {
+  type: "tool_state";
+  toolCallId: string;
+  toolName: string;
+  state: "pending" | "running" | "completed" | "error";
+  message?: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  error?: string;
+}
+
+export type AgentStreamEvent =
+  | AgentStreamStatusEvent
+  | AgentStreamAssistantTextDeltaEvent
+  | AgentStreamToolStateEvent;
 
 export interface Message {
   role: string;

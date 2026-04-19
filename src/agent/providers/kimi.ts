@@ -3,6 +3,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration } from "@langchain/core/outputs";
 import { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
 import { AIMessage } from "@langchain/core/messages";
+import { convertToOpenAITool } from "@langchain/core/utils/function_calling";
 
 /**
  * Kimi K2.5 Provider for Moonshot AI
@@ -11,8 +12,10 @@ import { AIMessage } from "@langchain/core/messages";
  */
 
 export interface KimiMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string | KimiContentPart[];
+  tool_call_id?: string;
+  tool_calls?: KimiToolCall[];
 }
 
 export interface KimiContentPart {
@@ -30,6 +33,8 @@ export interface KimiContentPart {
 export interface KimiChatCompletionRequest {
   model: string;
   messages: KimiMessage[];
+  tools?: KimiToolDefinition[];
+  tool_choice?: string | { type: "function"; function: { name: string } };
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
@@ -52,6 +57,24 @@ export interface KimiChatCompletionResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+  };
+}
+
+export interface KimiToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+export interface KimiToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
   };
 }
 
@@ -104,6 +127,8 @@ export class KimiChatModel extends BaseChatModel {
       const requestBody: KimiChatCompletionRequest = {
         model: this.model,
         messages: kimiMessages,
+        tools: this.extractToolDefinitions(_options),
+        tool_choice: this.extractToolChoice(_options),
         temperature: this.temperature,
         max_tokens: this.maxTokens,
         stream: false,
@@ -154,16 +179,12 @@ export class KimiChatModel extends BaseChatModel {
       }
 
       // Convert response back to LangChain format
-      let content: string;
-      if (typeof choice.message.content === "string") {
-        content = choice.message.content;
-      } else if (Array.isArray(choice.message.content)) {
-        content = choice.message.content
-          .map((part: KimiContentPart) => part.text || "")
-          .join("");
-      } else {
-        content = "";
-      }
+      const content = this.getMessageText(choice.message.content);
+      const toolCalls = Array.isArray(choice.message.tool_calls)
+        ? choice.message.tool_calls
+            .map((toolCall) => this.convertToolCall(toolCall))
+            .filter((toolCall): toolCall is NonNullable<typeof toolCall> => toolCall !== null)
+        : [];
 
       // Defensive: handle missing usage data
       const tokenUsage = data.usage || {
@@ -172,9 +193,14 @@ export class KimiChatModel extends BaseChatModel {
         total_tokens: 0,
       };
 
+      const aiMessage = new AIMessage({
+        content,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      });
+
       const generation: ChatGeneration = {
         text: content,
-        message: new AIMessage(content),
+        message: aiMessage,
       };
 
       return {
@@ -200,6 +226,33 @@ export class KimiChatModel extends BaseChatModel {
   private convertToKimiMessages(messages: BaseMessage[]): KimiMessage[] {
     return messages.map((msg) => {
       const role = this.mapRole(msg._getType());
+      const record = msg as BaseMessage & {
+        tool_calls?: Array<{ id?: string; name: string; args: Record<string, unknown> }>;
+        tool_call_id?: string;
+      };
+
+      if (role === "tool") {
+        return {
+          role,
+          content: this.getMessageText(msg.content),
+          tool_call_id: typeof record.tool_call_id === "string" ? record.tool_call_id : undefined,
+        };
+      }
+
+      if (role === "assistant" && Array.isArray(record.tool_calls) && record.tool_calls.length > 0) {
+        return {
+          role,
+          content: this.getMessageText(msg.content),
+          tool_calls: record.tool_calls.map((toolCall) => ({
+            id: toolCall.id || "",
+            type: "function",
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.args ?? {}),
+            },
+          })),
+        };
+      }
       
       // Handle array content (multimodal)
       if (Array.isArray(msg.content)) {
@@ -249,7 +302,7 @@ export class KimiChatModel extends BaseChatModel {
   /**
    * Map LangChain roles to Kimi roles
    */
-  private mapRole(type: string): "system" | "user" | "assistant" {
+  private mapRole(type: string): "system" | "user" | "assistant" | "tool" {
     switch (type) {
       case "system":
         return "system";
@@ -257,9 +310,80 @@ export class KimiChatModel extends BaseChatModel {
         return "user";
       case "ai":
         return "assistant";
+      case "tool":
+        return "tool";
       default:
         return "user";
     }
+  }
+
+  bindTools(tools: unknown[], kwargs?: Record<string, unknown>) {
+    return this.withConfig({
+      tools: tools.map((tool) =>
+        isKimiToolDefinition(tool)
+          ? tool
+          : (convertToOpenAITool(tool as never) as KimiToolDefinition)
+      ),
+      ...kwargs,
+    });
+  }
+
+  private extractToolDefinitions(options: this["ParsedCallOptions"]): KimiToolDefinition[] | undefined {
+    const record = options as Record<string, unknown>;
+    return Array.isArray(record.tools)
+      ? (record.tools as KimiToolDefinition[])
+      : undefined;
+  }
+
+  private extractToolChoice(
+    options: this["ParsedCallOptions"]
+  ): string | { type: "function"; function: { name: string } } | undefined {
+    const record = options as Record<string, unknown>;
+    const toolChoice = record.tool_choice;
+    if (
+      toolChoice === "auto" ||
+      toolChoice === "none" ||
+      (typeof toolChoice === "object" && toolChoice !== null)
+    ) {
+      return toolChoice as string | { type: "function"; function: { name: string } };
+    }
+    return undefined;
+  }
+
+  private convertToolCall(toolCall: KimiToolCall) {
+    if (
+      !toolCall ||
+      typeof toolCall !== "object" ||
+      typeof toolCall.id !== "string" ||
+      typeof toolCall.function?.name !== "string"
+    ) {
+      return null;
+    }
+
+    try {
+      return {
+        id: toolCall.id,
+        type: "tool_call" as const,
+        name: toolCall.function.name,
+        args: JSON.parse(toolCall.function.arguments || "{}") as Record<string, unknown>,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private getMessageText(content: string | KimiContentPart[] | unknown): string {
+    if (typeof content === "string") {
+      return content;
+    }
+
+    if (!Array.isArray(content)) {
+      return String(content ?? "");
+    }
+
+    return content
+      .map((part) => (part && typeof part === "object" && "text" in part ? String(part.text ?? "") : ""))
+      .join("");
   }
 
   /**
@@ -308,4 +432,22 @@ export function createKimiImagePart(base64Image: string, mimeType: string = "ima
       detail,
     },
   };
+}
+
+function isKimiToolDefinition(value: unknown): value is KimiToolDefinition {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type !== "function") {
+    return false;
+  }
+
+  const toolFunction =
+    typeof record.function === "object" && record.function !== null
+      ? (record.function as Record<string, unknown>)
+      : null;
+
+  return !!toolFunction && typeof toolFunction.name === "string";
 }

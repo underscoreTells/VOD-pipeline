@@ -20,6 +20,10 @@ const PREVIEW_SECTION_MARKERS = [
   LEGACY_SUGGESTION_MARKER,
 ] as const;
 
+// These helpers exist to sanitize legacy stored assistant messages and previews.
+// New conversation turns stream plain assistant text and no longer depend on
+// marker-based parsing as their primary contract.
+
 function findNextMarkerIndex(
   content: string,
   startIndex: number,
