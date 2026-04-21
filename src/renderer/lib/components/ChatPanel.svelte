@@ -29,7 +29,7 @@
   import { clampValue, startPointerDrag } from "./project-detail-layout.js";
   import Icon from './ui/Icon.svelte';
   import TooltipIconButton from './ui/TooltipIconButton.svelte';
-  import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight, Copy, GitBranch, Pencil, Repeat } from '../constants';
+  import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight, Copy, GitBranch, Pencil, Repeat, Play } from '../constants';
   import { cn } from "../utils/cn";
 
   interface Props {
@@ -59,6 +59,7 @@
   const SUGGESTIONS_TRAY_RESIZE_HANDLE_HEIGHT = 6;
   const MIN_SUGGESTIONS_TRAY_MAX_HEIGHT = 140;
   const MIN_VISIBLE_MESSAGES_HEIGHT = 160;
+  const SUGGESTION_ACTION_BUTTON_CLASS = 'border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle text-accent-primary hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50';
 
   const providers = [
     { value: "gemini", label: "Gemini" },
@@ -719,28 +720,43 @@
         >
           <div class="suggestions-header sticky top-0 z-[var(--z-panel)] flex items-center justify-between border-b border-border-subtle bg-surface-raised px-3 py-2 shadow-[0_1px_0_rgba(0,0,0,0.06)]">
             <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
-            <div class="suggestions-actions flex items-center gap-2">
-              <button
-                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+            <div class="suggestions-actions flex items-center gap-1">
+              <TooltipIconButton
+                class={cn(
+                  'h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]',
+                  SUGGESTION_ACTION_BUTTON_CLASS,
+                  bulkSuggestionAction === 'preview' && 'animate-pulse'
+                )}
+                icon={Play}
                 onclick={handlePreviewAllSuggestions}
                 disabled={isBulkSuggestionActionRunning || previewableSuggestions.length === 0}
-              >
-                {bulkSuggestionAction === 'preview' ? 'Previewing...' : 'Preview All'}
-              </button>
-              <button
-                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-destructive)_18%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-destructive)_10%,transparent)] px-2.5 py-1 text-app-xs font-medium text-accent-destructive transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-destructive hover:bg-accent-destructive hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                tooltip={bulkSuggestionAction === 'preview' ? 'Previewing suggestions' : 'Preview all suggestions'}
+                type="button"
+              />
+              <TooltipIconButton
+                class={cn(
+                  'h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]',
+                  SUGGESTION_ACTION_BUTTON_CLASS,
+                  bulkSuggestionAction === 'reject' && 'animate-pulse'
+                )}
+                icon={X}
                 onclick={handleRejectAllSuggestions}
                 disabled={isBulkSuggestionActionRunning || pendingSuggestions.length === 0}
-              >
-                {bulkSuggestionAction === 'reject' ? 'Rejecting...' : 'Reject All'}
-              </button>
-              <button
-                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                tooltip={bulkSuggestionAction === 'reject' ? 'Rejecting suggestions' : 'Reject all suggestions'}
+                type="button"
+              />
+              <TooltipIconButton
+                class={cn(
+                  'h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]',
+                  SUGGESTION_ACTION_BUTTON_CLASS,
+                  bulkSuggestionAction === 'apply' && 'animate-pulse'
+                )}
+                icon={Check}
                 onclick={handleApplyAllSuggestions}
                 disabled={isBulkSuggestionActionRunning || pendingSuggestions.length === 0}
-              >
-                {bulkSuggestionAction === 'apply' ? 'Applying...' : 'Apply All'}
-              </button>
+                tooltip={bulkSuggestionAction === 'apply' ? 'Applying suggestions' : 'Apply all suggestions'}
+                type="button"
+              />
               <button
                 class="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
                 onclick={() => showSuggestions = !showSuggestions}
@@ -755,46 +771,48 @@
               {#each pendingSuggestions as suggestion (suggestion.id)}
                 <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-hover">
                   <div class="suggestion-info flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span class="suggestion-time font-mono text-app-xs text-accent-success">{formatSuggestionPrimaryLine(suggestion)}</span>
+                    <span class="suggestion-time font-mono text-app-xs text-accent-primary">{formatSuggestionPrimaryLine(suggestion)}</span>
                     <span class="suggestion-desc text-app-sm font-medium leading-[1.4] text-text-primary">{suggestion.description || 'No description'}</span>
                     {#if suggestion.reasoning}
                       <span class="suggestion-reasoning text-app-xs leading-[1.4] text-text-tertiary">{suggestion.reasoning}</span>
                     {/if}
                   </div>
-                  <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100">
+                  <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100 group-focus-within/suggestion:opacity-100">
                     {#if suggestion.clip_id}
-                      <button
-                        class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      <TooltipIconButton
+                        class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
+                        icon={X}
                         onclick={() => handleCancelSuggestionPreview(suggestion.id)}
                         disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      >
-                        Cancel
-                      </button>
+                        tooltip="Cancel preview"
+                        type="button"
+                      />
                     {:else}
-                      <button
-                        class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      <TooltipIconButton
+                        class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
+                        icon={Play}
                         onclick={() => handlePreviewSuggestion(suggestion.id)}
                         disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      >
-                        Preview
-                      </button>
+                        tooltip="Preview suggestion"
+                        type="button"
+                      />
                     {/if}
-                    <button
-                      class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    <TooltipIconButton
+                      class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
+                      icon={Check}
                       onclick={() => handleApplySuggestion(suggestion.id)}
                       disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      title="Apply"
-                    >
-                      <Icon icon={Check} size={12} />
-                    </button>
-                    <button
-                      class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-border-default bg-surface-base p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      tooltip="Apply suggestion"
+                      type="button"
+                    />
+                    <TooltipIconButton
+                      class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
+                      icon={X}
                       onclick={() => handleRejectSuggestion(suggestion.id)}
                       disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      title="Reject"
-                    >
-                      <Icon icon={X} size={12} />
-                    </button>
+                      tooltip="Reject suggestion"
+                      type="button"
+                    />
                   </div>
                 </div>
               {/each}
