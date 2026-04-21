@@ -1,8 +1,9 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '../logger.js';
+import { getExternalHttpUrl } from './window-navigation.js';
 
 const logger = createLogger('Window');
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,28 @@ export function createMainWindow(): BrowserWindow {
     logger.error(`Failed to load preload ${failingPreloadPath}:`, error);
   });
 
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const externalUrl = getExternalHttpUrl(url);
+    if (externalUrl) {
+      void shell.openExternal(externalUrl);
+    }
+
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow?.webContents.getURL()) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const externalUrl = getExternalHttpUrl(url);
+    if (externalUrl) {
+      void shell.openExternal(externalUrl);
+    }
+  });
+
   if (isDev) {
     mainWindow.webContents.on('console-message', (_event, level, message) => {
       const levelName = ['debug', 'info', 'warning', 'error'][level] ?? String(level);
@@ -44,7 +67,9 @@ export function createMainWindow(): BrowserWindow {
   }
 
   if (isDev) {
-    void mainWindow.loadURL('http://localhost:5173');
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
+    logger.debug('Loading renderer from:', devServerUrl);
+    void mainWindow.loadURL(devServerUrl);
     if (process.env.ELECTRON_OPEN_DEVTOOLS === 'true') {
       mainWindow.webContents.openDevTools();
     }

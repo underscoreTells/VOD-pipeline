@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   conversation_id INTEGER NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
   content TEXT NOT NULL,
+  thinking_markdown TEXT,
+  trace_json TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
 );
@@ -205,6 +207,8 @@ CREATE TABLE IF NOT EXISTS chapter_proxies (
 CREATE TABLE IF NOT EXISTS suggestions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chapter_id INTEGER NOT NULL,
+  conversation_id INTEGER,
+  chat_message_id INTEGER,
   in_point REAL NOT NULL,
   out_point REAL NOT NULL,
   description TEXT,
@@ -220,6 +224,8 @@ CREATE TABLE IF NOT EXISTS suggestions (
   applied_at DATETIME,
   clip_id INTEGER, -- Linked clip on timeline when applied
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+  FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (chat_message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
   FOREIGN KEY (target_clip_id) REFERENCES clips(id) ON DELETE SET NULL,
   FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
 );
@@ -242,6 +248,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_conversations_project_chapter ON chat_conver
 CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at ON chat_conversations(updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_suggestions_conversation_id ON suggestions(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_suggestions_chat_message_id ON suggestions(chat_message_id);
 CREATE INDEX IF NOT EXISTS idx_clips_project_id ON clips(project_id);
 CREATE INDEX IF NOT EXISTS idx_clips_asset_id ON clips(asset_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track_index ON clips(track_index);

@@ -1,7 +1,7 @@
+export { batchUpdateClips } from './repositories/clips.js';
 export {
   applySuggestionWithClip,
-  batchUpdateClips,
   cancelSuggestionPreview,
   previewSuggestionWithClip,
   rejectSuggestion,
-} from './db.js';
+} from './repositories/suggestions.js';

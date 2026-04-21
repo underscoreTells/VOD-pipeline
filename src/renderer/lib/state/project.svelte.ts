@@ -5,7 +5,7 @@ import {
   type CreateProjectResult,
   type DeleteProjectResult,
   type GetProjectsResult,
-} from './electron.svelte';
+} from '../api/projects.js';
 
 export interface Project {
   id: number;

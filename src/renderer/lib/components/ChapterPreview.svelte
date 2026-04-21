@@ -22,7 +22,7 @@
     hasCompleteSelection,
   } from '../state/clip-builder.svelte';
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
-  import { getChapterReverseProxy } from '../state/electron.svelte';
+  import { getChapterReverseProxy } from '../api/chapters.js';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 

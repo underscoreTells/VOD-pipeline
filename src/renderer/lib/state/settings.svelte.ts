@@ -1,3 +1,15 @@
+import { decryptSettings, encryptSettings } from '../api/settings.js';
+import {
+  defaultSettings,
+  getApiKey as getSettingsApiKey,
+  getConfiguredProviders as getConfiguredProvidersFromSettings,
+  getConfiguredVideoProviders as getConfiguredVideoProvidersFromSettings,
+  getProviderLabel as getSettingsProviderLabel,
+  isProviderConfigured as isProviderConfiguredInSettings,
+  supportsVideo as providerSupportsVideo,
+  validateApiKey,
+} from './settings-helpers.js';
+
 /**
  * Settings State Management
  * Handles AI provider API keys and application preferences
@@ -51,24 +63,7 @@ export const settingsState = $state<{
   error: string | null;
   isSettingsOpen: boolean;
 }>({
-  settings: {
-    geminiApiKey: "",
-    openaiApiKey: "",
-    anthropicApiKey: "",
-    kimiApiKey: "",
-    openrouterApiKey: "",
-    defaultVideoProvider: "gemini",
-    defaultTextProvider: "openai",
-    autoGenerateProxies: true,
-    proxyGenerationOnImport: true,
-    proxyEncodingMode: 'auto', // Auto-detect GPU, fallback to CPU
-    proxyQuality: 'balanced', // Balanced quality/speed
-    autoChapterNamingEnabled: true,
-    autoChapterNamingModel: "gpt-4o-mini",
-    autoClipNamingEnabled: true,
-    autoClipNamingModel: "gpt-5-nano",
-    autoTranscribeOnImport: true,
-  },
+  settings: { ...defaultSettings },
   providerStatuses: new Map(),
   isLoading: false,
   error: null,
@@ -124,7 +119,7 @@ export async function loadSettings(): Promise<void> {
 
     // Decrypt API keys if present
     if (parsed._encryptedKeys) {
-      const response = await window.electronAPI.settings.decrypt(parsed._encryptedKeys);
+      const response = await decryptSettings(parsed._encryptedKeys);
       if (!response.success) {
         throw new Error(response.error || "Failed to decrypt API keys");
       }
@@ -170,7 +165,7 @@ export async function saveSettings(): Promise<void> {
       openrouterApiKey: settingsState.settings.openrouterApiKey,
     };
 
-    const response = await window.electronAPI.settings.encrypt(JSON.stringify(keysToEncrypt));
+    const response = await encryptSettings(JSON.stringify(keysToEncrypt));
     if (!response.success) {
       throw new Error(response.error || "Failed to encrypt API keys");
     }
@@ -252,49 +247,28 @@ export async function updateApiKey(provider: LLMProviderType, apiKey: string): P
  * Get API key for a provider
  */
 export function getApiKey(provider: LLMProviderType): string {
-  switch (provider) {
-    case "gemini":
-      return settingsState.settings.geminiApiKey || "";
-    case "openai":
-      return settingsState.settings.openaiApiKey || "";
-    case "anthropic":
-      return settingsState.settings.anthropicApiKey || "";
-    case "kimi":
-      return settingsState.settings.kimiApiKey || "";
-    case "openrouter":
-      return settingsState.settings.openrouterApiKey || "";
-    default:
-      return "";
-  }
+  return getSettingsApiKey(settingsState.settings, provider);
 }
 
 /**
  * Check if a provider has a configured API key
  */
 export function isProviderConfigured(provider: LLMProviderType): boolean {
-  return getApiKey(provider).length > 0;
+  return isProviderConfiguredInSettings(settingsState.settings, provider);
 }
 
 /**
  * Get list of configured providers
  */
 export function getConfiguredProviders(): LLMProviderType[] {
-  const providers: LLMProviderType[] = [
-    "gemini",
-    "openai",
-    "anthropic",
-    "kimi",
-    "openrouter",
-  ];
-  return providers.filter(isProviderConfigured);
+  return getConfiguredProvidersFromSettings(settingsState.settings);
 }
 
 /**
  * Get video-capable providers that are configured
  */
 export function getConfiguredVideoProviders(): LLMProviderType[] {
-  const videoProviders: LLMProviderType[] = ["gemini", "kimi"];
-  return videoProviders.filter(isProviderConfigured);
+  return getConfiguredVideoProvidersFromSettings(settingsState.settings);
 }
 
 /**
@@ -321,18 +295,16 @@ export async function testProvider(provider: LLMProviderType): Promise<boolean> 
 
   // Mock validation - in production, make actual API call
   // For now, just check if key looks valid (starts with expected prefix)
-  const validPrefixes: Record<LLMProviderType, string[]> = {
-    gemini: ["AIza"],
-    openai: ["sk-"],
-    anthropic: ["sk-ant-"],
-    kimi: ["sk-"],
-    openrouter: ["sk-or-"],
-  };
-
-  const prefixes = validPrefixes[provider];
-  const isValidFormat = prefixes.some((prefix) => apiKey.startsWith(prefix));
+  const isValidFormat = validateApiKey(provider, apiKey);
 
   if (!isValidFormat) {
+    const prefixes = {
+      gemini: ["AIza"],
+      openai: ["sk-"],
+      anthropic: ["sk-ant-"],
+      kimi: ["sk-"],
+      openrouter: ["sk-or-"],
+    }[provider];
     status.error = `Invalid API key format. Should start with: ${prefixes.join(" or ")}`;
     settingsState.providerStatuses.set(provider, status);
     return false;
@@ -375,45 +347,21 @@ export async function toggleSettings(): Promise<void> {
  * Get provider display name
  */
 export function getProviderLabel(provider: LLMProviderType): string {
-  const labels: Record<LLMProviderType, string> = {
-    gemini: "Google Gemini",
-    openai: "OpenAI",
-    anthropic: "Anthropic Claude",
-    kimi: "Kimi K2.5 (Moonshot AI)",
-    openrouter: "OpenRouter",
-  };
-  return labels[provider];
+  return getSettingsProviderLabel(provider);
 }
 
 /**
  * Check if provider supports video
  */
 export function supportsVideo(provider: LLMProviderType): boolean {
-  return provider === "gemini" || provider === "kimi";
+  return providerSupportsVideo(provider);
 }
 
 /**
  * Reset all settings to defaults
  */
 export async function resetSettings(): Promise<void> {
-  settingsState.settings = {
-    geminiApiKey: "",
-    openaiApiKey: "",
-    anthropicApiKey: "",
-    kimiApiKey: "",
-    openrouterApiKey: "",
-    defaultVideoProvider: "gemini",
-    defaultTextProvider: "openai",
-    autoGenerateProxies: true,
-    proxyGenerationOnImport: true,
-    proxyEncodingMode: 'auto',
-    proxyQuality: 'balanced',
-    autoChapterNamingEnabled: true,
-    autoChapterNamingModel: "gpt-4o-mini",
-    autoClipNamingEnabled: true,
-    autoClipNamingModel: "gpt-5-nano",
-    autoTranscribeOnImport: true,
-  };
+  settingsState.settings = { ...defaultSettings };
   settingsState.providerStatuses.clear();
   await saveSettings();
 }

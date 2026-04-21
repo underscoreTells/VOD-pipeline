@@ -12,6 +12,8 @@
     cancelSuggestionPreviewAction,
     rejectSuggestion,
   } from "../state/agent.svelte";
+  import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
+  import MarkdownContent from "./MarkdownContent.svelte";
   import { collapseChat } from "../state/layout.svelte";
   
   let message = $state("");
@@ -45,6 +47,25 @@
     autoResizeMessageInput();
   });
 
+  $effect(() => {
+    const lastMessage = agentState.messages[agentState.messages.length - 1];
+    const lastContent = lastMessage?.content ?? "";
+    const lastThinking = lastMessage?.thinkingMarkdown ?? "";
+    const lastTraceLength = lastMessage?.trace.length ?? 0;
+    const lastStreaming = lastMessage?.isStreaming ?? false;
+    void lastContent;
+    void lastThinking;
+    void lastTraceLength;
+    void lastStreaming;
+
+    if (!chatContainer || !lastMessage) return;
+
+    queueMicrotask(() => {
+      if (!chatContainer) return;
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    });
+  });
+
   async function submitMessage() {
     if (!message.trim() || agentState.isStreaming) return;
     
@@ -52,13 +73,6 @@
     message = "";
     autoResizeMessageInput();
     await sendChatMessage(msg);
-    
-    // Scroll to bottom
-    setTimeout(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      }
-    }, 100);
   }
 
   async function handleSubmit(e: Event) {
@@ -92,6 +106,32 @@
       return `${clipLabel} (${formatDuration(suggestion.in_point, suggestion.out_point)})`;
     }
     return formatDuration(suggestion.in_point, suggestion.out_point);
+  }
+
+  function formatTraceMeta(message: { nodeName?: string; passIndex?: number }) {
+    const parts: string[] = [];
+    if (typeof message.passIndex === "number") {
+      parts.push(`Pass ${message.passIndex}`);
+    }
+    if (message.nodeName) {
+      parts.push(message.nodeName);
+    }
+    return parts.join(" · ");
+  }
+
+  function hasThinkingDetails(message: { trace: unknown[]; thinkingMarkdown?: string | null }) {
+    return message.trace.length > 0 || Boolean(message.thinkingMarkdown?.trim());
+  }
+
+  function getVisibleStreamingStatusMeta(message: {
+    isStreaming?: boolean;
+    trace: Array<{ nodeName?: string; passIndex?: number }>;
+  }) {
+    if (!message.isStreaming || message.trace.length === 0) {
+      return null;
+    }
+
+    return formatTraceMeta(message.trace[message.trace.length - 1] ?? {});
   }
 
   async function handleCreateConversation() {
@@ -177,8 +217,9 @@
         value={agentState.selectedProvider}
         onchange={(e) => setProvider(e.currentTarget.value as any)}
         class="provider-select"
+        disabled={agentState.isStreaming}
       >
-        {#each providers as provider}
+        {#each providers as provider (provider.value)}
           <option value={provider.value}>{provider.label}</option>
         {/each}
       </select>
@@ -193,17 +234,17 @@
       class="conversation-select"
       value={agentState.selectedConversationId ?? ""}
       onchange={(event) => handleConversationChange(event.currentTarget.value)}
-      disabled={agentState.isLoadingConversations || agentState.conversations.length === 0}
+      disabled={agentState.isStreaming || agentState.isLoadingConversations || agentState.conversations.length === 0}
     >
       {#if agentState.conversations.length === 0}
         <option value="">No conversations</option>
       {:else}
-        {#each agentState.conversations as conversation}
+        {#each agentState.conversations as conversation (conversation.id)}
           <option value={conversation.id}>{conversation.title}</option>
         {/each}
       {/if}
     </select>
-    <button class="toolbar-btn" onclick={handleCreateConversation}>New</button>
+    <button class="toolbar-btn" onclick={handleCreateConversation} disabled={agentState.isStreaming}>New</button>
     <button
       class="toolbar-btn danger"
       onclick={handleDeleteConversation}
@@ -218,33 +259,69 @@
       <div class="empty-state">
         <p>Select a chapter to start chatting</p>
       </div>
+    {:else if agentState.conversations.length === 0}
+      <div class="empty-state">
+        <p>No conversations yet for this chapter</p>
+        <p class="hint">Click New or send a message to start one</p>
+      </div>
     {:else if agentState.messages.length === 0}
       <div class="empty-state">
-        <p>Start a conversation with the AI editor</p>
+        <p>Start this conversation with the AI editor</p>
         <p class="hint">Try: "What should we keep?" or "Analyze this video"</p>
       </div>
     {:else}
-      {#each agentState.messages as msg}
+      {#each agentState.messages as msg (msg.id)}
         <div class="message {msg.role}">
           <div class="message-header">
             <span class="role">{msg.role === "user" ? "You" : "AI"}</span>
             <span class="time">{formatTime(msg.timestamp)}</span>
           </div>
-          <div class="message-content">{msg.content}</div>
+          {#if getVisibleStreamingStatusLabel(msg)}
+            <div class="message-live-status" aria-live="polite">
+              <span class="live-status-dot"></span>
+              <span class="live-status-label">{getVisibleStreamingStatusLabel(msg)}</span>
+              {#if getVisibleStreamingStatusMeta(msg)}
+                <span class="live-status-meta">{getVisibleStreamingStatusMeta(msg)}</span>
+              {/if}
+            </div>
+          {/if}
+          {#if msg.content}
+            <div class="message-content">
+              <MarkdownContent content={msg.content} role={msg.role} />
+            </div>
+          {/if}
+          {#if hasThinkingDetails(msg)}
+            <details class="message-trace" open={Boolean(msg.isStreaming)}>
+              <summary>Thinking{msg.trace.length > 0 ? ` (${msg.trace.length})` : ""}</summary>
+              <div class="thinking-content">
+                {#if msg.trace.length > 0}
+                  <div class="thinking-section">
+                    <div class="thinking-label">Steps</div>
+                    <div class="trace-list">
+                      {#each msg.trace as entry (entry.id)}
+                        <div class="trace-entry">
+                          <div class="trace-label">{entry.label}</div>
+                          {#if formatTraceMeta(entry)}
+                            <div class="trace-meta">{formatTraceMeta(entry)}</div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+                {#if msg.thinkingMarkdown}
+                  <div class="thinking-section">
+                    <div class="thinking-label">Reasoning</div>
+                    <div class="thinking-markdown">
+                      <MarkdownContent content={msg.thinkingMarkdown} role="assistant" />
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </details>
+          {/if}
         </div>
       {/each}
-    {/if}
-    
-    {#if agentState.isStreaming}
-      <div class="message assistant streaming">
-        <div class="message-header">
-          <span class="role">AI</span>
-          <span class="time">{formatTime(new Date())}</span>
-        </div>
-        <div class="message-content">
-          <span class="typing">Analyzing video...</span>
-        </div>
-      </div>
     {/if}
   </div>
   
@@ -269,7 +346,7 @@
       
       {#if showSuggestions}
         <div class="suggestions-list">
-          {#each agentState.suggestions.filter(s => s.status === 'pending') as suggestion}
+          {#each agentState.suggestions.filter(s => s.status === 'pending') as suggestion (suggestion.id)}
             <div class="suggestion-card">
               <div class="suggestion-time">
                 {formatSuggestionPrimaryLine(suggestion)}
@@ -471,14 +548,114 @@
   }
   
   .message-content {
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
+    min-width: 0;
   }
-  
-  .typing {
-    font-style: italic;
-    opacity: 0.7;
+
+  .message-live-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 0;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.36);
+    color: #dbeafe;
+    font-size: 12px;
+  }
+
+  .live-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #60a5fa;
+    box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.16);
+    animation: live-status-pulse 1.2s ease-in-out infinite;
+    flex: 0 0 auto;
+  }
+
+  .live-status-label {
+    font-weight: 600;
+  }
+
+  .live-status-meta {
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  @keyframes live-status-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.72;
+      transform: scale(0.92);
+    }
+  }
+
+  .message-trace {
+    margin-top: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.26);
+  }
+
+  .message-trace summary {
+    cursor: pointer;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #cbd5e1;
+    user-select: none;
+  }
+
+  .thinking-content {
+    padding: 0 10px 10px;
+  }
+
+  .thinking-section + .thinking-section {
+    margin-top: 12px;
+  }
+
+  .thinking-label {
+    margin-bottom: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #94a3b8;
+  }
+
+  .trace-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .trace-entry {
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .trace-entry:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .trace-label {
+    font-size: 12px;
+    color: #e2e8f0;
+  }
+
+  .trace-meta {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+
+  .thinking-markdown :global(.markdown-content) {
+    font-size: 13px;
   }
   
   .chat-input {

@@ -9,11 +9,12 @@ import {
   createAsset,
   createChapter,
   addAssetToChapter,
-  createSuggestion,
-  getSuggestion,
-  applySuggestionWithClip,
-  getSuggestionsByChapter,
-  rejectSuggestion,
+    createSuggestion,
+    getSuggestion,
+    applySuggestionWithClip,
+    getSuggestionsByConversation,
+    getSuggestionsByChapter,
+    rejectSuggestion,
   getClipsByProject,
   getClip,
   setDatabaseForTesting,
@@ -226,6 +227,8 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       const suggestion = {
         id: 1,
         chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
         in_point: 120.5,
         out_point: 180.0,
         description: "Test",
@@ -246,6 +249,8 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       // Verify CreateSuggestionInput allows optional clip_id
       const input = {
         chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
         in_point: 120.5,
         out_point: 180.0,
         description: "Test",
@@ -280,6 +285,38 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
         (fk) => fk.from === "clip_id" && fk.table === "clips"
       );
       expect(clipFk).toBeDefined();
+    });
+
+    it("should query suggestions by conversation scope", async () => {
+      const firstConversationId = db
+        .prepare(
+          "INSERT INTO chat_conversations (project_id, chapter_id, title, provider, thread_id) VALUES (?, ?, ?, ?, ?)"
+        )
+        .run(testProjectId, testChapterId, "First", "gemini", "thread-1")
+        .lastInsertRowid as number;
+      const secondConversationId = db
+        .prepare(
+          "INSERT INTO chat_conversations (project_id, chapter_id, title, provider, thread_id) VALUES (?, ?, ?, ?, ?)"
+        )
+        .run(testProjectId, testChapterId, "Second", "gemini", "thread-2")
+        .lastInsertRowid as number;
+
+      db.prepare(
+        `INSERT INTO suggestions
+         (chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider, status, display_order)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(testChapterId, firstConversationId, 10, 20, "First suggestion", "Scoped to first", "gemini", "pending", 0);
+      db.prepare(
+        `INSERT INTO suggestions
+         (chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider, status, display_order)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(testChapterId, secondConversationId, 30, 40, "Second suggestion", "Scoped to second", "gemini", "pending", 0);
+
+      const suggestions = await getSuggestionsByConversation(firstConversationId, testChapterId, "pending");
+
+      expect(suggestions).toHaveLength(1);
+      expect(suggestions[0]?.conversation_id).toBe(firstConversationId);
+      expect(suggestions[0]?.description).toBe("First suggestion");
     });
   });
 

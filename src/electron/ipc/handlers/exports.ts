@@ -10,7 +10,6 @@ const logger = createLogger('ExportHandlers');
 export const EXPORT_HANDLER_CHANNELS = [
   IPC_CHANNELS.EXPORT_GENERATE,
   IPC_CHANNELS.EXPORT_GET_FORMATS,
-  'dialog:showSaveDialog',
 ];
 
 export function registerExportHandlers(): void {
@@ -34,15 +33,6 @@ export function registerExportHandlers(): void {
     logger.info('export:get-formats');
     try {
       return createSuccessResponse(getExportFormats());
-    } catch (error) {
-      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
-    }
-  });
-
-  ipcMain.handle('dialog:showSaveDialog', async (_, options) => {
-    logger.info('dialog:showSaveDialog');
-    try {
-      return await dialog.showSaveDialog(options);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }

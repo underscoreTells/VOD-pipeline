@@ -52,13 +52,17 @@ describeAgentChat("Agent Chat Integration", () => {
     stdoutReader.on("message", (msg: AgentOutputMessage) => {
       messages.push(msg);
 
-      if (msg.type === "token" || msg.type === "progress") {
+      if (
+        msg.type === "assistant_text_delta" ||
+        msg.type === "status" ||
+        msg.type === "tool_state"
+      ) {
         return;
       }
 
       const pendingHandler = pending.get(msg.requestId);
       if (pendingHandler) {
-        if (msg.type === "graph-complete") {
+        if (msg.type === "turn_complete") {
           pendingHandler.resolve(msg as any);
         } else if (msg.type === "error") {
           pendingHandler.reject(new Error(msg.error));
@@ -143,11 +147,11 @@ describeAgentChat("Agent Chat Integration", () => {
       messages: [{ role: "user", content: "Hello!" }],
     });
 
-    expect(response.type).toBe("graph-complete");
+    expect(response.type).toBe("turn_complete");
     expect(response.result).toBeDefined();
   });
 
-  it.skip("should stream tokens during chat", async () => {
+  it.skip("should stream assistant text during chat", async () => {
     messages = [];
 
     const responsePromise = sendAndWait({
@@ -158,11 +162,11 @@ describeAgentChat("Agent Chat Integration", () => {
 
     await new Promise((r) => setTimeout(r, 2000));
 
-    const tokens = messages.filter((msg) => msg.type === "token");
-    expect(tokens.length).toBeGreaterThan(0);
+    const deltas = messages.filter((msg) => msg.type === "assistant_text_delta");
+    expect(deltas.length).toBeGreaterThan(0);
 
     const response = await responsePromise;
-    expect(response.type).toBe("graph-complete");
+    expect(response.type).toBe("turn_complete");
   });
 
   it.skip("should handle error on invalid message type", async () => {
@@ -182,7 +186,7 @@ describeAgentChat("Agent Chat Integration", () => {
       messages: [{ role: "user", content: "My name is Alice" }],
     });
 
-    expect(response1.type).toBe("graph-complete");
+    expect(response1.type).toBe("turn_complete");
 
     const response2 = await sendAndWait({
       type: "chat",
@@ -191,7 +195,7 @@ describeAgentChat("Agent Chat Integration", () => {
       messages: [{ role: "user", content: "What is my name?" }],
     });
 
-    expect(response2.type).toBe("graph-complete");
+    expect(response2.type).toBe("turn_complete");
     expect(response2.result).toBeDefined();
   });
 
@@ -202,7 +206,7 @@ describeAgentChat("Agent Chat Integration", () => {
       messages: [{ role: "user", content: "Say hello without thread" }],
     });
 
-    expect(response.type).toBe("graph-complete");
+    expect(response.type).toBe("turn_complete");
     expect(response.threadId).toBeDefined();
     expect(response.threadId.length).toBeGreaterThan(0);
   });
@@ -230,7 +234,7 @@ describeAgentChat("Agent Chat Integration", () => {
 
     expect(responses).toHaveLength(3);
     responses.forEach((response) => {
-      expect(response.type).toBe("graph-complete");
+      expect(response.type).toBe("turn_complete");
     });
   });
 
@@ -248,6 +252,6 @@ describeAgentChat("Agent Chat Integration", () => {
       requestId: "test-7",
     });
 
-    expect(stopResponse.type).toBe("graph-complete");
+    expect(stopResponse.type).toBe("turn_complete");
   });
 });

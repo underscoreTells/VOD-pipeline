@@ -3,55 +3,25 @@
  * Manages chapters for the dual-path import system
  */
 
+import {
+  addAssetToChapter as ipcAddAssetToChapter,
+  createChapter as ipcCreateChapter,
+  deleteChapter as ipcDeleteChapter,
+  getChapterAssets,
+  getChaptersByProject,
+  type AddAssetToChapterResult,
+  type CreateChapterInput,
+  type CreateChapterResult,
+  type DeleteChapterResult,
+  type GetChapterAssetsResult,
+  type GetChaptersResult,
+  type UpdateChapterInput,
+  type UpdateChapterResult,
+  updateChapter as ipcUpdateChapter,
+} from '../api/chapters.js';
+import { transcribeChapter as requestTranscription } from '../api/transcription.js';
+import { generateChapterTitleFromFilename } from './chapter-import-helpers.js';
 import type { Chapter, Asset } from "$shared/types/database";
-
-// Local type definitions (mirrors preload types)
-interface CreateChapterInput {
-  projectId: number;
-  title: string;
-  startTime: number;
-  endTime: number;
-}
-
-interface CreateChapterResult {
-  success: boolean;
-  data?: Chapter;
-  error?: string;
-}
-
-interface GetChaptersResult {
-  success: boolean;
-  data?: Chapter[];
-  error?: string;
-}
-
-interface UpdateChapterInput {
-  title?: string;
-  startTime?: number;
-  endTime?: number;
-  display_order?: number;
-}
-
-interface UpdateChapterResult {
-  success: boolean;
-  error?: string;
-}
-
-interface DeleteChapterResult {
-  success: boolean;
-  error?: string;
-}
-
-interface AddAssetToChapterResult {
-  success: boolean;
-  error?: string;
-}
-
-interface GetChapterAssetsResult {
-  success: boolean;
-  data?: number[];
-  error?: string;
-}
 
 interface ChaptersState {
   chapters: Chapter[];
@@ -86,7 +56,7 @@ export async function loadChapters(projectId: number): Promise<void> {
     chaptersState.error = null;
     currentProjectId = projectId;
 
-    const result: GetChaptersResult = await window.electronAPI.chapters.getByProject(projectId);
+    const result: GetChaptersResult = await getChaptersByProject(projectId);
 
     if (result.success && result.data) {
       chaptersState.chapters = result.data;
@@ -121,7 +91,7 @@ export async function createChapter(
       endTime,
     };
 
-    const result: CreateChapterResult = await window.electronAPI.chapters.create(input);
+      const result: CreateChapterResult = await ipcCreateChapter(input);
 
     if (result.success && result.data) {
       chaptersState.chapters = [...chaptersState.chapters, result.data];
@@ -151,7 +121,7 @@ export async function updateChapter(
   updates: UpdateChapterInput
   ): Promise<boolean> {
     try {
-      const result: UpdateChapterResult = await window.electronAPI.chapters.update(chapterId, updates);
+      const result: UpdateChapterResult = await ipcUpdateChapter(chapterId, updates);
 
       if (result.success) {
         const stateUpdates: Partial<Chapter> = {};
@@ -187,7 +157,7 @@ export async function updateChapter(
  */
 export async function deleteChapter(chapterId: number): Promise<boolean> {
   try {
-    const result: DeleteChapterResult = await window.electronAPI.chapters.delete(chapterId);
+    const result: DeleteChapterResult = await ipcDeleteChapter(chapterId);
 
     if (result.success) {
       chaptersState.chapters = chaptersState.chapters.filter((chapter) => chapter.id !== chapterId);
@@ -215,10 +185,7 @@ export async function linkAssetToChapter(
   assetId: number
 ): Promise<boolean> {
   try {
-    const result: AddAssetToChapterResult = await window.electronAPI.chapters.addAsset(
-      chapterId,
-      assetId
-    );
+    const result: AddAssetToChapterResult = await ipcAddAssetToChapter(chapterId, assetId);
 
     if (result.success) {
       const existing = chaptersState.chapterAssets.get(chapterId) ?? [];
@@ -249,7 +216,7 @@ export function getAssetsForChapter(chapterId: number): number[] {
  */
 export async function loadAssetsForChapter(chapterId: number): Promise<number[]> {
   try {
-    const result: GetChapterAssetsResult = await window.electronAPI.chapters.getAssets(chapterId);
+    const result: GetChapterAssetsResult = await getChapterAssets(chapterId);
 
     if (result.success && result.data) {
       chaptersState.chapterAssets.set(chapterId, result.data);
@@ -304,29 +271,6 @@ export async function autoCreateChaptersFromFiles(
 }
 
 /**
- * Generate a chapter title from filename
- * Handles duplicates by appending numbers
- */
-function generateChapterTitleFromFilename(
-  filePath: string,
-  existingTitles: string[]
-): string {
-  const basename = filePath.split(/[/\\]/).pop() || "unnamed";
-  const nameWithoutExt = basename.replace(/\.[^/.]+$/, "");
-
-  if (!existingTitles.includes(nameWithoutExt)) {
-    return nameWithoutExt;
-  }
-
-  // Find next available number
-  let counter = 1;
-  while (existingTitles.includes(`${nameWithoutExt}_${counter}`)) {
-    counter++;
-  }
-  return `${nameWithoutExt}_${counter}`;
-}
-
-/**
  * Reorder chapters
  */
 export async function reorderChapters(orderedIds: number[]): Promise<boolean> {
@@ -353,9 +297,7 @@ export async function reorderChapters(orderedIds: number[]): Promise<boolean> {
  */
 export async function transcribeChapter(chapterId: number, options?: Record<string, unknown>): Promise<void> {
   try {
-    // Import dynamically to avoid circular dependency
-    const { transcribeChapter } = await import("./electron.svelte");
-    await transcribeChapter(chapterId, options);
+    await requestTranscription(chapterId, options);
   } catch (error) {
     console.error("[Chapters] Failed to start transcription:", error);
   }

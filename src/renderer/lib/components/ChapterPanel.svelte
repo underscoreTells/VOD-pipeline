@@ -3,6 +3,7 @@
   import { chaptersState, selectChapter, deleteChapter, updateChapter, getAssetsForChapter } from "../state/chapters.svelte";
   import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
+  import { formatChapterRange } from "./chapter-panel-helpers.js";
 
   interface Props {
     projectAssets: Asset[];
@@ -137,7 +138,7 @@
   {:else}
     <div class="chapters-list">
       <!-- VOD Groups -->
-      {#each vodGroups() as group}
+      {#each vodGroups() as group (group.assetId)}
         <div class="asset-group">
           <button
             class="asset-header"
@@ -177,7 +178,10 @@
                       onclick={(e) => e.stopPropagation()}
                     />
                   {:else}
-                    <span class="chapter-title">{chapter.title}</span>
+                    <div class="chapter-details">
+                      <span class="chapter-title">{chapter.title}</span>
+                      <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                    </div>
                   {/if}
                   
                   <span class="chapter-time">
@@ -247,7 +251,7 @@
           
           {#if isExpanded(-1)}
             <div class="chapter-list">
-              {#each individualGroups() as group}
+              {#each individualGroups() as group (group.assetId)}
                 {#each group.chapters as chapter (chapter.id)}
                   <div
                     class="chapter-item"
@@ -274,7 +278,10 @@
                         onclick={(e) => e.stopPropagation()}
                       />
                     {:else}
-                      <span class="chapter-title">{chapter.title}</span>
+                      <div class="chapter-details">
+                        <span class="chapter-title">{chapter.title}</span>
+                        <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                      </div>
                     {/if}
                     
                     <span class="chapter-time">
@@ -500,17 +507,33 @@
   }
 
   .chapter-item.selected .chapter-title,
+  .chapter-item.selected .chapter-range,
   .chapter-item.selected .chapter-time {
     color: #fff;
   }
 
-  .chapter-title {
+  .chapter-details {
+    display: flex;
     flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .chapter-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #ccc;
     font-size: 0.875rem;
+  }
+
+  .chapter-range {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #666;
+    font-size: 0.75rem;
+    font-family: monospace;
   }
 
   .chapter-time {

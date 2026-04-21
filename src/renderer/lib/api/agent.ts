@@ -1,32 +1,111 @@
-export {
-  agentChat,
-  applyAgentActions,
-  createAgentConversation,
-  deleteAgentConversation,
-  getAgentConversationMessages,
-  listAgentConversations,
-} from '../state/electron.svelte.js';
+import type {
+  AgentApplyActionsParams,
+  AgentApplyActionsResult,
+  AgentChatParams,
+  AgentChatResult,
+  AgentConversationCreateParams,
+  AgentConversationCreateResult,
+  AgentConversationListParams,
+  AgentConversationListResult,
+  AgentConversationMessagesResult,
+  ApplyAllSuggestionsResult,
+  SuggestionListParams,
+  SuggestionListResult,
+  SuggestionMutationResult,
+} from '../../../shared/contracts/electron-api.js';
+import type { AgentStreamEvent } from '../../../shared/types/agent-ipc.js';
+import { getElectronApi } from './client.js';
 
-export function getSuggestions(chapterId: string) {
-  return window.electronAPI.agent.getSuggestions(chapterId);
+export type {
+  AgentApplyActionsParams,
+  AgentApplyActionsResult,
+  AgentChatParams,
+  AgentChatResult,
+  AgentConversationCreateParams,
+  AgentConversationCreateResult,
+  AgentConversationListParams,
+  AgentConversationListResult,
+  AgentConversationMessagesResult,
+  ApplyAllSuggestionsResult,
+  SuggestionListParams,
+  SuggestionListResult,
+  SuggestionMutationResult,
+} from '../../../shared/contracts/electron-api.js';
+
+export async function agentChat(params: AgentChatParams): Promise<AgentChatResult> {
+  return await getElectronApi().agent.chat(params);
 }
 
-export function previewSuggestion(suggestionId: number) {
-  return window.electronAPI.agent.previewSuggestion(suggestionId);
+export async function createAgentConversation(
+  params: AgentConversationCreateParams
+): Promise<AgentConversationCreateResult> {
+  return await getElectronApi().agent.createConversation(params);
 }
 
-export function cancelSuggestionPreview(suggestionId: number) {
-  return window.electronAPI.agent.cancelSuggestionPreview(suggestionId);
+export async function listAgentConversations(
+  params: AgentConversationListParams
+): Promise<AgentConversationListResult> {
+  return await getElectronApi().agent.listConversations(params);
 }
 
-export function applySuggestion(suggestionId: number) {
-  return window.electronAPI.agent.applySuggestion(suggestionId);
+export async function getAgentConversationMessages(
+  conversationId: number
+): Promise<AgentConversationMessagesResult> {
+  return await getElectronApi().agent.getConversationMessages(conversationId);
 }
 
-export function applyAllSuggestions(chapterId: string) {
-  return window.electronAPI.agent.applyAllSuggestions(chapterId);
+export async function deleteAgentConversation(
+  conversationId: number
+): Promise<{ success: boolean; error?: string }> {
+  return await getElectronApi().agent.deleteConversation(conversationId);
 }
 
-export function rejectSuggestion(suggestionId: number) {
-  return window.electronAPI.agent.rejectSuggestion(suggestionId);
+export async function applyAgentActions(
+  params: AgentApplyActionsParams
+): Promise<AgentApplyActionsResult> {
+  return await getElectronApi().agent.applyActions(params);
+}
+
+export function onAgentStream(callback: (message: AgentStreamEvent) => void): () => void {
+  return getElectronApi().agent.onStream(callback);
+}
+
+export function onAgentError(callback: (payload: { error: string }) => void): () => void {
+  return getElectronApi().agent.onError(callback);
+}
+
+export async function getSuggestions(
+  params: SuggestionListParams
+): Promise<SuggestionListResult> {
+  return await getElectronApi().agent.getSuggestions(params);
+}
+
+export async function previewSuggestion(
+  suggestionId: number
+): Promise<SuggestionMutationResult> {
+  return await getElectronApi().agent.previewSuggestion(suggestionId);
+}
+
+export async function cancelSuggestionPreview(
+  suggestionId: number
+): Promise<SuggestionMutationResult> {
+  return await getElectronApi().agent.cancelSuggestionPreview(suggestionId);
+}
+
+export async function applySuggestion(
+  suggestionId: number
+): Promise<SuggestionMutationResult> {
+  return await getElectronApi().agent.applySuggestion(suggestionId);
+}
+
+export async function applyAllSuggestions(
+  params: SuggestionListParams
+): Promise<ApplyAllSuggestionsResult> {
+  return await getElectronApi().agent.applyAllSuggestions(params);
+}
+
+export async function rejectSuggestion(
+  suggestionId: number
+): Promise<SuggestionMutationResult> {
+  return await getElectronApi().agent.rejectSuggestion(suggestionId);
 }

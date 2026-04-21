@@ -58,8 +58,7 @@ export const MainState = Annotation.Root({
   timelineActions: Annotation<TimelineAction[] | undefined>,
   transcriptDetailRequests: Annotation<TranscriptDetailRequest[] | undefined>,
   assistantResponse: Annotation<string | undefined>,
-  // Track last analyzed message to prevent repeated analysis loops
-  lastAnalyzedMessageIndex: Annotation<number | undefined>,
+  thinkingMarkdown: Annotation<string | undefined>,
 });
 
 export const ChapterState = Annotation.Root({

@@ -3,7 +3,7 @@ import {
   createClip as ipcCreateClip,
   deleteClip as ipcDeleteClip,
   updateClip as ipcUpdateClip,
-} from './electron.svelte';
+} from '../api/clips.js';
 import {
   timelineState,
   createClip as createTimelineClip,

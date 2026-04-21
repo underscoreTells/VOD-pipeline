@@ -1,42 +1,41 @@
-import { v4 as uuidv4 } from "uuid";
 import type {
   ChatConversation,
   ChatConversationMessage,
-  Clip,
+  ExecutionTraceEntry,
   Suggestion,
 } from "../../../shared/types/database";
 import type { TimelineAction } from "../../../shared/types/agent-ipc";
 import {
-  applyAgentActions,
-  applyAllSuggestions as applyAllAgentSuggestions,
-  applySuggestion as applyAgentSuggestion,
-  agentChat,
-  cancelSuggestionPreview as cancelAgentSuggestionPreview,
+  sanitizeAssistantContent,
+  sanitizeThinkingMarkdown,
+} from "../../../shared/utils/assistant-content.js";
+import { parseExecutionTraceJson } from "../../../shared/utils/execution-trace.js";
+import {
+  buildConversationContextKey,
+  isConversationContextRequestCurrent,
+  resolveConversationSelection,
+  shouldChangeChapterContext,
+} from "./agent-session-helpers.js";
+import {
   createAgentConversation,
   deleteAgentConversation,
-  getSuggestions,
   getAgentConversationMessages,
+  getSuggestions,
   listAgentConversations,
-  previewSuggestion as previewAgentSuggestion,
-  rejectSuggestion as rejectAgentSuggestion,
 } from "../api/agent.js";
 import { settingsState } from "./settings.svelte";
-import {
-  timelineState,
-  createClip as createTimelineClip,
-  deleteClip as deleteTimelineClip,
-  selectClip,
-  setPlayhead,
-  updateClip as updateTimelineClip,
-} from "./timeline.svelte";
 
 export type LLMProviderType = "gemini" | "openai" | "anthropic" | "openrouter" | "kimi";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  thinkingMarkdown: string | null;
+  trace: ExecutionTraceEntry[];
   id: string;
   timestamp: Date;
+  requestId?: string;
+  isStreaming?: boolean;
 }
 
 export interface TimelineActionProposal {
@@ -77,7 +76,20 @@ export const agentState = $state<AgentState>({
 
 let chapterLoadToken = 0;
 
-function buildProviderEnvFromSettings() {
+function setStreamingBlockedError() {
+  agentState.error = "Wait for the current response to finish before changing chat context.";
+}
+
+function isStreamingBlocked(): boolean {
+  if (!agentState.isStreaming) {
+    return false;
+  }
+
+  setStreamingBlockedError();
+  return true;
+}
+
+export function buildProviderEnvFromSettings() {
   const providers: Record<string, string> = {};
   const { settings } = settingsState;
 
@@ -103,61 +115,128 @@ function buildProviderEnvFromSettings() {
   };
 }
 
-function sortConversations(items: ChatConversation[]): ChatConversation[] {
-  return [...items].sort((a, b) => {
-    const aTime = new Date(a.updated_at).getTime();
-    const bTime = new Date(b.updated_at).getTime();
-    return bTime - aTime;
-  });
-}
-
-function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
+export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
   return messages.map((item) => ({
     role: item.role,
-    content: item.content,
+    content: item.role === "assistant"
+      ? sanitizeAssistantContent(item.content)
+      : item.content,
+    thinkingMarkdown: item.role === "assistant" && typeof item.thinking_markdown === "string"
+      ? sanitizeThinkingMarkdown(item.thinking_markdown) || null
+      : null,
+    trace: parseExecutionTraceJson(item.trace_json),
     id: `db-${item.id}`,
     timestamp: new Date(item.created_at),
   }));
 }
 
-async function refreshConversations(autoCreateIfEmpty: boolean, reloadMessages: boolean = true): Promise<void> {
-  if (!agentState.currentProjectId || !agentState.currentChapterId) {
-    agentState.conversations = [];
-    agentState.selectedConversationId = null;
-    agentState.messages = [];
+function getCurrentConversationContextKey(): string {
+  return buildConversationContextKey(
+    agentState.currentProjectId,
+    agentState.currentChapterId
+  );
+}
+
+function isCurrentConversationContextRequest(
+  token: number,
+  contextKey: string
+): boolean {
+  return isConversationContextRequestCurrent(
+    { token, contextKey },
+    { token: chapterLoadToken, contextKey: getCurrentConversationContextKey() }
+  );
+}
+
+function clearChapterConversationState(clearSuggestions: boolean): void {
+  agentState.timelineProposals = [];
+  agentState.messages = [];
+  agentState.conversations = [];
+  agentState.selectedConversationId = null;
+  agentState.error = null;
+
+  if (clearSuggestions) {
+    agentState.suggestions = [];
+  }
+}
+
+async function loadConversationSuggestions(
+  chapterId: string,
+  conversationId: number,
+  requestToken?: number,
+  requestContextKey?: string
+): Promise<void> {
+  const response = await getSuggestions({
+    chapterId,
+    conversationId,
+  });
+
+  if (
+    requestToken !== undefined &&
+    requestContextKey !== undefined &&
+    !isCurrentConversationContextRequest(requestToken, requestContextKey)
+  ) {
     return;
   }
 
+  if (!response.success) {
+    agentState.error = response.error || "Failed to load suggestions";
+    agentState.suggestions = [];
+    return;
+  }
+
+  agentState.suggestions = response.data ?? [];
+}
+
+async function loadChapterConversations(options: {
+  chapterId: string;
+  preserveSelection: boolean;
+  projectId: string;
+  requestContextKey?: string;
+  requestToken?: number;
+}): Promise<void> {
   const response = await listAgentConversations({
-    projectId: agentState.currentProjectId,
-    chapterId: agentState.currentChapterId,
+    projectId: options.projectId,
+    chapterId: options.chapterId,
   });
+
+  if (
+    options.requestToken !== undefined &&
+    options.requestContextKey !== undefined &&
+    !isCurrentConversationContextRequest(options.requestToken, options.requestContextKey)
+  ) {
+    return;
+  }
 
   if (!response.success) {
     agentState.error = response.error || "Failed to load conversations";
     return;
   }
 
-  const sorted = sortConversations(response.data ?? []);
-  agentState.conversations = sorted;
+  const selectionState = resolveConversationSelection(response.data ?? [], {
+    hasLoadedMessages: agentState.messages.length > 0,
+    preserveSelection: options.preserveSelection,
+    selectedConversationId: agentState.selectedConversationId,
+  });
 
-  if (sorted.length === 0) {
+  agentState.conversations = selectionState.sortedConversations;
+
+  if (selectionState.shouldClearMessages) {
     agentState.selectedConversationId = null;
     agentState.messages = [];
-    if (autoCreateIfEmpty) {
-      await createConversation();
-    }
+    agentState.timelineProposals = [];
+    agentState.suggestions = [];
     return;
   }
 
-  const selectedId = agentState.selectedConversationId;
-  const hasCurrent = selectedId !== null && sorted.some((conversation) => conversation.id === selectedId);
-  const targetId = hasCurrent ? selectedId : sorted[0].id;
-
-  agentState.selectedConversationId = targetId;
-  if (reloadMessages) {
-    await selectConversation(targetId);
+  if (selectionState.targetConversationId !== null && selectionState.shouldReloadMessages) {
+    await selectConversation(selectionState.targetConversationId, {
+      requestContextKey: options.requestContextKey,
+      requestToken: options.requestToken,
+    });
+    return;
   }
+
+  agentState.selectedConversationId = selectionState.targetConversationId;
 }
 
 async function createConversation(title?: string): Promise<ChatConversation | null> {
@@ -165,6 +244,11 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
     agentState.error = "Select a project chapter before creating a conversation.";
     return null;
   }
+
+  const requestContextKey = buildConversationContextKey(
+    agentState.currentProjectId,
+    agentState.currentChapterId
+  );
 
   const response = await createAgentConversation({
     projectId: agentState.currentProjectId,
@@ -179,35 +263,106 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
   }
 
   const conversation = response.data;
-  agentState.conversations = sortConversations([conversation, ...agentState.conversations]);
-  agentState.selectedConversationId = conversation.id;
-  agentState.messages = [];
-  agentState.timelineProposals = [];
-  agentState.error = null;
-  return conversation;
-}
-
-export function setProjectContext(projectId: string | null) {
-  if (agentState.currentProjectId === projectId) {
-    return;
+  if (requestContextKey !== getCurrentConversationContextKey()) {
+    return conversation;
   }
 
-  agentState.currentProjectId = projectId;
-  agentState.currentChapterId = null;
-  agentState.conversations = [];
-  agentState.selectedConversationId = null;
+  agentState.conversations = resolveConversationSelection(
+    [conversation, ...agentState.conversations],
+    {
+      hasLoadedMessages: true,
+      preserveSelection: false,
+      selectedConversationId: null,
+    }
+  ).sortedConversations;
+  agentState.selectedConversationId = conversation.id;
   agentState.messages = [];
   agentState.timelineProposals = [];
   agentState.suggestions = [];
   agentState.error = null;
+  return conversation;
+}
+
+export async function syncAgentContext(
+  projectId: string | null,
+  chapterId: string | null
+) {
+  if (isStreamingBlocked()) {
+    return;
+  }
+
+  const nextContextKey = buildConversationContextKey(projectId, chapterId);
+  if (nextContextKey === getCurrentConversationContextKey()) {
+    return;
+  }
+
+  const token = ++chapterLoadToken;
+  agentState.currentProjectId = projectId;
+  agentState.currentChapterId = chapterId;
+  clearChapterConversationState(true);
+
+  if (!projectId || !chapterId) {
+    agentState.isLoadingConversations = false;
+    return;
+  }
+
+  agentState.isLoadingConversations = true;
+
+  try {
+    await loadChapterConversations({
+      chapterId,
+      preserveSelection: false,
+      projectId,
+      requestContextKey: nextContextKey,
+      requestToken: token,
+    });
+  } finally {
+    if (isCurrentConversationContextRequest(token, nextContextKey)) {
+      agentState.isLoadingConversations = false;
+    }
+  }
+}
+
+export function setProjectContext(projectId: string | null) {
+  if (isStreamingBlocked()) {
+    return;
+  }
+
+  const nextChapterId = agentState.currentProjectId === projectId
+    ? agentState.currentChapterId
+    : null;
+
+  void syncAgentContext(projectId, nextChapterId);
 }
 
 export async function createNewConversation() {
+  if (isStreamingBlocked()) {
+    return null;
+  }
+
   return await createConversation();
 }
 
-export async function selectConversation(conversationId: number) {
+export async function selectConversation(
+  conversationId: number,
+  options?: {
+    requestContextKey?: string;
+    requestToken?: number;
+  }
+) {
+  if (isStreamingBlocked()) {
+    return false;
+  }
+
   const response = await getAgentConversationMessages(conversationId);
+  if (
+    options?.requestToken !== undefined &&
+    options.requestContextKey !== undefined &&
+    !isCurrentConversationContextRequest(options.requestToken, options.requestContextKey)
+  ) {
+    return false;
+  }
+
   if (!response.success || !response.data) {
     agentState.error = response.error || "Failed to load conversation messages";
     return false;
@@ -216,10 +371,26 @@ export async function selectConversation(conversationId: number) {
   agentState.selectedConversationId = conversationId;
   agentState.messages = mapConversationMessages(response.data);
   agentState.timelineProposals = [];
+  agentState.suggestions = [];
+
+  if (!agentState.currentChapterId) {
+    return true;
+  }
+
+  await loadConversationSuggestions(
+    agentState.currentChapterId,
+    conversationId,
+    options?.requestToken,
+    options?.requestContextKey
+  );
   return true;
 }
 
 export async function removeConversation(conversationId: number) {
+  if (isStreamingBlocked()) {
+    return false;
+  }
+
   const response = await deleteAgentConversation(conversationId);
   if (!response.success) {
     agentState.error = response.error || "Failed to delete conversation";
@@ -234,145 +405,70 @@ export async function removeConversation(conversationId: number) {
     } else {
       agentState.selectedConversationId = null;
       agentState.messages = [];
-      await createConversation();
+      agentState.timelineProposals = [];
+      agentState.suggestions = [];
     }
   }
 
   return true;
 }
 
-export async function sendChatMessage(message: string) {
-  if (!message.trim()) return;
-
-  if (!agentState.currentProjectId) {
-    agentState.error = "No project selected. Please open a project first.";
-    return;
-  }
-
-  if (!agentState.currentChapterId) {
-    agentState.error = "Select a chapter before starting a conversation.";
-    return;
-  }
-
-  let conversationId = agentState.selectedConversationId;
-  if (!conversationId) {
-    const created = await createConversation();
-    if (!created) {
-      return;
-    }
-    conversationId = created.id;
-  }
-
-  const userMessage: ChatMessage = {
-    role: "user",
-    content: message,
-    id: uuidv4(),
-    timestamp: new Date(),
-  };
-
-  agentState.messages.push(userMessage);
-  agentState.isStreaming = true;
-  agentState.error = null;
-
-  try {
-    const response = await agentChat({
-      projectId: agentState.currentProjectId,
-      conversationId,
-      message,
-      provider: agentState.selectedProvider,
-      selectedClipIds: Array.from(timelineState.selectedClipIds),
-      playheadTime: timelineState.playheadTime,
-      agentConfig: buildProviderEnvFromSettings(),
-    });
-
-    if (response.success && response.data) {
-      const result = response.data;
-
-      if (Array.isArray(result.suggestions) && result.suggestions.length > 0) {
-        agentState.suggestions.push(...(result.suggestions as unknown as Suggestion[]));
-      }
-
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: result.message || "Analysis complete",
-        id: uuidv4(),
-        timestamp: new Date(),
-      };
-
-      agentState.messages.push(assistantMessage);
-
-      if (Array.isArray(result.timelineActions) && result.timelineActions.length > 0) {
-        const proposals = result.timelineActions.map((action) => ({
-          id: uuidv4(),
-          messageId: assistantMessage.id,
-          action,
-          status: "pending" as const,
-          error: null,
-        }));
-        agentState.timelineProposals = [...agentState.timelineProposals, ...proposals];
-      }
-
-      await refreshConversations(false, false);
-      if (agentState.selectedConversationId !== conversationId) {
-        await selectConversation(conversationId);
-      }
-    } else {
-      agentState.error = response.error || "Unknown error";
-      const errorMessage: ChatMessage = {
-        role: "assistant",
-        content: `Error: ${agentState.error}`,
-        id: uuidv4(),
-        timestamp: new Date(),
-      };
-      agentState.messages.push(errorMessage);
-    }
-  } catch (error) {
-    agentState.error = (error as Error).message;
-    const errorMessage: ChatMessage = {
-      role: "assistant",
-      content: `Error: ${agentState.error}`,
-      id: uuidv4(),
-      timestamp: new Date(),
-    };
-    agentState.messages.push(errorMessage);
-  } finally {
-    agentState.isStreaming = false;
-  }
-}
-
 export function setProvider(provider: LLMProviderType) {
+  if (isStreamingBlocked()) {
+    return;
+  }
+
   agentState.selectedProvider = provider;
 }
 
 export async function setChapterContext(chapterId: string | null, _proxyPath: string | null) {
-  agentState.currentChapterId = chapterId;
-  agentState.timelineProposals = [];
-  agentState.messages = [];
-  agentState.conversations = [];
-  agentState.selectedConversationId = null;
-  agentState.error = null;
-
-  if (!chapterId || !agentState.currentProjectId) {
-    agentState.suggestions = [];
+  if (isStreamingBlocked()) {
     return;
   }
 
-  const token = ++chapterLoadToken;
-  agentState.isLoadingConversations = true;
-
-  try {
-    await loadSuggestions(chapterId);
-    if (token !== chapterLoadToken) {
-      return;
-    }
-    await refreshConversations(true);
-  } finally {
-    if (token === chapterLoadToken) {
-      agentState.isLoadingConversations = false;
-    }
+  if (!shouldChangeChapterContext(agentState.currentChapterId, chapterId)) {
+    return;
   }
+
+  await syncAgentContext(agentState.currentProjectId, chapterId);
 }
 
 export function clearMessages() {
   agentState.messages = [];
+}
+
+export async function ensureActiveConversation(): Promise<number | null> {
+  if (!agentState.currentProjectId) {
+    agentState.error = "No project selected. Please open a project first.";
+    return null;
+  }
+
+  if (!agentState.currentChapterId) {
+    agentState.error = "Select a chapter before starting a conversation.";
+    return null;
+  }
+
+  if (agentState.selectedConversationId) {
+    return agentState.selectedConversationId;
+  }
+
+  const created = await createConversation();
+  return created?.id ?? null;
+}
+
+export async function refreshConversationListMetadata(): Promise<void> {
+  if (!agentState.currentProjectId || !agentState.currentChapterId) {
+    return;
+  }
+
+  const requestContextKey = getCurrentConversationContextKey();
+  const requestToken = ++chapterLoadToken;
+
+  await loadChapterConversations({
+    chapterId: agentState.currentChapterId,
+    preserveSelection: true,
+    projectId: agentState.currentProjectId,
+    requestContextKey,
+    requestToken,
+  });
 }

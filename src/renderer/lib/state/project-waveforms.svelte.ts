@@ -1,5 +1,11 @@
-import { getWaveform as ipcGetWaveform, generateWaveform as ipcGenerateWaveform, onWaveformProgress, type WaveformGenerateOptions, type WaveformGenerationResult } from '../api/waveforms.js';
-import type { WaveformResult } from './electron.svelte';
+import {
+  generateWaveform as ipcGenerateWaveform,
+  getWaveform as ipcGetWaveform,
+  onWaveformProgress,
+  type WaveformGenerateOptions,
+  type WaveformGenerationResult,
+  type WaveformResult,
+} from '../api/waveforms.js';
 import { projectDetail } from './project-media.svelte.js';
 import { setError } from './timeline.svelte';
 

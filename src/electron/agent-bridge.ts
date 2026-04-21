@@ -8,8 +8,10 @@ import {
   type AgentInputMessage,
   type AgentOutputMessage,
   type AgentInputMessageWithoutId,
+  type AgentStreamContext,
 } from "../shared/types/agent-ipc.js";
 import { v4 as uuidv4 } from "uuid";
+import { enrichAgentStreamEvent } from "./agent-stream-events.js";
 
 const AGENT_STARTUP_TIMEOUT = 10000;
 const AGENT_REQUEST_TIMEOUT = 300000;
@@ -18,6 +20,14 @@ interface PendingRequest {
   resolve: (value: AgentOutputMessage) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
+  streamContext?: AgentStreamContext;
+  onStreamEvent?: (message: AgentOutputMessage) => void;
+}
+
+interface SendOptions {
+  timeoutMs?: number;
+  streamContext?: AgentStreamContext;
+  onStreamEvent?: (message: AgentOutputMessage) => void;
 }
 
 export class AgentBridge extends EventEmitter {
@@ -75,12 +85,14 @@ export class AgentBridge extends EventEmitter {
     const agentPath = this.getAgentPath();
 
     const checkpointerDbPath = path.join(app.getPath("userData"), "agent-checkpoints.db");
+    const appDatabasePath = path.join(app.getPath("userData"), "vod-pipeline.db");
 
     this.process = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         AGENT_CHECKPOINTER_DB_PATH: checkpointerDbPath,
+        VOD_PIPELINE_DB_PATH: appDatabasePath,
       },
     });
 
@@ -179,12 +191,28 @@ export class AgentBridge extends EventEmitter {
   private async handleMessage(message: AgentOutputMessage): Promise<void> {
     console.log(`[AgentBridge] Received message type=${message.type}`);
 
-    if (message.type === "progress" || message.type === "token") {
-      this.emit("stream", message);
+    const pending = this.pendingRequests.get(message.requestId);
+
+    if (
+      message.type === "status" ||
+      message.type === "assistant_text_delta" ||
+      message.type === "tool_state"
+    ) {
+      if (!pending) {
+        console.warn(
+          `[AgentBridge] No pending request for stream requestId=${message.requestId}`
+        );
+        return;
+      }
+
+      pending.onStreamEvent?.(message);
+      const streamEvent = enrichAgentStreamEvent(message, pending.streamContext);
+      if (streamEvent) {
+        this.emit("stream", streamEvent);
+      }
       return;
     }
 
-    const pending = this.pendingRequests.get(message.requestId);
     if (!pending) {
       console.warn(
         `[AgentBridge] No pending request for requestId=${message.requestId}`
@@ -195,7 +223,7 @@ export class AgentBridge extends EventEmitter {
     clearTimeout(pending.timeout);
     this.pendingRequests.delete(message.requestId);
 
-    if (message.type === "graph-complete" || message.type === "error") {
+    if (message.type === "turn_complete" || message.type === "error") {
       pending.resolve(message);
     } else {
       pending.reject(new Error(`Unexpected response type: ${message.type}`));
@@ -204,12 +232,14 @@ export class AgentBridge extends EventEmitter {
 
   async send(
     message: AgentInputMessageWithoutId,
-    timeoutMs: number = AGENT_REQUEST_TIMEOUT
+    options: SendOptions = {}
   ): Promise<AgentOutputMessage> {
     const stdinWriter = this.stdinWriter;
     if (!stdinWriter) {
       throw new Error("Agent process not started");
     }
+
+    const { timeoutMs = AGENT_REQUEST_TIMEOUT, streamContext, onStreamEvent } = options;
 
     const requestId = uuidv4();
     const fullMessage = {
@@ -229,6 +259,8 @@ export class AgentBridge extends EventEmitter {
         resolve,
         reject: (error) => reject(error),
         timeout,
+        streamContext,
+        onStreamEvent,
       });
 
       stdinWriter
@@ -247,7 +279,7 @@ export class AgentBridge extends EventEmitter {
     console.log("[AgentBridge] Stopping agent...");
 
     try {
-      await this.send({ type: "stop" }, 5000);
+      await this.send({ type: "stop" }, { timeoutMs: 5000 });
     } catch (error) {
       console.warn("[AgentBridge] Failed to send stop signal:", error);
     }
