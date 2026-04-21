@@ -33,6 +33,8 @@ import {
   Moon,
   Settings,
   Repeat,
+  Copy,
+  GitBranch,
 } from 'lucide-svelte';
 
 export type ClipRole = 'setup' | 'escalation' | 'twist' | 'payoff' | 'transition' | 'unassigned';
@@ -133,4 +135,6 @@ export {
   Moon,
   Settings,
   Repeat,
+  Copy,
+  GitBranch,
 };

@@ -28,7 +28,8 @@
   } from "../state/layout.svelte";
   import { clampValue, startPointerDrag } from "./project-detail-layout.js";
   import Icon from './ui/Icon.svelte';
-  import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight } from '../constants';
+  import TooltipIconButton from './ui/TooltipIconButton.svelte';
+  import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight, Copy, GitBranch, Pencil, Repeat } from '../constants';
   import { cn } from "../utils/cn";
 
   interface Props {
@@ -266,10 +267,9 @@
   async function handleSaveEditedMessage(message: ChatMessage) {
     if (editingMessageId !== message.id || !editingMessageValue.trim()) return;
 
-    const saved = await editMessage(message, editingMessageValue);
-    if (saved) {
-      cancelEditingMessage();
-    }
+    const nextContent = editingMessageValue;
+    cancelEditingMessage();
+    await editMessage(message, nextContent);
   }
 
   async function handleCopyMessage(message: ChatMessage) {
@@ -551,132 +551,139 @@
       {#each agentState.messages as msg (msg.id)}
         <div
           class={cn(
-            `message ${msg.role} group/message relative mb-5 max-w-[85%]`,
-            msg.role === 'user'
-              ? 'self-end max-w-[80%] rounded-lg bg-surface-elevated px-4 py-3'
-              : 'self-start',
+            `message ${msg.role} group/message relative mb-5 flex w-full flex-col gap-2`,
+            msg.role === 'user' ? 'items-end' : 'items-start',
           )}
         >
-          {#if msg.role === 'assistant' && getVisibleStreamingStatusLabel(msg)}
-            <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_20%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary" aria-live="polite">
-              <span class="streaming-dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary animate-pulse"></span>
-              <span>{getVisibleStreamingStatusLabel(msg)}</span>
-              {#if getVisibleStreamingStatusMeta(msg)}
-                <span class="streaming-meta text-app-xs text-text-tertiary">{getVisibleStreamingStatusMeta(msg)}</span>
-              {/if}
-            </div>
-          {/if}
-
-          {#if editingMessageId === msg.id}
-            <div class="message-edit flex flex-col gap-2">
-              <textarea
-                class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
-                bind:value={editingMessageValue}
-              ></textarea>
-              <div class="message-edit-actions flex items-center justify-end gap-2">
-                <button
-                  class="rounded-[6px] border border-border-default bg-surface-base px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
-                  onclick={cancelEditingMessage}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-colors hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  onclick={() => handleSaveEditedMessage(msg)}
-                  disabled={!editingMessageValue.trim()}
-                  type="button"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          {:else if msg.content}
-            <div
-              class={cn(
-                'message-content min-w-0 leading-[1.6]',
-                msg.role === 'user' ? 'text-text-primary' : 'text-text-secondary',
-              )}
-            >
-              <MarkdownContent content={msg.content} role={msg.role} />
-            </div>
-          {/if}
-
-          {#if msg.role === 'assistant' && hasThinkingDetails(msg)}
-            <details class="thinking group/thinking mt-2" open={Boolean(msg.isStreaming)}>
-              <summary class="ui-summary-reset flex list-none items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
-                <span class="thinking-chevron inline-flex items-center text-text-disabled transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-open/thinking:rotate-90"><Icon icon={ChevronRight} size={12} /></span>
-                {#if msg.isStreaming}
-                  Thinking{msg.trace.length > 0 ? ` (${msg.trace.length})` : ''}...
-                {:else}
-                  Thought for {msg.trace.length} step{msg.trace.length !== 1 ? 's' : ''}
-                {/if}
-              </summary>
-              <div class="thinking-body ml-4 pt-2">
-                {#if msg.trace.length > 0}
-                  <div class="thinking-steps flex flex-col gap-[3px]">
-                    {#each msg.trace as entry (entry.id)}
-                      <div class="thinking-step text-app-xs text-text-tertiary">
-                        <span class="step-label text-text-tertiary">{entry.label}</span>
-                        {#if formatTraceMeta(entry)}
-                          <span class="step-meta ml-2 font-mono text-app-xs text-text-disabled">{formatTraceMeta(entry)}</span>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-                {#if msg.thinkingMarkdown}
-                  <div class="thinking-reasoning thinking-markdown mt-2">
-                    <MarkdownContent content={msg.thinkingMarkdown} role="assistant" />
-                  </div>
+          <div
+            class={cn(
+              'message-body min-w-0',
+              msg.role === 'user' ? 'w-fit max-w-[80%]' : 'max-w-[85%]',
+            )}
+          >
+            {#if msg.role === 'assistant' && getVisibleStreamingStatusLabel(msg)}
+              <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_20%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary" aria-live="polite">
+                <span class="streaming-dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary animate-pulse"></span>
+                <span>{getVisibleStreamingStatusLabel(msg)}</span>
+                {#if getVisibleStreamingStatusMeta(msg)}
+                  <span class="streaming-meta text-app-xs text-text-tertiary">{getVisibleStreamingStatusMeta(msg)}</span>
                 {/if}
               </div>
-            </details>
-          {/if}
+            {/if}
+
+            {#if editingMessageId === msg.id}
+              <div class="message-edit flex flex-col gap-2 rounded-lg bg-surface-elevated px-4 py-3">
+                <textarea
+                  class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
+                  bind:value={editingMessageValue}
+                ></textarea>
+                <div class="message-edit-actions flex items-center justify-end gap-1">
+                  <TooltipIconButton
+                    class="h-7 w-7 rounded-[6px] border border-border-default bg-surface-base text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+                    icon={X}
+                    onclick={cancelEditingMessage}
+                    tooltip="Cancel edit"
+                    type="button"
+                  />
+                  <TooltipIconButton
+                    class="h-7 w-7 rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle text-accent-primary hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:opacity-50"
+                    icon={Check}
+                    onclick={() => handleSaveEditedMessage(msg)}
+                    disabled={!editingMessageValue.trim()}
+                    tooltip="Save edit"
+                    type="button"
+                  />
+                </div>
+              </div>
+            {:else if msg.content}
+              <div
+                class={cn(
+                  'message-content min-w-0 leading-[1.6]',
+                  msg.role === 'user'
+                    ? 'rounded-lg bg-surface-elevated px-4 py-3 text-text-primary'
+                    : 'text-text-secondary',
+                )}
+              >
+                <MarkdownContent content={msg.content} role={msg.role} />
+              </div>
+            {/if}
+
+            {#if msg.role === 'assistant' && hasThinkingDetails(msg)}
+              <details class="thinking group/thinking mt-2" open={Boolean(msg.isStreaming)}>
+                <summary class="ui-summary-reset flex list-none items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
+                  <span class="thinking-chevron inline-flex items-center text-text-disabled transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-open/thinking:rotate-90"><Icon icon={ChevronRight} size={12} /></span>
+                  {#if msg.isStreaming}
+                    Thinking{msg.trace.length > 0 ? ` (${msg.trace.length})` : ''}...
+                  {:else}
+                    Thought for {msg.trace.length} step{msg.trace.length !== 1 ? 's' : ''}
+                  {/if}
+                </summary>
+                <div class="thinking-body ml-4 pt-2">
+                  {#if msg.trace.length > 0}
+                    <div class="thinking-steps flex flex-col gap-[3px]">
+                      {#each msg.trace as entry (entry.id)}
+                        <div class="thinking-step text-app-xs text-text-tertiary">
+                          <span class="step-label text-text-tertiary">{entry.label}</span>
+                          {#if formatTraceMeta(entry)}
+                            <span class="step-meta ml-2 font-mono text-app-xs text-text-disabled">{formatTraceMeta(entry)}</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if msg.thinkingMarkdown}
+                    <div class="thinking-reasoning thinking-markdown mt-2">
+                      <MarkdownContent content={msg.thinkingMarkdown} role="assistant" />
+                    </div>
+                  {/if}
+                </div>
+              </details>
+            {/if}
+          </div>
 
           <div
             class={cn(
-              'message-meta mt-2 flex min-h-[20px] items-center gap-3 text-app-2xs leading-none',
+              'message-meta flex min-h-[20px] items-center gap-2 text-app-2xs leading-none',
               'pointer-events-none opacity-0 transition-opacity',
               'group-hover/message:pointer-events-auto group-hover/message:opacity-100',
               'group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100',
               msg.role === 'user' ? 'justify-end' : 'justify-start',
             )}
           >
-            {#if msg.role !== 'system'}
+            {#if msg.role !== 'system' && editingMessageId !== msg.id}
               <div class="message-actions flex items-center gap-1">
-                <button
-                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                <TooltipIconButton
+                  class="h-6 w-6 rounded-[6px] border border-border-default bg-surface-base text-text-tertiary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                  icon={Repeat}
                   onclick={() => handleRerollMessage(msg)}
                   disabled={!canMutateMessage(msg) || !!editingMessageId}
+                  tooltip="Reroll response"
                   type="button"
-                >
-                  Reroll
-                </button>
-                <button
-                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                />
+                <TooltipIconButton
+                  class="h-6 w-6 rounded-[6px] border border-border-default bg-surface-base text-text-tertiary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+                  icon={copiedMessageId === msg.id ? Check : Copy}
                   onclick={() => handleCopyMessage(msg)}
+                  tooltip={copiedMessageId === msg.id ? 'Copied' : 'Copy message'}
                   type="button"
-                >
-                  {copiedMessageId === msg.id ? 'Copied' : 'Copy'}
-                </button>
-                <button
-                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <TooltipIconButton
+                  class="h-6 w-6 rounded-[6px] border border-border-default bg-surface-base text-text-tertiary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                  icon={GitBranch}
                   onclick={() => handleBranchMessage(msg)}
                   disabled={!canMutateMessage(msg) || !!editingMessageId}
+                  tooltip="Branch conversation"
                   type="button"
-                >
-                  Branch
-                </button>
+                />
                 {#if msg.role === 'user'}
-                  <button
-                    class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  <TooltipIconButton
+                    class="h-6 w-6 rounded-[6px] border border-border-default bg-surface-base text-text-tertiary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                    icon={Pencil}
                     onclick={() => startEditingMessage(msg)}
                     disabled={!canEditMessage(msg)}
+                    tooltip="Edit message"
                     type="button"
-                  >
-                    Edit
-                  </button>
+                  />
                 {/if}
               </div>
             {/if}
