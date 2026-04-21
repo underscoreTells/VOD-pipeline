@@ -2,8 +2,14 @@
   import {
     agentState,
     applyAllSuggestions,
+    branchMessage,
+    editMessage,
+    previewAllSuggestions,
+    rejectAllSuggestions,
+    rerollMessage,
     sendChatMessage,
     setProvider,
+    type ChatMessage,
     createNewConversation,
     selectConversation,
     removeConversation,
@@ -14,7 +20,13 @@
   } from "../state/agent.svelte";
   import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
   import MarkdownContent from "./MarkdownContent.svelte";
-  import { collapseChat } from "../state/layout.svelte";
+  import {
+    collapseChat,
+    layoutState,
+    persistLayout,
+    setSuggestionsTrayMaxHeight,
+  } from "../state/layout.svelte";
+  import { clampValue, startPointerDrag } from "./project-detail-layout.js";
   import Icon from './ui/Icon.svelte';
   import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight } from '../constants';
   import { cn } from "../utils/cn";
@@ -26,15 +38,26 @@
   let { class: className = '' }: Props = $props();
 
   let message = $state("");
-  let chatContainer: HTMLDivElement;
-  let messageInput: HTMLTextAreaElement | null = null;
+  let chatPanelElement = $state<HTMLDivElement | null>(null);
+  let chatContainer = $state<HTMLDivElement | null>(null);
+  let messageInput = $state<HTMLTextAreaElement | null>(null);
+  let suggestionsWrapper = $state<HTMLDivElement | null>(null);
+  let suggestionsPanel = $state<HTMLDivElement | null>(null);
   let showSuggestions = $state(true);
-  let applyingAllSuggestionState = $state(false);
-  let suggestionActionBusy = $state<Map<number, boolean>>(new Map());
+  let bulkSuggestionAction = $state<'preview' | 'reject' | 'apply' | null>(null);
+  let busySuggestionIds = $state<number[]>([]);
   let showConversationDropdown = $state(false);
+  let copiedMessageId = $state<string | null>(null);
+  let editingMessageId = $state<string | null>(null);
+  let editingMessageValue = $state("");
+  let messageActionPending = $state(false);
+  let copyResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
   const MESSAGE_INPUT_MIN_HEIGHT = 112;
   const MESSAGE_INPUT_MAX_HEIGHT = 180;
+  const SUGGESTIONS_TRAY_RESIZE_HANDLE_HEIGHT = 6;
+  const MIN_SUGGESTIONS_TRAY_MAX_HEIGHT = 140;
+  const MIN_VISIBLE_MESSAGES_HEIGHT = 160;
 
   const providers = [
     { value: "gemini", label: "Gemini" },
@@ -45,9 +68,15 @@
     agentState.conversations.find(c => c.id === agentState.selectedConversationId)
   );
 
-  let pendingSuggestions = $derived(
-    agentState.suggestions.filter(s => s.status === 'pending')
+  let pendingSuggestions = $derived.by(
+    () => agentState.suggestions.filter((suggestion) => suggestion.status === 'pending')
   );
+
+  let previewableSuggestions = $derived.by(
+    () => pendingSuggestions.filter((suggestion) => suggestion.clip_id == null)
+  );
+
+  let isBulkSuggestionActionRunning = $derived(bulkSuggestionAction !== null);
 
   let conversationTitle = $derived(
     !agentState.currentChapterId
@@ -106,8 +135,92 @@
     return () => document.removeEventListener('click', onClickOutside, true);
   });
 
+  $effect(() => {
+    if (!editingMessageId) return;
+    if (agentState.messages.some((msg) => msg.id === editingMessageId)) {
+      return;
+    }
+
+    editingMessageId = null;
+    editingMessageValue = "";
+  });
+
+  function isSuggestionBusy(id: number): boolean {
+    return busySuggestionIds.includes(id);
+  }
+
+  function getBusySuggestionIdsNext(id: number, busy: boolean): number[] {
+    const next = busySuggestionIds.filter((busyId) => busyId !== id);
+    if (busy) {
+      next.push(id);
+    }
+    return next;
+  }
+
+  function getSuggestionsTrayMaxHeightBounds() {
+    const min = MIN_SUGGESTIONS_TRAY_MAX_HEIGHT;
+    if (!chatContainer || !suggestionsWrapper || !showSuggestions) {
+      return { min, max: Math.max(min, layoutState.suggestionsTrayMaxHeight) };
+    }
+
+    const availableCenterHeight = chatContainer.clientHeight + suggestionsWrapper.offsetHeight;
+    const max = Math.max(
+      min,
+      availableCenterHeight - MIN_VISIBLE_MESSAGES_HEIGHT - SUGGESTIONS_TRAY_RESIZE_HANDLE_HEIGHT
+    );
+    return { min, max };
+  }
+
+  function clampSuggestionsTrayMaxHeight(shouldPersist: boolean = false) {
+    if (!showSuggestions || pendingSuggestions.length === 0) {
+      return;
+    }
+
+    const { min, max } = getSuggestionsTrayMaxHeightBounds();
+    const next = clampValue(layoutState.suggestionsTrayMaxHeight, min, max);
+    if (next === layoutState.suggestionsTrayMaxHeight) {
+      return;
+    }
+
+    setSuggestionsTrayMaxHeight(next);
+    if (shouldPersist) {
+      persistLayout();
+    }
+  }
+
+  $effect(() => {
+    if (!showSuggestions || pendingSuggestions.length === 0) {
+      return;
+    }
+
+    clampSuggestionsTrayMaxHeight();
+  });
+
+  $effect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    if (!chatPanelElement || !chatContainer) return;
+
+    const observer = new ResizeObserver(() => {
+      clampSuggestionsTrayMaxHeight();
+    });
+
+    observer.observe(chatPanelElement);
+    observer.observe(chatContainer);
+    if (suggestionsWrapper) {
+      observer.observe(suggestionsWrapper);
+    }
+    if (suggestionsPanel) {
+      observer.observe(suggestionsPanel);
+    }
+    if (messageInput) {
+      observer.observe(messageInput);
+    }
+
+    return () => observer.disconnect();
+  });
+
   async function submitMessage() {
-    if (!message.trim() || agentState.isStreaming) return;
+    if (!message.trim() || agentState.isStreaming || editingMessageId) return;
 
     const msg = message;
     message = "";
@@ -129,6 +242,66 @@
 
   function formatTime(date: Date) {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function canMutateMessage(message: ChatMessage) {
+    return !agentState.isStreaming && !messageActionPending && message.databaseId !== null;
+  }
+
+  function canEditMessage(message: ChatMessage) {
+    return canMutateMessage(message) && message.role === "user" && !editingMessageId;
+  }
+
+  function startEditingMessage(message: ChatMessage) {
+    if (!canEditMessage(message)) return;
+    editingMessageId = message.id;
+    editingMessageValue = message.content;
+  }
+
+  function cancelEditingMessage() {
+    editingMessageId = null;
+    editingMessageValue = "";
+  }
+
+  async function handleSaveEditedMessage(message: ChatMessage) {
+    if (editingMessageId !== message.id || !editingMessageValue.trim()) return;
+
+    const saved = await editMessage(message, editingMessageValue);
+    if (saved) {
+      cancelEditingMessage();
+    }
+  }
+
+  async function handleCopyMessage(message: ChatMessage) {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      copiedMessageId = message.id;
+      if (copyResetTimeout) {
+        clearTimeout(copyResetTimeout);
+      }
+      copyResetTimeout = setTimeout(() => {
+        copiedMessageId = null;
+      }, 1500);
+    } catch (error) {
+      agentState.error = error instanceof Error ? error.message : "Failed to copy message";
+    }
+  }
+
+  async function handleBranchMessage(message: ChatMessage) {
+    if (!canMutateMessage(message) || editingMessageId) return;
+
+    messageActionPending = true;
+    try {
+      await branchMessage(message);
+      cancelEditingMessage();
+    } finally {
+      messageActionPending = false;
+    }
+  }
+
+  async function handleRerollMessage(message: ChatMessage) {
+    if (!canMutateMessage(message) || editingMessageId) return;
+    await rerollMessage(message);
   }
 
   function formatDuration(start: number, end: number) {
@@ -190,65 +363,101 @@
   }
 
   async function handleApplySuggestion(id: number) {
-    if (applyingAllSuggestionState || suggestionActionBusy.has(id)) return;
-    suggestionActionBusy = new Map(suggestionActionBusy).set(id, true);
+    if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
+    busySuggestionIds = getBusySuggestionIdsNext(id, true);
     try {
       await applySuggestion(id);
     } finally {
-      const next = new Map(suggestionActionBusy);
-      next.delete(id);
-      suggestionActionBusy = next;
+      busySuggestionIds = getBusySuggestionIdsNext(id, false);
     }
   }
 
   async function handlePreviewSuggestion(id: number) {
-    if (applyingAllSuggestionState || suggestionActionBusy.has(id)) return;
-    suggestionActionBusy = new Map(suggestionActionBusy).set(id, true);
+    if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
+    busySuggestionIds = getBusySuggestionIdsNext(id, true);
     try {
       await previewSuggestion(id);
     } finally {
-      const next = new Map(suggestionActionBusy);
-      next.delete(id);
-      suggestionActionBusy = next;
+      busySuggestionIds = getBusySuggestionIdsNext(id, false);
     }
   }
 
   async function handleCancelSuggestionPreview(id: number) {
-    if (applyingAllSuggestionState || suggestionActionBusy.has(id)) return;
-    suggestionActionBusy = new Map(suggestionActionBusy).set(id, true);
+    if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
+    busySuggestionIds = getBusySuggestionIdsNext(id, true);
     try {
       await cancelSuggestionPreviewAction(id);
     } finally {
-      const next = new Map(suggestionActionBusy);
-      next.delete(id);
-      suggestionActionBusy = next;
+      busySuggestionIds = getBusySuggestionIdsNext(id, false);
     }
   }
 
   async function handleApplyAllSuggestions() {
-    if (applyingAllSuggestionState) return;
-    applyingAllSuggestionState = true;
+    if (isBulkSuggestionActionRunning || pendingSuggestions.length === 0) return;
+    bulkSuggestionAction = 'apply';
     try {
       await applyAllSuggestions();
     } finally {
-      applyingAllSuggestionState = false;
+      bulkSuggestionAction = null;
+    }
+  }
+
+  async function handlePreviewAllSuggestions() {
+    if (isBulkSuggestionActionRunning || previewableSuggestions.length === 0) return;
+    bulkSuggestionAction = 'preview';
+    try {
+      await previewAllSuggestions();
+    } finally {
+      bulkSuggestionAction = null;
+    }
+  }
+
+  async function handleRejectAllSuggestions() {
+    if (isBulkSuggestionActionRunning || pendingSuggestions.length === 0) return;
+    bulkSuggestionAction = 'reject';
+    try {
+      await rejectAllSuggestions();
+    } finally {
+      bulkSuggestionAction = null;
     }
   }
 
   async function handleRejectSuggestion(id: number) {
-    if (applyingAllSuggestionState || suggestionActionBusy.has(id)) return;
-    suggestionActionBusy = new Map(suggestionActionBusy).set(id, true);
+    if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
+    busySuggestionIds = getBusySuggestionIdsNext(id, true);
     try {
       await rejectSuggestion(id);
     } finally {
-      const next = new Map(suggestionActionBusy);
-      next.delete(id);
-      suggestionActionBusy = next;
+      busySuggestionIds = getBusySuggestionIdsNext(id, false);
     }
+  }
+
+  function handleSuggestionsResize(event: PointerEvent) {
+    if (!showSuggestions || pendingSuggestions.length === 0) return;
+
+    const startY = event.clientY;
+    const startHeight = layoutState.suggestionsTrayMaxHeight;
+
+    startPointerDrag(
+      event,
+      'row-resize',
+      (moveEvent) => {
+        const delta = moveEvent.clientY - startY;
+        const { min, max } = getSuggestionsTrayMaxHeightBounds();
+        const next = clampValue(startHeight - delta, min, max);
+        setSuggestionsTrayMaxHeight(next);
+      },
+      () => {
+        clampSuggestionsTrayMaxHeight(true);
+      }
+    );
   }
 </script>
 
-<div class={cn('chat-panel flex h-full min-h-0 flex-col overflow-hidden bg-surface-base', className)}>
+<div
+  class={cn('chat-panel flex h-full min-h-0 flex-col overflow-hidden bg-surface-base', className)}
+  bind:this={chatPanelElement}
+>
   <div class="chat-header flex shrink-0 items-center justify-between bg-surface-base px-[14px] py-[10px]">
     <div class="header-left relative min-w-0 flex-1">
       <button
@@ -358,7 +567,31 @@
             </div>
           {/if}
 
-          {#if msg.content}
+          {#if editingMessageId === msg.id}
+            <div class="message-edit flex flex-col gap-2">
+              <textarea
+                class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
+                bind:value={editingMessageValue}
+              ></textarea>
+              <div class="message-edit-actions flex items-center justify-end gap-2">
+                <button
+                  class="rounded-[6px] border border-border-default bg-surface-base px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-colors hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+                  onclick={cancelEditingMessage}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-colors hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  onclick={() => handleSaveEditedMessage(msg)}
+                  disabled={!editingMessageValue.trim()}
+                  type="button"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          {:else if msg.content}
             <div
               class={cn(
                 'message-content min-w-0 leading-[1.6]',
@@ -403,84 +636,165 @@
 
           <div
             class={cn(
-              'message-time mt-1 text-app-xs text-text-tertiary opacity-0 transition-opacity group-hover/message:opacity-100',
-              msg.role === 'user' ? 'text-right' : 'text-left',
+              'message-meta mt-2 flex min-h-[20px] items-center gap-3 text-app-2xs leading-none',
+              'pointer-events-none opacity-0 transition-opacity',
+              'group-hover/message:pointer-events-auto group-hover/message:opacity-100',
+              'group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100',
+              msg.role === 'user' ? 'justify-end' : 'justify-start',
             )}
           >
-            {formatTime(msg.timestamp)}
+            {#if msg.role !== 'system'}
+              <div class="message-actions flex items-center gap-1">
+                <button
+                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  onclick={() => handleRerollMessage(msg)}
+                  disabled={!canMutateMessage(msg) || !!editingMessageId}
+                  type="button"
+                >
+                  Reroll
+                </button>
+                <button
+                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                  onclick={() => handleCopyMessage(msg)}
+                  type="button"
+                >
+                  {copiedMessageId === msg.id ? 'Copied' : 'Copy'}
+                </button>
+                <button
+                  class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  onclick={() => handleBranchMessage(msg)}
+                  disabled={!canMutateMessage(msg) || !!editingMessageId}
+                  type="button"
+                >
+                  Branch
+                </button>
+                {#if msg.role === 'user'}
+                  <button
+                    class="rounded-sm px-1.5 py-1 font-medium text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    onclick={() => startEditingMessage(msg)}
+                    disabled={!canEditMessage(msg)}
+                    type="button"
+                  >
+                    Edit
+                  </button>
+                {/if}
+              </div>
+            {/if}
+            <div
+              class="message-time font-mono tracking-[0.04em] tabular-nums text-text-tertiary"
+              class:text-right={msg.role === 'user'}
+              class:text-left={msg.role !== 'user'}
+            >
+              {formatTime(msg.timestamp)}
+            </div>
           </div>
         </div>
       {/each}
     {/if}
   </div>
 
-  {#if agentState.suggestions.length > 0}
-    <div class="suggestions-panel scrollbar-thin mx-3 mb-2 max-h-[240px] shrink-0 overflow-y-auto rounded-lg bg-surface-raised">
-      <div class="suggestions-header flex items-center justify-between px-3 py-2">
-        <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
-        <div class="suggestions-actions flex items-center gap-2">
-          <button
-            class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
-            onclick={handleApplyAllSuggestions}
-            disabled={applyingAllSuggestionState || pendingSuggestions.length === 0}
-          >
-            {applyingAllSuggestionState ? 'Applying...' : 'Apply All'}
-          </button>
-          <button class="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary" onclick={() => showSuggestions = !showSuggestions}>
-            <Icon icon={showSuggestions ? ChevronDown : ChevronRight} size={14} />
-          </button>
+  {#if pendingSuggestions.length > 0}
+    <div class="suggestions-wrapper mx-3 mb-2 shrink-0" bind:this={suggestionsWrapper}>
+      {#if showSuggestions}
+        <div
+          class="suggestions-resize-handle h-[6px] flex-[0_0_6px] cursor-row-resize touch-none rounded-t-lg bg-surface-base transition-colors hover:bg-surface-hover"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize suggestions tray"
+          onpointerdown={handleSuggestionsResize}
+        ></div>
+      {/if}
+      <div class="suggestions-shell overflow-hidden rounded-lg bg-surface-raised">
+        <div
+          class="suggestions-panel scrollbar-thin overflow-y-auto"
+          bind:this={suggestionsPanel}
+          style={showSuggestions ? `max-height: ${layoutState.suggestionsTrayMaxHeight}px;` : undefined}
+        >
+          <div class="suggestions-header sticky top-0 z-[var(--z-panel)] flex items-center justify-between border-b border-border-subtle bg-surface-raised px-3 py-2 shadow-[0_1px_0_rgba(0,0,0,0.06)]">
+            <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
+            <div class="suggestions-actions flex items-center gap-2">
+              <button
+                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={handlePreviewAllSuggestions}
+                disabled={isBulkSuggestionActionRunning || previewableSuggestions.length === 0}
+              >
+                {bulkSuggestionAction === 'preview' ? 'Previewing...' : 'Preview All'}
+              </button>
+              <button
+                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-destructive)_18%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-destructive)_10%,transparent)] px-2.5 py-1 text-app-xs font-medium text-accent-destructive transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-destructive hover:bg-accent-destructive hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={handleRejectAllSuggestions}
+                disabled={isBulkSuggestionActionRunning || pendingSuggestions.length === 0}
+              >
+                {bulkSuggestionAction === 'reject' ? 'Rejecting...' : 'Reject All'}
+              </button>
+              <button
+                class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={handleApplyAllSuggestions}
+                disabled={isBulkSuggestionActionRunning || pendingSuggestions.length === 0}
+              >
+                {bulkSuggestionAction === 'apply' ? 'Applying...' : 'Apply All'}
+              </button>
+              <button
+                class="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                onclick={() => showSuggestions = !showSuggestions}
+                aria-label={showSuggestions ? 'Collapse suggestions tray' : 'Expand suggestions tray'}
+              >
+                <Icon icon={showSuggestions ? ChevronDown : ChevronRight} size={14} />
+              </button>
+            </div>
+          </div>
+          {#if showSuggestions}
+            <div class="suggestions-list flex flex-col gap-2 px-3 pb-2 pt-2">
+              {#each pendingSuggestions as suggestion (suggestion.id)}
+                <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-hover">
+                  <div class="suggestion-info flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span class="suggestion-time font-mono text-app-xs text-accent-success">{formatSuggestionPrimaryLine(suggestion)}</span>
+                    <span class="suggestion-desc text-app-sm font-medium leading-[1.4] text-text-primary">{suggestion.description || 'No description'}</span>
+                    {#if suggestion.reasoning}
+                      <span class="suggestion-reasoning text-app-xs leading-[1.4] text-text-tertiary">{suggestion.reasoning}</span>
+                    {/if}
+                  </div>
+                  <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100">
+                    {#if suggestion.clip_id}
+                      <button
+                        class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                        onclick={() => handleCancelSuggestionPreview(suggestion.id)}
+                        disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
+                      >
+                        Cancel
+                      </button>
+                    {:else}
+                      <button
+                        class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                        onclick={() => handlePreviewSuggestion(suggestion.id)}
+                        disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
+                      >
+                        Preview
+                      </button>
+                    {/if}
+                    <button
+                      class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      onclick={() => handleApplySuggestion(suggestion.id)}
+                      disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
+                      title="Apply"
+                    >
+                      <Icon icon={Check} size={12} />
+                    </button>
+                    <button
+                      class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-border-default bg-surface-base p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      onclick={() => handleRejectSuggestion(suggestion.id)}
+                      disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
+                      title="Reject"
+                    >
+                      <Icon icon={X} size={12} />
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       </div>
-      {#if showSuggestions}
-        <div class="suggestions-list flex flex-col gap-2 px-3 pb-2">
-          {#each pendingSuggestions as suggestion (suggestion.id)}
-            <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-hover">
-              <div class="suggestion-info flex min-w-0 flex-1 flex-col gap-0.5">
-                <span class="suggestion-time font-mono text-app-xs text-accent-success">{formatSuggestionPrimaryLine(suggestion)}</span>
-                <span class="suggestion-desc text-app-sm font-medium leading-[1.4] text-text-primary">{suggestion.description || 'No description'}</span>
-                {#if suggestion.reasoning}
-                  <span class="suggestion-reasoning text-app-xs leading-[1.4] text-text-tertiary">{suggestion.reasoning}</span>
-                {/if}
-              </div>
-              <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100">
-                {#if suggestion.clip_id}
-                  <button
-                    class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    onclick={() => handleCancelSuggestionPreview(suggestion.id)}
-                    disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
-                  >
-                    Cancel
-                  </button>
-                {:else}
-                  <button
-                    class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    onclick={() => handlePreviewSuggestion(suggestion.id)}
-                    disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
-                  >
-                    Preview
-                  </button>
-                {/if}
-                <button
-                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                  onclick={() => handleApplySuggestion(suggestion.id)}
-                  disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
-                  title="Apply"
-                >
-                  <Icon icon={Check} size={12} />
-                </button>
-                <button
-                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-border-default bg-surface-base p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                  onclick={() => handleRejectSuggestion(suggestion.id)}
-                  disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
-                  title="Reject"
-                >
-                  <Icon icon={X} size={12} />
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
     </div>
   {/if}
 
@@ -491,15 +805,15 @@
         rows="1"
         bind:value={message}
         bind:this={messageInput}
-        placeholder="Ask the AI editor..."
-        disabled={agentState.isStreaming || !agentState.currentChapterId}
+        placeholder={editingMessageId ? "Finish editing the selected message..." : "Ask the AI editor..."}
+        disabled={agentState.isStreaming || !agentState.currentChapterId || !!editingMessageId}
         oninput={autoResizeMessageInput}
         onkeydown={handleInputKeydown}
       ></textarea>
       <button
         type="submit"
         class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
-        disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId}
+        disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId || !!editingMessageId}
         title="Send message"
       >
         <Icon icon={ArrowUp} size={16} />

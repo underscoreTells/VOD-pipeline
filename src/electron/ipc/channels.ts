@@ -32,6 +32,9 @@ export const IPC_CHANNELS = {
 
   // Agent channels
   AGENT_CHAT: 'agent:chat',
+  AGENT_REROLL_MESSAGE: 'agent:reroll-message',
+  AGENT_EDIT_MESSAGE: 'agent:edit-message',
+  AGENT_BRANCH_MESSAGE: 'agent:branch-message',
   AGENT_STREAM: 'agent:stream',
   AGENT_APPLY_ACTIONS: 'agent:apply-actions',
   AGENT_CONVERSATION_CREATE: 'agent:conversation-create',

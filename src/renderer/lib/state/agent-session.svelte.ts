@@ -35,6 +35,7 @@ export interface ChatMessage {
   thinkingMarkdown: string | null;
   trace: ExecutionTraceEntry[];
   id: string;
+  databaseId: number | null;
   timestamp: Date;
   requestId?: string;
   isStreaming?: boolean;
@@ -106,8 +107,20 @@ export function mapConversationMessages(messages: ChatConversationMessage[]): Ch
       : null,
     trace: parseExecutionTraceJson(item.trace_json),
     id: `db-${item.id}`,
+    databaseId: item.id,
     timestamp: new Date(item.created_at),
   }));
+}
+
+export function insertConversation(conversation: ChatConversation): void {
+  agentState.conversations = resolveConversationSelection(
+    [conversation, ...agentState.conversations],
+    {
+      hasLoadedMessages: agentState.messages.length > 0,
+      preserveSelection: false,
+      selectedConversationId: agentState.selectedConversationId,
+    }
+  ).sortedConversations;
 }
 
 function getCurrentConversationContextKey(): string {
@@ -247,14 +260,7 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
     return conversation;
   }
 
-  agentState.conversations = resolveConversationSelection(
-    [conversation, ...agentState.conversations],
-    {
-      hasLoadedMessages: true,
-      preserveSelection: false,
-      selectedConversationId: null,
-    }
-  ).sortedConversations;
+  insertConversation(conversation);
   agentState.selectedConversationId = conversation.id;
   agentState.messages = [];
   agentState.timelineProposals = [];

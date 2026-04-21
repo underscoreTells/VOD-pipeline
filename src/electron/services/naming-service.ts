@@ -128,6 +128,7 @@ async function requestGeneratedName(input: {
   }
 
   try {
+    // The provider factory strips unsupported temperature params for OpenAI GPT-5 models.
     const llm = createLLM({
       provider,
       apiKey,

@@ -67,6 +67,36 @@ export interface AgentChatParams {
   agentConfig?: ProviderConfigPayload;
 }
 
+export interface AgentRerollMessageParams {
+  clientRequestId: string;
+  projectId: string;
+  conversationId: number;
+  messageId: number;
+  provider?: string;
+  selectedClipIds?: number[];
+  playheadTime?: number;
+  agentConfig?: ProviderConfigPayload;
+}
+
+export interface AgentEditMessageParams {
+  clientRequestId: string;
+  projectId: string;
+  conversationId: number;
+  messageId: number;
+  message: string;
+  provider?: string;
+  selectedClipIds?: number[];
+  playheadTime?: number;
+  threadNamingModel?: NamingModelId;
+  agentConfig?: ProviderConfigPayload;
+}
+
+export interface AgentBranchMessageParams {
+  projectId: string;
+  conversationId: number;
+  messageId: number;
+}
+
 export interface AgentChatResult {
   success: boolean;
   data?: AgentChatData;
@@ -412,6 +442,9 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;
+    rerollMessage: (params: AgentRerollMessageParams) => Promise<AgentChatResult>;
+    editMessage: (params: AgentEditMessageParams) => Promise<AgentChatResult>;
+    branchMessage: (params: AgentBranchMessageParams) => Promise<AgentConversationCreateResult>;
     createConversation: (params: AgentConversationCreateParams) => Promise<AgentConversationCreateResult>;
     listConversations: (params: AgentConversationListParams) => Promise<AgentConversationListResult>;
     getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;

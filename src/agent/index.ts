@@ -1,5 +1,6 @@
 import { setIpcConfig, type AgentConfig } from "./config.js";
 import { JSONStdinWriter, JSONStdoutReader } from "./ipc/json-message-transport.js";
+import { installStdoutProtocolGuard } from "./ipc/stdout-protocol.js";
 import type {
   AgentInputMessage,
   AgentInputMessageWithoutId,
@@ -15,6 +16,8 @@ import type {
   ConversationTurnInput,
   ConversationWriter,
 } from "./conversation/types.js";
+
+installStdoutProtocolGuard();
 
 const activeRequests = new Map<string, AbortController>();
 

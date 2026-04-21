@@ -19,19 +19,23 @@ const bridgeMocks = vi.hoisted(() => ({
 }));
 
 const databaseMocks = vi.hoisted(() => ({
+  cloneChatMessagesThrough: vi.fn(),
   createChatConversation: vi.fn(),
   createChatMessage: vi.fn(),
   createClip: vi.fn(),
+  deleteChatMessagesAfter: vi.fn(),
   deleteChatConversation: vi.fn(),
   getAssetsByProject: vi.fn(),
   getAssetsForChapter: vi.fn(),
   getChapter: vi.fn(),
   getChatConversation: vi.fn(),
   getChatConversationsByChapter: vi.fn(),
+  getChatMessageByConversation: vi.fn(),
   getChatMessagesByConversation: vi.fn(),
   getClip: vi.fn(),
   getProject: vi.fn(),
   getSuggestionsByConversation: vi.fn(),
+  updateUserChatMessageContent: vi.fn(),
   updateChatConversation: vi.fn(),
   updateClip: vi.fn(),
 }));
@@ -39,7 +43,6 @@ const databaseMocks = vi.hoisted(() => ({
 const handlerSupportMocks = vi.hoisted(() => ({
   applyNearLimitTokenGuard: vi.fn(),
   buildAgentChatContext: vi.fn(),
-  deriveConversationTitle: vi.fn(),
   normalizeConversationProvider: vi.fn((value: unknown) => value ?? null),
   normalizeTimelineActions: vi.fn(),
   parseAgentGraphResult: vi.fn(),
@@ -63,6 +66,11 @@ const namingServiceMocks = vi.hoisted(() => ({
   suggestConversationTitle: vi.fn(),
 }));
 
+const conversationTitleMocks = vi.hoisted(() => ({
+  DEFAULT_CONVERSATION_TITLE: "New conversation",
+  deriveConversationTitle: vi.fn(),
+}));
+
 vi.mock("electron", () => electronMocks);
 
 vi.mock("../../src/electron/agent-bridge.js", () => ({
@@ -77,6 +85,8 @@ vi.mock("../../src/electron/dev-runtime.js", () => devRuntimeMocks);
 
 vi.mock("../../src/electron/services/naming-service.js", () => namingServiceMocks);
 
+vi.mock("../../src/shared/utils/conversation-title.js", () => conversationTitleMocks);
+
 describe("agent chat handler", () => {
   beforeEach(async () => {
     registeredHandlers.clear();
@@ -86,6 +96,11 @@ describe("agent chat handler", () => {
     Object.values(handlerSupportMocks).forEach((mock) => mock.mockReset());
     devRuntimeMocks.getBackendRuntimeStaleness.mockReset();
     Object.values(namingServiceMocks).forEach((mock) => mock.mockReset());
+    Object.values(conversationTitleMocks).forEach((mock) => {
+      if (typeof mock === "function" && "mockReset" in mock) {
+        mock.mockReset();
+      }
+    });
 
     databaseMocks.getProject.mockResolvedValue({ id: 1 });
     databaseMocks.getChatConversation.mockResolvedValue({
@@ -105,16 +120,28 @@ describe("agent chat handler", () => {
     databaseMocks.getAssetsForChapter.mockResolvedValue([11]);
     databaseMocks.getSuggestionsByConversation.mockResolvedValue([]);
     databaseMocks.updateChatConversation.mockResolvedValue(true);
+    databaseMocks.updateUserChatMessageContent.mockResolvedValue(true);
+    databaseMocks.deleteChatMessagesAfter.mockResolvedValue(1);
+    databaseMocks.cloneChatMessagesThrough.mockResolvedValue(1);
     databaseMocks.getChatMessagesByConversation.mockResolvedValue([
       {
         id: 10,
+        conversation_id: 2,
         role: "user",
         content: "Please provide new clips for this chapter",
+        created_at: "2026-04-18T12:00:00.000Z",
       },
     ]);
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 10,
+      conversation_id: 2,
+      role: "user",
+      content: "Please provide new clips for this chapter",
+      created_at: "2026-04-18T12:00:00.000Z",
+    });
     databaseMocks.createChatMessage
-      .mockResolvedValueOnce({ id: 100 })
-      .mockResolvedValueOnce({ id: 101 });
+      .mockResolvedValueOnce({ id: 100, created_at: "2026-04-18T12:00:00.000Z" })
+      .mockResolvedValueOnce({ id: 101, created_at: "2026-04-18T12:00:05.000Z" });
     handlerSupportMocks.buildAgentChatContext.mockResolvedValue({
       chapter: { id: "3", startTime: 0, endTime: 120 },
       chapterAssetIds: [11],
@@ -136,9 +163,10 @@ describe("agent chat handler", () => {
       suggestionDrafts: [],
       outcome: "proposal",
     });
-    handlerSupportMocks.deriveConversationTitle.mockReturnValue("Fallback title");
     handlerSupportMocks.persistAgentSuggestions.mockResolvedValue([]);
     namingServiceMocks.suggestConversationTitle.mockResolvedValue(null);
+    conversationTitleMocks.deriveConversationTitle.mockReturnValue("Fallback title");
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
 
     const { registerAgentHandlers } = await import("../../src/electron/ipc/handlers/agent.js");
     registerAgentHandlers();
@@ -196,12 +224,18 @@ describe("agent chat handler", () => {
       data: {
         message: "Drafted one new clip proposal.",
         outcome: "proposal",
+        userMessageId: 100,
+        assistantMessageId: 101,
       },
     });
   });
 
   it("uses an AI-generated thread title on the first user message", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([]);
+    databaseMocks.createChatMessage
+      .mockResolvedValueOnce({ id: 100, created_at: "2026-04-18T12:00:00.000Z" })
+      .mockResolvedValueOnce({ id: 101, created_at: "2026-04-18T12:00:05.000Z" });
     databaseMocks.getChatConversation.mockResolvedValue({
       id: 2,
       project_id: 1,
@@ -252,6 +286,10 @@ describe("agent chat handler", () => {
 
   it("falls back to the derived title when the selected naming provider is unavailable", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([]);
+    databaseMocks.createChatMessage
+      .mockResolvedValueOnce({ id: 100, created_at: "2026-04-18T12:00:00.000Z" })
+      .mockResolvedValueOnce({ id: 101, created_at: "2026-04-18T12:00:05.000Z" });
     databaseMocks.getChatConversation.mockResolvedValue({
       id: 2,
       project_id: 1,
@@ -289,6 +327,10 @@ describe("agent chat handler", () => {
 
   it("falls back to the derived title when AI thread naming throws", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([]);
+    databaseMocks.createChatMessage
+      .mockResolvedValueOnce({ id: 100, created_at: "2026-04-18T12:00:00.000Z" })
+      .mockResolvedValueOnce({ id: 101, created_at: "2026-04-18T12:00:05.000Z" });
     databaseMocks.getChatConversation.mockResolvedValue({
       id: 2,
       project_id: 1,
@@ -327,6 +369,283 @@ describe("agent chat handler", () => {
     });
     expect(result).toMatchObject({
       success: true,
+    });
+  });
+
+  it("rerolls from a user message by truncating later history and regenerating the assistant turn", async () => {
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 10,
+        conversation_id: 2,
+        role: "user",
+        content: "Setup the chapter",
+        created_at: "2026-04-18T12:00:00.000Z",
+      },
+      {
+        id: 11,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Keep the setup.",
+        created_at: "2026-04-18T12:01:00.000Z",
+      },
+      {
+        id: 12,
+        conversation_id: 2,
+        role: "user",
+        content: "Find a sharper payoff",
+        created_at: "2026-04-18T12:02:00.000Z",
+      },
+      {
+        id: 13,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Use the reset clip.",
+        created_at: "2026-04-18T12:03:00.000Z",
+      },
+    ]);
+    databaseMocks.createChatMessage.mockReset();
+    databaseMocks.createChatMessage.mockResolvedValue({
+      id: 201,
+      created_at: "2026-04-18T12:04:00.000Z",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-2",
+      result: {
+        assistantResponse: "Try the ladder payoff instead.",
+        outcome: "proposal",
+      },
+    });
+
+    const rerollHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_REROLL_MESSAGE);
+    const result = await rerollHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 12,
+    });
+
+    expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalledWith(2, 12);
+    expect(databaseMocks.createChatMessage).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        userMessageId: 12,
+        assistantMessageId: 201,
+      },
+    });
+  });
+
+  it("rerolls from an assistant message by anchoring on the preceding user turn", async () => {
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 10,
+        conversation_id: 2,
+        role: "user",
+        content: "Setup the chapter",
+        created_at: "2026-04-18T12:00:00.000Z",
+      },
+      {
+        id: 11,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Keep the setup.",
+        created_at: "2026-04-18T12:01:00.000Z",
+      },
+      {
+        id: 12,
+        conversation_id: 2,
+        role: "user",
+        content: "Find a sharper payoff",
+        created_at: "2026-04-18T12:02:00.000Z",
+      },
+      {
+        id: 13,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Use the reset clip.",
+        created_at: "2026-04-18T12:03:00.000Z",
+      },
+    ]);
+    databaseMocks.createChatMessage.mockReset();
+    databaseMocks.createChatMessage.mockResolvedValue({
+      id: 202,
+      created_at: "2026-04-18T12:04:30.000Z",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-2",
+      result: {
+        assistantResponse: "Land on the ladder payoff.",
+        outcome: "proposal",
+      },
+    });
+
+    const rerollHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_REROLL_MESSAGE);
+    const result = await rerollHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 13,
+    });
+
+    expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalledWith(2, 12);
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        userMessageId: 12,
+        assistantMessageId: 202,
+      },
+    });
+  });
+
+  it("edits a user message, truncates later history, and regenerates the assistant turn", async () => {
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 10,
+        conversation_id: 2,
+        role: "user",
+        content: "Setup the chapter",
+        created_at: "2026-04-18T12:00:00.000Z",
+      },
+      {
+        id: 11,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Keep the setup.",
+        created_at: "2026-04-18T12:01:00.000Z",
+      },
+      {
+        id: 12,
+        conversation_id: 2,
+        role: "user",
+        content: "Find a softer payoff",
+        created_at: "2026-04-18T12:02:00.000Z",
+      },
+      {
+        id: 13,
+        conversation_id: 2,
+        role: "assistant",
+        content: "Use the reset clip.",
+        created_at: "2026-04-18T12:03:00.000Z",
+      },
+    ]);
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 12,
+      conversation_id: 2,
+      role: "user",
+      content: "Find a softer payoff",
+      created_at: "2026-04-18T12:02:00.000Z",
+    });
+    databaseMocks.createChatMessage.mockReset();
+    databaseMocks.createChatMessage.mockResolvedValue({
+      id: 203,
+      created_at: "2026-04-18T12:05:00.000Z",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-3",
+      result: {
+        assistantResponse: "Use the ladder payoff instead.",
+        outcome: "proposal",
+      },
+    });
+
+    const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
+    const result = await editHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 12,
+      message: "Find a sharper payoff",
+      threadNamingModel: "gpt-5-nano",
+    });
+
+    expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalledWith(
+      2,
+      12,
+      "Find a sharper payoff"
+    );
+    expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalledWith(2, 12);
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        userMessageId: 12,
+        assistantMessageId: 203,
+      },
+    });
+  });
+
+  it("rejects edits for non-user messages", async () => {
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 13,
+      conversation_id: 2,
+      role: "assistant",
+      content: "Use the reset clip.",
+      created_at: "2026-04-18T12:03:00.000Z",
+    });
+
+    const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
+    const result = await editHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 13,
+      message: "Changed text",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: "Only user messages can be edited",
+      code: IPC_ERROR_CODES.VALIDATION_ERROR,
+    });
+    expect(databaseMocks.updateUserChatMessageContent).not.toHaveBeenCalled();
+    expect(bridgeMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("branches a conversation through the selected message", async () => {
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 13,
+      conversation_id: 2,
+      role: "assistant",
+      content: "Use the reset clip.",
+      created_at: "2026-04-18T12:03:00.000Z",
+    });
+    databaseMocks.createChatConversation.mockResolvedValue({
+      id: 99,
+      project_id: 1,
+      chapter_id: 3,
+      title: "Existing conversation (Branch)",
+      provider: "gemini",
+      thread_id: "thread-branch",
+      created_at: "2026-04-18T12:10:00.000Z",
+      updated_at: "2026-04-18T12:10:00.000Z",
+    });
+
+    const branchHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_BRANCH_MESSAGE);
+    const result = await branchHandler?.({}, {
+      projectId: "1",
+      conversationId: 2,
+      messageId: 13,
+    });
+
+    expect(databaseMocks.createChatConversation).toHaveBeenCalledWith({
+      project_id: 1,
+      chapter_id: 3,
+      title: "Existing conversation (Branch)",
+      provider: "gemini",
+      thread_id: expect.any(String),
+    });
+    expect(databaseMocks.cloneChatMessagesThrough).toHaveBeenCalledWith(2, 99, 13);
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        id: 99,
+        title: "Existing conversation (Branch)",
+      },
     });
   });
 });

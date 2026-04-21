@@ -4,12 +4,16 @@ import * as path from "path";
 import * as os from "os";
 import Database from "better-sqlite3";
 import {
+  cloneChatMessagesThrough,
   setDatabaseForTesting,
   createChatConversation,
   getChatConversationsByChapter,
   createChatMessage,
+  deleteChatMessagesAfter,
+  getChatMessageByConversation,
   getChatMessagesByConversation,
   deleteChatConversation,
+  updateUserChatMessageContent,
   createChapterProxy,
   getChapterProxyByChapterAsset,
   updateChapterProxyStatus,
@@ -145,6 +149,126 @@ describeNative("Chat conversation persistence", () => {
     expect(messages[1].content).toBe("world");
     expect(messages[1].thinking_markdown).toBe("## Reasoning\n\nThe response is grounded in the chapter context.");
     expect(messages[1].trace_json).toContain("trace-1");
+  });
+
+  it("updates a persisted user message in place", async () => {
+    const conversation = await createChatConversation({
+      project_id: projectId,
+      chapter_id: chapterId,
+      title: "Editable",
+      provider: "gemini",
+      thread_id: "thread-editable",
+    });
+
+    const userMessage = await createChatMessage({
+      conversation_id: conversation.id,
+      role: "user",
+      content: "initial question",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+
+    const updated = await updateUserChatMessageContent(
+      conversation.id,
+      userMessage.id,
+      "revised question"
+    );
+    const reloaded = await getChatMessageByConversation(conversation.id, userMessage.id);
+
+    expect(updated).toBe(true);
+    expect(reloaded?.content).toBe("revised question");
+  });
+
+  it("deletes conversation history after the selected message", async () => {
+    const conversation = await createChatConversation({
+      project_id: projectId,
+      chapter_id: chapterId,
+      title: "Tail delete",
+      provider: "gemini",
+      thread_id: "thread-tail-delete",
+    });
+
+    const first = await createChatMessage({
+      conversation_id: conversation.id,
+      role: "user",
+      content: "first",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+    await createChatMessage({
+      conversation_id: conversation.id,
+      role: "assistant",
+      content: "second",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+    await createChatMessage({
+      conversation_id: conversation.id,
+      role: "user",
+      content: "third",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+
+    const deletedCount = await deleteChatMessagesAfter(conversation.id, first.id);
+    const remaining = await getChatMessagesByConversation(conversation.id);
+
+    expect(deletedCount).toBe(2);
+    expect(remaining.map((message) => message.content)).toEqual(["first"]);
+  });
+
+  it("clones messages into a branched conversation through the selected message", async () => {
+    const sourceConversation = await createChatConversation({
+      project_id: projectId,
+      chapter_id: chapterId,
+      title: "Source",
+      provider: "gemini",
+      thread_id: "thread-source",
+    });
+    const targetConversation = await createChatConversation({
+      project_id: projectId,
+      chapter_id: chapterId,
+      title: "Source (Branch)",
+      provider: "gemini",
+      thread_id: "thread-branch",
+    });
+
+    const first = await createChatMessage({
+      conversation_id: sourceConversation.id,
+      role: "user",
+      content: "keep this",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+    const second = await createChatMessage({
+      conversation_id: sourceConversation.id,
+      role: "assistant",
+      content: "keep that",
+      thinking_markdown: "## Reasoning\n\nImportant context.",
+      trace_json: "{\"id\":\"trace-1\"}",
+    });
+    await createChatMessage({
+      conversation_id: sourceConversation.id,
+      role: "user",
+      content: "drop this tail",
+      thinking_markdown: null,
+      trace_json: null,
+    });
+
+    const clonedCount = await cloneChatMessagesThrough(
+      sourceConversation.id,
+      targetConversation.id,
+      second.id
+    );
+    const clonedMessages = await getChatMessagesByConversation(targetConversation.id);
+
+    expect(clonedCount).toBe(2);
+    expect(clonedMessages).toHaveLength(2);
+    expect(clonedMessages[0]?.content).toBe("keep this");
+    expect(clonedMessages[0]?.created_at).toBe(first.created_at);
+    expect(clonedMessages[1]?.content).toBe("keep that");
+    expect(clonedMessages[1]?.thinking_markdown).toBe("## Reasoning\n\nImportant context.");
+    expect(clonedMessages[1]?.trace_json).toBe("{\"id\":\"trace-1\"}");
   });
 
   it("deletes conversation with cascading messages", async () => {

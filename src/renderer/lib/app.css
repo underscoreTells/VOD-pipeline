@@ -53,6 +53,7 @@
   --color-role-unassigned: var(--role-unassigned);
   --color-role-unassigned-subtle: var(--role-unassigned-subtle);
 
+  --text-app-2xs: var(--text-2xs);
   --text-app-xs: var(--text-xs);
   --text-app-sm: var(--text-sm);
   --text-app-base: var(--text-base);

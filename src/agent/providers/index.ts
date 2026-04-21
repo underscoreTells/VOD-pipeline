@@ -31,6 +31,25 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "gemini-3-flash": "gemini-3-flash-preview",
 };
 
+function isDirectOpenAIGPT5Model(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("gpt-5");
+}
+
+function getOpenAITemperatureConfig(
+  model: string,
+  temperature: number | undefined
+): { temperature?: number } {
+  if (!isDirectOpenAIGPT5Model(model)) {
+    return { temperature: temperature ?? 0.7 };
+  }
+
+  if (temperature === 1) {
+    return { temperature: 1 };
+  }
+
+  return {};
+}
+
 function resolveModel(config: LLMConfig): string {
   const configuredModel = config.model ?? DEFAULT_MODELS[config.provider];
   if (config.provider !== "gemini") {
@@ -49,7 +68,7 @@ export function createLLM(config: LLMConfig): BaseChatModel {
       return new ChatOpenAI({
         apiKey: config.apiKey,
         model,
-        temperature: config.temperature ?? 0.7,
+        ...getOpenAITemperatureConfig(model, config.temperature),
         maxTokens: config.maxTokens,
       });
 

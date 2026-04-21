@@ -1,23 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { ipcMain } from 'electron';
 import {
+  cloneChatMessagesThrough,
   createChatConversation,
   createChatMessage,
   createClip,
+  deleteChatMessagesAfter,
   deleteChatConversation,
   getAssetsByProject,
   getAssetsForChapter,
   getChapter,
   getChatConversation,
   getChatConversationsByChapter,
+  getChatMessageByConversation,
   getChatMessagesByConversation,
   getClip,
   getProject,
   getSuggestionsByConversation,
+  updateUserChatMessageContent,
   updateChatConversation,
   updateClip,
 } from '../../database/index.js';
 import type {
+  ChatConversation,
+  ChatConversationMessage,
   Clip,
   ExecutionTraceEntry,
   Suggestion,
@@ -37,12 +43,15 @@ import {
   serializeExecutionTrace,
 } from '../../../shared/utils/execution-trace.js';
 import { sanitizeAssistantContent } from '../../../shared/utils/assistant-content.js';
+import {
+  DEFAULT_CONVERSATION_TITLE,
+  deriveConversationTitle,
+} from '../../../shared/utils/conversation-title.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   applyNearLimitTokenGuard,
   buildAgentChatContext,
-  deriveConversationTitle,
   normalizeConversationProvider,
   normalizeTimelineActions,
   parseAgentGraphResult,
@@ -52,6 +61,317 @@ import {
 } from '../handler-support.js';
 
 const logger = createLogger('AgentHandlers');
+
+class AgentHandlerError extends Error {
+  constructor(
+    message: string,
+    readonly code: typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES]
+  ) {
+    super(message);
+    this.name = 'AgentHandlerError';
+  }
+}
+
+function requireProjectId(projectId: number | null): number {
+  if (!projectId) {
+    throw new AgentHandlerError('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  return projectId;
+}
+
+function requireConversationId(conversationId: number | null): number {
+  if (!conversationId) {
+    throw new AgentHandlerError('Conversation ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  return conversationId;
+}
+
+function requireMessageId(messageId: number | null): number {
+  if (!messageId) {
+    throw new AgentHandlerError('Message ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  return messageId;
+}
+
+async function resolveConversationContext(
+  projectId: number,
+  conversationId: number,
+  provider?: string,
+  options: { requireFreshRuntime?: boolean } = {}
+): Promise<{
+  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>;
+  conversation: ChatConversation;
+  effectiveProvider: string | undefined;
+}> {
+  const project = await getProject(projectId);
+  if (!project) {
+    throw new AgentHandlerError('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+  }
+
+  const conversation = await getChatConversation(conversationId);
+  if (!conversation) {
+    throw new AgentHandlerError('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
+  }
+  if (conversation.project_id !== projectId) {
+    throw new AgentHandlerError(
+      'Conversation does not belong to project',
+      IPC_ERROR_CODES.VALIDATION_ERROR
+    );
+  }
+
+  const chapter = await getChapter(conversation.chapter_id);
+  if (!chapter) {
+    throw new AgentHandlerError('Conversation chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+  }
+  if (chapter.project_id !== projectId) {
+    throw new AgentHandlerError(
+      'Conversation chapter does not belong to project',
+      IPC_ERROR_CODES.VALIDATION_ERROR
+    );
+  }
+
+  if (options.requireFreshRuntime) {
+    const staleRuntime = await getBackendRuntimeStaleness();
+    if (staleRuntime) {
+      logger.warn(
+        'agent:chat stale dev runtime',
+        staleRuntime.runtimeSessionId,
+        staleRuntime.startupFingerprint,
+        staleRuntime.currentFingerprint
+      );
+      throw new AgentHandlerError(
+        'Backend code changed since this Electron session started. Restarting is required.',
+        IPC_ERROR_CODES.STALE_DEV_RUNTIME
+      );
+    }
+  }
+
+  return {
+    chapter,
+    conversation,
+    effectiveProvider: provider ?? conversation.provider ?? undefined,
+  };
+}
+
+async function syncConversationProvider(
+  conversation: ChatConversation,
+  provider?: string
+): Promise<ChatConversation> {
+  if (!provider || provider === conversation.provider) {
+    return conversation;
+  }
+
+  const normalizedProvider = normalizeConversationProvider(provider);
+  await updateChatConversation(conversation.id, {
+    provider: normalizedProvider,
+  });
+
+  return {
+    ...conversation,
+    provider: normalizedProvider,
+  };
+}
+
+async function resolveConversationThreadId(
+  conversation: ChatConversation,
+  options: { forceRotate?: boolean } = {}
+): Promise<string> {
+  const existingThreadId = conversation.thread_id?.trim();
+  const threadId = options.forceRotate || !existingThreadId
+    ? randomUUID()
+    : existingThreadId;
+
+  if (options.forceRotate || !existingThreadId || existingThreadId !== threadId) {
+    await updateChatConversation(conversation.id, { thread_id: threadId });
+  }
+
+  return threadId;
+}
+
+function sanitizeConversationHistory(
+  messages: ChatConversationMessage[]
+): Array<{ role: string; content: string }> {
+  return messages.map((item) => ({
+    role: item.role,
+    content: item.role === 'assistant'
+      ? sanitizeAssistantContent(item.content)
+      : item.content,
+  }));
+}
+
+async function generateConversationTitle(
+  message: string,
+  chapterTitle: string | undefined,
+  threadNamingModel: ReturnType<typeof normalizeNamingModel>,
+  agentConfig: ProviderConfigPayload | undefined
+): Promise<string> {
+  let generatedTitle: string | null = null;
+
+  try {
+    generatedTitle = await suggestConversationTitle({
+      message,
+      chapterTitle,
+      model: threadNamingModel,
+      providerConfig: agentConfig,
+    });
+  } catch (error) {
+    logger.warn('agent:thread-title fallback', error);
+  }
+
+  return generatedTitle ?? deriveConversationTitle(message);
+}
+
+async function runConversationTurn(
+  agentBridge: ReturnType<typeof getAgentBridge>,
+  options: {
+    agentConfig?: ProviderConfigPayload;
+    chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>;
+    clientRequestId: string;
+    conversation: ChatConversation;
+    conversationHistory: Array<{ role: string; content: string }>;
+    effectiveProvider?: string;
+    playheadTime?: number;
+    projectId: number;
+    selectedClipIds: number[];
+    threadId: string;
+    userMessageId: number;
+    userCreatedAt: string;
+  }
+): Promise<AgentChatData> {
+  const chapterAssetIds = await getAssetsForChapter(options.chapter.id);
+  const chapterDuration = Math.max(0.01, options.chapter.end_time - options.chapter.start_time);
+  const existingSuggestions = await getSuggestionsByConversation(
+    options.conversation.id,
+    options.chapter.id
+  );
+  const initialContext = await buildAgentChatContext(options.projectId, options.chapter.id, {
+    ensureChapterProxyReady: false,
+  });
+  const contextWithSuggestions = {
+    ...initialContext,
+    suggestionSummary: summarizeSuggestions(existingSuggestions),
+  };
+
+  if (chapterAssetIds.length > 0 && !initialContext.proxyPath) {
+    const primaryAssetId = chapterAssetIds[0];
+    void scheduleChapterMediaPrewarm(options.chapter.id, primaryAssetId).catch((error) => {
+      console.warn(
+        `[ChapterPrewarm] Failed scheduling from chat chapter=${options.chapter.id} asset=${primaryAssetId}:`,
+        error
+      );
+    });
+  }
+
+  const guardedInitialPayload = applyNearLimitTokenGuard(
+    options.conversationHistory,
+    contextWithSuggestions,
+    options.effectiveProvider
+  );
+
+  if (guardedInitialPayload.compressed) {
+    logger.info(
+      'agent:token-guard',
+      options.conversation.id,
+      options.effectiveProvider || 'default',
+      `${guardedInitialPayload.estimatedTotalTokens}/${guardedInitialPayload.effectiveContextLimit}`
+    );
+  }
+
+  await agentBridge.ensureStarted();
+  let executionTrace: ExecutionTraceEntry[] = [];
+  const response = await agentBridge.send({
+    type: 'chat',
+    threadId: options.threadId,
+    messages: guardedInitialPayload.messages,
+    metadata: {
+      projectId: String(options.projectId),
+      provider: options.effectiveProvider,
+      chapterId: String(options.chapter.id),
+      selectedClipIds: options.selectedClipIds,
+      playheadTime: options.playheadTime,
+      agentConfig: options.agentConfig,
+      context: contextWithSuggestions,
+    },
+  }, {
+    streamContext: {
+      clientRequestId: options.clientRequestId,
+      projectId: String(options.projectId),
+      chapterId: String(options.chapter.id),
+      conversationId: options.conversation.id,
+      passIndex: 1,
+    },
+    onStreamEvent: (streamMessage) => {
+      if (streamMessage.type === 'assistant_text_delta') {
+        return;
+      }
+
+      if (streamMessage.type === 'tool_state') {
+        executionTrace = appendExecutionTraceEntry(executionTrace, {
+          status: `tool_${streamMessage.state}`,
+          message:
+            streamMessage.message ??
+            streamMessage.error ??
+            `${streamMessage.toolName} ${streamMessage.state}`,
+          nodeName: streamMessage.toolName,
+          passIndex: 1,
+        });
+        return;
+      }
+
+      if (streamMessage.type === 'status') {
+        executionTrace = appendExecutionTraceEntry(executionTrace, {
+          status: streamMessage.status,
+          message: streamMessage.message,
+          nodeName: streamMessage.nodeName,
+          passIndex: 1,
+        });
+      }
+    },
+  });
+
+  if (response.type === 'error') {
+    throw new Error(response.error);
+  }
+  if (response.type !== 'turn_complete') {
+    throw new Error('Unexpected agent response type');
+  }
+
+  const finalResult = response.result && typeof response.result === 'object'
+    ? (response.result as Record<string, unknown>)
+    : {};
+  const finalParsed = parseAgentGraphResult(finalResult, chapterDuration, chapterAssetIds);
+  const assistantMessage = finalParsed.message || 'Analysis complete';
+  const thinkingMarkdown = finalParsed.thinkingMarkdown;
+  const persistedAssistantMessage = await createChatMessage({
+    conversation_id: options.conversation.id,
+    role: 'assistant',
+    content: assistantMessage,
+    thinking_markdown: thinkingMarkdown,
+    trace_json: serializeExecutionTrace(executionTrace),
+  });
+  const persistedSuggestions = await persistAgentSuggestions(
+    options.chapter.id,
+    options.conversation.id,
+    persistedAssistantMessage.id,
+    options.effectiveProvider,
+    finalParsed.suggestionDrafts
+  );
+
+  return {
+    message: assistantMessage,
+    thinkingMarkdown: thinkingMarkdown ?? undefined,
+    threadId: options.threadId,
+    userMessageId: options.userMessageId,
+    assistantMessageId: persistedAssistantMessage.id,
+    userCreatedAt: options.userCreatedAt,
+    assistantCreatedAt: persistedAssistantMessage.created_at,
+    suggestions: persistedSuggestions,
+    outcome: finalParsed.outcome,
+  };
+}
 
 function summarizeSuggestions(suggestions: Suggestion[]): string {
   if (suggestions.length === 0) {
@@ -77,6 +397,9 @@ export const AGENT_HANDLER_CHANNELS = [
   IPC_CHANNELS.AGENT_CONVERSATION_MESSAGES,
   IPC_CHANNELS.AGENT_CONVERSATION_DELETE,
   IPC_CHANNELS.AGENT_CHAT,
+  IPC_CHANNELS.AGENT_REROLL_MESSAGE,
+  IPC_CHANNELS.AGENT_EDIT_MESSAGE,
+  IPC_CHANNELS.AGENT_BRANCH_MESSAGE,
   IPC_CHANNELS.AGENT_APPLY_ACTIONS,
 ];
 
@@ -115,7 +438,7 @@ export function registerAgentHandlers(): void {
       const conversation = await createChatConversation({
         project_id: projectId,
         chapter_id: chapterId,
-        title: titleRaw || 'New conversation',
+        title: titleRaw || DEFAULT_CONVERSATION_TITLE,
         provider: normalizeConversationProvider(provider),
         thread_id: randomUUID(),
       });
@@ -206,226 +529,358 @@ export function registerAgentHandlers(): void {
 
     try {
       if (!clientRequestId) {
-        return createErrorResponse('Client request ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-      if (!projectId) {
-        return createErrorResponse('Project ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-      if (!conversationId) {
-        return createErrorResponse('Conversation ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+        throw new AgentHandlerError(
+          'Client request ID is required',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
       }
       if (!message) {
-        return createErrorResponse('Message is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+        throw new AgentHandlerError('Message is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const project = await getProject(projectId);
-      if (!project) {
-        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
-      }
-
-      const conversation = await getChatConversation(conversationId);
-      if (!conversation) {
-        return createErrorResponse('Conversation not found', IPC_ERROR_CODES.NOT_FOUND);
-      }
-      if (conversation.project_id !== projectId) {
-        return createErrorResponse('Conversation does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-
-      const chapter = await getChapter(conversation.chapter_id);
-      if (!chapter) {
-        return createErrorResponse('Conversation chapter not found', IPC_ERROR_CODES.NOT_FOUND);
-      }
-      if (chapter.project_id !== projectId) {
-        return createErrorResponse('Conversation chapter does not belong to project', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-
-      const effectiveProvider = provider ?? conversation.provider ?? undefined;
-      const staleRuntime = await getBackendRuntimeStaleness();
-      if (staleRuntime) {
-        logger.warn(
-          'agent:chat stale dev runtime',
-          staleRuntime.runtimeSessionId,
-          staleRuntime.startupFingerprint,
-          staleRuntime.currentFingerprint
-        );
-        return createErrorResponse(
-          'Backend code changed since this Electron session started. Restarting is required.',
-          IPC_ERROR_CODES.STALE_DEV_RUNTIME
-        );
-      }
-
-      if (provider && provider !== conversation.provider) {
-        await updateChatConversation(conversation.id, {
-          provider: normalizeConversationProvider(provider),
-        });
-      }
-
-      await createChatMessage({
-        conversation_id: conversation.id,
+      const normalizedProjectId = requireProjectId(projectId);
+      const normalizedConversationId = requireConversationId(conversationId);
+      const {
+        chapter,
+        conversation,
+        effectiveProvider,
+      } = await resolveConversationContext(
+        normalizedProjectId,
+        normalizedConversationId,
+        provider,
+        { requireFreshRuntime: true }
+      );
+      const syncedConversation = await syncConversationProvider(conversation, provider);
+      const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
+      const persistedUserMessage = await createChatMessage({
+        conversation_id: syncedConversation.id,
         role: 'user',
         content: message,
         thinking_markdown: null,
         trace_json: null,
       });
 
-      const existingMessages = await getChatMessagesByConversation(conversation.id);
-      if (conversation.title === 'New conversation' && existingMessages.length === 1) {
-        let generatedTitle: string | null = null;
-        try {
-          generatedTitle = await suggestConversationTitle({
+      if (
+        syncedConversation.title === DEFAULT_CONVERSATION_TITLE &&
+        existingMessages.length === 0
+      ) {
+        await updateChatConversation(syncedConversation.id, {
+          title: await generateConversationTitle(
             message,
-            chapterTitle: chapter.title,
-            model: threadNamingModel,
-            providerConfig: agentConfig,
-          });
-        } catch (error) {
-          logger.warn('agent:thread-title fallback', error);
-        }
-        await updateChatConversation(conversation.id, {
-          title: generatedTitle ?? deriveConversationTitle(message),
+            chapter.title,
+            threadNamingModel,
+            agentConfig
+          ),
         });
       }
 
-      const threadId = conversation.thread_id?.trim() || randomUUID();
-      if (!conversation.thread_id || conversation.thread_id !== threadId) {
-        await updateChatConversation(conversation.id, { thread_id: threadId });
-      }
-
-      const chapterAssetIds = await getAssetsForChapter(chapter.id);
-      const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-      const existingSuggestions = await getSuggestionsByConversation(conversation.id, chapter.id);
-      const initialContext = await buildAgentChatContext(projectId, chapter.id, {
-        ensureChapterProxyReady: false,
-      });
-      const contextWithSuggestions = {
-        ...initialContext,
-        suggestionSummary: summarizeSuggestions(existingSuggestions),
-      };
-
-      if (chapterAssetIds.length > 0 && !initialContext.proxyPath) {
-        const primaryAssetId = chapterAssetIds[0];
-        void scheduleChapterMediaPrewarm(chapter.id, primaryAssetId).catch((error) => {
-          console.warn(
-            `[ChapterPrewarm] Failed scheduling from chat chapter=${chapter.id} asset=${primaryAssetId}:`,
-            error
-          );
-        });
-      }
-
-      const conversationHistory = existingMessages.map((item) => ({
-        role: item.role,
-        content: item.role === 'assistant'
-          ? sanitizeAssistantContent(item.content)
-          : item.content,
-      }));
-
-      const guardedInitialPayload = applyNearLimitTokenGuard(
-        conversationHistory,
-        contextWithSuggestions,
-        effectiveProvider
-      );
-
-      if (guardedInitialPayload.compressed) {
-        logger.info(
-          'agent:token-guard',
-          conversation.id,
-          effectiveProvider || 'default',
-          `${guardedInitialPayload.estimatedTotalTokens}/${guardedInitialPayload.effectiveContextLimit}`
-        );
-      }
-
-      await agentBridge.ensureStarted();
-      let executionTrace: ExecutionTraceEntry[] = [];
-      const response = await agentBridge.send({
-        type: 'chat',
-        threadId,
-        messages: guardedInitialPayload.messages,
-        metadata: {
-          projectId: String(projectId),
-          provider: effectiveProvider,
-          chapterId: String(chapter.id),
-          selectedClipIds,
-          playheadTime,
-          agentConfig,
-          context: contextWithSuggestions,
-        },
-      }, {
-        streamContext: {
-          clientRequestId,
-          projectId: String(projectId),
-          chapterId: String(chapter.id),
-          conversationId: conversation.id,
-          passIndex: 1,
-        },
-        onStreamEvent: (streamMessage) => {
-          if (streamMessage.type === 'assistant_text_delta') {
-            return;
-          }
-
-          if (streamMessage.type === 'tool_state') {
-            executionTrace = appendExecutionTraceEntry(executionTrace, {
-              status: `tool_${streamMessage.state}`,
-              message:
-                streamMessage.message ??
-                streamMessage.error ??
-                `${streamMessage.toolName} ${streamMessage.state}`,
-              nodeName: streamMessage.toolName,
-              passIndex: 1,
-            });
-            return;
-          }
-
-          if (streamMessage.type === 'status') {
-            executionTrace = appendExecutionTraceEntry(executionTrace, {
-              status: streamMessage.status,
-              message: streamMessage.message,
-              nodeName: streamMessage.nodeName,
-              passIndex: 1,
-            });
-          }
-        },
-      });
-
-      if (response.type === 'error') {
-        throw new Error(response.error);
-      }
-      if (response.type !== 'turn_complete') {
-        throw new Error('Unexpected agent response type');
-      }
-
-      const finalResult = response.result && typeof response.result === 'object'
-        ? (response.result as Record<string, unknown>)
-        : {};
-      const finalParsed = parseAgentGraphResult(finalResult, chapterDuration, chapterAssetIds);
-      const assistantMessage = finalParsed.message || 'Analysis complete';
-      const thinkingMarkdown = finalParsed.thinkingMarkdown;
-      const persistedAssistantMessage = await createChatMessage({
-        conversation_id: conversation.id,
-        role: 'assistant',
-        content: assistantMessage,
-        thinking_markdown: thinkingMarkdown,
-        trace_json: serializeExecutionTrace(executionTrace),
-      });
-      const persistedSuggestions = await persistAgentSuggestions(
-        chapter.id,
-        conversation.id,
-        persistedAssistantMessage.id,
+      const threadId = await resolveConversationThreadId(syncedConversation);
+      const normalized = await runConversationTurn(agentBridge, {
+        agentConfig,
+        chapter,
+        clientRequestId,
+        conversation: syncedConversation,
+        conversationHistory: sanitizeConversationHistory([
+          ...existingMessages,
+          persistedUserMessage,
+        ]),
         effectiveProvider,
-        finalParsed.suggestionDrafts
-      );
-
-      const normalized: AgentChatData = {
-        message: assistantMessage,
-        thinkingMarkdown: thinkingMarkdown ?? undefined,
+        playheadTime,
+        projectId: normalizedProjectId,
+        selectedClipIds,
         threadId,
-        suggestions: persistedSuggestions,
-        outcome: finalParsed.outcome,
-      };
+        userMessageId: persistedUserMessage.id,
+        userCreatedAt: persistedUserMessage.created_at,
+      });
 
       return createSuccessResponse(normalized);
     } catch (error) {
-      console.error('[IPC] agent:chat error:', error);
-      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+      return createErrorResponse(
+        error,
+        error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
+      );
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_REROLL_MESSAGE, async (_, payload) => {
+    const clientRequestId =
+      typeof payload?.clientRequestId === 'string' ? payload.clientRequestId.trim() : '';
+    const projectId = toNumberOrNull(payload?.projectId);
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    const messageId = toNumberOrNull(payload?.messageId);
+    const provider = typeof payload?.provider === 'string' ? payload.provider : undefined;
+    const selectedClipIds = Array.isArray(payload?.selectedClipIds)
+      ? payload.selectedClipIds.filter(
+        (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+      )
+      : [];
+    const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
+      ? payload.agentConfig as ProviderConfigPayload
+      : undefined;
+
+    logger.info('agent:reroll-message', projectId, conversationId, messageId, provider);
+
+    try {
+      if (!clientRequestId) {
+        throw new AgentHandlerError(
+          'Client request ID is required',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
+      const normalizedProjectId = requireProjectId(projectId);
+      const normalizedConversationId = requireConversationId(conversationId);
+      const normalizedMessageId = requireMessageId(messageId);
+      const {
+        chapter,
+        conversation,
+        effectiveProvider,
+      } = await resolveConversationContext(
+        normalizedProjectId,
+        normalizedConversationId,
+        provider,
+        { requireFreshRuntime: true }
+      );
+      const syncedConversation = await syncConversationProvider(conversation, provider);
+      const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
+      const targetIndex = existingMessages.findIndex((item) => item.id === normalizedMessageId);
+      if (targetIndex < 0) {
+        throw new AgentHandlerError('Message not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const targetMessage = existingMessages[targetIndex];
+      if (targetMessage.role === 'system') {
+        throw new AgentHandlerError(
+          'System messages cannot be rerolled',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
+      const retainedUserMessage = targetMessage.role === 'user'
+        ? targetMessage
+        : [...existingMessages.slice(0, targetIndex)]
+          .reverse()
+          .find((item) => item.role === 'user');
+
+      if (!retainedUserMessage) {
+        throw new AgentHandlerError(
+          'Reroll requires a preceding user message',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
+      await deleteChatMessagesAfter(syncedConversation.id, retainedUserMessage.id);
+      const threadId = await resolveConversationThreadId(syncedConversation, {
+        forceRotate: true,
+      });
+
+      const retainedIndex = existingMessages.findIndex(
+        (item) => item.id === retainedUserMessage.id
+      );
+      const normalized = await runConversationTurn(agentBridge, {
+        agentConfig,
+        chapter,
+        clientRequestId,
+        conversation: syncedConversation,
+        conversationHistory: sanitizeConversationHistory(
+          existingMessages.slice(0, retainedIndex + 1)
+        ),
+        effectiveProvider,
+        playheadTime,
+        projectId: normalizedProjectId,
+        selectedClipIds,
+        threadId,
+        userMessageId: retainedUserMessage.id,
+        userCreatedAt: retainedUserMessage.created_at,
+      });
+
+      return createSuccessResponse(normalized);
+    } catch (error) {
+      return createErrorResponse(
+        error,
+        error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
+      );
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_EDIT_MESSAGE, async (_, payload) => {
+    const clientRequestId =
+      typeof payload?.clientRequestId === 'string' ? payload.clientRequestId.trim() : '';
+    const projectId = toNumberOrNull(payload?.projectId);
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    const messageId = toNumberOrNull(payload?.messageId);
+    const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+    const provider = typeof payload?.provider === 'string' ? payload.provider : undefined;
+    const selectedClipIds = Array.isArray(payload?.selectedClipIds)
+      ? payload.selectedClipIds.filter(
+        (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+      )
+      : [];
+    const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
+    const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
+      ? payload.agentConfig as ProviderConfigPayload
+      : undefined;
+
+    logger.info('agent:edit-message', projectId, conversationId, messageId, provider);
+
+    try {
+      if (!clientRequestId) {
+        throw new AgentHandlerError(
+          'Client request ID is required',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+      if (!message) {
+        throw new AgentHandlerError('Message is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const normalizedProjectId = requireProjectId(projectId);
+      const normalizedConversationId = requireConversationId(conversationId);
+      const normalizedMessageId = requireMessageId(messageId);
+      const {
+        chapter,
+        conversation,
+        effectiveProvider,
+      } = await resolveConversationContext(
+        normalizedProjectId,
+        normalizedConversationId,
+        provider,
+        { requireFreshRuntime: true }
+      );
+      const syncedConversation = await syncConversationProvider(conversation, provider);
+      const targetMessage = await getChatMessageByConversation(
+        syncedConversation.id,
+        normalizedMessageId
+      );
+      if (!targetMessage) {
+        throw new AgentHandlerError('Message not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (targetMessage.role !== 'user') {
+        throw new AgentHandlerError(
+          'Only user messages can be edited',
+          IPC_ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
+      const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
+      const targetIndex = existingMessages.findIndex((item) => item.id === targetMessage.id);
+      if (targetIndex < 0) {
+        throw new AgentHandlerError('Message not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const firstUserMessage = existingMessages.find((item) => item.role === 'user');
+      const shouldRetitleConversation =
+        firstUserMessage?.id === targetMessage.id &&
+        (
+          syncedConversation.title === DEFAULT_CONVERSATION_TITLE ||
+          syncedConversation.title === deriveConversationTitle(targetMessage.content)
+        );
+
+      if (shouldRetitleConversation) {
+        await updateChatConversation(syncedConversation.id, {
+          title: await generateConversationTitle(
+            message,
+            chapter.title,
+            threadNamingModel,
+            agentConfig
+          ),
+        });
+      }
+
+      const updated = await updateUserChatMessageContent(
+        syncedConversation.id,
+        targetMessage.id,
+        message
+      );
+      if (!updated) {
+        throw new AgentHandlerError(
+          'Failed to update user message',
+          IPC_ERROR_CODES.DATABASE_ERROR
+        );
+      }
+
+      await deleteChatMessagesAfter(syncedConversation.id, targetMessage.id);
+      const threadId = await resolveConversationThreadId(syncedConversation, {
+        forceRotate: true,
+      });
+
+      const updatedMessages = existingMessages
+        .slice(0, targetIndex + 1)
+        .map((item) => item.id === targetMessage.id ? { ...item, content: message } : item);
+      const normalized = await runConversationTurn(agentBridge, {
+        agentConfig,
+        chapter,
+        clientRequestId,
+        conversation: syncedConversation,
+        conversationHistory: sanitizeConversationHistory(updatedMessages),
+        effectiveProvider,
+        playheadTime,
+        projectId: normalizedProjectId,
+        selectedClipIds,
+        threadId,
+        userMessageId: targetMessage.id,
+        userCreatedAt: targetMessage.created_at,
+      });
+
+      return createSuccessResponse(normalized);
+    } catch (error) {
+      return createErrorResponse(
+        error,
+        error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
+      );
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_BRANCH_MESSAGE, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const conversationId = toNumberOrNull(payload?.conversationId);
+    const messageId = toNumberOrNull(payload?.messageId);
+
+    logger.info('agent:branch-message', projectId, conversationId, messageId);
+
+    try {
+      const normalizedProjectId = requireProjectId(projectId);
+      const normalizedConversationId = requireConversationId(conversationId);
+      const normalizedMessageId = requireMessageId(messageId);
+      const { chapter, conversation } = await resolveConversationContext(
+        normalizedProjectId,
+        normalizedConversationId
+      );
+      const targetMessage = await getChatMessageByConversation(
+        conversation.id,
+        normalizedMessageId
+      );
+      if (!targetMessage) {
+        throw new AgentHandlerError('Message not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      const branchedConversation = await createChatConversation({
+        project_id: normalizedProjectId,
+        chapter_id: chapter.id,
+        title: `${conversation.title} (Branch)`,
+        provider: conversation.provider,
+        thread_id: randomUUID(),
+      });
+      const clonedCount = await cloneChatMessagesThrough(
+        conversation.id,
+        branchedConversation.id,
+        targetMessage.id
+      );
+      if (clonedCount === 0) {
+        throw new AgentHandlerError(
+          'Failed to branch conversation history',
+          IPC_ERROR_CODES.DATABASE_ERROR
+        );
+      }
+
+      return createSuccessResponse(branchedConversation);
+    } catch (error) {
+      return createErrorResponse(
+        error,
+        error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
+      );
     }
   });
 

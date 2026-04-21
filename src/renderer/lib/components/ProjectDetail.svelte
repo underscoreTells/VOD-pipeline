@@ -614,7 +614,7 @@
             style="width: {layoutState.leftWidth}px"
           >
             <div class="left-sidebar-stack flex h-full min-h-0 flex-col">
-              <div class="left-sidebar-chapters min-h-[220px] flex-[1_1_auto] overflow-hidden">
+              <div class="left-sidebar-chapters min-h-[220px] basis-0 flex-1 overflow-hidden">
                 <ChapterPanel
                   class="h-full border-r-0"
                   projectAssets={projectDetail.assets}
@@ -623,7 +623,7 @@
               </div>
 
               {#if !showClipsDock}
-                <div class="left-sidebar-clips min-h-[220px] flex-[1_1_auto] overflow-hidden border-t border-border-default">
+                <div class="left-sidebar-clips min-h-[220px] basis-0 flex-1 overflow-hidden border-t border-border-default">
                   <BeatPanel
                     class="h-full w-full border-l-0"
                     clips={selectedChapterClips}

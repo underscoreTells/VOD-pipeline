@@ -15,6 +15,7 @@ export function createDraftAssistantMessage(
     thinkingMarkdown: null,
     trace: [],
     id: `draft-${clientRequestId}`,
+    databaseId: null,
     timestamp,
     requestId: clientRequestId,
     isStreaming: true,
