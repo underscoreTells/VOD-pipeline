@@ -556,13 +556,16 @@
                 <Icon icon={ChevronRight} size={12} />
               </button>
               <button
-                class="loop-btn ml-1 inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
-                class:bg-accent-primary-subtle={isLooping}
-                class:border-accent-primary={isLooping}
-                class:text-accent-primary={isLooping}
+                class={cn(
+                  'loop-btn ml-1 inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] transition-all',
+                  isLooping
+                    ? 'border border-accent-primary bg-accent-primary text-white hover:bg-accent-primary-hover'
+                    : 'border border-white/12 bg-black text-white hover:border-white/25 hover:bg-black/90'
+                )}
                 onclick={() => isLooping = !isLooping}
                 title={isLooping ? 'Disable loop' : 'Enable loop'}
-                aria-label="Toggle loop"
+                aria-label={isLooping ? 'Loop enabled' : 'Loop disabled'}
+                aria-pressed={isLooping}
               >
                 <Icon icon={Repeat} size={12} />
               </button>
