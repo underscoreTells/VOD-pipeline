@@ -7,96 +7,145 @@ export interface SeekableMediaElement {
 interface QueuedMediaSeekOptions {
   getVideo: () => SeekableMediaElement | null;
   normalizeTime: (time: number) => number;
+  snapPreviewTime?: (time: number) => number;
+  requestFrame?: (callback: FrameRequestCallback) => number;
+  cancelFrame?: (id: number) => void;
   epsilon?: number;
 }
-
-type QueuedSeekRequest = {
-  time: number;
-  precise: boolean;
-};
 
 function clampEpsilonEqual(left: number, right: number, epsilon: number): boolean {
   return Math.abs(left - right) <= epsilon;
 }
 
+function defaultRequestFrame(callback: FrameRequestCallback): number {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    return globalThis.requestAnimationFrame(callback);
+  }
+
+  return globalThis.setTimeout(() => callback(Date.now()), 16) as unknown as number;
+}
+
+function defaultCancelFrame(id: number): void {
+  if (typeof globalThis.cancelAnimationFrame === 'function') {
+    globalThis.cancelAnimationFrame(id);
+    return;
+  }
+
+  globalThis.clearTimeout(id as unknown as ReturnType<typeof globalThis.setTimeout>);
+}
+
 export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
   const epsilon = options.epsilon ?? 0.001;
+  const requestFrame = options.requestFrame ?? defaultRequestFrame;
+  const cancelFrame = options.cancelFrame ?? defaultCancelFrame;
 
+  let latestPreviewTarget: number | null = null;
+  let lastIssuedPreviewTarget: number | null = null;
+  let previewFrameId: number | null = null;
   let seekInFlight = false;
-  let pendingRequest: QueuedSeekRequest | null = null;
+  let commitPending = false;
 
-  function getNormalizedTime(time: number): number {
-    return options.normalizeTime(time);
+  function normalizePreviewTarget(time: number): number {
+    const normalizedTime = options.normalizeTime(time);
+    if (!options.snapPreviewTime) {
+      return normalizedTime;
+    }
+
+    return options.normalizeTime(options.snapPreviewTime(normalizedTime));
   }
 
-  function issueSeek(request: QueuedSeekRequest): void {
-    const video = options.getVideo();
-    if (!video) {
-      seekInFlight = false;
+  function clearScheduledPreviewFlush(): void {
+    if (previewFrameId === null) {
       return;
     }
 
-    const nextTime = getNormalizedTime(request.time);
-    const currentTime = video.currentTime;
-    if (!video.seeking && clampEpsilonEqual(currentTime, nextTime, epsilon)) {
-      seekInFlight = false;
-      return;
-    }
-
-    seekInFlight = true;
-
-    if (!request.precise && typeof video.fastSeek === 'function') {
-      try {
-        video.fastSeek(nextTime);
-      } catch {
-        video.currentTime = nextTime;
-      }
-      return;
-    }
-
-    video.currentTime = nextTime;
+    cancelFrame(previewFrameId);
+    previewFrameId = null;
   }
 
-  function enqueue(time: number, precise: boolean): void {
-    const request = {
-      time: getNormalizedTime(time),
-      precise,
-    };
+  function schedulePreviewFlush(): void {
+    if (previewFrameId !== null) {
+      return;
+    }
 
+    previewFrameId = requestFrame(() => {
+      previewFrameId = null;
+      flushPreviewSeek();
+    });
+  }
+
+  function flushPreviewSeek(): void {
+    const target = latestPreviewTarget;
     const video = options.getVideo();
-    if (!video) return;
+
+    if (target === null || !video) {
+      return;
+    }
 
     if (seekInFlight || video.seeking) {
-      pendingRequest = request;
       return;
     }
 
-    issueSeek(request);
+    if (
+      lastIssuedPreviewTarget !== null &&
+      clampEpsilonEqual(lastIssuedPreviewTarget, target, epsilon)
+    ) {
+      return;
+    }
+
+    video.currentTime = target;
+    lastIssuedPreviewTarget = target;
+    seekInFlight = true;
+    commitPending = false;
   }
 
   return {
     preview(time: number): void {
-      enqueue(time, false);
+      commitPending = false;
+      latestPreviewTarget = normalizePreviewTarget(time);
+      schedulePreviewFlush();
     },
 
     commit(time: number): void {
-      enqueue(time, true);
-    },
+      clearScheduledPreviewFlush();
+      latestPreviewTarget = null;
 
-    handleSeeked(): void {
-      if (!pendingRequest) {
+      const video = options.getVideo();
+      if (!video) {
+        lastIssuedPreviewTarget = null;
         seekInFlight = false;
+        commitPending = false;
         return;
       }
 
-      const nextRequest = pendingRequest;
-      pendingRequest = null;
-      issueSeek(nextRequest);
+      const nextTime = options.normalizeTime(time);
+      video.currentTime = nextTime;
+      lastIssuedPreviewTarget = nextTime;
+      seekInFlight = true;
+      commitPending = true;
+    },
+
+    handleSeeked(): void {
+      commitPending = false;
+      seekInFlight = false;
+
+      if (
+        latestPreviewTarget !== null &&
+        (
+          lastIssuedPreviewTarget === null ||
+          !clampEpsilonEqual(latestPreviewTarget, lastIssuedPreviewTarget, epsilon)
+        )
+      ) {
+        schedulePreviewFlush();
+      }
     },
 
     reset(): void {
+      clearScheduledPreviewFlush();
+      latestPreviewTarget = null;
+      lastIssuedPreviewTarget = null;
       seekInFlight = false;
-      pendingRequest = null;
+      commitPending = false;
     },
   };
 }

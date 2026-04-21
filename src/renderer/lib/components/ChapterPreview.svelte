@@ -30,6 +30,11 @@
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
+  import {
+    clampPreviewFps,
+    getReversePreviewFps,
+    snapToPreviewSample,
+  } from '../utils/previewSampling';
   import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
@@ -70,6 +75,7 @@
   const seekController = createQueuedMediaSeek({
     getVideo: () => videoRef,
     normalizeTime: (time) => normalizeMediaSeekTime(time),
+    snapPreviewTime: (time) => snapPreviewMediaTime(time),
   });
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
@@ -138,6 +144,18 @@
     }
 
     return clampToChapter(chapter, time);
+  }
+
+  function getPreviewSamplingFps(): number {
+    if (activeSource === 'reverse') {
+      return getReversePreviewFps(reverseProxyQuality);
+    }
+
+    return clampPreviewFps(asset?.metadata?.fps);
+  }
+
+  function snapPreviewMediaTime(time: number): number {
+    return normalizeMediaSeekTime(snapToPreviewSample(time, getPreviewSamplingFps()));
   }
 
   function getMediaTimeForGlobalTime(globalTime: number): number {

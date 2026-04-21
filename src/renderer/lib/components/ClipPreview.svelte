@@ -7,6 +7,7 @@
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
+  import { clampPreviewFps, snapToPreviewSample } from '../utils/previewSampling';
   import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
   import Badge from './ui/Badge.svelte';
   import Icon from './ui/Icon.svelte';
@@ -79,6 +80,7 @@
   const seekController = createQueuedMediaSeek({
     getVideo: () => videoRef,
     normalizeTime: (time) => clampToClip(time),
+    snapPreviewTime: (time) => snapPreviewTime(time),
     epsilon: CLIP_END_EPSILON,
   });
 
@@ -143,6 +145,14 @@
   function clampToClip(time: number): number {
     if (!selectedClip) return time;
     return clamp(time, selectedClip.in_point, selectedClip.out_point);
+  }
+
+  function getPreviewSamplingFps(): number {
+    return clampPreviewFps(selectedAsset?.metadata?.fps);
+  }
+
+  function snapPreviewTime(time: number): number {
+    return clampToClip(snapToPreviewSample(time, getPreviewSamplingFps()));
   }
 
   function clearScrubPointerListeners() {
