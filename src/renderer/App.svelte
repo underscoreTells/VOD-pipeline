@@ -99,7 +99,7 @@
   }
 </script>
 
-<div class="flex min-h-[100dvh] flex-col w-full">
+<div class="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden">
   <header class="flex items-center justify-between px-8 py-6 z-10 relative">
     <div class="flex items-center gap-4">
       <div class="h-8 w-8 rounded-md bg-surface-raised border border-border-default flex items-center justify-center">
@@ -123,7 +123,7 @@
 
   <main
     class={cn(
-      'flex-1 w-full',
+      'flex-1 min-h-0 w-full',
       selectedProject ? 'overflow-hidden p-0' : 'overflow-auto p-4 md:p-8 max-w-[1400px] mx-auto',
     )}
   >

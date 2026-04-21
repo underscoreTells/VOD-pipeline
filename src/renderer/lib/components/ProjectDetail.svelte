@@ -832,6 +832,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
     background: var(--surface-page);
     color: var(--text-primary);
     position: relative;
