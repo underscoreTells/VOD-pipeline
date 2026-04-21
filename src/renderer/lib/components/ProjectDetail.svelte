@@ -45,6 +45,7 @@
     setRightWidth,
     setPreviewHeight,
     setClipPreviewWidth,
+    setLeftBottomHeight,
     expandLeft,
     expandChat,
     expandBeat,
@@ -78,6 +79,9 @@
     getWaveformTrackIndices,
     isMkvAsset,
   } from './project-detail-waveforms.js';
+  import ProjectEditorHeader from './ProjectEditorHeader.svelte';
+  import Icon from './ui/Icon.svelte';
+  import { BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
   import type { Project, Asset } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
   
@@ -111,6 +115,7 @@
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
+  let leftSidebarStackRef = $state<HTMLElement | null>(null);
   let previousSelectedChapterId: number | null = null;
   let previousAgentContextKey = $state<string | null>(null);
   let initialChapterLoadEvaluated = $state(false);
@@ -123,6 +128,7 @@
   const MAX_RIGHT_WIDTH = 560;
   const MIN_PREVIEW_HEIGHT = 200;
   const MIN_TIMELINE_HEIGHT = 220;
+  const MIN_LEFT_SIDEBAR_SECTION_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
   const MIX_TRACK_INDEX = 0;
@@ -150,9 +156,12 @@
     setPreviewHeight,
     getClipPreviewWidth: () => layoutState.clipPreviewWidth,
     setClipPreviewWidth,
+    getLeftBottomHeight: () => layoutState.leftBottomHeight,
+    setLeftBottomHeight,
     persistLayout,
     getEditorMainRef: () => editorMainRef,
     getPreviewTopLayoutRef: () => previewTopLayoutRef,
+    getLeftSidebarStackRef: () => leftSidebarStackRef,
   }, {
     resizeHandleSize: RESIZE_HANDLE_SIZE,
     minLeftWidth: MIN_LEFT_WIDTH,
@@ -163,6 +172,8 @@
     minTimelineHeight: MIN_TIMELINE_HEIGHT,
     minClipPreviewWidth: MIN_CLIP_PREVIEW_WIDTH,
     minChapterPreviewWidth: MIN_CHAPTER_PREVIEW_WIDTH,
+    minLeftTopHeight: MIN_LEFT_SIDEBAR_SECTION_HEIGHT,
+    minLeftBottomHeight: MIN_LEFT_SIDEBAR_SECTION_HEIGHT,
   });
   
   // Load project data and chapters on mount
@@ -318,7 +329,9 @@
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
 
-  const rightHidden = $derived(() => layoutState.chatCollapsed);
+  const showLeftDock = $derived.by(() => layoutState.leftCollapsed);
+  const showRightDock = $derived.by(() => layoutState.chatCollapsed);
+  const showClipsDock = $derived.by(() => !layoutState.leftCollapsed && layoutState.beatCollapsed);
 
   $effect(() => {
     if (!canShowSourceTracks && showSourceTracks) {
@@ -452,6 +465,23 @@
       observer.disconnect();
     };
   });
+
+  $effect(() => {
+    if (showLeftDock || showClipsDock || !leftSidebarStackRef) return;
+
+    layoutController.clampLeftBottomHeight();
+
+    const observer = new ResizeObserver(() => {
+      if (showLeftDock || showClipsDock) return;
+      layoutController.clampLeftBottomHeight();
+    });
+
+    observer.observe(leftSidebarStackRef);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
   
   const timelineLanes = $derived.by(() => {
     if (selectedChapterAssets.length === 0) {
@@ -522,37 +552,26 @@
 </script>
 
 <div 
-  class="project-detail"
-  class:dragging={isDragging}
+  class={`project-detail relative flex h-full min-h-0 flex-col bg-surface-page text-text-primary ${isDragging ? 'border-2 border-dashed border-accent-primary bg-surface-base' : ''}`}
   role="presentation"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
-  <!-- Header -->
-  <div class="detail-header">
-    <div class="header-left">
-      <button class="back-btn" onclick={onBack}>← Back</button>
-      <h2>{project.name}</h2>
-    </div>
-    <div class="header-actions">
-      {#if hasContent()}
-        <button class="import-btn" onclick={() => setIsImporting(true)}>
-          📁 Import More
-        </button>
-      {/if}
-      <button class="export-btn" onclick={() => showExportDialog = true}>
-        📤 Export
-      </button>
-    </div>
-  </div>
+  <ProjectEditorHeader
+    projectName={project.name}
+    showImportMore={hasContent()}
+    onBack={onBack}
+    onImportMore={() => setIsImporting(true)}
+    onExport={() => showExportDialog = true}
+  />
   
   <!-- Main Content -->
-  <div class="detail-content">
+  <div class="detail-content relative flex min-h-0 flex-1 flex-col overflow-hidden">
     {#if projectDetail.isLoadingAssets || projectDetail.isLoadingClips || chaptersState.isLoading}
-      <div class="loading">
-        <span class="spinner"></span>
-        <p>Loading project...</p>
+      <div class="loading flex h-full flex-col items-center justify-center gap-4">
+        <span class="spinner h-10 w-10 animate-spin rounded-full border-[3px] border-border-default border-t-accent-primary"></span>
+        <p class="text-text-secondary">Loading project...</p>
       </div>
     {:else if showChapterDefinition && vodAssetForDefinition}
       <!-- Chapter Definition Mode -->
@@ -579,91 +598,145 @@
     {:else}
       <!-- Chapters-First Layout -->
       {#if missingProjectAssets.length > 0}
-        <div class="missing-media-banner">
-          <div class="missing-media-header">
-            <h3>Missing project media</h3>
-            <span>{missingProjectAssets.length} asset{missingProjectAssets.length === 1 ? '' : 's'} unavailable</span>
+        <div class="missing-media-banner mx-4 mt-4 rounded-[4px] border-l-[3px] border-accent-warning bg-surface-raised p-4 text-text-secondary">
+          <div class="missing-media-header mb-3 flex items-baseline justify-between gap-4">
+            <h3 class="text-app-md text-text-primary">Missing project media</h3>
+            <span class="text-app-sm text-text-secondary">
+              {missingProjectAssets.length} asset{missingProjectAssets.length === 1 ? '' : 's'} unavailable
+            </span>
           </div>
-          <div class="missing-media-list">
+          <div class="missing-media-list flex flex-col gap-3">
             {#each missingProjectAssets as asset (asset.id)}
-              <div class="missing-media-item">
-                <p class="missing-media-name">{getAssetDisplayName(asset)}</p>
-                <p class="missing-media-path">{asset.availability.savedPath}</p>
+              <div class="missing-media-item border-b border-border-subtle py-2 last:border-b-0">
+                <p class="missing-media-name mb-1 font-medium text-text-primary">{getAssetDisplayName(asset)}</p>
+                <p class="missing-media-path break-all text-app-sm leading-[1.4] text-text-secondary">
+                  {asset.availability.savedPath}
+                </p>
                 {#if asset.availability.nearestExistingAncestor}
-                  <p class="missing-media-ancestor">
+                  <p class="missing-media-ancestor break-all text-app-sm leading-[1.4] text-text-secondary">
                     Nearest existing path: {asset.availability.nearestExistingAncestor}
                   </p>
                 {/if}
               </div>
             {/each}
           </div>
-          <p class="missing-media-guidance">Mount the original storage and reload the project.</p>
+          <p class="missing-media-guidance mt-3 break-all text-app-sm leading-[1.4] text-text-tertiary">
+            Mount the original storage and reload the project.
+          </p>
           {#if missingMediaLooksExternal}
-            <p class="missing-media-guidance secondary">This looks like external or network storage.</p>
+            <p class="missing-media-guidance secondary mt-1 break-all text-app-sm leading-[1.4] text-text-tertiary">
+              This looks like external or network storage.
+            </p>
           {/if}
         </div>
       {/if}
 
-      <div class="project-layout">
+      <div class="project-layout flex h-full min-h-0 flex-1">
         <!-- Chapter Panel Sidebar -->
-        {#if !layoutState.leftCollapsed}
-          <aside class="chapters-sidebar" style="width: {layoutState.leftWidth}px">
-            <div class="left-sidebar-stack">
-              <div class="left-sidebar-chapters">
+        {#if !showLeftDock}
+          <aside
+            class="chapters-sidebar min-h-0 flex-[0_0_auto] overflow-hidden border-r border-border-default"
+            style="width: {layoutState.leftWidth}px"
+          >
+            <div class="left-sidebar-stack flex h-full min-h-0 flex-col" bind:this={leftSidebarStackRef}>
+              <div
+                class="left-sidebar-chapters min-h-0 flex-1 overflow-hidden"
+                style="min-height: {MIN_LEFT_SIDEBAR_SECTION_HEIGHT}px"
+              >
                 <ChapterPanel
+                  class="h-full border-r-0"
                   projectAssets={projectDetail.assets}
                   onImportClick={() => setIsImporting(true)}
                 />
               </div>
 
-              {#if !layoutState.beatCollapsed}
-                <div class="left-sidebar-clips">
+              {#if !showClipsDock}
+                <div
+                  class="resize-handle-horizontal h-[6px] flex-[0_0_6px] cursor-row-resize touch-none bg-surface-page transition-colors hover:bg-surface-hover"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Resize clips panel"
+                  onpointerdown={layoutController.handleLeftSectionResize}
+                ></div>
+                <div
+                  class="left-sidebar-clips min-h-0 shrink-0 overflow-hidden border-t border-border-default"
+                  style="height: {layoutState.leftBottomHeight}px; min-height: {MIN_LEFT_SIDEBAR_SECTION_HEIGHT}px"
+                >
                   <BeatPanel
+                    class="h-full w-full border-l-0"
                     clips={selectedChapterClips}
                     chapterStartTime={selectedChapter?.start_time ?? 0}
                     chapterDuration={selectedChapterDuration}
                   />
                 </div>
+              {:else}
+                <div class="clips-panel-dock flex h-14 shrink-0 items-center border-t border-border-default bg-surface-base px-3">
+                  <button
+                    type="button"
+                    class="group inline-flex items-center gap-2 rounded-2xl border border-border-default bg-surface-elevated px-3.5 py-2 text-app-sm font-medium text-text-secondary shadow-[0_16px_30px_-24px_rgba(0,0,0,0.7)] transition-[transform,background-color,border-color,color] duration-200 hover:-translate-y-px hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:translate-y-px focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus"
+                    onclick={expandBeat}
+                    title="Show clips"
+                    aria-label="Show clips panel"
+                  >
+                    <Icon icon={ChevronRight} size={14} class="text-text-tertiary transition-colors group-hover:text-text-primary" />
+                    <span>Show clips</span>
+                  </button>
+                </div>
               {/if}
             </div>
           </aside>
           <div
-            class="resize-handle-vertical"
+            class="resize-handle-vertical w-[6px] flex-[0_0_6px] cursor-col-resize touch-none bg-surface-page transition-colors hover:bg-surface-hover"
             role="separator"
             aria-orientation="vertical"
             onpointerdown={layoutController.handleLeftResize}
           ></div>
+        {:else}
+          <aside class="left-panel-dock flex min-h-0 w-[52px] shrink-0 items-start justify-center border-r border-border-default bg-surface-page px-2 py-4 max-[980px]:w-11">
+            <button
+              type="button"
+              class="group inline-flex h-40 w-full flex-col items-center justify-center gap-3 rounded-2xl border border-border-default bg-surface-elevated px-2 py-3 text-text-secondary shadow-[0_18px_32px_-24px_rgba(0,0,0,0.7)] transition-[transform,background-color,border-color,color] duration-200 hover:-translate-y-px hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:translate-y-px focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus max-[980px]:h-32 max-[980px]:gap-2"
+              onclick={expandLeft}
+              title="Show chapters"
+              aria-label="Show chapters panel"
+            >
+              <Icon icon={ChevronRight} size={14} class="text-text-tertiary transition-colors group-hover:text-text-primary" />
+              <span class="text-app-xs font-medium tracking-[0.04em] [text-orientation:mixed] [writing-mode:vertical-rl]">
+                Chapters
+              </span>
+            </button>
+          </aside>
         {/if}
         
         <!-- Main Content Area -->
-        <main class="main-content">
-          <div class="editor-layout">
-            <section class="editor-main" bind:this={editorMainRef}>
-              <div class="editor-top-fixed" style="height: {layoutState.previewHeight}px">
-                <div class="preview-top-toolbar">
+        <main class="main-content flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div class="editor-layout flex flex-1 min-h-0 overflow-hidden">
+            <section class="editor-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" bind:this={editorMainRef}>
+              <div
+                class="editor-top-fixed box-border flex shrink-0 flex-col gap-2 overflow-hidden border-b border-border-subtle px-4 pt-4 pb-2"
+                style="height: {layoutState.previewHeight}px"
+              >
+                <div class="preview-top-toolbar flex shrink-0 items-center justify-end">
                   <button
-                    class="preview-toggle-btn"
+                    class="preview-toggle-btn rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-sm text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
                     onclick={() => showClipPreviewPanel = !showClipPreviewPanel}
                   >
                     {showClipPreviewPanel ? 'Hide Clip Player' : 'Show Clip Player'}
                   </button>
                 </div>
-                <div class="preview-top-layout" bind:this={previewTopLayoutRef}>
+                <div
+                  class="preview-top-layout flex flex-1 min-h-0 items-stretch gap-3 max-[980px]:flex-col"
+                  bind:this={previewTopLayoutRef}
+                >
                   {#if showClipPreviewPanel}
-                    <div class="clip-preview-pane" style="width: {layoutState.clipPreviewWidth}px">
-                      <ClipPreview />
+                    <div class="clip-preview-pane min-h-0 min-w-0 flex-1 basis-0 overflow-hidden max-[980px]:flex-auto">
+                      <ClipPreview class="h-full min-h-0" />
                     </div>
-
-                    <div
-                      class="resize-handle-vertical clip-preview-resize"
-                      role="separator"
-                      aria-orientation="vertical"
-                      onpointerdown={layoutController.handleClipPreviewResize}
-                    ></div>
                   {/if}
 
-                  <div class="chapter-preview-pane">
+                  <div class="chapter-preview-pane min-h-0 min-w-0 flex-1 basis-0 max-[980px]:flex-auto">
                     <ChapterPreview
+                      class="h-full min-h-0"
                       chapter={selectedChapter}
                       asset={chapterPreviewAsset}
                       clips={selectedChapterClips}
@@ -672,30 +745,33 @@
                 </div>
               </div>
               <div
-                class="resize-handle-horizontal"
+                class="resize-handle-horizontal h-[6px] flex-[0_0_6px] cursor-row-resize touch-none bg-surface-page transition-colors hover:bg-surface-hover"
                 role="separator"
                 aria-orientation="horizontal"
                 onpointerdown={layoutController.handlePreviewResize}
               ></div>
 
               {#if chaptersState.selectedChapterId}
-                <div class="editor-bottom-scrollable">
-                  <div class="timeline-wrapper">
-                    <div class="timeline-toolbar-row">
-                      <div class="timeline-toolbar-main">
+                <div class="editor-bottom-scrollable scrollbar-thin flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto overflow-x-hidden px-4 pt-2 pb-4">
+                  <div class="timeline-wrapper flex min-h-[220px] flex-1 flex-col overflow-hidden">
+                    <div class="timeline-toolbar-row flex items-center gap-3">
+                      <div class="timeline-toolbar-main min-w-0 flex-1">
                         <TimelineToolbar />
                       </div>
                       {#if canShowSourceTracks}
                         <button
-                          class="source-tracks-toggle"
-                          class:active={showSourceTracks}
+                          class={`source-tracks-toggle flex-none rounded-[4px] border px-2.5 py-1 text-app-sm leading-[1.2] transition-all ${
+                            showSourceTracks
+                              ? 'border-accent-primary bg-accent-primary-subtle text-accent-primary'
+                              : 'border-border-default bg-transparent text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary'
+                          }`}
                           onclick={() => showSourceTracks = !showSourceTracks}
                         >
                           {showSourceTracks ? 'Hide Source Tracks' : 'Show Source Tracks'}
                         </button>
                       {/if}
                     </div>
-                    <div class="timeline-container">
+                    <div class="timeline-container scrollbar-thin flex-1 overflow-auto">
                       <Timeline 
                         projectId={project.id}
                         lanes={timelineLanes}
@@ -707,25 +783,45 @@
                   </div>
                 </div>
               {:else}
-                <div class="editor-bottom-scrollable empty-selection">
-                  <div class="empty-icon">📖</div>
-                  <h3>Select a Chapter</h3>
-                  <p>Choose a chapter from the sidebar to view its timeline and beats</p>
+                <div class="editor-bottom-scrollable empty-selection flex h-full flex-col items-center justify-center px-8 py-8 text-center text-text-disabled">
+                  <div class="empty-icon mb-4 flex items-center justify-center opacity-50">
+                    <Icon icon={BookOpen} size={40} />
+                  </div>
+                  <h3 class="mb-2 mt-0 text-text-tertiary">Select a Chapter</h3>
+                  <p class="m-0 text-app-base">Choose a chapter from the sidebar to view its timeline and beats</p>
                 </div>
               {/if}
             </section>
 
-            {#if !rightHidden()}
+            {#if !showRightDock}
               <div
-                class="resize-handle-vertical"
+                class="resize-handle-vertical w-[6px] flex-[0_0_6px] cursor-col-resize touch-none bg-surface-page transition-colors hover:bg-surface-hover"
                 role="separator"
                 aria-orientation="vertical"
                 onpointerdown={layoutController.handleRightResize}
               ></div>
-              <aside class="editor-side" style="width: {layoutState.rightWidth}px">
-                <div class="side-panel chat-panel-wrapper full-height">
-                  <ChatPanel />
+              <aside
+                class="editor-side flex min-h-0 min-w-0 flex-[0_0_auto] flex-col overflow-hidden border-l border-border-default"
+                style="width: {layoutState.rightWidth}px"
+              >
+                <div class="side-panel chat-panel-wrapper flex min-h-[240px] flex-1 flex-col overflow-hidden">
+                  <ChatPanel class="h-full flex-1" />
                 </div>
+              </aside>
+            {:else}
+              <aside class="right-panel-dock flex min-h-0 w-[52px] shrink-0 items-start justify-center border-l border-border-default bg-surface-page px-2 py-4 max-[980px]:w-11">
+                <button
+                  type="button"
+                  class="group inline-flex h-40 w-full flex-col items-center justify-center gap-3 rounded-2xl border border-border-default bg-surface-elevated px-2 py-3 text-text-secondary shadow-[0_18px_32px_-24px_rgba(0,0,0,0.7)] transition-[transform,background-color,border-color,color] duration-200 hover:-translate-y-px hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:translate-y-px focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus max-[980px]:h-32 max-[980px]:gap-2"
+                  onclick={expandChat}
+                  title="Show chat"
+                  aria-label="Show chat panel"
+                >
+                  <Icon icon={ChevronLeft} size={14} class="text-text-tertiary transition-colors group-hover:text-text-primary" />
+                  <span class="text-app-xs font-medium tracking-[0.04em] [text-orientation:mixed] [writing-mode:vertical-rl]">
+                    Chat
+                  </span>
+                </button>
               </aside>
             {/if}
           </div>
@@ -736,13 +832,16 @@
   
   <!-- Waveform Generation Progress -->
   {#if projectDetail.isGeneratingWaveform}
-    <div class="progress-overlay">
-      <div class="progress-dialog">
-        <p class="progress-title">Generating waveforms... {Math.round(projectDetail.waveformProgress.percent)}%</p>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: {projectDetail.waveformProgress.percent}%"></div>
+    <div class="progress-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60">
+      <div class="progress-dialog min-w-[300px] rounded-md border border-border-default bg-surface-base p-8">
+        <p class="progress-title m-0">Generating waveforms... {Math.round(projectDetail.waveformProgress.percent)}%</p>
+        <div class="progress-bar my-4 h-2 overflow-hidden rounded-sm bg-border-default">
+          <div
+            class="progress-fill h-full bg-accent-primary"
+            style="width: {projectDetail.waveformProgress.percent}%"
+          ></div>
         </div>
-        <p class="progress-status">{projectDetail.waveformProgress.status}</p>
+        <p class="progress-status m-0 text-app-base text-text-tertiary">{projectDetail.waveformProgress.status}</p>
       </div>
     </div>
   {/if}
@@ -750,7 +849,7 @@
   <!-- Export Dialog -->
   {#if showExportDialog}
     <div
-      class="dialog-overlay"
+      class="dialog-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60"
       role="button"
       tabindex="0"
       aria-label="Close export dialog"
@@ -763,7 +862,7 @@
       }}
     >
       <div
-        class="dialog"
+        class="dialog min-w-[400px] max-w-[90vw] rounded-md border border-border-default bg-surface-base p-8"
         role="dialog"
         aria-modal="true"
         aria-label="Export project"
@@ -771,29 +870,47 @@
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => e.stopPropagation()}
       >
-        <h3>Export Project</h3>
-        <p class="dialog-description">Export your timeline to use in professional NLE software</p>
+        <h3 class="mb-2 mt-0">Export Project</h3>
+        <p class="dialog-description mb-6 mt-0 text-text-tertiary">
+          Export your timeline to use in professional NLE software
+        </p>
         
-        <div class="format-list">
+        <div class="format-list mb-6 flex flex-col gap-2">
           {#each projectDetail.exportFormats as format (format.id)}
-            <label class="format-option" class:selected={selectedExportFormat === format.id}>
+            <label
+              class={`format-option flex cursor-pointer items-center gap-3 rounded-[4px] border p-3 transition-colors ${
+                selectedExportFormat === format.id
+                  ? 'border-border-default bg-surface-hover'
+                  : 'border-transparent bg-surface-raised hover:border-border-default hover:bg-surface-hover'
+              }`}
+            >
               <input 
                 type="radio" 
                 name="format" 
                 value={format.id}
                 bind:group={selectedExportFormat}
               />
-              <div class="format-info">
-                <span class="format-name">{format.name}</span>
-                <span class="format-desc">{format.description}</span>
+              <div class="format-info flex flex-col">
+                <span class="format-name font-medium">{format.name}</span>
+                <span class="format-desc text-app-sm text-text-tertiary">{format.description}</span>
               </div>
             </label>
           {/each}
         </div>
         
-        <div class="dialog-actions">
-          <button class="secondary" onclick={() => showExportDialog = false}>Cancel</button>
-          <button class="primary" onclick={handleExport}>Export</button>
+        <div class="dialog-actions flex justify-end gap-3">
+          <button
+            class="secondary rounded-sm border border-border-default bg-transparent px-4 py-2 font-medium text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
+            onclick={() => showExportDialog = false}
+          >
+            Cancel
+          </button>
+          <button
+            class="primary rounded-sm border border-accent-primary bg-accent-primary px-4 py-2 font-medium text-white transition-all hover:border-accent-primary-hover hover:bg-accent-primary-hover"
+            onclick={handleExport}
+          >
+            Export
+          </button>
         </div>
       </div>
     </div>
@@ -801,703 +918,14 @@
   
   <!-- Error Display -->
   {#if timelineState.error}
-    <div class="error-toast">
+    <div class="error-toast fixed right-4 bottom-4 z-[var(--z-overlay)] flex items-center gap-4 rounded-sm border border-accent-destructive bg-surface-base px-4 py-3 text-accent-destructive">
       <p>{timelineState.error}</p>
-      <button onclick={() => setError(null)}>✕</button>
+      <button
+        class="inline-flex items-center bg-transparent p-0 text-accent-destructive hover:opacity-80"
+        onclick={() => setError(null)}
+      >
+        <Icon icon={X} size={14} />
+      </button>
     </div>
   {/if}
-
-  {#if layoutState.leftCollapsed}
-    <button class="floating-toggle left" onclick={expandLeft}>
-      Show Chapters
-    </button>
-  {/if}
-
-  {#if layoutState.chatCollapsed}
-    <button class="floating-toggle right chat" onclick={expandChat}>
-      Show Chat
-    </button>
-  {/if}
-  {#if !layoutState.leftCollapsed && layoutState.beatCollapsed}
-    <button class="floating-toggle left clips" onclick={expandBeat}>
-      Show Clips
-    </button>
-  {/if}
 </div>
-
-<style>
-  .project-detail {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: #0f0f0f;
-    color: #fff;
-    position: relative;
-  }
-  
-  .project-detail.dragging {
-    background: #1a1a2e;
-    border: 2px dashed #007bff;
-  }
-  
-  /* Header */
-  .detail-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 1.5rem;
-    background: #1e1e1e;
-    border-bottom: 1px solid #333;
-    flex-shrink: 0;
-  }
-  
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-  
-  .back-btn {
-    padding: 0.5rem 1rem;
-    background: transparent;
-    border: 1px solid #555;
-    color: #ccc;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  
-  .back-btn:hover {
-    background: #333;
-    border-color: #666;
-  }
-  
-  .header-actions {
-    display: flex;
-    gap: 0.75rem;
-  }
-  
-  .import-btn, .export-btn {
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: all 0.2s;
-    border: none;
-  }
-  
-  .import-btn {
-    background: #333;
-    color: #fff;
-  }
-  
-  .import-btn:hover {
-    background: #444;
-  }
-  
-  .export-btn {
-    background: #007bff;
-    color: #fff;
-  }
-  
-  .export-btn:hover {
-    background: #0056b3;
-  }
-  
-  /* Main Content */
-  .detail-content {
-    flex: 1;
-    overflow: hidden;
-    position: relative;
-    min-height: 0;
-  }
-
-  .missing-media-banner {
-    margin: 1rem 1rem 0;
-    padding: 1rem;
-    border: 1px solid #5a3d1a;
-    border-radius: 8px;
-    background: linear-gradient(180deg, #2a1f12 0%, #1b1610 100%);
-    color: #f0d3a1;
-  }
-
-  .missing-media-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 1rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .missing-media-header h3 {
-    margin: 0;
-    color: #fff;
-    font-size: 1rem;
-  }
-
-  .missing-media-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .missing-media-item {
-    padding: 0.75rem;
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.18);
-  }
-
-  .missing-media-name,
-  .missing-media-path,
-  .missing-media-ancestor,
-  .missing-media-guidance {
-    margin: 0;
-  }
-
-  .missing-media-name {
-    color: #fff;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-  }
-
-  .missing-media-path,
-  .missing-media-ancestor,
-  .missing-media-guidance {
-    font-size: 0.85rem;
-    line-height: 1.4;
-    color: #d2c0a4;
-    word-break: break-all;
-  }
-
-  .missing-media-guidance {
-    margin-top: 0.75rem;
-  }
-
-  .missing-media-guidance.secondary {
-    margin-top: 0.35rem;
-    color: #c9b38d;
-  }
-  
-  .loading {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 1rem;
-  }
-  
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #333;
-    border-top-color: #007bff;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-  
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  
-  /* Project Layout */
-  .project-layout {
-    display: flex;
-    height: 100%;
-    min-height: 0;
-  }
-  
-  .chapters-sidebar {
-    width: 300px;
-    flex-shrink: 0;
-    flex: 0 0 auto;
-    border-right: 1px solid #333;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .left-sidebar-stack {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-  }
-
-  .left-sidebar-chapters {
-    flex: 1 1 auto;
-    min-height: 220px;
-    overflow: hidden;
-  }
-
-  .left-sidebar-clips {
-    flex: 1 1 auto;
-    min-height: 220px;
-    overflow: hidden;
-    border-top: 1px solid #333;
-  }
-
-  .chapters-sidebar :global(.chapter-panel) {
-    height: 100%;
-    border-right: none;
-  }
-
-  .chapters-sidebar :global(.beat-panel) {
-    width: 100%;
-    height: 100%;
-    border-left: none;
-    border-top: none;
-  }
-  
-  .main-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .editor-layout {
-    flex: 1;
-    display: flex;
-    gap: 0;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .editor-main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-    min-width: 0;
-  }
-
-  .editor-top-fixed {
-    flex: 0 0 auto;
-    padding: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #2a2a2a;
-    overflow: hidden;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .preview-top-toolbar {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    flex: 0 0 auto;
-  }
-
-  .preview-toggle-btn {
-    padding: 0.35rem 0.75rem;
-    background: #232323;
-    border: 1px solid #3a3a3a;
-    border-radius: 4px;
-    color: #d0d0d0;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
-  }
-
-  .preview-toggle-btn:hover {
-    background: #2d2d2d;
-    border-color: #4a4a4a;
-    color: #fff;
-  }
-
-  .preview-top-layout {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    gap: 0;
-    align-items: stretch;
-  }
-
-  .clip-preview-pane {
-    flex: 0 0 auto;
-    min-width: 220px;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .clip-preview-resize {
-    align-self: stretch;
-  }
-
-  .chapter-preview-pane {
-    flex: 1 1 auto;
-    min-width: 0;
-    min-height: 0;
-    padding-left: 0.75rem;
-  }
-
-  .preview-top-layout :global(.clip-preview),
-  .preview-top-layout :global(.chapter-preview) {
-    height: 100%;
-    min-height: 0;
-  }
-
-  @media (max-width: 980px) {
-    .preview-top-layout {
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .clip-preview-pane {
-      flex: 1 1 45%;
-      min-width: 0;
-      width: auto !important;
-    }
-
-    .clip-preview-resize {
-      display: none;
-    }
-
-    .chapter-preview-pane {
-      flex: 1 1 55%;
-      padding-left: 0;
-    }
-  }
-
-  .editor-bottom-scrollable {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1rem;
-    padding-top: 0.5rem;
-  }
-
-  .editor-side {
-    width: 360px;
-    display: flex;
-    flex-direction: column;
-    border-left: 1px solid #333;
-    overflow: hidden;
-    min-height: 0;
-    min-width: 0;
-    flex: 0 0 auto;
-  }
-
-  .side-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .chat-panel-wrapper {
-    min-height: 240px;
-  }
-
-  .chat-panel-wrapper.full-height {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  .editor-side :global(.chat-panel) {
-    flex: 1;
-    border-left: none;
-    height: 100%;
-  }
-
-  .timeline-wrapper {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 220px;
-  }
-
-  .timeline-toolbar-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .timeline-toolbar-main {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .source-tracks-toggle {
-    flex: 0 0 auto;
-    padding: 0.35rem 0.75rem;
-    border: 1px solid #3a3a3a;
-    border-radius: 6px;
-    background: #1f1f1f;
-    color: #d0d0d0;
-    font-size: 0.75rem;
-    line-height: 1.2;
-  }
-
-  .source-tracks-toggle:hover {
-    background: #2a2a2a;
-    border-color: #4a4a4a;
-  }
-
-  .source-tracks-toggle.active {
-    background: #153a63;
-    border-color: #1b4f8a;
-    color: #d6ebff;
-  }
-  
-  .timeline-container {
-    flex: 1;
-    overflow: auto;
-  }
-
-  .resize-handle-vertical {
-    width: 6px;
-    flex: 0 0 6px;
-    cursor: col-resize;
-    background: #141414;
-    transition: background 0.2s;
-    touch-action: none;
-  }
-
-  .resize-handle-vertical:hover {
-    background: #2a2a2a;
-  }
-
-  .resize-handle-horizontal {
-    height: 6px;
-    flex: 0 0 6px;
-    cursor: row-resize;
-    background: #141414;
-    transition: background 0.2s;
-    touch-action: none;
-  }
-
-  .resize-handle-horizontal:hover {
-    background: #2a2a2a;
-  }
-  
-  /* Empty Selection State */
-  .empty-selection {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: #666;
-    text-align: center;
-    padding: 2rem;
-  }
-  
-  .empty-icon {
-    font-size: 4rem;
-    margin-bottom: 1rem;
-    opacity: 0.5;
-  }
-  
-  .empty-selection h3 {
-    margin: 0 0 0.5rem 0;
-    color: #888;
-  }
-  
-  .empty-selection p {
-    margin: 0;
-    font-size: 0.875rem;
-  }
-
-  .floating-toggle {
-    position: absolute;
-    top: 96px;
-    z-index: 20;
-    background: #1e1e1e;
-    border: 1px solid #333;
-    color: #fff;
-    padding: 0.5rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    cursor: pointer;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
-    white-space: nowrap;
-  }
-
-  .floating-toggle:hover {
-    background: #2a2a2a;
-  }
-
-  .floating-toggle.left {
-    left: 12px;
-  }
-
-  .floating-toggle.right {
-    right: 12px;
-  }
-
-  .floating-toggle.right.chat {
-    top: 96px;
-  }
-
-  .floating-toggle.left.clips {
-    top: 140px;
-  }
-  
-  /* Progress Overlay */
-  .progress-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-  
-  .progress-dialog {
-    background: #1e1e1e;
-    padding: 2rem;
-    border-radius: 8px;
-    min-width: 300px;
-  }
-
-  .progress-title {
-    margin: 0;
-  }
-  
-  .progress-bar {
-    height: 8px;
-    background: #333;
-    border-radius: 4px;
-    overflow: hidden;
-    margin: 1rem 0;
-  }
-  
-  .progress-fill {
-    height: 100%;
-    background: #007bff;
-  }
-  
-  .progress-status {
-    font-size: 0.875rem;
-    color: #888;
-    margin: 0;
-  }
-  
-  /* Dialog */
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-  
-  .dialog {
-    background: #1e1e1e;
-    padding: 2rem;
-    border-radius: 8px;
-    min-width: 400px;
-    max-width: 90vw;
-  }
-  
-  .dialog h3 {
-    margin: 0 0 0.5rem 0;
-  }
-  
-  .dialog-description {
-    color: #888;
-    margin: 0 0 1.5rem 0;
-  }
-  
-  .format-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
-  }
-  
-  .format-option {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem;
-    background: #252525;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  
-  .format-option:hover,
-  .format-option.selected {
-    background: #333;
-  }
-  
-  .format-info {
-    display: flex;
-    flex-direction: column;
-  }
-  
-  .format-name {
-    font-weight: 500;
-  }
-  
-  .format-desc {
-    font-size: 0.75rem;
-    color: #888;
-  }
-  
-  .dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.75rem;
-  }
-  
-  .dialog-actions button {
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    border: none;
-  }
-  
-  .dialog-actions .secondary {
-    background: #333;
-    color: #fff;
-  }
-  
-  .dialog-actions .primary {
-    background: #007bff;
-    color: #fff;
-  }
-  
-  /* Error Toast */
-  .error-toast {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    background: #dc3545;
-    color: #fff;
-    padding: 1rem;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    z-index: 1000;
-  }
-  
-  .error-toast button {
-    background: none;
-    border: none;
-    color: #fff;
-    cursor: pointer;
-    font-size: 1.25rem;
-  }
-</style>

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProviderConfig,
   defaultSettings,
   getApiKey,
   getConfiguredProviders,
   getConfiguredVideoProviders,
+  getNamingModelApiKey,
   getProviderLabel,
   isProviderConfigured,
   supportsVideo,
@@ -17,6 +19,9 @@ describe("settings helpers", () => {
     expect(defaultSettings.autoGenerateProxies).toBe(true);
     expect(defaultSettings.proxyGenerationOnImport).toBe(true);
     expect(defaultSettings.autoChapterNamingEnabled).toBe(true);
+    expect(defaultSettings.autoChapterNamingModel).toBe("gpt-5-nano");
+    expect(defaultSettings.autoClipNamingModel).toBe("gpt-5-nano");
+    expect(defaultSettings.autoThreadNamingModel).toBe("gpt-5-nano");
     expect(defaultSettings.autoTranscribeOnImport).toBe(true);
   });
 
@@ -49,5 +54,23 @@ describe("settings helpers", () => {
     expect(validateApiKey("openrouter", "sk-or-test")).toBe(true);
     expect(validateApiKey("gemini", "not-valid")).toBe(false);
     expect(validateApiKey("openai", "")).toBe(false);
+  });
+
+  it("builds provider config payloads and resolves naming model keys", () => {
+    const settings = {
+      ...defaultSettings,
+      geminiApiKey: "AIza-test",
+      kimiApiKey: "sk-kimi",
+    };
+
+    expect(buildProviderConfig(settings, "gemini")).toEqual({
+      defaultProvider: "gemini",
+      providers: {
+        gemini: "AIza-test",
+        kimi: "sk-kimi",
+      },
+    });
+    expect(getNamingModelApiKey(settings, "gemini-3-flash-preview")).toBe("AIza-test");
+    expect(getNamingModelApiKey(settings, "kimi-k2.5")).toBe("sk-kimi");
   });
 });

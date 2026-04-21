@@ -1,11 +1,20 @@
 import { SvelteDate, SvelteMap } from "svelte/reactivity";
 import { v4 as uuidv4 } from "uuid";
-import { agentChat, onAgentError, onAgentStream } from "../api/agent.js";
+import {
+  agentChat,
+  branchAgentMessage,
+  editAgentMessage,
+  onAgentError,
+  onAgentStream,
+  rerollAgentMessage,
+} from "../api/agent.js";
 import {
   agentState,
   buildProviderEnvFromSettings,
   ensureActiveConversation,
+  insertConversation,
   refreshConversationListMetadata,
+  selectConversation,
   type ChatMessage,
 } from "./agent-session.svelte.js";
 import {
@@ -15,15 +24,26 @@ import {
   failDraftMessage,
   finalizeDraftMessage,
 } from "./agent-streaming-helpers.js";
+import { loadSuggestions } from "./agent-proposals.svelte.js";
 import { timelineState } from "./timeline.svelte";
 import {
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
+import type { AgentChatData } from "../../../shared/types/agent-ipc.js";
+import {
+  DEFAULT_CONVERSATION_TITLE,
+  deriveConversationTitle,
+} from "../../../shared/utils/conversation-title.js";
+import { settingsState } from "./settings.svelte";
+
+type StreamingMutationKind = "send" | "reroll" | "edit";
 
 interface PendingDraft {
   clientRequestId: string;
   conversationId: number;
+  userMessageDatabaseId?: number;
+  userMessageLocalId?: string;
 }
 
 const pendingDrafts = new SvelteMap<string, PendingDraft>();
@@ -88,95 +108,435 @@ function buildUserMessage(message: string): ChatMessage {
     thinkingMarkdown: null,
     trace: [],
     id: uuidv4(),
+    databaseId: null,
     timestamp: new SvelteDate(),
   };
 }
 
-export async function sendChatMessage(message: string) {
-  if (!message.trim() || agentState.isStreaming) {
-    return;
+function updateConversationTitle(conversationId: number, title: string): void {
+  agentState.conversations = agentState.conversations.map((conversation) =>
+    conversation.id === conversationId
+      ? { ...conversation, title }
+      : conversation
+  );
+}
+
+function updateMessagePersistence(
+  messages: ChatMessage[],
+  matcher: (message: ChatMessage) => boolean,
+  metadata: {
+    content?: string;
+    databaseId?: number;
+    thinkingMarkdown?: string | null;
+    timestamp?: string;
+  }
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (!matcher(message)) {
+      return message;
+    }
+
+    return {
+      ...message,
+      content: metadata.content ?? message.content,
+      databaseId: metadata.databaseId ?? message.databaseId,
+      thinkingMarkdown:
+        metadata.thinkingMarkdown !== undefined
+          ? metadata.thinkingMarkdown
+          : message.thinkingMarkdown,
+      timestamp: metadata.timestamp ? new Date(metadata.timestamp) : message.timestamp,
+      id: metadata.databaseId ? `db-${metadata.databaseId}` : message.id,
+    };
+  });
+}
+
+function finalizeSuccessfulMutation(
+  messages: ChatMessage[],
+  pendingDraft: PendingDraft,
+  result: AgentChatData
+): ChatMessage[] {
+  const finalMessage = sanitizeAssistantContent(result.message || "Analysis complete");
+  const finalThinkingMarkdown = typeof result.thinkingMarkdown === "string"
+    ? sanitizeThinkingMarkdown(result.thinkingMarkdown) || null
+    : null;
+
+  let nextMessages = finalizeDraftMessage(
+    messages,
+    pendingDraft.clientRequestId,
+    finalMessage,
+    finalThinkingMarkdown
+  );
+
+  if (typeof result.assistantMessageId === "number") {
+    nextMessages = updateMessagePersistence(
+      nextMessages,
+      (message) => message.requestId === pendingDraft.clientRequestId,
+      {
+        databaseId: result.assistantMessageId,
+        timestamp: result.assistantCreatedAt,
+      }
+    );
   }
 
-  ensureStreamingSubscriptions();
+  if (typeof result.userMessageId === "number") {
+    nextMessages = updateMessagePersistence(
+      nextMessages,
+      (message) =>
+        (pendingDraft.userMessageLocalId !== undefined && message.id === pendingDraft.userMessageLocalId)
+        || (
+          pendingDraft.userMessageDatabaseId !== undefined
+          && message.databaseId === pendingDraft.userMessageDatabaseId
+        ),
+      {
+        databaseId: result.userMessageId,
+        timestamp: result.userCreatedAt,
+      }
+    );
+  }
 
+  return nextMessages;
+}
+
+function getStreamingMutationContext():
+  | {
+    currentChapterId: string;
+    currentProjectId: string;
+    selectedClipIds: number[];
+    playheadTime: number;
+  }
+  | null {
   if (!agentState.currentProjectId) {
     agentState.error = "No project selected. Please open a project first.";
-    return;
+    return null;
   }
 
   if (!agentState.currentChapterId) {
     agentState.error = "Select a chapter before starting a conversation.";
-    return;
+    return null;
   }
 
-  const conversationId = await ensureActiveConversation();
-  if (!conversationId) {
+  return {
+    currentChapterId: agentState.currentChapterId,
+    currentProjectId: agentState.currentProjectId,
+    selectedClipIds: Array.from(timelineState.selectedClipIds),
+    playheadTime: timelineState.playheadTime,
+  };
+}
+
+async function refreshSuggestions(conversationId: number): Promise<void> {
+  if (!agentState.currentChapterId || agentState.selectedConversationId !== conversationId) {
     return;
   }
-
-  const clientRequestId = uuidv4();
-  const userMessage = buildUserMessage(message);
-  const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
-
-  pendingDrafts.set(clientRequestId, {
-    clientRequestId,
-    conversationId,
-  });
-
-  agentState.messages = [...agentState.messages, userMessage, assistantDraft];
-  agentState.isStreaming = true;
-  agentState.error = null;
 
   try {
-    const response = await agentChat({
-      clientRequestId,
-      projectId: agentState.currentProjectId,
-      conversationId,
-      message,
-      provider: agentState.selectedProvider,
-      selectedClipIds: Array.from(timelineState.selectedClipIds),
-      playheadTime: timelineState.playheadTime,
-      agentConfig: buildProviderEnvFromSettings(),
-    });
+    await loadSuggestions(agentState.currentChapterId, conversationId);
+  } catch (error) {
+    console.error("[AgentStreaming] Failed to refresh suggestions:", error);
+  }
+}
 
+async function runStreamingMutation(options: {
+  conversationId: number;
+  kind: StreamingMutationKind;
+  optimisticMessages: ChatMessage[];
+  pendingDraft: PendingDraft;
+  request: (clientRequestId: string) => Promise<{ success: boolean; data?: AgentChatData; error?: string }>;
+}): Promise<boolean> {
+  ensureStreamingSubscriptions();
+
+  agentState.messages = options.optimisticMessages;
+  agentState.isStreaming = true;
+  agentState.error = null;
+  pendingDrafts.set(options.pendingDraft.clientRequestId, options.pendingDraft);
+
+  let shouldReloadConversation = false;
+
+  try {
+    const response = await options.request(options.pendingDraft.clientRequestId);
     if (response.success && response.data) {
-      const result = response.data;
-      const finalMessage = sanitizeAssistantContent(result.message || "Analysis complete");
-      const finalThinkingMarkdown = typeof result.thinkingMarkdown === "string"
-        ? sanitizeThinkingMarkdown(result.thinkingMarkdown) || null
-        : null;
-
-      agentState.messages = finalizeDraftMessage(
+      agentState.messages = finalizeSuccessfulMutation(
         agentState.messages,
-        clientRequestId,
-        finalMessage,
-        finalThinkingMarkdown
+        options.pendingDraft,
+        response.data
       );
 
-      if (Array.isArray(result.suggestions) && result.suggestions.length > 0) {
-        agentState.suggestions.push(...result.suggestions);
+      if (options.kind === "send") {
+        if (Array.isArray(response.data.suggestions) && response.data.suggestions.length > 0) {
+          agentState.suggestions.push(...response.data.suggestions);
+        }
+      } else {
+        await refreshSuggestions(options.conversationId);
       }
 
-      await refreshConversationListMetadata();
-    } else {
-      const errorMessage = response.error || "Unknown error";
-      agentState.error = errorMessage;
-      agentState.messages = failDraftMessage(
-        agentState.messages,
-        clientRequestId,
-        errorMessage
-      );
+      return true;
     }
+
+    const errorMessage = response.error || "Unknown error";
+    agentState.error = errorMessage;
+    agentState.messages = failDraftMessage(
+      agentState.messages,
+      options.pendingDraft.clientRequestId,
+      errorMessage
+    );
+    shouldReloadConversation = options.kind !== "send";
+    return false;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     agentState.error = errorMessage;
     agentState.messages = failDraftMessage(
       agentState.messages,
-      clientRequestId,
+      options.pendingDraft.clientRequestId,
       errorMessage
     );
+    shouldReloadConversation = options.kind !== "send";
+    return false;
   } finally {
-    pendingDrafts.delete(clientRequestId);
+    pendingDrafts.delete(options.pendingDraft.clientRequestId);
     agentState.isStreaming = false;
+
+    if (shouldReloadConversation) {
+      try {
+        await selectConversation(options.conversationId);
+      } catch (error) {
+        console.error("[AgentStreaming] Failed to reload conversation after mutation error:", error);
+      }
+    }
+
+    try {
+      await refreshConversationListMetadata();
+    } catch (error) {
+      console.error("[AgentStreaming] Failed to refresh conversation metadata:", error);
+    }
+  }
+}
+
+function getRetainedUserMessage(targetMessage: ChatMessage): ChatMessage | null {
+  if (targetMessage.role === "user") {
+    return targetMessage;
+  }
+
+  const targetIndex = agentState.messages.findIndex((message) => message.id === targetMessage.id);
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  return [...agentState.messages.slice(0, targetIndex)]
+    .reverse()
+    .find((message) => message.role === "user") ?? null;
+}
+
+export async function sendChatMessage(message: string) {
+  if (!message.trim() || agentState.isStreaming) {
+    return false;
+  }
+
+  const mutationContext = getStreamingMutationContext();
+  if (!mutationContext) {
+    return false;
+  }
+
+  const conversationId = await ensureActiveConversation();
+  if (!conversationId) {
+    return false;
+  }
+
+  const clientRequestId = uuidv4();
+  const shouldOptimisticallyRenameConversation =
+    agentState.messages.length === 0
+    && agentState.conversations.some(
+      (conversation) =>
+        conversation.id === conversationId
+        && conversation.title === DEFAULT_CONVERSATION_TITLE
+    );
+  const userMessage = buildUserMessage(message);
+  const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
+
+  if (shouldOptimisticallyRenameConversation) {
+    updateConversationTitle(conversationId, deriveConversationTitle(message));
+  }
+
+  return await runStreamingMutation({
+    conversationId,
+    kind: "send",
+    optimisticMessages: [...agentState.messages, userMessage, assistantDraft],
+    pendingDraft: {
+      clientRequestId,
+      conversationId,
+      userMessageLocalId: userMessage.id,
+    },
+    request: async (requestId) => await agentChat({
+      clientRequestId: requestId,
+      projectId: mutationContext.currentProjectId,
+      conversationId,
+      message,
+      provider: agentState.selectedProvider,
+      selectedClipIds: mutationContext.selectedClipIds,
+      playheadTime: mutationContext.playheadTime,
+      threadNamingModel: settingsState.settings.autoThreadNamingModel,
+      agentConfig: buildProviderEnvFromSettings(),
+    }),
+  });
+}
+
+export async function rerollMessage(targetMessage: ChatMessage) {
+  if (
+    agentState.isStreaming
+    || targetMessage.role === "system"
+    || targetMessage.databaseId === null
+  ) {
+    return false;
+  }
+
+  const mutationContext = getStreamingMutationContext();
+  if (!mutationContext) {
+    return false;
+  }
+
+  const conversationId = agentState.selectedConversationId;
+  if (!conversationId) {
+    agentState.error = "No conversation selected.";
+    return false;
+  }
+
+  const retainedUserMessage = getRetainedUserMessage(targetMessage);
+  if (!retainedUserMessage || retainedUserMessage.databaseId === null) {
+    agentState.error = "Reroll requires a user message anchor.";
+    return false;
+  }
+
+  const retainedIndex = agentState.messages.findIndex(
+    (message) => message.id === retainedUserMessage.id
+  );
+  if (retainedIndex < 0) {
+    agentState.error = "Message not found.";
+    return false;
+  }
+
+  const clientRequestId = uuidv4();
+  const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
+
+  return await runStreamingMutation({
+    conversationId,
+    kind: "reroll",
+    optimisticMessages: [
+      ...agentState.messages.slice(0, retainedIndex + 1),
+      assistantDraft,
+    ],
+    pendingDraft: {
+      clientRequestId,
+      conversationId,
+      userMessageDatabaseId: retainedUserMessage.databaseId,
+    },
+    request: async (requestId) => await rerollAgentMessage({
+      clientRequestId: requestId,
+      projectId: mutationContext.currentProjectId,
+      conversationId,
+      messageId: targetMessage.databaseId,
+      provider: agentState.selectedProvider,
+      selectedClipIds: mutationContext.selectedClipIds,
+      playheadTime: mutationContext.playheadTime,
+      agentConfig: buildProviderEnvFromSettings(),
+    }),
+  });
+}
+
+export async function editMessage(targetMessage: ChatMessage, message: string) {
+  if (
+    agentState.isStreaming
+    || targetMessage.role !== "user"
+    || targetMessage.databaseId === null
+    || !message.trim()
+  ) {
+    return false;
+  }
+
+  const mutationContext = getStreamingMutationContext();
+  if (!mutationContext) {
+    return false;
+  }
+
+  const conversationId = agentState.selectedConversationId;
+  if (!conversationId) {
+    agentState.error = "No conversation selected.";
+    return false;
+  }
+
+  const targetIndex = agentState.messages.findIndex((item) => item.id === targetMessage.id);
+  if (targetIndex < 0) {
+    agentState.error = "Message not found.";
+    return false;
+  }
+
+  const clientRequestId = uuidv4();
+  const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
+  const updatedUserMessage: ChatMessage = {
+    ...targetMessage,
+    content: message,
+  };
+
+  return await runStreamingMutation({
+    conversationId,
+    kind: "edit",
+    optimisticMessages: [
+      ...agentState.messages.slice(0, targetIndex),
+      updatedUserMessage,
+      assistantDraft,
+    ],
+    pendingDraft: {
+      clientRequestId,
+      conversationId,
+      userMessageDatabaseId: targetMessage.databaseId,
+    },
+    request: async (requestId) => await editAgentMessage({
+      clientRequestId: requestId,
+      projectId: mutationContext.currentProjectId,
+      conversationId,
+      messageId: targetMessage.databaseId,
+      message,
+      provider: agentState.selectedProvider,
+      selectedClipIds: mutationContext.selectedClipIds,
+      playheadTime: mutationContext.playheadTime,
+      threadNamingModel: settingsState.settings.autoThreadNamingModel,
+      agentConfig: buildProviderEnvFromSettings(),
+    }),
+  });
+}
+
+export async function branchMessage(targetMessage: ChatMessage) {
+  if (agentState.isStreaming || targetMessage.databaseId === null || targetMessage.role === "system") {
+    return false;
+  }
+
+  if (!agentState.currentProjectId) {
+    agentState.error = "No project selected. Please open a project first.";
+    return false;
+  }
+
+  const conversationId = agentState.selectedConversationId;
+  if (!conversationId) {
+    agentState.error = "No conversation selected.";
+    return false;
+  }
+
+  agentState.error = null;
+
+  try {
+    const response = await branchAgentMessage({
+      projectId: agentState.currentProjectId,
+      conversationId,
+      messageId: targetMessage.databaseId,
+    });
+
+    if (!response.success || !response.data) {
+      agentState.error = response.error || "Failed to branch conversation";
+      return false;
+    }
+
+    insertConversation(response.data);
+    await selectConversation(response.data.id);
+    return true;
+  } catch (error) {
+    agentState.error = error instanceof Error ? error.message : String(error);
+    return false;
   }
 }

@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IPC_CHANNELS } from "../../src/electron/ipc/channels.js";
 
-const registeredHandlers = vi.hoisted(() => new Map<string, Function>());
+type MockIpcHandler = (...args: unknown[]) => unknown;
+
+const registeredHandlers = vi.hoisted(() => new Map<string, MockIpcHandler>());
 
 const electronMocks = vi.hoisted(() => ({
   ipcMain: {
-    handle: vi.fn((channel: string, handler: Function) => {
+    handle: vi.fn((channel: string, handler: MockIpcHandler) => {
       registeredHandlers.set(channel, handler);
     }),
   },

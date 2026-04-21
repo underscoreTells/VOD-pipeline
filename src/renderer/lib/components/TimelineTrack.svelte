@@ -22,6 +22,7 @@
   } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
+  import { ROLE_CONFIG } from '../constants';
   
   interface Props {
     audioUrl: string;
@@ -75,17 +76,16 @@
 
   const WAVEFORM_TIER_LEVEL = 1;
   
-  // Role colors for clips
   const ROLE_COLORS: Record<string, string> = {
-    'setup': 'rgba(239, 68, 68, 0.6)',      // Red
-    'escalation': 'rgba(249, 115, 22, 0.6)', // Orange
-    'twist': 'rgba(234, 179, 8, 0.6)',      // Yellow
-    'payoff': 'rgba(34, 197, 94, 0.6)',     // Green
-    'transition': 'rgba(59, 130, 246, 0.6)', // Blue
+    'setup': ROLE_CONFIG.setup.subtleCssVar,
+    'escalation': ROLE_CONFIG.escalation.subtleCssVar,
+    'twist': ROLE_CONFIG.twist.subtleCssVar,
+    'payoff': ROLE_CONFIG.payoff.subtleCssVar,
+    'transition': ROLE_CONFIG.transition.subtleCssVar,
   };
   
-  const DEFAULT_COLOR = 'rgba(107, 114, 128, 0.6)';
-  const SELECTION_COLOR = 'rgba(79, 70, 229, 0.2)';
+  const DEFAULT_COLOR = ROLE_CONFIG.unassigned.subtleCssVar;
+  const SELECTION_COLOR = 'var(--accent-primary-subtle)';
   
   // Get clips for this track
   const trackClips = $derived.by(() => {
@@ -207,24 +207,11 @@
       scrollContainer.removeEventListener('pointerdown', handleWaveformPointerDown, true);
       scrollContainer.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer.removeEventListener('scroll', handleScrollContainerScroll);
-      scrollContainer.classList.remove('waveform-scroll-container');
+      scrollContainer.classList.remove('scrollbar-thin');
     }
     scrollContainer = nextScrollContainer;
     if (scrollContainer) {
-      const root = scrollContainer.getRootNode();
-      if (root instanceof ShadowRoot) {
-        const existingStyle = root.querySelector('style[data-waveform-scrollbar]');
-        if (!existingStyle) {
-          const style = document.createElement('style');
-          style.dataset.waveformScrollbar = 'true';
-          style.textContent = `
-            .waveform-scroll-container { scrollbar-width: none; -ms-overflow-style: none; }
-            .waveform-scroll-container::-webkit-scrollbar { width: 0; height: 0; }
-          `;
-          root.appendChild(style);
-        }
-      }
-      scrollContainer.classList.add('waveform-scroll-container');
+      scrollContainer.classList.add('scrollbar-thin');
       scrollContainer.addEventListener('pointerdown', handleWaveformPointerDown, { capture: true });
       scrollContainer.addEventListener('contextmenu', handleWaveformContextMenu, { capture: true });
       scrollContainer.addEventListener('scroll', handleScrollContainerScroll, { passive: true });
@@ -1129,7 +1116,7 @@
       scrollContainer?.removeEventListener('pointerdown', handleWaveformPointerDown, true);
       scrollContainer?.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer?.removeEventListener('scroll', handleScrollContainerScroll);
-      scrollContainer?.classList.remove('waveform-scroll-container');
+      scrollContainer?.classList.remove('scrollbar-thin');
       scrollContainer = null;
       regionsPlugin?.destroy();
       waveSurfer?.destroy();
@@ -1266,27 +1253,29 @@
   });
 </script>
 
-<div class="track-container">
-  <div class="track-header">
-    <span class="track-label">{laneLabel}</span>
-    <span class="track-info">{missing ? 'source unavailable' : editable ? `${trackClips.length} clips` : 'visual only'}</span>
+<div class="track-container flex flex-col border-b border-border-default bg-surface-base">
+  <div class="track-header flex h-6 items-center justify-between border-b border-border-default bg-surface-hover px-2 py-1">
+    <span class="track-label text-app-sm font-semibold text-text-secondary">{laneLabel}</span>
+    <span class="track-info text-app-xs text-text-disabled">{missing ? 'source unavailable' : editable ? `${trackClips.length} clips` : 'visual only'}</span>
   </div>
   <div
-    class="waveform-container"
-    class:visual-only={!editable}
-    class:missing={missing}
-    class:panning={isPanning}
-    class:selecting={isSelecting}
+    class="waveform-container relative min-h-[100px] w-full cursor-pointer"
+    class:bg-surface-page={missing}
+    class:cursor-default={!editable}
+    class:cursor-grabbing={isPanning}
+    class:cursor-crosshair={isSelecting}
     bind:this={container}
   >
     {#if missing}
-      <div class="missing-overlay">Original media unavailable</div>
+      <div class="missing-overlay pointer-events-none absolute inset-0 flex items-center justify-center bg-[color-mix(in_srgb,var(--surface-page)_55%,transparent)] text-app-sm text-text-secondary">
+        Original media unavailable
+      </div>
     {/if}
   </div>
 
   {#if editable && contextMenu.open}
     <div
-      class="timeline-clip-context-menu"
+      class="timeline-clip-context-menu fixed z-[var(--z-context-menu)] min-w-40 rounded-[4px] border border-border-default bg-surface-raised p-1"
       style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
       role="menu"
       tabindex="-1"
@@ -1299,162 +1288,35 @@
       oncontextmenu={(event) => event.preventDefault()}
     >
       {#if contextMenu.mode === 'track'}
-        <button class="timeline-context-item" role="menuitem" onclick={handleTrackContextCreateClip}>
+        <button
+          class="timeline-context-item w-full rounded-sm bg-transparent px-3 py-2 text-left text-app-base text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          role="menuitem"
+          onclick={handleTrackContextCreateClip}
+        >
           Create clip at cursor
         </button>
       {:else}
         <button
-          class="timeline-context-item"
-          class:disabled={!contextMenu.canSplit}
+          class="timeline-context-item w-full rounded-sm bg-transparent px-3 py-2 text-left text-app-base text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          class:opacity-45={!contextMenu.canSplit}
+          class:cursor-not-allowed={!contextMenu.canSplit}
+          class:text-text-tertiary={!contextMenu.canSplit}
+          class:hover:bg-transparent={!contextMenu.canSplit}
+          class:hover:text-text-tertiary={!contextMenu.canSplit}
           role="menuitem"
           onclick={handleClipContextSplit}
           disabled={!contextMenu.canSplit}
         >
           Split clip at cursor
         </button>
-        <button class="timeline-context-item destructive" role="menuitem" onclick={handleClipContextDelete}>
+        <button
+          class="timeline-context-item w-full rounded-sm bg-transparent px-3 py-2 text-left text-app-base text-accent-destructive transition-colors hover:bg-surface-hover hover:text-text-primary"
+          role="menuitem"
+          onclick={handleClipContextDelete}
+        >
           Delete clip
         </button>
       {/if}
     </div>
   {/if}
 </div>
-
-<style>
-  .track-container {
-    display: flex;
-    flex-direction: column;
-    background: #1a1a1a;
-    border-bottom: 1px solid #333;
-  }
-  
-  .track-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.25rem 0.5rem;
-    background: #2a2a2a;
-    border-bottom: 1px solid #333;
-    height: 24px;
-  }
-  
-  .track-label {
-    font-size: 0.75rem;
-    color: #aaa;
-    font-weight: 600;
-  }
-  
-  .track-info {
-    font-size: 0.7rem;
-    color: #666;
-  }
-  
-  .waveform-container {
-    position: relative;
-    width: 100%;
-    min-height: 100px;
-    cursor: pointer;
-  }
-
-  .waveform-container.missing {
-    background: linear-gradient(180deg, #151515 0%, #101010 100%);
-  }
-
-  .waveform-container.visual-only {
-    cursor: default;
-  }
-
-  :global(.waveform-scroll-container) {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  :global(.waveform-scroll-container::-webkit-scrollbar) {
-    width: 0;
-    height: 0;
-  }
-
-  .waveform-container.panning {
-    cursor: grabbing;
-  }
-
-  .waveform-container.selecting {
-    cursor: crosshair;
-  }
-
-  .missing-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #b0b0b0;
-    font-size: 0.8rem;
-    pointer-events: none;
-    background: rgba(12, 12, 12, 0.55);
-  }
-
-  .timeline-clip-context-menu {
-    position: fixed;
-    z-index: 80;
-    min-width: 160px;
-    padding: 0.25rem;
-    background: #1f1f1f;
-    border: 1px solid #333;
-    border-radius: 6px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  }
-
-  .timeline-context-item {
-    width: 100%;
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    border: none;
-    background: transparent;
-    color: #ddd;
-    font-size: 0.875rem;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .timeline-context-item:hover {
-    background: #2a2a2a;
-    color: #fff;
-  }
-
-  .timeline-context-item:disabled,
-  .timeline-context-item.disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-    color: #8a8a8a;
-  }
-
-  .timeline-context-item:disabled:hover,
-  .timeline-context-item.disabled:hover {
-    background: transparent;
-    color: #8a8a8a;
-  }
-
-  .timeline-context-item.destructive {
-    color: #f87171;
-  }
-  
-  :global(.wavesurfer-region) {
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-  }
-
-  :global(.clip-region) {
-    z-index: 2;
-    min-width: 2px;
-  }
-  
-  :global(.wavesurfer-region:hover) {
-    border-color: rgba(255, 255, 255, 0.5);
-  }
-  
-  :global(.wavesurfer-region.selected) {
-    border-color: #fff;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
-  }
-</style>

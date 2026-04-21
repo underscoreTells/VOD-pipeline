@@ -4,7 +4,7 @@ export interface AgentToolMetadata {
   anthropicStrict?: boolean;
 }
 
-export interface AgentToolDefinition<TParsed = unknown> {
+export interface AgentToolDefinition<TParsed = any> {
   name: string;
   description: string;
   schema: CanonicalSchemaNode;

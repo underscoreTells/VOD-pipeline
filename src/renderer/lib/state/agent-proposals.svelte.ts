@@ -18,6 +18,14 @@ import {
 } from './timeline.svelte';
 import { agentState } from './agent-session.svelte.js';
 
+interface BulkSuggestionActionResult {
+  success: boolean;
+  total: number;
+  succeededIds: number[];
+  failedIds: number[];
+  error?: string;
+}
+
 function upsertTimelineClip(clip: Clip | undefined) {
   if (!clip) return;
   const existing = timelineState.clips.find((item) => item.id === clip.id);
@@ -230,6 +238,31 @@ export async function applyAllSuggestions() {
   }
 }
 
+export async function previewAllSuggestions(): Promise<BulkSuggestionActionResult> {
+  const pendingSuggestions = agentState.suggestions.filter(
+    (suggestion) => suggestion.status === 'pending' && suggestion.clip_id == null
+  );
+  const succeededIds: number[] = [];
+  const failedIds: number[] = [];
+
+  for (const suggestion of pendingSuggestions) {
+    const result = await previewSuggestion(suggestion.id);
+    if (result.success) {
+      succeededIds.push(suggestion.id);
+    } else {
+      failedIds.push(suggestion.id);
+    }
+  }
+
+  return {
+    success: failedIds.length === 0,
+    total: pendingSuggestions.length,
+    succeededIds,
+    failedIds,
+    error: failedIds.length > 0 ? 'Failed to preview some suggestions' : undefined,
+  };
+}
+
 export async function rejectSuggestion(suggestionId: number) {
   const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
 
@@ -255,6 +288,31 @@ export async function rejectSuggestion(suggestionId: number) {
     console.error('Failed to reject suggestion:', error);
     return false;
   }
+}
+
+export async function rejectAllSuggestions(): Promise<BulkSuggestionActionResult> {
+  const pendingSuggestions = agentState.suggestions.filter(
+    (suggestion) => suggestion.status === 'pending'
+  );
+  const succeededIds: number[] = [];
+  const failedIds: number[] = [];
+
+  for (const suggestion of pendingSuggestions) {
+    const result = await rejectSuggestion(suggestion.id);
+    if (result) {
+      succeededIds.push(suggestion.id);
+    } else {
+      failedIds.push(suggestion.id);
+    }
+  }
+
+  return {
+    success: failedIds.length === 0,
+    total: pendingSuggestions.length,
+    succeededIds,
+    failedIds,
+    error: failedIds.length > 0 ? 'Failed to reject some suggestions' : undefined,
+  };
 }
 
 export function clearSuggestions() {

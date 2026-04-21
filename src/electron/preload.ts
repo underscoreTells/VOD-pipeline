@@ -16,6 +16,9 @@ const electronAPI: ElectronAPI = {
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
+    rerollMessage: (params) => ipcRenderer.invoke('agent:reroll-message', params),
+    editMessage: (params) => ipcRenderer.invoke('agent:edit-message', params),
+    branchMessage: (params) => ipcRenderer.invoke('agent:branch-message', params),
     createConversation: (params) => ipcRenderer.invoke('agent:conversation-create', params),
     listConversations: (params) => ipcRenderer.invoke('agent:conversation-list', params),
     getConversationMessages: (conversationId) =>

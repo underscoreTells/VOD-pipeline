@@ -5,7 +5,7 @@ import { defaultSettings } from "../../src/renderer/lib/state/settings-helpers.j
 describe("dual-path import helpers", () => {
   it("keeps the import-related defaults enabled", () => {
     expect(defaultSettings.autoChapterNamingEnabled).toBe(true);
-    expect(defaultSettings.autoChapterNamingModel).toBe("gpt-4o-mini");
+    expect(defaultSettings.autoChapterNamingModel).toBe("gpt-5-nano");
     expect(defaultSettings.autoTranscribeOnImport).toBe(true);
   });
 

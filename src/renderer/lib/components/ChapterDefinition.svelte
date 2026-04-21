@@ -5,6 +5,9 @@
   import { settingsState } from "../state/settings.svelte";
   import { buildPlayableAssetUrl } from "../utils/media";
   import { formatTime } from "../utils/time";
+  import Icon from './ui/Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import { Check, X, Pencil, Trash2, ArrowRight } from '../constants';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
@@ -264,20 +267,20 @@
   }
 </script>
 
-<div class="chapter-definition" bind:this={definitionContainer}>
-  <div class="definition-top-fixed" style="height: {definitionTopHeight}px">
+<div class="chapter-definition flex h-full flex-col overflow-hidden bg-surface-raised" bind:this={definitionContainer}>
+  <div class="definition-top-fixed flex shrink-0 flex-col gap-4 overflow-hidden border-b border-border-default px-6 pt-6 pb-3" style="height: {definitionTopHeight}px">
     <div class="header">
-      <h2>Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
-      <p class="duration">Duration: {formatTime(duration)}</p>
+      <h2 class="mb-2 mt-0 text-app-xl text-text-primary">Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
+      <p class="duration m-0 text-app-base text-text-tertiary">Duration: {formatTime(duration)}</p>
     </div>
 
-    <div class="video-preview">
+    <div class="video-preview flex-1 min-h-0 overflow-hidden rounded-md bg-surface-page">
       {#if assetUnavailable}
-        <div class="unavailable-state">
-          <p class="unavailable-title">Chapter source file is unavailable</p>
-          <p class="unavailable-path">{asset.availability?.savedPath ?? asset.file_path}</p>
+        <div class="unavailable-state flex h-full w-full flex-col justify-center gap-2 bg-linear-to-b from-surface-raised to-surface-page p-5 text-text-secondary">
+          <p class="unavailable-title m-0 font-semibold text-text-primary">Chapter source file is unavailable</p>
+          <p class="unavailable-path m-0 break-all text-app-sm leading-[1.4] text-text-tertiary">{asset.availability?.savedPath ?? asset.file_path}</p>
           {#if asset.availability?.nearestExistingAncestor}
-            <p class="unavailable-ancestor">
+            <p class="unavailable-ancestor m-0 break-all text-app-sm leading-[1.4] text-text-tertiary">
               Nearest existing path: {asset.availability.nearestExistingAncestor}
             </p>
           {/if}
@@ -285,7 +288,7 @@
       {:else}
         <video
           bind:this={videoRef}
-          class="definition-video"
+          class="definition-video block h-full w-full bg-black object-contain"
           src={videoSrc}
           ontimeupdate={handleVideoTimeUpdate}
           onloadedmetadata={handleVideoLoadedMetadata}
@@ -301,34 +304,34 @@
   </div>
 
   <div
-    class="definition-resize-handle"
+    class="definition-resize-handle h-[6px] flex-[0_0_6px] touch-none bg-surface-page transition-colors hover:bg-surface-hover"
     role="separator"
     aria-orientation="horizontal"
     onpointerdown={handleDefinitionResize}
   ></div>
-  <div class="definition-scroll">
+  <div class="definition-scroll scrollbar-thin flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-6">
     <!-- Timeline Scrubber -->
-    <div class="timeline-section">
-    <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
-      <div class="timeline-bar">
+    <div class="timeline-section mb-6 rounded-md bg-surface-raised p-6">
+    <div class="scrubber-container relative mb-4 h-[60px] cursor-pointer rounded-md bg-surface-base" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
+      <div class="timeline-bar relative h-full overflow-hidden rounded-md bg-linear-to-b from-surface-hover to-surface-base">
         <!-- Playhead -->
           <div
-            class="playhead"
+            class="playhead absolute top-0 bottom-0 z-10 w-0.5 -translate-x-1/2 bg-accent-primary"
             style="left: {playheadPercent}%"
           >
-          <div class="playhead-marker">▲</div>
+          <div class="playhead-marker absolute left-1/2 top-0 h-0 w-0 -translate-x-1/2 border-x-[5px] border-x-transparent border-b-[8px] border-b-accent-primary"></div>
         </div>
 
         <!-- Selection highlight -->
         {#if hasSelection}
           <div
-            class="selection-highlight"
+            class="selection-highlight absolute top-5 bottom-5 z-[5] rounded-sm border border-accent-success bg-accent-success/30"
             style="left: {selectionStartPercent}%; width: {selectionWidthPercent}%"
           ></div>
         {/if}
 
         <!-- Time markers -->
-        <div class="time-markers">
+        <div class="time-markers absolute inset-x-0 bottom-1 flex justify-between px-2 text-app-xs text-text-disabled">
           <span>0:00</span>
           <span>{formatTime(duration / 2)}</span>
           <span>{formatTime(duration)}</span>
@@ -336,52 +339,52 @@
       </div>
     </div>
 
-    <div class="time-display">
+    <div class="time-display mb-4 text-app-base text-text-tertiary">
       Playhead: <strong>{formatTime(playheadTime)}</strong>
     </div>
 
     <!-- Controls -->
-    <div class="controls">
-      <button class="control-btn" onclick={markStart} disabled={assetUnavailable}>
+    <div class="controls mb-4 flex flex-wrap gap-2">
+      <button class="rounded-sm bg-accent-primary px-4 py-2 text-app-base text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong" onclick={markStart} disabled={assetUnavailable}>
         Mark Start @ {formatTime(playheadTime)}
       </button>
-      <button class="control-btn" onclick={markEnd} disabled={assetUnavailable}>
+      <button class="rounded-sm bg-accent-primary px-4 py-2 text-app-base text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong" onclick={markEnd} disabled={assetUnavailable}>
         Mark End
       </button>
-      <button class="control-btn secondary" onclick={previewSelection} disabled={!hasSelection || assetUnavailable}>
+      <button class="rounded-sm bg-surface-active px-4 py-2 text-app-base text-text-secondary transition-colors hover:bg-border-strong disabled:cursor-not-allowed disabled:bg-border-strong" onclick={previewSelection} disabled={!hasSelection || assetUnavailable}>
         Preview
       </button>
-      <button class="control-btn secondary" onclick={clearSelection} disabled={assetUnavailable}>
+      <button class="rounded-sm bg-surface-active px-4 py-2 text-app-base text-text-secondary transition-colors hover:bg-border-strong disabled:cursor-not-allowed disabled:bg-border-strong" onclick={clearSelection} disabled={assetUnavailable}>
         Clear
       </button>
     </div>
 
     <!-- Selection Info -->
-    <div class="selection-info">
+    <div class="selection-info flex items-center justify-between rounded-sm bg-surface-base p-3">
       {#if hasSelection}
-        <span class="selection-text">
+        <span class="selection-text text-app-base text-accent-success">
           Selection: {formatTime(selectionStart)} - {formatTime(selectionEnd)} ({formatTime(selectionDuration)})
         </span>
-        <button class="add-btn" onclick={addChapter} disabled={assetUnavailable}>
+        <button class="add-btn rounded-sm bg-accent-success px-4 py-2 text-app-base font-medium text-text-inverse transition-[filter] hover:brightness-90 disabled:cursor-not-allowed" onclick={addChapter} disabled={assetUnavailable}>
           + Add Chapter
         </button>
       {:else}
-        <span class="no-selection">No selection made. Mark start and end points.</span>
+        <span class="no-selection text-app-base italic text-text-disabled">No selection made. Mark start and end points.</span>
       {/if}
     </div>
     </div>
 
     <!-- Draft Chapters List -->
-    <div class="chapters-list">
-    <h3>Defined Chapters ({draftChapters.length})</h3>
+    <div class="chapters-list mb-6">
+    <h3 class="mb-4 mt-0 text-app-md text-text-primary">Defined Chapters ({draftChapters.length})</h3>
     
     {#if draftChapters.length === 0}
-      <p class="empty-message">No chapters defined yet. Use the timeline above to create chapters.</p>
+      <p class="empty-message p-8 text-center italic text-text-disabled">No chapters defined yet. Use the timeline above to create chapters.</p>
     {:else}
-      <div class="chapters">
+      <div class="chapters flex flex-col gap-2">
         {#each draftChapters as chapter, i (chapter.id)}
-          <div class="chapter-item">
-            <span class="chapter-number">{i + 1}.</span>
+          <div class="chapter-item flex items-center gap-2 rounded-md bg-surface-hover p-3">
+            <span class="chapter-number min-w-6 text-app-base text-text-disabled">{i + 1}.</span>
             
             {#if editingChapterId === chapter.id}
               <input
@@ -391,29 +394,17 @@
                   if (e.key === "Enter") saveEdit(chapter.id);
                   if (e.key === "Escape") cancelEdit();
                 }}
-                class="edit-input"
+                class="edit-input flex-1 rounded-sm border border-accent-primary bg-surface-raised px-2 py-1 text-app-base text-text-primary"
               />
-              <button class="icon-btn" onclick={() => saveEdit(chapter.id)}>✓</button>
-              <button class="icon-btn" onclick={cancelEdit}>✕</button>
+              <IconButton icon={Check} size={14} onclick={() => saveEdit(chapter.id)} title="Save" />
+              <IconButton icon={X} size={14} onclick={cancelEdit} title="Cancel" />
             {:else}
-              <span class="chapter-title">{chapter.title}</span>
-              <span class="chapter-time">
+              <span class="chapter-title flex-1 text-app-base text-text-primary">{chapter.title}</span>
+              <span class="chapter-time font-mono text-app-sm text-text-tertiary">
                 {formatTime(chapter.startTime)} - {formatTime(chapter.endTime)}
               </span>
-              <button
-                class="icon-btn"
-                onclick={() => startEditing(chapter)}
-                title="Edit title"
-              >
-                ✎
-              </button>
-              <button
-                class="icon-btn delete"
-                onclick={() => deleteDraftChapter(chapter.id)}
-                title="Delete"
-              >
-                🗑
-              </button>
+              <IconButton icon={Pencil} size={14} onclick={() => startEditing(chapter)} title="Edit title" />
+              <IconButton icon={Trash2} size={14} variant="destructive" onclick={() => deleteDraftChapter(chapter.id)} title="Delete" />
             {/if}
           </div>
         {/each}
@@ -422,388 +413,17 @@
     </div>
 
     <!-- Footer Actions -->
-    <div class="footer">
-      <button class="back-btn" onclick={onCancel}>
+    <div class="footer flex items-center justify-between border-t border-border-default pt-4">
+      <button class="rounded-md border border-border-strong bg-transparent px-5 py-2 text-app-base text-text-tertiary transition-colors hover:border-text-disabled hover:text-text-primary" onclick={onCancel}>
         Back
       </button>
       <button
-        class="create-btn"
+        class="rounded-md bg-accent-primary px-6 py-2 text-app-base font-medium text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong"
         onclick={handleCreateAll}
         disabled={draftChapters.length === 0}
       >
-        Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} →
+        Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} <Icon icon={ArrowRight} size={14} />
       </button>
     </div>
   </div>
 </div>
-
-<style>
-  .chapter-definition {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: #1e1e1e;
-    overflow: hidden;
-  }
-
-  .definition-top-fixed {
-    flex: 0 0 auto;
-    padding: 1.5rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid #333;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    overflow: hidden;
-  }
-
-  .definition-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 1.5rem;
-    padding-top: 1rem;
-  }
-
-  .definition-resize-handle {
-    height: 6px;
-    flex: 0 0 6px;
-    cursor: row-resize;
-    background: #141414;
-    transition: background 0.2s;
-    touch-action: none;
-  }
-
-  .definition-resize-handle:hover {
-    background: #2a2a2a;
-  }
-
-  .header {
-    margin-bottom: 0;
-  }
-
-  .header h2 {
-    margin: 0 0 0.5rem 0;
-    color: #fff;
-    font-size: 1.25rem;
-  }
-
-  .duration {
-    margin: 0;
-    color: #888;
-    font-size: 0.875rem;
-  }
-
-  .video-preview {
-    background: #111;
-    border-radius: 8px;
-    overflow: hidden;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .definition-video {
-    width: 100%;
-    height: 100%;
-    display: block;
-    background: #000;
-    object-fit: contain;
-  }
-
-  .unavailable-state {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.5rem;
-    width: 100%;
-    height: 100%;
-    padding: 1.25rem;
-    box-sizing: border-box;
-    background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
-    color: #d4d4d4;
-  }
-
-  .unavailable-title {
-    margin: 0;
-    font-weight: 600;
-    color: #fff;
-  }
-
-  .unavailable-path,
-  .unavailable-ancestor {
-    margin: 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: #a0a0a0;
-    word-break: break-all;
-  }
-
-  .timeline-section {
-    background: #252525;
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .scrubber-container {
-    position: relative;
-    height: 60px;
-    background: #1a1a1a;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-bottom: 1rem;
-  }
-
-  .timeline-bar {
-    position: relative;
-    height: 100%;
-    background: linear-gradient(to bottom, #2a2a2a 0%, #1a1a1a 100%);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-
-  .playhead {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: #2563eb;
-    transform: translateX(-50%);
-    z-index: 10;
-  }
-
-  .playhead-marker {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    color: #2563eb;
-    font-size: 8px;
-  }
-
-  .selection-highlight {
-    position: absolute;
-    top: 20px;
-    bottom: 20px;
-    background: rgba(74, 222, 128, 0.3);
-    border: 1px solid #4ade80;
-    border-radius: 4px;
-    z-index: 5;
-  }
-
-  .time-markers {
-    position: absolute;
-    bottom: 4px;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: space-between;
-    padding: 0 8px;
-    font-size: 0.625rem;
-    color: #666;
-  }
-
-  .time-display {
-    color: #888;
-    font-size: 0.875rem;
-    margin-bottom: 1rem;
-  }
-
-  .time-display strong {
-    color: #fff;
-  }
-
-  .controls {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-  }
-
-  .control-btn {
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: background 0.2s;
-  }
-
-  .control-btn:hover:not(:disabled) {
-    background: #1d4ed8;
-  }
-
-  .control-btn:disabled {
-    background: #444;
-    cursor: not-allowed;
-  }
-
-  .control-btn.secondary {
-    background: #333;
-    color: #ccc;
-  }
-
-  .control-btn.secondary:hover:not(:disabled) {
-    background: #444;
-  }
-
-  .selection-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem;
-    background: #1a1a1a;
-    border-radius: 4px;
-  }
-
-  .selection-text {
-    color: #4ade80;
-    font-size: 0.875rem;
-  }
-
-  .no-selection {
-    color: #666;
-    font-size: 0.875rem;
-    font-style: italic;
-  }
-
-  .add-btn {
-    background: #4ade80;
-    color: #000;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-
-  .add-btn:hover {
-    background: #22c55e;
-  }
-
-  .chapters-list {
-    margin-bottom: 1.5rem;
-  }
-
-  .chapters-list h3 {
-    margin: 0 0 1rem 0;
-    color: #fff;
-    font-size: 1rem;
-  }
-
-  .empty-message {
-    color: #666;
-    font-style: italic;
-    text-align: center;
-    padding: 2rem;
-  }
-
-  .chapters {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .chapter-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: #2a2a2a;
-    border-radius: 6px;
-  }
-
-  .chapter-number {
-    color: #666;
-    font-size: 0.875rem;
-    min-width: 24px;
-  }
-
-  .chapter-title {
-    flex: 1;
-    color: #fff;
-    font-size: 0.875rem;
-  }
-
-  .chapter-time {
-    color: #888;
-    font-size: 0.75rem;
-    font-family: monospace;
-  }
-
-  .edit-input {
-    flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2563eb;
-    color: #fff;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
-  }
-
-  .icon-btn {
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
-    padding: 0.25rem;
-    font-size: 0.875rem;
-    border-radius: 4px;
-  }
-
-  .icon-btn:hover {
-    background: #333;
-    color: #fff;
-  }
-
-  .icon-btn.delete:hover {
-    background: rgba(248, 113, 113, 0.1);
-    color: #f87171;
-  }
-
-  .footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 1rem;
-    border-top: 1px solid #333;
-  }
-
-  .back-btn {
-    background: none;
-    border: 1px solid #444;
-    color: #888;
-    padding: 0.625rem 1.25rem;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.875rem;
-  }
-
-  .back-btn:hover {
-    border-color: #666;
-    color: #fff;
-  }
-
-  .create-btn {
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    padding: 0.625rem 1.5rem;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-
-  .create-btn:hover:not(:disabled) {
-    background: #1d4ed8;
-  }
-
-  .create-btn:disabled {
-    background: #444;
-    cursor: not-allowed;
-  }
-</style>

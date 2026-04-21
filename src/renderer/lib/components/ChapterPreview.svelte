@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import type { Chapter, Asset, Clip } from '$shared/types/database';
   import type { AssetAvailability } from '$shared/contracts/ipc';
+  import Icon from './ui/Icon.svelte';
+  import { Clapperboard, Play, Pause } from '../constants';
   import { buildPlayableAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
@@ -12,8 +14,12 @@
   } from '../utils/chapter-time';
   import {
     timelineState,
+    type TimelineTransportSnapshot,
+    restoreTransport,
     setPlayhead,
     setPlaying,
+    snapshotTransport,
+    stopShuttle,
     togglePlayback,
   } from '../state/timeline.svelte';
   import {
@@ -23,22 +29,34 @@
   } from '../state/clip-builder.svelte';
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../api/chapters.js';
+  import { cn } from '../utils/cn';
+  import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
+  import {
+    clampPreviewFps,
+    getReversePreviewFps,
+    snapToPreviewSample,
+  } from '../utils/previewSampling';
+  import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
   interface Props {
+    class?: string;
     chapter: Chapter | null;
     asset: AvailabilityAwareAsset | null;
     clips?: Clip[];
   }
 
-  let { chapter, asset, clips = timelineState.clips }: Props = $props();
+  let { class: className = '', chapter, asset, clips = timelineState.clips }: Props = $props();
 
   let videoRef = $state<HTMLVideoElement | null>(null);
+  let scrubberRef = $state<HTMLInputElement | null>(null);
   let currentTime = $state(0);
   let isCreatingFromSelection = $state(false);
+  let isScrubbing = $state(false);
   let lastChapterId = $state<number | null>(null);
   let isProgrammaticPlayheadSeek = $state(false);
+  let resumeTransportSnapshot = $state<TimelineTransportSnapshot | null>(null);
 
   let reverseProxyStatus = $state<'missing' | 'generating' | 'ready' | 'error'>('missing');
   let reverseProxyUrl = $state<string | null>(null);
@@ -50,9 +68,16 @@
   let reverseProxyRequestToken = 0;
   let reverseEnsureRequested = false;
   let reversePollTimerId: number | null = null;
-  let activeSource: 'normal' | 'reverse' = 'normal';
+  let activeSource = $state<'normal' | 'reverse'>('normal');
   let currentVideoUrl: string | null = null;
   let pendingGlobalSeekTime: number | null = null;
+  let clearScrubListeners: (() => void) | null = null;
+
+  const seekController = createQueuedMediaSeek({
+    getVideo: () => videoRef,
+    normalizeTime: (time) => normalizeMediaSeekTime(time),
+    snapPreviewTime: (time) => snapPreviewMediaTime(time),
+  });
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
@@ -110,6 +135,109 @@
     const duration = getChapterDurationSafe(selectedChapter);
     const clampedReverse = clampNumber(reverseTime, 0, duration);
     return clampToChapter(selectedChapter, selectedChapter.end_time - clampedReverse);
+  }
+
+  function normalizeMediaSeekTime(time: number): number {
+    if (!chapter) return Math.max(0, time);
+
+    if (activeSource === 'reverse') {
+      return clampNumber(time, 0, getChapterDurationSafe(chapter));
+    }
+
+    return clampToChapter(chapter, time);
+  }
+
+  function getPreviewSamplingFps(): number {
+    if (activeSource === 'reverse') {
+      return getReversePreviewFps(reverseProxyQuality);
+    }
+
+    return clampPreviewFps(asset?.metadata?.fps);
+  }
+
+  function snapPreviewMediaTime(time: number): number {
+    return normalizeMediaSeekTime(snapToPreviewSample(time, getPreviewSamplingFps()));
+  }
+
+  function getMediaTimeForGlobalTime(globalTime: number): number {
+    if (!chapter) return globalTime;
+
+    return activeSource === 'reverse'
+      ? toReverseProxyTime(chapter, globalTime)
+      : globalTime;
+  }
+
+  function clearScrubPointerListeners() {
+    clearScrubListeners?.();
+    clearScrubListeners = null;
+  }
+
+  function resetScrubSession() {
+    clearScrubPointerListeners();
+    seekController.reset();
+    isScrubbing = false;
+    isProgrammaticPlayheadSeek = false;
+    resumeTransportSnapshot = null;
+  }
+
+  function getScrubGlobalTime(input: HTMLInputElement | null): number | null {
+    if (!chapter) return null;
+
+    const fallbackLocalTime = localTime();
+    const rawValue = input ? Number(input.value) : fallbackLocalTime;
+    const nextLocalTime = clampNumber(
+      Number.isFinite(rawValue) ? rawValue : fallbackLocalTime,
+      0,
+      chapterDuration()
+    );
+
+    return toChapterGlobalTime(chapter, nextLocalTime);
+  }
+
+  function beginScrubSession() {
+    if (!videoRef || !chapter || !asset || asset.availability?.exists === false || isScrubbing) return;
+
+    resumeTransportSnapshot = snapshotTransport();
+    isScrubbing = true;
+    stopShuttle();
+  }
+
+  function finalizeScrubSession(input: HTMLInputElement | null) {
+    if (!videoRef || !chapter || !isScrubbing) return;
+
+    const nextGlobal = getScrubGlobalTime(input);
+    if (nextGlobal === null) return;
+
+    const nextMedia = getMediaTimeForGlobalTime(nextGlobal);
+    isProgrammaticPlayheadSeek = true;
+    seekController.commit(nextMedia);
+    currentTime = nextGlobal;
+    setPlayhead(nextGlobal);
+    isScrubbing = false;
+
+    const snapshot = resumeTransportSnapshot;
+    resumeTransportSnapshot = null;
+
+    if (snapshot?.isPlaying) {
+      restoreTransport(snapshot);
+    }
+  }
+
+  function trackScrubPointer(input: HTMLInputElement) {
+    clearScrubPointerListeners();
+
+    const handlePointerEnd = () => {
+      finalizeScrubSession(input);
+      clearScrubPointerListeners();
+    };
+
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+
+    clearScrubListeners = () => {
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+    };
   }
 
   function setPitchCorrection(media: HTMLVideoElement, enabled: boolean) {
@@ -230,6 +358,7 @@
     pendingGlobalSeekTime = clampToChapter(chapter, targetGlobalTime);
 
     if (currentVideoUrl !== targetUrl) {
+      seekController.reset();
       currentVideoUrl = targetUrl;
       videoRef.src = targetUrl;
       videoRef.load();
@@ -384,6 +513,10 @@
   function handleTimeUpdate() {
     if (!videoRef || !chapter) return;
 
+    if (isScrubbing) {
+      return;
+    }
+
     if (activeSource === 'reverse') {
       const duration = getChapterDurationSafe(chapter);
       const reverseTime = clampNumber(videoRef.currentTime, 0, duration);
@@ -436,7 +569,10 @@
   }
 
   function handleSeeked() {
-    isProgrammaticPlayheadSeek = false;
+    seekController.handleSeeked();
+    if (!videoRef?.seeking) {
+      isProgrammaticPlayheadSeek = false;
+    }
   }
 
   function handleLoadedMetadata() {
@@ -479,6 +615,16 @@
     void chapterEnd;
     void assetId;
 
+    const nextChapterStart = chapter
+      ? clampToChapter(chapter, chapter.start_time)
+      : 0;
+    const mediaChange = untrack(() => resolveChapterPreviewMediaChange({
+      asset,
+      activeSource,
+      currentVideoUrl,
+    }));
+
+    resetScrubSession();
     reverseProxyRequestToken += 1;
     clearReversePollTimer();
     reverseEnsureRequested = false;
@@ -490,31 +636,32 @@
     reverseStatusMessage = null;
 
     activeSource = 'normal';
-    currentVideoUrl = null;
-    pendingGlobalSeekTime = null;
+    pendingGlobalSeekTime = nextChapterStart;
 
-    if (!asset) {
+    if (mediaChange.decision === 'clear') {
+      currentVideoUrl = null;
       videoRef.removeAttribute('src');
       videoRef.load();
       currentTime = 0;
       return;
     }
 
-    const normalUrl = buildPlayableAssetUrl(asset);
-    if (!normalUrl) {
-      videoRef.pause();
-      videoRef.removeAttribute('src');
-      videoRef.load();
-      currentTime = 0;
-      return;
-    }
+    if (mediaChange.decision === 'reload') {
+      if (!mediaChange.normalUrl) {
+        currentVideoUrl = null;
+        videoRef.removeAttribute('src');
+        videoRef.load();
+        currentTime = 0;
+        return;
+      }
 
-    currentVideoUrl = normalUrl;
-    videoRef.src = normalUrl;
-    pendingGlobalSeekTime = chapter
-      ? clampToChapter(chapter, chapter.start_time)
-      : 0;
-    videoRef.load();
+      currentVideoUrl = mediaChange.normalUrl;
+      videoRef.src = mediaChange.normalUrl;
+      videoRef.load();
+    } else if (videoRef.readyState >= 1) {
+      applyPendingSeek();
+      applyTransportState();
+    }
 
     if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
       void refreshReverseProxy(true);
@@ -530,12 +677,12 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter || !asset || asset.availability?.exists === false) return;
+    if (!videoRef || !chapter || !asset || asset.availability?.exists === false || isScrubbing) return;
     applyTransportState();
   });
 
   $effect(() => {
-    if (!videoRef || !chapter || activeSource !== 'reverse') return;
+    if (!videoRef || !chapter || activeSource !== 'reverse' || isScrubbing) return;
     if (!reverseProxyUrl) return;
     if (currentVideoUrl === reverseProxyUrl) return;
 
@@ -543,11 +690,9 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter) return;
+    if (!videoRef || !chapter || isScrubbing) return;
     const targetGlobal = clampToChapter(chapter, timelineState.playheadTime);
-    const targetMedia = activeSource === 'reverse'
-      ? toReverseProxyTime(chapter, targetGlobal)
-      : targetGlobal;
+    const targetMedia = getMediaTimeForGlobalTime(targetGlobal);
 
     if (Math.abs(targetMedia - videoRef.currentTime) < 0.05) return;
     isProgrammaticPlayheadSeek = true;
@@ -556,6 +701,7 @@
   });
 
   onDestroy(() => {
+    resetScrubSession();
     clearReversePollTimer();
   });
 
@@ -591,14 +737,36 @@
 
   function handleScrubInput(event: Event) {
     if (!videoRef || !chapter) return;
-    const value = Number((event.target as HTMLInputElement).value);
-    const nextGlobal = toChapterGlobalTime(chapter, value);
-    const nextMedia = activeSource === 'reverse'
-      ? toReverseProxyTime(chapter, nextGlobal)
-      : nextGlobal;
-    videoRef.currentTime = nextMedia;
+
+    beginScrubSession();
+
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+    const nextGlobal = getScrubGlobalTime(input);
+    if (nextGlobal === null) return;
+
+    const nextMedia = getMediaTimeForGlobalTime(nextGlobal);
+    isProgrammaticPlayheadSeek = true;
     currentTime = nextGlobal;
     setPlayhead(nextGlobal);
+    seekController.preview(nextMedia);
+  }
+
+  function handleScrubStart(event: PointerEvent) {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return;
+
+    beginScrubSession();
+    trackScrubPointer(event.currentTarget);
+  }
+
+  function handleScrubCommit(event: Event) {
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+
+    finalizeScrubSession(input);
+    clearScrubPointerListeners();
   }
 
   $effect(() => {
@@ -608,269 +776,101 @@
   });
 </script>
 
-<div class="chapter-preview">
-  <div class="preview-header">
-    <h3>Chapter Preview</h3>
-    <span class="chapter-title">{previewTitle()}</span>
+<div
+  class={cn(
+    'chapter-preview flex h-full min-h-0 flex-col gap-2 overflow-hidden rounded-md border border-border-default bg-surface-base p-2',
+    className,
+  )}
+>
+  <div class="preview-header flex cursor-default items-center justify-between gap-2">
+    <h3 class="m-0 py-0.5 text-app-xs font-medium text-text-primary">Chapter preview</h3>
+    <span class="chapter-title truncate text-app-sm text-text-tertiary">{previewTitle()}</span>
   </div>
 
-  <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()}>
-    {#if !hasPreview()}
-      <div class="empty-state">
-        <div class="empty-icon">🎬</div>
-        <p>Select a chapter to preview</p>
-      </div>
-    {:else if assetUnavailable()}
-      <div class="unavailable-state">
-        <p class="unavailable-title">Chapter source file is unavailable</p>
-        <p class="unavailable-path">{asset?.availability?.savedPath ?? asset?.file_path}</p>
-        {#if asset?.availability?.nearestExistingAncestor}
-          <p class="unavailable-ancestor">
-            Nearest existing path: {asset.availability.nearestExistingAncestor}
-          </p>
-        {/if}
-      </div>
-    {:else}
-      <video
-        bind:this={videoRef}
-        class="preview-video"
-        onseeking={handleSeeking}
-        onseeked={handleSeeked}
-        ontimeupdate={handleTimeUpdate}
-        onloadedmetadata={handleLoadedMetadata}
-        onerror={handleVideoError}
-        preload="metadata"
-        playsinline
-      >
-        <track kind="captions" />
-      </video>
-    {/if}
-  </div>
-
-  {#if chapter && asset}
-    <div class="preview-controls">
-      <button class="play-toggle" onclick={togglePlayback} disabled={assetUnavailable()}>
-        {timelineState.isPlaying ? 'Pause' : 'Play'}
-      </button>
-      <div class="time-display">
-        <span class="time-current">{formatTime(localTime())}</span>
-        <span class="time-divider">/</span>
-        <span class="time-total">{formatTime(chapterDuration())}</span>
-      </div>
-      <input
-        class="scrubber"
-        type="range"
-        min="0"
-        max={chapterDuration()}
-        step="0.01"
-        value={localTime()}
-        disabled={assetUnavailable()}
-        oninput={handleScrubInput}
-      />
-      {#if reverseStatusMessage}
-        <div class="reverse-status">{reverseStatusMessage}</div>
+  <div class="player-stage relative flex-1 min-h-0" style="--player-dock-height: 110px;">
+    <div
+      class={cn(
+        'video-frame absolute inset-x-0 top-0 min-h-0 overflow-hidden rounded-md bg-black',
+        (!hasPreview() || assetUnavailable()) && 'bg-linear-to-b from-surface-raised to-surface-page',
+      )}
+      style={`bottom: ${chapter && asset ? 'calc(var(--player-dock-height) + var(--space-2))' : '0px'}`}
+    >
+      {#if !hasPreview()}
+        <div class="empty-state pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-text-tertiary">
+          <div class="empty-icon flex items-center justify-center opacity-60"><Icon icon={Clapperboard} size={40} /></div>
+          <p>Select a chapter to preview</p>
+        </div>
+      {:else if assetUnavailable()}
+        <div class="unavailable-state absolute inset-0 flex flex-col justify-center gap-2 bg-linear-to-b from-surface-base to-surface-page p-5 text-text-secondary">
+          <p class="unavailable-title m-0 font-semibold text-text-primary">Chapter source file is unavailable</p>
+          <p class="unavailable-path m-0 break-all text-app-xs leading-[1.4] text-text-tertiary">{asset?.availability?.savedPath ?? asset?.file_path}</p>
+          {#if asset?.availability?.nearestExistingAncestor}
+            <p class="unavailable-ancestor m-0 break-all text-app-xs leading-[1.4] text-text-tertiary">
+              Nearest existing path: {asset.availability.nearestExistingAncestor}
+            </p>
+          {/if}
+        </div>
+      {:else}
+        <video
+          bind:this={videoRef}
+          class="preview-video h-full w-full bg-black object-contain"
+          onseeking={handleSeeking}
+          onseeked={handleSeeked}
+          ontimeupdate={handleTimeUpdate}
+          onloadedmetadata={handleLoadedMetadata}
+          onerror={handleVideoError}
+          preload="auto"
+          playsinline
+        >
+          <track kind="captions" />
+        </video>
       {/if}
     </div>
-  {/if}
 
-  <div class="preview-footer">
-    {#if chapter}
-      <span class="range">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
-    {:else}
-      <span class="range">No chapter selected</span>
+    {#if chapter && asset}
+      <div class="player-dock absolute inset-x-1 bottom-0 flex min-h-[var(--player-dock-height)] flex-col justify-end gap-2">
+        <div class="transport-bar player-dock-surface flex items-center gap-2 rounded-sm px-2 py-1">
+          <button
+            class="play-btn inline-flex h-7 w-7 flex-none items-center justify-center rounded-sm border border-border-default bg-surface-raised text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            onclick={togglePlayback}
+            disabled={assetUnavailable()}
+            aria-label={timelineState.isPlaying ? 'Pause' : 'Play'}
+          >
+            <Icon icon={timelineState.isPlaying ? Pause : Play} size={14} />
+          </button>
+          <input
+            bind:this={scrubberRef}
+            class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
+            type="range"
+            min="0"
+            max={chapterDuration()}
+            step="0.01"
+            value={localTime()}
+            disabled={assetUnavailable()}
+            onpointerdown={handleScrubStart}
+            oninput={handleScrubInput}
+            onchange={handleScrubCommit}
+          />
+          <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">
+            {formatTime(localTime())} / {formatTime(chapterDuration())}
+          </span>
+        </div>
+
+        <div class="info-grid player-dock-surface grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm p-2">
+          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Range</span>
+          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
+          <span class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
+
+          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Mode</span>
+          <span class="info-value text-app-sm leading-[22px] text-text-secondary">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
+          <span
+            class="info-meta text-right text-app-sm tabular-nums leading-[22px] text-text-tertiary"
+            class:text-[#fbbf24]={Boolean(reverseStatusMessage)}
+          >
+            {reverseStatusMessage ?? formatTime(localTime())}
+          </span>
+        </div>
+      </div>
     {/if}
-    <span class="timecode">{formatTime(localTime())}</span>
   </div>
 </div>
-
-<style>
-  .chapter-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    background: #1a1a1a;
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 0.75rem;
-    height: 100%;
-    min-height: 0;
-    box-sizing: border-box;
-  }
-
-  .preview-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .preview-header h3 {
-    margin: 0;
-    font-size: 0.875rem;
-    color: #fff;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .chapter-title {
-    font-size: 0.875rem;
-    color: #ccc;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .video-frame {
-    position: relative;
-    background: #000;
-    border-radius: 6px;
-    overflow: hidden;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .video-frame.empty {
-    background: linear-gradient(180deg, #1f1f1f 0%, #0f0f0f 100%);
-  }
-
-  .preview-video {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: contain;
-  }
-
-  .unavailable-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 1.25rem;
-    box-sizing: border-box;
-    background: linear-gradient(180deg, #1c1c1c 0%, #111 100%);
-    color: #d4d4d4;
-  }
-
-  .unavailable-title {
-    margin: 0;
-    font-weight: 600;
-    color: #fff;
-  }
-
-  .unavailable-path,
-  .unavailable-ancestor {
-    margin: 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: #a0a0a0;
-    word-break: break-all;
-  }
-
-  .empty-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    color: #777;
-    text-align: center;
-    pointer-events: none;
-  }
-
-  .empty-icon {
-    font-size: 2rem;
-    opacity: 0.6;
-  }
-
-  .preview-footer {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.75rem;
-    color: #888;
-    font-family: 'SF Mono', Monaco, monospace;
-  }
-
-  .timecode {
-    color: #ccc;
-  }
-
-  .preview-controls {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto auto auto;
-    gap: 0.5rem 1rem;
-    align-items: center;
-    padding: 0.5rem 0;
-  }
-
-  .play-toggle {
-    grid-row: 1 / span 2;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    border: 1px solid #2b2b2b;
-    background: #1e1e1e;
-    color: #fff;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
-  }
-
-  .play-toggle:hover {
-    background: #2a2a2a;
-    border-color: #3a3a3a;
-  }
-
-  .time-display {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.8rem;
-    color: #ccc;
-  }
-
-  .time-divider {
-    color: #666;
-  }
-
-  .scrubber {
-    width: 100%;
-    height: 6px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: #2a2a2a;
-    border-radius: 999px;
-    outline: none;
-  }
-
-  .scrubber::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
-    cursor: pointer;
-  }
-
-  .scrubber::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
-    cursor: pointer;
-  }
-
-  .reverse-status {
-    grid-column: 2;
-    grid-row: 3;
-    font-size: 0.75rem;
-    color: #fbbf24;
-  }
-</style>

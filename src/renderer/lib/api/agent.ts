@@ -1,6 +1,7 @@
 import type {
   AgentApplyActionsParams,
   AgentApplyActionsResult,
+  AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
   AgentConversationCreateParams,
@@ -8,6 +9,8 @@ import type {
   AgentConversationListParams,
   AgentConversationListResult,
   AgentConversationMessagesResult,
+  AgentEditMessageParams,
+  AgentRerollMessageParams,
   ApplyAllSuggestionsResult,
   SuggestionListParams,
   SuggestionListResult,
@@ -19,6 +22,7 @@ import { getElectronApi } from './client.js';
 export type {
   AgentApplyActionsParams,
   AgentApplyActionsResult,
+  AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
   AgentConversationCreateParams,
@@ -26,6 +30,8 @@ export type {
   AgentConversationListParams,
   AgentConversationListResult,
   AgentConversationMessagesResult,
+  AgentEditMessageParams,
+  AgentRerollMessageParams,
   ApplyAllSuggestionsResult,
   SuggestionListParams,
   SuggestionListResult,
@@ -34,6 +40,24 @@ export type {
 
 export async function agentChat(params: AgentChatParams): Promise<AgentChatResult> {
   return await getElectronApi().agent.chat(params);
+}
+
+export async function rerollAgentMessage(
+  params: AgentRerollMessageParams
+): Promise<AgentChatResult> {
+  return await getElectronApi().agent.rerollMessage(params);
+}
+
+export async function editAgentMessage(
+  params: AgentEditMessageParams
+): Promise<AgentChatResult> {
+  return await getElectronApi().agent.editMessage(params);
+}
+
+export async function branchAgentMessage(
+  params: AgentBranchMessageParams
+): Promise<AgentConversationCreateResult> {
+  return await getElectronApi().agent.branchMessage(params);
 }
 
 export async function createAgentConversation(

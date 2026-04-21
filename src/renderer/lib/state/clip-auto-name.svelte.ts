@@ -1,5 +1,13 @@
+import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
+import {
+  DEFAULT_NAMING_MODEL,
+  getNamingModelProvider,
+  normalizeNamingModel,
+  type NamingModelId,
+} from '../../../shared/llm/naming-models.js';
 import type { Clip } from '../../../shared/types/database';
 import { suggestClipName } from '../api/clips.js';
+import { getProviderConfigApiKey } from './settings-helpers.js';
 
 const AUTO_NAME_RETRY_DELAY_MS = 2000;
 const AUTO_NAME_FAILED_RETRY_DELAY_MS = 8000;
@@ -15,8 +23,8 @@ let contextProvider: (() => ClipAutoNameContext) | null = null;
 
 interface ClipAutoNameSettings {
   autoClipNamingEnabled: boolean;
-  autoClipNamingModel: string;
-  openaiApiKey: string;
+  autoClipNamingModel: NamingModelId;
+  providerConfig: ProviderConfigPayload;
 }
 
 interface ClipAutoNameContext {
@@ -46,10 +54,14 @@ export function hasClipDescription(clip: Pick<Clip, 'description'> | null | unde
 }
 
 function getAutoNameConfigSignature(settings: ClipAutoNameSettings): string {
+  const model = normalizeNamingModel(settings.autoClipNamingModel);
+  const provider = getNamingModelProvider(model);
+  const apiKey = getProviderConfigApiKey(settings.providerConfig, provider);
   return [
     settings.autoClipNamingEnabled ? '1' : '0',
-    settings.autoClipNamingModel,
-    settings.openaiApiKey,
+    model,
+    provider,
+    apiKey,
   ].join(':');
 }
 
@@ -85,7 +97,11 @@ async function autoNameClipIfEnabled(clip: Clip, context: ClipAutoNameContext): 
     return 'deferred';
   }
 
-  const apiKey = context.settings.openaiApiKey.trim();
+  const model = normalizeNamingModel(context.settings.autoClipNamingModel, DEFAULT_NAMING_MODEL);
+  const apiKey = getProviderConfigApiKey(
+    context.settings.providerConfig,
+    getNamingModelProvider(model)
+  );
   if (!apiKey) {
     return 'deferred';
   }
@@ -101,15 +117,13 @@ async function autoNameClipIfEnabled(clip: Clip, context: ClipAutoNameContext): 
   const localOut = Math.min(chapterDuration, localOutRaw);
   if (localOut <= localIn) return 'failed';
 
-  const model = (context.settings.autoClipNamingModel || 'gpt-5-nano').trim() || 'gpt-5-nano';
-
   try {
     const result = await suggestClipName({
       chapterId: chapter.id,
       inPoint: localIn,
       outPoint: localOut,
       model,
-      apiKey,
+      providerConfig: context.settings.providerConfig,
       chapterTitle: chapter.title,
     });
 

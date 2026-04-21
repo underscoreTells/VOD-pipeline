@@ -17,6 +17,7 @@ function createMessages(): ChatMessage[] {
       thinkingMarkdown: null,
       trace: [],
       id: "user-1",
+      databaseId: 1,
       timestamp: new Date("2026-01-01T00:00:00.000Z"),
     },
   ];
@@ -34,6 +35,7 @@ describe("agent streaming helpers", () => {
       content: "",
       thinkingMarkdown: null,
       id: "draft-request-1",
+      databaseId: null,
       requestId: "request-1",
       isStreaming: true,
       trace: [],

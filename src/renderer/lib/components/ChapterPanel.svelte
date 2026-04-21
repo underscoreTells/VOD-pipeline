@@ -4,13 +4,18 @@
   import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
   import { formatChapterRange } from "./chapter-panel-helpers.js";
+  import Icon from './ui/Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import { Video, Folder, Check, X, Pencil, Trash2, ChevronRight, ChevronDown } from '../constants';
+  import { cn } from "../utils/cn";
 
   interface Props {
+    class?: string;
     projectAssets: Asset[];
     onImportClick: () => void;
   }
 
-  let { projectAssets, onImportClick }: Props = $props();
+  let { class: className = '', projectAssets, onImportClick }: Props = $props();
 
   // Track which groups are expanded
   let expandedGroups = $state<Set<number>>(new Set());
@@ -113,49 +118,64 @@
   }
 </script>
 
-<div class="chapter-panel">
-  <div class="panel-header">
-    <h3>Chapters</h3>
-    <div class="header-actions">
-      <button class="import-btn" onclick={onImportClick}>
+<div
+  class={cn(
+    'chapter-panel flex h-full flex-col border-r border-border-default bg-surface-raised',
+    className,
+  )}
+>
+  <div class="flex items-center justify-between border-b border-border-default bg-surface-base px-[14px] py-3">
+    <h3 class="m-0 text-app-base font-semibold text-text-primary">Chapters</h3>
+    <div class="flex items-center gap-2">
+      <button
+        class="rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+        onclick={onImportClick}
+      >
         + Import
       </button>
-      <button class="collapse-btn" onclick={collapseLeft}>
+      <button
+        class="rounded-[4px] border border-transparent bg-transparent px-2.5 py-1 text-app-xs text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
+        onclick={collapseLeft}
+      >
         Hide
       </button>
     </div>
   </div>
 
   {#if chaptersState.isLoading}
-    <div class="loading">Loading chapters...</div>
+    <div class="p-8 text-center text-app-sm text-text-tertiary">Loading chapters...</div>
   {:else if chaptersState.chapters.length === 0}
-    <div class="empty-state">
-      <p>No chapters yet</p>
-      <button class="action-btn" onclick={onImportClick}>
+    <div class="p-8 text-center">
+      <p class="mb-4 text-app-sm text-text-tertiary">No chapters yet</p>
+      <button
+        class="rounded-[4px] border border-border-default bg-transparent px-4 py-2 text-app-sm font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+        onclick={onImportClick}
+      >
         Import videos
       </button>
     </div>
   {:else}
-    <div class="chapters-list">
-      <!-- VOD Groups -->
+    <div class="chapters-list scrollbar-thin flex-1 overflow-y-auto p-2">
       {#each vodGroups() as group (group.assetId)}
-        <div class="asset-group">
+        <div class="mb-1">
           <button
-            class="asset-header"
+            class="flex w-full items-center gap-2 rounded-[4px] bg-transparent px-2.5 py-2 text-left text-app-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             onclick={() => toggleGroup(group.assetId)}
           >
-            <span class="toggle-icon">{isExpanded(group.assetId) ? "▼" : "▶"}</span>
-            <span class="asset-icon">📹</span>
-            <span class="asset-name">{getAssetDisplayName(group.asset)}</span>
-            <span class="chapter-count">({group.chapters.length})</span>
+            <span class="inline-flex w-[14px] items-center justify-center text-text-disabled">{#if isExpanded(group.assetId)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="inline-flex items-center"><Icon icon={Video} size={14} /></span>
+            <span class="flex-1 truncate">{getAssetDisplayName(group.asset)}</span>
+            <span class="text-app-xs text-text-disabled">({group.chapters.length})</span>
           </button>
           
           {#if isExpanded(group.assetId)}
-            <div class="chapter-list">
+            <div class="ml-[18px] flex flex-col border-l border-border-subtle py-1">
               {#each group.chapters as chapter (chapter.id)}
+                {@const selected = isSelected(chapter.id)}
                 <div
-                  class="chapter-item"
-                  class:selected={isSelected(chapter.id)}
+                  class="group/chapter relative ml-[-1px] flex cursor-pointer items-center gap-2 rounded-r-[4px] border-l-[3px] border-l-transparent px-2.5 py-1.5 transition-colors hover:bg-surface-hover"
+                  class:bg-surface-hover={selected}
+                  class:border-l-accent-primary={selected}
                   onclick={() => handleSelectChapter(chapter.id)}
                   onkeydown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -174,59 +194,30 @@
                         if (e.key === "Enter") saveEdit(chapter.id);
                         if (e.key === "Escape") cancelEdit();
                       }}
-                      class="edit-input"
+                      class="flex-1 rounded-[4px] border border-accent-primary bg-surface-base px-2 py-1 text-app-sm text-text-primary"
                       onclick={(e) => e.stopPropagation()}
                     />
                   {:else}
-                    <div class="chapter-details">
-                      <span class="chapter-title">{chapter.title}</span>
-                      <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
+                      <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                     </div>
                   {/if}
                   
-                  <span class="chapter-time">
+                  <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                     {formatTime(chapter.end_time - chapter.start_time)}
                   </span>
                   
-                  <div class="chapter-actions">
+                  <div
+                    class="flex gap-1 opacity-0 transition-opacity group-hover/chapter:opacity-100"
+                    class:opacity-100={selected}
+                  >
                     {#if editingChapterId === chapter.id}
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          saveEdit(chapter.id);
-                        }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          cancelEdit();
-                        }}
-                      >
-                        ✕
-                      </button>
+                      <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
+                      <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
                     {:else}
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          startEditing(chapter);
-                        }}
-                      >
-                        ✎
-                      </button>
-                      <button
-                        class="action-icon delete"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteChapter(chapter.id);
-                        }}
-                      >
-                        🗑
-                      </button>
+                      <IconButton icon={Pencil} size={14} onclick={(e) => { e.stopPropagation(); startEditing(chapter); }} title="Edit" />
+                      <IconButton icon={Trash2} size={14} variant="destructive" onclick={(e) => { e.stopPropagation(); handleDeleteChapter(chapter.id); }} title="Delete" />
                     {/if}
                   </div>
                 </div>
@@ -236,26 +227,27 @@
         </div>
       {/each}
 
-      <!-- Individual Files Section -->
       {#if individualGroups().length > 0}
-        <div class="asset-group individual-files">
+        <div class="mb-1">
           <button
-            class="asset-header"
+            class="flex w-full items-center gap-2 rounded-[4px] bg-transparent px-2.5 py-2 text-left text-app-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             onclick={() => toggleGroup(-1)}
           >
-            <span class="toggle-icon">{isExpanded(-1) ? "▼" : "▶"}</span>
-            <span class="asset-icon">📁</span>
-            <span class="asset-name">Individual Files</span>
-            <span class="chapter-count">({individualGroups().reduce((acc, g) => acc + g.chapters.length, 0)})</span>
+            <span class="inline-flex w-[14px] items-center justify-center text-text-disabled">{#if isExpanded(-1)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="inline-flex items-center"><Icon icon={Folder} size={14} /></span>
+            <span class="flex-1 truncate">Individual Files</span>
+            <span class="text-app-xs text-text-disabled">({individualGroups().reduce((acc, g) => acc + g.chapters.length, 0)})</span>
           </button>
           
           {#if isExpanded(-1)}
-            <div class="chapter-list">
+            <div class="ml-[18px] flex flex-col border-l border-border-subtle py-1">
               {#each individualGroups() as group (group.assetId)}
                 {#each group.chapters as chapter (chapter.id)}
+                  {@const selected = isSelected(chapter.id)}
                   <div
-                    class="chapter-item"
-                    class:selected={isSelected(chapter.id)}
+                    class="group/chapter relative ml-[-1px] flex cursor-pointer items-center gap-2 rounded-r-[4px] border-l-[3px] border-l-transparent px-2.5 py-1.5 transition-colors hover:bg-surface-hover"
+                    class:bg-surface-hover={selected}
+                    class:border-l-accent-primary={selected}
                     onclick={() => handleSelectChapter(chapter.id)}
                     onkeydown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -274,59 +266,30 @@
                           if (e.key === "Enter") saveEdit(chapter.id);
                           if (e.key === "Escape") cancelEdit();
                         }}
-                        class="edit-input"
+                        class="flex-1 rounded-[4px] border border-accent-primary bg-surface-base px-2 py-1 text-app-sm text-text-primary"
                         onclick={(e) => e.stopPropagation()}
                       />
                     {:else}
-                      <div class="chapter-details">
-                        <span class="chapter-title">{chapter.title}</span>
-                        <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
+                        <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                       </div>
                     {/if}
                     
-                    <span class="chapter-time">
+                    <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                       {formatTime(chapter.end_time - chapter.start_time)}
                     </span>
                     
-                    <div class="chapter-actions">
+                    <div
+                      class="flex gap-1 opacity-0 transition-opacity group-hover/chapter:opacity-100"
+                      class:opacity-100={selected}
+                    >
                       {#if editingChapterId === chapter.id}
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            saveEdit(chapter.id);
-                          }}
-                        >
-                          ✓
-                        </button>
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            cancelEdit();
-                          }}
-                        >
-                          ✕
-                        </button>
+                        <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
+                        <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
                       {:else}
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            startEditing(chapter);
-                          }}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          class="action-icon delete"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteChapter(chapter.id);
-                          }}
-                        >
-                          🗑
-                        </button>
+                        <IconButton icon={Pencil} size={14} onclick={(e) => { e.stopPropagation(); startEditing(chapter); }} title="Edit" />
+                        <IconButton icon={Trash2} size={14} variant="destructive" onclick={(e) => { e.stopPropagation(); handleDeleteChapter(chapter.id); }} title="Delete" />
                       {/if}
                     </div>
                   </div>
@@ -339,252 +302,3 @@
     </div>
   {/if}
 </div>
-
-<style>
-  .chapter-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: #1e1e1e;
-    border-right: 1px solid #333;
-  }
-
-  .panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem;
-    border-bottom: 1px solid #333;
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .panel-header h3 {
-    margin: 0;
-    color: #fff;
-    font-size: 1rem;
-  }
-
-  .import-btn {
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.75rem;
-    font-weight: 500;
-  }
-
-  .import-btn:hover {
-    background: #1d4ed8;
-  }
-
-  .collapse-btn {
-    background: #333;
-    color: #ccc;
-    border: 1px solid #444;
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.75rem;
-  }
-
-  .collapse-btn:hover {
-    background: #444;
-    color: #fff;
-  }
-
-  .loading {
-    padding: 2rem;
-    text-align: center;
-    color: #888;
-  }
-
-  .empty-state {
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .empty-state p {
-    color: #666;
-    margin: 0 0 1rem 0;
-  }
-
-  .action-btn {
-    background: #333;
-    color: #fff;
-    border: 1px solid #444;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-  }
-
-  .action-btn:hover {
-    background: #444;
-  }
-
-  .chapters-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0.5rem;
-  }
-
-  .asset-group {
-    margin-bottom: 0.5rem;
-  }
-
-  .asset-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: 100%;
-    padding: 0.75rem;
-    background: #252525;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    text-align: left;
-    color: #ccc;
-    font-size: 0.875rem;
-    transition: background 0.2s;
-  }
-
-  .asset-header:hover {
-    background: #2a2a2a;
-  }
-
-  .toggle-icon {
-    font-size: 0.625rem;
-    color: #666;
-    width: 12px;
-  }
-
-  .asset-icon {
-    font-size: 1rem;
-  }
-
-  .asset-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chapter-count {
-    color: #666;
-    font-size: 0.75rem;
-  }
-
-  .chapter-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.25rem 0 0.25rem 1.5rem;
-  }
-
-  .chapter-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-
-  .chapter-item:hover {
-    background: #2a2a2a;
-  }
-
-  .chapter-item.selected {
-    background: #2563eb;
-  }
-
-  .chapter-item.selected .chapter-title,
-  .chapter-item.selected .chapter-range,
-  .chapter-item.selected .chapter-time {
-    color: #fff;
-  }
-
-  .chapter-details {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .chapter-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #ccc;
-    font-size: 0.875rem;
-  }
-
-  .chapter-range {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #666;
-    font-size: 0.75rem;
-    font-family: monospace;
-  }
-
-  .chapter-time {
-    color: #666;
-    font-size: 0.75rem;
-    font-family: monospace;
-  }
-
-  .chapter-actions {
-    display: flex;
-    gap: 0.25rem;
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
-
-  .chapter-item:hover .chapter-actions,
-  .chapter-item.selected .chapter-actions {
-    opacity: 1;
-  }
-
-  .action-icon {
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
-    padding: 0.125rem 0.25rem;
-    font-size: 0.75rem;
-    border-radius: 3px;
-  }
-
-  .action-icon:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .action-icon.delete:hover {
-    background: rgba(248, 113, 113, 0.2);
-    color: #f87171;
-  }
-
-  .edit-input {
-    flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2563eb;
-    color: #fff;
-    padding: 0.25rem 0.5rem;
-    border-radius: 3px;
-    font-size: 0.875rem;
-  }
-
-  .individual-files .asset-header {
-    background: #2a2a2a;
-  }
-</style>

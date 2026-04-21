@@ -10,10 +10,17 @@ import type {
   TimelineState,
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
+import type { NamingModelId } from '../llm/naming-models.js';
 import type { ProjectAsset } from './ipc.js';
 
 export type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
 export type ProxyQuality = 'high' | 'balanced' | 'fast';
+export type ProviderConfigProvider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'kimi';
+
+export interface ProviderConfigPayload {
+  defaultProvider?: ProviderConfigProvider;
+  providers?: Partial<Record<ProviderConfigProvider, string>>;
+}
 
 export interface ProxyOptions {
   encodingMode?: ProxyEncodingMode;
@@ -56,10 +63,38 @@ export interface AgentChatParams {
   provider?: string;
   selectedClipIds?: number[];
   playheadTime?: number;
-  agentConfig?: {
-    defaultProvider?: string;
-    providers?: Record<string, string>;
-  };
+  threadNamingModel?: NamingModelId;
+  agentConfig?: ProviderConfigPayload;
+}
+
+export interface AgentRerollMessageParams {
+  clientRequestId: string;
+  projectId: string;
+  conversationId: number;
+  messageId: number;
+  provider?: string;
+  selectedClipIds?: number[];
+  playheadTime?: number;
+  agentConfig?: ProviderConfigPayload;
+}
+
+export interface AgentEditMessageParams {
+  clientRequestId: string;
+  projectId: string;
+  conversationId: number;
+  messageId: number;
+  message: string;
+  provider?: string;
+  selectedClipIds?: number[];
+  playheadTime?: number;
+  threadNamingModel?: NamingModelId;
+  agentConfig?: ProviderConfigPayload;
+}
+
+export interface AgentBranchMessageParams {
+  projectId: string;
+  conversationId: number;
+  messageId: number;
 }
 
 export interface AgentChatResult {
@@ -226,8 +261,8 @@ export interface SuggestClipNameParams {
   chapterId: number;
   inPoint: number;
   outPoint: number;
-  model: string;
-  apiKey: string;
+  model: NamingModelId;
+  providerConfig?: ProviderConfigPayload;
   chapterTitle?: string;
 }
 
@@ -407,6 +442,9 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;
+    rerollMessage: (params: AgentRerollMessageParams) => Promise<AgentChatResult>;
+    editMessage: (params: AgentEditMessageParams) => Promise<AgentChatResult>;
+    branchMessage: (params: AgentBranchMessageParams) => Promise<AgentConversationCreateResult>;
     createConversation: (params: AgentConversationCreateParams) => Promise<AgentConversationCreateResult>;
     listConversations: (params: AgentConversationListParams) => Promise<AgentConversationListResult>;
     getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;

@@ -243,17 +243,6 @@ export function applyNearLimitTokenGuard(
   };
 }
 
-export function deriveConversationTitle(message: string): string {
-  const normalized = message.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return 'New conversation';
-  }
-  if (normalized.length <= 64) {
-    return normalized;
-  }
-  return `${normalized.slice(0, 61)}...`;
-}
-
 function extractAssistantMessage(result: Record<string, unknown>): string {
   const explicit = result.assistantResponse;
   if (typeof explicit === 'string' && explicit.trim().length > 0) {

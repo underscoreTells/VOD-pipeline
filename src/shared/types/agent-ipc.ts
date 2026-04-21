@@ -70,6 +70,10 @@ export interface AgentChatData {
   message: string;
   thinkingMarkdown?: string;
   threadId?: string;
+  userMessageId?: number;
+  assistantMessageId?: number;
+  userCreatedAt?: string;
+  assistantCreatedAt?: string;
   suggestions?: Suggestion[];
   outcome?: ConversationTurnResult["outcome"];
   // Deprecated for renderer-facing chat flows. Persisted suggestions are canonical.

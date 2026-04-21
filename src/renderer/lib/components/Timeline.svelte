@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import TimelineTrack from './TimelineTrack.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
+  import Spinner from './ui/Spinner.svelte';
   import { timelineState, loadTimeline, setMinZoom, setZoom } from '../state/timeline.svelte';
   import type { Clip, TimelineState as TimelineStateType } from '../../../shared/types/database';
 
@@ -17,7 +19,7 @@
     waveformTrackIndex: number;
     createTrackIndex?: number;
   }
-  
+
   interface Props {
     projectId: number;
     lanes: TimelineLane[];
@@ -71,8 +73,7 @@
     resizeObserver = null;
     setMinZoom(DEFAULT_MIN_ZOOM_LEVEL);
   });
-  
-  // Load timeline data
+
   $effect(() => {
     if (!projectId || !clips) return;
     if (timelineState.projectId === projectId) {
@@ -86,8 +87,7 @@
       isLoading = false;
     }
   });
-  
-  // Update loading state when clips change
+
   $effect(() => {
     if (clips && clips.length > 0) {
       isLoading = false;
@@ -100,7 +100,6 @@
     updateMinZoomToFitChapter();
   });
 
-  // Handle wheel for ctrl+scroll zoom
   function handleWheel(event: WheelEvent) {
     if (!event.ctrlKey) return;
     event.preventDefault();
@@ -110,20 +109,20 @@
   }
 </script>
 
-<div class="timeline" onwheel={handleWheel} bind:this={timelineRef}>
-    {#if isLoading}
-      <div class="loading">
-        <span class="loading-spinner"></span>
-        <p>Loading timeline...</p>
-      </div>
+<div class="flex h-full flex-col overflow-hidden bg-surface-page" onwheel={handleWheel} bind:this={timelineRef}>
+  {#if isLoading}
+    <div class="flex h-full flex-col items-center justify-center gap-4 px-8 text-text-tertiary">
+      <Spinner />
+      <p>Loading timeline...</p>
+    </div>
   {:else if error}
-    <div class="error">
+    <div class="flex h-full flex-col items-center justify-center px-8 text-accent-destructive">
       <p>Error: {error}</p>
     </div>
   {:else}
-    <div class="tracks-container">
+    <div class="scrollbar-thin flex-1 overflow-y-auto overflow-x-hidden">
       {#each lanes as lane (lane.id)}
-        <TimelineTrack 
+        <TimelineTrack
           audioUrl={lane.audioUrl}
           missing={lane.missing}
           assetId={lane.assetId}
@@ -137,62 +136,9 @@
         />
       {/each}
     </div>
-    
+
     {#if lanes.length === 0}
-      <div class="empty">
-        <p>No audio tracks loaded</p>
-        <p class="hint">Import a video to see the timeline</p>
-      </div>
+      <EmptyState title="No audio tracks loaded" description="Import a video to see the timeline" />
     {/if}
   {/if}
 </div>
-
-<style>
-  .timeline {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: #0f0f0f;
-    overflow: hidden;
-  }
-  
-  .tracks-container {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-  
-  .loading, .error, .empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: #888;
-    padding: 2rem;
-  }
-  
-  .loading-spinner {
-    display: inline-block;
-    width: 40px;
-    height: 40px;
-    border: 3px solid #333;
-    border-top-color: #007bff;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
-  }
-  
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  
-  .error {
-    color: #dc3545;
-  }
-  
-  .empty .hint {
-    font-size: 0.875rem;
-    color: #666;
-  }
-</style>

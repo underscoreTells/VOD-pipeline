@@ -1,3 +1,4 @@
+import type { ProviderConfigPayload } from "../../../shared/contracts/electron-api.js";
 import type {
   ChatConversation,
   ChatConversationMessage,
@@ -16,6 +17,7 @@ import {
   resolveConversationSelection,
   shouldChangeChapterContext,
 } from "./agent-session-helpers.js";
+import { buildProviderConfig } from "./settings-helpers.js";
 import {
   createAgentConversation,
   deleteAgentConversation,
@@ -33,6 +35,7 @@ export interface ChatMessage {
   thinkingMarkdown: string | null;
   trace: ExecutionTraceEntry[];
   id: string;
+  databaseId: number | null;
   timestamp: Date;
   requestId?: string;
   isStreaming?: boolean;
@@ -90,29 +93,7 @@ function isStreamingBlocked(): boolean {
 }
 
 export function buildProviderEnvFromSettings() {
-  const providers: Record<string, string> = {};
-  const { settings } = settingsState;
-
-  if (settings.geminiApiKey.trim()) {
-    providers.gemini = settings.geminiApiKey.trim();
-  }
-  if (settings.openaiApiKey.trim()) {
-    providers.openai = settings.openaiApiKey.trim();
-  }
-  if (settings.anthropicApiKey.trim()) {
-    providers.anthropic = settings.anthropicApiKey.trim();
-  }
-  if (settings.openrouterApiKey.trim()) {
-    providers.openrouter = settings.openrouterApiKey.trim();
-  }
-  if (settings.kimiApiKey.trim()) {
-    providers.kimi = settings.kimiApiKey.trim();
-  }
-
-  return {
-    defaultProvider: agentState.selectedProvider,
-    providers,
-  };
+  return buildProviderConfig(settingsState.settings, agentState.selectedProvider) as ProviderConfigPayload;
 }
 
 export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
@@ -126,8 +107,20 @@ export function mapConversationMessages(messages: ChatConversationMessage[]): Ch
       : null,
     trace: parseExecutionTraceJson(item.trace_json),
     id: `db-${item.id}`,
+    databaseId: item.id,
     timestamp: new Date(item.created_at),
   }));
+}
+
+export function insertConversation(conversation: ChatConversation): void {
+  agentState.conversations = resolveConversationSelection(
+    [conversation, ...agentState.conversations],
+    {
+      hasLoadedMessages: agentState.messages.length > 0,
+      preserveSelection: false,
+      selectedConversationId: agentState.selectedConversationId,
+    }
+  ).sortedConversations;
 }
 
 function getCurrentConversationContextKey(): string {
@@ -267,14 +260,7 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
     return conversation;
   }
 
-  agentState.conversations = resolveConversationSelection(
-    [conversation, ...agentState.conversations],
-    {
-      hasLoadedMessages: true,
-      preserveSelection: false,
-      selectedConversationId: null,
-    }
-  ).sortedConversations;
+  insertConversation(conversation);
   agentState.selectedConversationId = conversation.id;
   agentState.messages = [];
   agentState.timelineProposals = [];

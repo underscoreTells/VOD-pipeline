@@ -1,8 +1,16 @@
 <script lang="ts">
   import { projects, getSelectedProject, loadProjects, createProject, deleteProject, selectProject } from './lib/state/project.svelte';
-  import { settingsState, openSettings, loadSettings } from './lib/state/settings.svelte';
+  import { openSettings, loadSettings } from './lib/state/settings.svelte';
+  import { themeState, toggleTheme } from './lib/state/theme.svelte';
   import ProjectDetail from './lib/components/ProjectDetail.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
+  import Button from './lib/components/ui/Button.svelte';
+  import ContextMenu from './lib/components/ui/ContextMenu.svelte';
+  import Dialog from './lib/components/ui/Dialog.svelte';
+  import Icon from './lib/components/ui/Icon.svelte';
+  import IconButton from './lib/components/ui/IconButton.svelte';
+  import { cn } from './lib/utils/cn';
+  import { Video, Sun, Moon, Settings } from './lib/constants';
 
   const selectedProject = $derived.by(() => getSelectedProject());
 
@@ -23,16 +31,16 @@
   });
 
   function handleCreateProject() {
-    if (newProjectName.trim()) {
-      createProject(newProjectName.trim())
-        .then(() => {
-          newProjectName = '';
-          showCreateDialog = false;
-        })
-        .catch((error) => {
-          console.error('Failed to create project:', error);
-        });
-    }
+    if (!newProjectName.trim()) return;
+
+    createProject(newProjectName.trim())
+      .then(() => {
+        newProjectName = '';
+        showCreateDialog = false;
+      })
+      .catch((error) => {
+        console.error('Failed to create project:', error);
+      });
   }
 
   function handleBackToProjects() {
@@ -43,12 +51,10 @@
     if (deletingProjectId === projectId) return;
 
     const confirmed = window.confirm(
-      `Delete project "${projectName}"?\n\nThis permanently deletes the project and all related chapters, clips, transcripts, and waveform data.`
+      `Delete project "${projectName}"?\n\nThis permanently deletes the project and all related chapters, clips, transcripts, and waveform data.`,
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     deletingProjectId = projectId;
     try {
@@ -87,426 +93,157 @@
     const projectName = projectContextMenu.projectName;
     closeProjectContextMenu();
 
-    if (projectId === null) {
-      return;
-    }
+    if (projectId === null) return;
 
     void handleDeleteProject(projectId, projectName);
   }
-
-  $effect(() => {
-    if (!projectContextMenu.open) return;
-
-    const handleWindowPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('.project-context-menu')) return;
-      closeProjectContextMenu();
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeProjectContextMenu();
-      }
-    };
-
-    const handleResize = () => {
-      closeProjectContextMenu();
-    };
-
-    window.addEventListener('pointerdown', handleWindowPointerDown);
-    window.addEventListener('keydown', handleEscape);
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('pointerdown', handleWindowPointerDown);
-      window.removeEventListener('keydown', handleEscape);
-      window.removeEventListener('resize', handleResize);
-    };
-  });
 </script>
 
-<div class="app">
-  <header>
-    <h1>VOD Pipeline</h1>
-    <button class="settings-btn" onclick={openSettings} title="Settings">
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24M6.34 17.66l-4.24 4.24M23 12h-6m-6 0H1m20.24 4.24l-4.24-4.24M6.34 6.34L2.1 2.1"/>
-      </svg>
-      Settings
-    </button>
-  </header>
+<div class="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden">
+  {#if !selectedProject}
+    <header class="relative z-10 flex items-center justify-between px-8 py-6">
+      <div class="flex items-center gap-4">
+        <div class="flex h-8 w-8 items-center justify-center rounded-md border border-border-default bg-surface-raised">
+          <Icon icon={Video} size={16} class="text-text-primary" />
+        </div>
+        <h1 class="m-0 text-app-xl font-bold tracking-tighter text-text-primary">VOD Pipeline</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <IconButton
+          icon={themeState.current === 'dark' ? Sun : Moon}
+          size={16}
+          onclick={toggleTheme}
+          title="Toggle theme"
+          class="h-9 w-9 rounded-md border border-border-default bg-surface-base text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
+        />
+        <Button variant="ghost" onclick={openSettings} icon={Settings} class="h-9">
+          Settings
+        </Button>
+      </div>
+    </header>
+  {/if}
 
-  <main class="container" class:project-open={selectedProject !== null}>
-    <!-- Projects View -->
+  <main
+    class={cn(
+      'flex-1 min-h-0 w-full',
+      selectedProject ? 'overflow-hidden p-0' : 'overflow-auto p-4 md:p-8 max-w-[1400px] mx-auto',
+    )}
+  >
     {#if !selectedProject}
-      <section class="projects-section">
-        <div class="section-header">
-          <h2>Projects</h2>
-          <button onclick={() => showCreateDialog = true}>New Project</button>
+      <section class="flex flex-col gap-12 w-full pt-4 md:pt-10">
+        <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 w-full max-w-4xl">
+          <div class="flex flex-col gap-2">
+            <h2 class="m-0 max-w-lg text-app-2xl font-bold tracking-tighter leading-none text-text-primary md:text-app-3xl">
+              Your Video Projects
+            </h2>
+            <p class="text-app-md text-text-secondary max-w-md mt-2">
+              Transform raw streams into polished stories with AI-assisted narrative beat extraction.
+            </p>
+          </div>
+          <Button variant="primary" onclick={() => showCreateDialog = true} class="font-medium px-6 py-2.5 h-auto">
+            New Project
+          </Button>
         </div>
 
         {#if projects.loading}
-          <p class="loading">Loading projects...</p>
+          <div class="surface-card p-12 text-center text-text-tertiary max-w-4xl border-dashed">
+            <div class="animate-pulse">Loading workspace...</div>
+          </div>
         {:else if projects.error}
-          <p class="error">{projects.error}</p>
+          <div class="surface-card p-8 border-accent-destructive bg-accent-destructive/5 text-accent-destructive max-w-4xl">
+            {projects.error}
+          </div>
         {:else if projects.items.length === 0}
-          <p class="empty">No projects yet. Create one to get started!</p>
+          <div class="surface-card p-16 flex flex-col items-center justify-center gap-4 text-center max-w-4xl border-dashed">
+            <div class="h-16 w-16 rounded-md bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
+              <Icon icon={Video} size={28} class="text-text-tertiary" />
+            </div>
+            <h3 class="text-app-xl font-bold tracking-tight m-0 text-text-primary">Ready to cut</h3>
+            <p class="text-text-secondary m-0 max-w-[30ch]">
+              Drop your first VOD in and let the pipeline extract the story.
+            </p>
+            <Button variant="secondary" onclick={() => showCreateDialog = true} class="mt-4">
+              Create your first project
+            </Button>
+          </div>
         {:else}
-          <div class="projects-grid">
-            {#each projects.items as project (project.id)}
-              <div 
-                class="project-card" 
-                onclick={() => selectProject(project.id)}
-                oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    selectProject(project.id);
-                  }
-                }}
-                role="button"
-                tabindex="0"
-              >
-                <div class="project-thumbnail">
-                  <span class="project-icon">📹</span>
-                </div>
-                <div class="project-info">
-                  <h3>{project.name}</h3>
-                  <p class="project-date">
-                    {new Date(project.created_at).toLocaleDateString()}
-                  </p>
+          <!-- Bento Grid Layout -->
+          <div class="grid grid-flow-dense grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-[280px]">
+            {#each projects.items as project, i (project.id)}
+              <div class="flex flex-col group relative">
+                <button
+                  type="button"
+                  class="surface-card flex-1 p-8 text-left transition-all duration-200 hover:bg-surface-elevated active:scale-[0.98] outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus flex flex-col justify-between"
+                  onclick={() => selectProject(project.id)}
+                  oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
+                >
+                  <div class="flex items-start justify-between w-full">
+                    <div class="h-10 w-10 rounded-md bg-surface-raised border border-border-default flex items-center justify-center">
+                       <Icon icon={Video} size={18} class="text-text-primary" />
+                    </div>
+                  </div>
+                  
+                  <div class="mt-auto">
+                    <h3 class="text-app-xl font-bold tracking-tight text-text-primary m-0 line-clamp-2">
+                      {project.name}
+                    </h3>
+                  </div>
+                </button>
+                <div class="pt-3 px-1 flex items-center justify-between text-app-sm text-text-secondary">
+                  <span class="text-app-xs tabular-nums">{new Date(project.created_at).toLocaleDateString()}</span>
+                  <span class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">Open project →</span>
                 </div>
               </div>
             {/each}
           </div>
 
           {#if projectContextMenu.open}
-            <div
-              class="project-context-menu"
-              role="menu"
-              style={`left: ${projectContextMenu.x}px; top: ${projectContextMenu.y}px;`}
-            >
-              <button
-                type="button"
-                class="project-context-item"
-                role="menuitem"
-                disabled={deletingProjectId === projectContextMenu.projectId}
-                onclick={handleContextDelete}
-              >
-                {deletingProjectId === projectContextMenu.projectId
-                  ? 'Deleting...'
-                  : 'Delete project'}
-              </button>
-            </div>
+            <ContextMenu
+              x={projectContextMenu.x}
+              y={projectContextMenu.y}
+              onclose={closeProjectContextMenu}
+              items={[
+                {
+                  label: deletingProjectId === projectContextMenu.projectId ? 'Deleting...' : 'Delete project',
+                  action: handleContextDelete,
+                  destructive: true,
+                  disabled: deletingProjectId === projectContextMenu.projectId,
+                },
+              ]}
+            />
           {/if}
         {/if}
       </section>
 
-      <!-- Create Project Dialog -->
-      {#if showCreateDialog}
-        <div class="dialog-overlay" onclick={() => showCreateDialog = false}>
-          <div class="dialog" onclick={(e) => e.stopPropagation()}>
-            <h2>Create New Project</h2>
-            <input 
-              type="text" 
-              bind:value={newProjectName} 
-              placeholder="Project name" 
+      <Dialog open={showCreateDialog} title="Create New Project" onClose={() => showCreateDialog = false}>
+        <div class="flex w-[400px] max-w-full flex-col gap-6 pt-2">
+          <div class="flex flex-col gap-2">
+            <label for="projectName" class="text-app-sm font-medium text-text-secondary">Project Name</label>
+            <input
+              id="projectName"
+              type="text"
+              bind:value={newProjectName}
+              class="w-full h-10 rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-md text-text-primary placeholder:text-text-disabled focus:ring-[3px] focus:ring-border-focus focus:border-border-focus transition-all duration-120"
+              placeholder="e.g. Mario Odyssey Part 1"
               onkeydown={(e) => {
                 if (e.key === 'Enter' && newProjectName.trim()) {
                   handleCreateProject();
                 }
               }}
             />
-            <div class="dialog-actions">
-              <button onclick={() => showCreateDialog = false}>Cancel</button>
-              <button 
-                class="primary" 
-                onclick={handleCreateProject} 
-                disabled={!newProjectName.trim()}
-              >
-                Create
-              </button>
-            </div>
+          </div>
+          <div class="flex justify-end gap-3">
+            <Button variant="ghost" onclick={() => showCreateDialog = false}>Cancel</Button>
+            <Button variant="primary" onclick={handleCreateProject} disabled={!newProjectName.trim()}>
+              Create
+            </Button>
           </div>
         </div>
-      {/if}
-      
-    {:else if selectedProject}
-      <!-- Project Detail View with Timeline Editor -->
-      <ProjectDetail 
-        project={selectedProject} 
-        onBack={handleBackToProjects}
-      />
+      </Dialog>
+    {:else}
+      <ProjectDetail project={selectedProject} onBack={handleBackToProjects} />
     {/if}
-    
-    <!-- Settings Panel - rendered outside conditional so it works from any view -->
+
     <SettingsPanel />
   </main>
 </div>
-
-<style>
-  :global(html),
-  :global(body),
-  :global(#app) {
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    background: #0f0f0f;
-  }
-
-  .app {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  }
-
-  :global(*) {
-    scrollbar-width: none;
-  }
-
-  :global(*::-webkit-scrollbar) {
-    width: 0;
-    height: 0;
-  }
-
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #1e1e1e;
-    color: white;
-    padding: 1rem 2rem;
-    border-bottom: 1px solid #333;
-  }
-
-  header h1 {
-    margin: 0;
-    font-size: 1.5rem;
-  }
-
-  .settings-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: transparent;
-    color: #ccc;
-    border: 1px solid #444;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: all 0.2s;
-  }
-
-  .settings-btn:hover {
-    background: #333;
-    color: #fff;
-    border-color: #555;
-  }
-
-  .container {
-    flex: 1;
-    overflow: auto;
-    padding: 2rem;
-  }
-
-  .container.project-open {
-    padding: 0;
-    overflow: hidden;
-  }
-
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-  }
-
-  .section-header h2 {
-    margin: 0;
-    font-size: 1.5rem;
-  }
-
-  button {
-    padding: 0.5rem 1rem;
-    background: #007bff;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-  }
-
-  button:hover {
-    background: #0056b3;
-  }
-
-  button.primary {
-    background: #28a745;
-  }
-
-  button.primary:hover {
-    background: #218838;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .loading, .error, .empty {
-    text-align: center;
-    padding: 2rem;
-    color: #666;
-  }
-
-  .error {
-    color: #dc3545;
-  }
-
-  .projects-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 1.5rem;
-  }
-
-  .project-card {
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    overflow: hidden;
-    cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-  }
-
-  .project-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  }
-
-  .project-context-menu {
-    position: fixed;
-    z-index: 1200;
-    min-width: 220px;
-    padding: 0.25rem;
-    background: #1e1e1e;
-    border: 1px solid #3a3a3a;
-    border-radius: 8px;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  }
-
-  .project-context-item {
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    border: none;
-    background: transparent;
-    color: #f4f4f5;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    line-height: 1.2;
-  }
-
-  .project-context-item:hover:not(:disabled) {
-    background: #4d1b1b;
-    color: #ffd5d5;
-  }
-
-  .project-context-item:disabled {
-    opacity: 0.7;
-    cursor: wait;
-  }
-
-  .project-thumbnail {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    height: 140px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .project-icon {
-    font-size: 4rem;
-  }
-
-  .project-info {
-    padding: 1rem;
-  }
-
-  .project-info h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-  }
-
-  .project-date {
-    margin: 0;
-    font-size: 0.875rem;
-    color: #666;
-  }
-
-  .dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-
-  .dialog {
-    background: white;
-    border-radius: 8px;
-    padding: 2rem;
-    width: 100%;
-    max-width: 400px;
-  }
-
-  .dialog h2 {
-    margin-top: 0;
-  }
-
-  .dialog input {
-    width: 100%;
-    padding: 0.5rem;
-    margin: 1rem 0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-  }
-
-  .dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-
-  .project-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
-  }
-
-  .project-header h2 {
-    margin: 0;
-  }
-
-  .project-content {
-    padding: 2rem;
-    background: #f5f5f5;
-    border-radius: 8px;
-  }
-
-  .placeholder {
-    text-align: center;
-    color: #666;
-  }
-</style>

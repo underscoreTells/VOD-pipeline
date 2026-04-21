@@ -8,6 +8,7 @@ export {
   agentState,
   clearMessages,
   createNewConversation,
+  insertConversation,
   removeConversation,
   selectConversation,
   setChapterContext,
@@ -15,7 +16,12 @@ export {
   setProvider,
   syncAgentContext,
 } from './agent-session.svelte.js';
-export { sendChatMessage } from './agent-streaming.svelte.js';
+export {
+  branchMessage,
+  editMessage,
+  rerollMessage,
+  sendChatMessage,
+} from './agent-streaming.svelte.js';
 export {
   applyAllSuggestions,
   applySuggestion,
@@ -24,7 +30,9 @@ export {
   clearSuggestions,
   clearTimelineProposals,
   loadSuggestions,
+  previewAllSuggestions,
   previewSuggestion,
+  rejectAllSuggestions,
   rejectSuggestion,
   rejectTimelineProposal,
 } from './agent-proposals.svelte.js';

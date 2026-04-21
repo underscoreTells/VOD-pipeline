@@ -1,5 +1,11 @@
+import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
+import {
+  normalizeNamingModel,
+  type NamingModelId,
+} from '../../../shared/llm/naming-models.js';
 import { decryptSettings, encryptSettings } from '../api/settings.js';
 import {
+  buildProviderConfig,
   defaultSettings,
   getApiKey as getSettingsApiKey,
   getConfiguredProviders as getConfiguredProvidersFromSettings,
@@ -37,11 +43,14 @@ export interface Settings {
 
   // Chapter auto-naming preferences
   autoChapterNamingEnabled: boolean;
-  autoChapterNamingModel: string;
+  autoChapterNamingModel: NamingModelId;
 
   // Clip auto-naming preferences
   autoClipNamingEnabled: boolean;
-  autoClipNamingModel: string;
+  autoClipNamingModel: NamingModelId;
+
+  // Chat thread naming preferences
+  autoThreadNamingModel: NamingModelId;
 
   autoTranscribeOnImport: boolean;
 }
@@ -105,13 +114,16 @@ export async function loadSettings(): Promise<void> {
       settingsState.settings.autoChapterNamingEnabled = parsed.autoChapterNamingEnabled;
     }
     if (parsed.autoChapterNamingModel) {
-      settingsState.settings.autoChapterNamingModel = parsed.autoChapterNamingModel;
+      settingsState.settings.autoChapterNamingModel = normalizeNamingModel(parsed.autoChapterNamingModel);
     }
     if (parsed.autoClipNamingEnabled !== undefined) {
       settingsState.settings.autoClipNamingEnabled = parsed.autoClipNamingEnabled;
     }
     if (parsed.autoClipNamingModel) {
-      settingsState.settings.autoClipNamingModel = parsed.autoClipNamingModel;
+      settingsState.settings.autoClipNamingModel = normalizeNamingModel(parsed.autoClipNamingModel);
+    }
+    if (parsed.autoThreadNamingModel) {
+      settingsState.settings.autoThreadNamingModel = normalizeNamingModel(parsed.autoThreadNamingModel);
     }
     if (parsed.autoTranscribeOnImport !== undefined) {
       settingsState.settings.autoTranscribeOnImport = parsed.autoTranscribeOnImport;
@@ -178,9 +190,10 @@ export async function saveSettings(): Promise<void> {
       proxyEncodingMode: settingsState.settings.proxyEncodingMode,
       proxyQuality: settingsState.settings.proxyQuality,
       autoChapterNamingEnabled: settingsState.settings.autoChapterNamingEnabled,
-      autoChapterNamingModel: settingsState.settings.autoChapterNamingModel,
+      autoChapterNamingModel: normalizeNamingModel(settingsState.settings.autoChapterNamingModel),
       autoClipNamingEnabled: settingsState.settings.autoClipNamingEnabled,
-      autoClipNamingModel: settingsState.settings.autoClipNamingModel,
+      autoClipNamingModel: normalizeNamingModel(settingsState.settings.autoClipNamingModel),
+      autoThreadNamingModel: normalizeNamingModel(settingsState.settings.autoThreadNamingModel),
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
       _encryptedKeys: response.data,
     };
@@ -269,6 +282,12 @@ export function getConfiguredProviders(): LLMProviderType[] {
  */
 export function getConfiguredVideoProviders(): LLMProviderType[] {
   return getConfiguredVideoProvidersFromSettings(settingsState.settings);
+}
+
+export function buildProviderConfigFromSettings(
+  defaultProvider?: LLMProviderType
+): ProviderConfigPayload {
+  return buildProviderConfig(settingsState.settings, defaultProvider);
 }
 
 /**

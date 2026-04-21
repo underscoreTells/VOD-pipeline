@@ -41,6 +41,33 @@ describe("project detail waveform helpers", () => {
     expect(generateAssetWaveform).toHaveBeenCalledWith(1, -1, {
       includeSourceTracks: true,
       playbackActive: true,
+    }, {
+      uiMode: "background",
+    });
+  });
+
+  it("passes background UI mode for single-track chapter prewarm", async () => {
+    const generateAssetWaveform = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createChapterWaveformScheduler({
+      resolveAsset: () => ({
+        id: 2,
+        file_path: "/tmp/test.mp4",
+        availability: { exists: true },
+        metadata: { audioTracks: [{ index: 0 }] },
+      }) as never,
+      getAssetWaveform: vi.fn().mockResolvedValue(null),
+      generateAssetWaveform,
+      isPlaybackActive: () => false,
+    });
+
+    await scheduler.ensureChapterWaveforms([2], false, -1);
+
+    expect(generateAssetWaveform).toHaveBeenCalledTimes(1);
+    expect(generateAssetWaveform).toHaveBeenCalledWith(2, -1, {
+      includeSourceTracks: false,
+      playbackActive: false,
+    }, {
+      uiMode: "background",
     });
   });
 });

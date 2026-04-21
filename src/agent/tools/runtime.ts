@@ -82,13 +82,11 @@ function compileSchemaNode(schema: CanonicalSchemaNode): ZodTypeAny {
 }
 
 function compileStringSchema(schema: Extract<CanonicalSchemaNode, { kind: "string" }>): ZodTypeAny {
-  let stringSchema: ZodTypeAny;
-
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    stringSchema = z.enum(schema.enum as [string, ...string[]]);
-  } else {
-    stringSchema = z.string();
+    return z.enum(schema.enum as [string, ...string[]]);
   }
+
+  let stringSchema = z.string();
 
   if (typeof schema.minLength === "number") {
     stringSchema = stringSchema.min(schema.minLength);
@@ -208,7 +206,12 @@ function compileDiscriminatedUnionSchema(
   const variants = schema.variants.map((variant) =>
     assertDiscriminatedVariant(schema.discriminator, variant)
   );
-  return z.discriminatedUnion(schema.discriminator, variants);
+  if (variants.length === 0) {
+    throw new Error(
+      `Discriminated union "${schema.discriminator}" must define at least one variant`
+    );
+  }
+  return z.union(variants as [typeof variants[0], ...typeof variants]);
 }
 
 function assertDiscriminatedVariant(
@@ -220,7 +223,7 @@ function assertDiscriminatedVariant(
       `Discriminated union variant is missing discriminator field "${discriminator}"`
     );
   }
-  return compileObjectSchema(schema) as unknown as z.ZodDiscriminatedUnionOption<string>;
+  return compileObjectSchema(schema);
 }
 
 function applyNullable(schema: ZodTypeAny, nullable: boolean | undefined): ZodTypeAny {
