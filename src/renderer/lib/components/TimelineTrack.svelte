@@ -1401,8 +1401,7 @@
     padding: var(--space-1);
     background: var(--surface-raised);
     border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    border-radius: var(--radius-xs);
   }
 
   .timeline-context-item {
@@ -1454,7 +1453,7 @@
   }
   
   :global(.wavesurfer-region.selected) {
-    border-color: var(--text-primary);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary) 30%, transparent);
+    border-color: var(--accent-primary);
+    border-width: 2px;
   }
 </style>

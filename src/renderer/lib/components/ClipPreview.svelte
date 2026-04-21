@@ -418,7 +418,7 @@
     gap: var(--space-3);
     background: var(--surface-base);
     border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     padding: var(--space-3);
     min-height: 0;
     height: 100%;

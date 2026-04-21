@@ -108,7 +108,7 @@
   .markdown-content :global(.markdown-code-block) {
     overflow-x: auto;
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     background: var(--surface-elevated);
     border: 1px solid var(--border-subtle);
   }

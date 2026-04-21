@@ -53,7 +53,7 @@
 {#if items.length > 0}
   <div
     bind:this={menuRef}
-    class="fixed z-[var(--z-context-menu)] min-w-[140px] rounded-md border border-border-default bg-surface-raised py-1 shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
+    class="fixed z-[var(--z-context-menu)] min-w-[140px] rounded-md border border-border-default bg-surface-raised py-1"
     style="left: {adjustPosition().left}; top: {adjustPosition().top}"
   >
     {#each items as item}

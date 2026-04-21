@@ -300,9 +300,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-4);
+    padding: 12px 14px;
     border-bottom: 1px solid var(--border-default);
-    background: var(--surface-raised);
+    background: var(--surface-base);
   }
 
   .header-actions {
@@ -310,49 +310,51 @@
     align-items: center;
     gap: var(--space-2);
   }
-  
+
   .panel-header h3 {
     margin: 0;
-    font-size: var(--text-md);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--text-primary);
   }
-  
+
   .clip-count {
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     color: var(--text-tertiary);
-    background: var(--surface-active);
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-pill);
+    font-family: var(--font-mono);
   }
 
   .collapse-btn {
-    padding: var(--space-1) var(--space-2);
-    background: var(--surface-active);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
     color: var(--text-secondary);
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: all var(--transition-fast);
   }
 
   .collapse-btn:hover {
-    background: var(--border-strong);
+    background: var(--surface-hover);
     color: var(--text-primary);
   }
 
   .section-toggle-btn {
-    padding: var(--space-1) var(--space-2);
-    background: var(--surface-hover);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xs);
     color: var(--text-secondary);
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     cursor: pointer;
+    transition: all var(--transition-fast);
   }
 
   .section-toggle-btn:hover {
-    background: var(--surface-active);
+    background: var(--surface-hover);
     color: var(--text-primary);
+    border-color: var(--border-strong);
   }
   
   .clip-groups {
@@ -360,30 +362,38 @@
     overflow-y: auto;
     padding: var(--space-2);
   }
-  
+
   .role-group {
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: var(--space-2);
   }
-  
+
+  .role-group:last-child {
+    border-bottom: none;
+  }
+
   .role-header {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2);
+    padding: 6px 8px;
     border-left: 3px solid;
     border-top: none;
     border-right: none;
     border-bottom: none;
-    border-radius: var(--radius-sm);
-    margin-bottom: var(--space-2);
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+    margin-bottom: var(--space-1);
     width: 100%;
     text-align: left;
     cursor: pointer;
     color: inherit;
+    background: transparent;
+    transition: background var(--transition-fast);
   }
 
   .role-header:hover {
-    filter: brightness(1.08);
+    background: var(--surface-hover);
   }
 
   .section-expand-icon {
@@ -391,50 +401,50 @@
     width: var(--space-3);
     text-align: center;
   }
-  
+
   .role-icon {
     display: inline-flex;
     align-items: center;
   }
-  
+
   .role-label {
-    font-size: var(--text-base);
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     color: var(--text-primary);
     flex: 1;
   }
-  
+
   .role-count {
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     color: var(--text-tertiary);
-    background: color-mix(in srgb, var(--text-primary) 25%, transparent);
-    padding: 0.125rem 0.375rem;
-    border-radius: var(--radius-pill);
+    font-family: var(--font-mono);
   }
   
   .clip-list {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    padding-left: 14px;
+    border-left: 1px solid var(--border-subtle);
+    margin-left: 6px;
   }
-  
+
   .clip-item {
-    padding: var(--space-2);
-    background: var(--surface-elevated);
-    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    background: transparent;
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
     cursor: pointer;
     transition: all var(--transition-fast);
-    border: 1px solid transparent;
+    border-left: 2px solid transparent;
+    margin-bottom: 1px;
   }
-  
+
   .clip-item:hover {
     background: var(--surface-hover);
-    border-color: var(--border-strong);
   }
-  
+
   .clip-item.selected {
-    background: color-mix(in srgb, var(--accent-primary) 13%, transparent);
-    border-color: var(--accent-primary);
+    background: var(--surface-hover);
+    border-left-color: var(--accent-primary);
   }
 
   .clip-context-menu {
@@ -444,8 +454,7 @@
     padding: var(--space-1);
     background: var(--surface-raised);
     border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    border-radius: var(--radius-xs);
   }
 
   .context-item {
@@ -455,9 +464,10 @@
     border: none;
     background: transparent;
     color: var(--text-secondary);
-    font-size: var(--text-base);
-    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    border-radius: var(--radius-xs);
     cursor: pointer;
+    transition: background var(--transition-fast);
   }
 
   .context-item:hover {
@@ -468,82 +478,82 @@
   .context-item.destructive {
     color: var(--role-setup);
   }
-  
+
   .clip-item.discarded {
     opacity: 0.5;
   }
-  
+
   .clip-time {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     color: var(--text-tertiary);
-    margin-bottom: var(--space-1);
+    margin-bottom: 2px;
     font-family: var(--font-mono);
   }
-  
+
   .time-separator {
-    color: var(--text-disabled);
+    color: var(--text-tertiary);
+    opacity: 0.6;
   }
-  
+
   .clip-info {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: var(--space-2);
   }
-  
+
   .clip-description {
-    font-size: var(--text-base);
+    font-size: var(--text-sm);
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1;
   }
-  
+
   .clip-description.empty {
-    color: var(--text-disabled);
+    color: var(--text-tertiary);
     font-style: italic;
   }
-  
+
   .clip-meta {
     display: flex;
     align-items: center;
     gap: var(--space-1);
     flex-shrink: 0;
   }
-  
+
   .track-badge {
     font-size: var(--text-xs);
     color: var(--text-tertiary);
-    background: var(--surface-active);
-    padding: 0.125rem var(--space-1);
-    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
   }
-  
+
   .essential-badge {
     display: inline-flex;
     align-items: center;
     color: var(--accent-warning);
   }
-  
+
   .empty-state {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 2rem;
-    color: var(--text-disabled);
+    color: var(--text-tertiary);
     text-align: center;
   }
-  
+
   .empty-state p:first-child {
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     margin-bottom: var(--space-2);
+    color: var(--text-secondary);
   }
-  
+
   .hint {
     font-size: var(--text-sm);
   }

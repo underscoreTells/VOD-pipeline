@@ -692,7 +692,7 @@
     gap: var(--space-2);
     background: var(--surface-base);
     border: 1px solid var(--surface-hover);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     padding: var(--space-3);
     height: 100%;
     min-height: 0;

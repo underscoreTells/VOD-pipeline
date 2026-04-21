@@ -38,13 +38,13 @@
 
   const variantClasses: Record<Variant, string> = {
     primary:
-      'border-transparent bg-accent-primary text-white hover:opacity-90 shadow-xs/5 relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[inset_0_1px_rgba(255,255,255,0.15)]',
+      'border-transparent bg-accent-primary text-white hover:opacity-90',
     secondary:
-      'border-border-default bg-surface-base text-text-primary hover:bg-surface-elevated shadow-xs/5',
+      'border-border-default bg-surface-base text-text-primary hover:bg-surface-elevated',
     ghost:
       'border-transparent bg-transparent text-text-secondary hover:bg-surface-hover hover:text-text-primary',
     destructive:
-      'border-transparent bg-accent-destructive text-white hover:opacity-90 shadow-xs/5',
+      'border-transparent bg-accent-destructive text-white hover:opacity-90',
   };
 </script>
 

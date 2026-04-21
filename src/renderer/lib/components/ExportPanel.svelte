@@ -73,22 +73,22 @@
   const frameRates = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 </script>
 
-<div class="scrollbar-thin min-w-[280px] border-t border-border-default bg-surface-raised p-4">
-  <h3 class="mb-4 text-app-sm uppercase tracking-[0.05em] text-text-primary">Export Timeline</h3>
+<div class="scrollbar-thin min-w-[280px] border-t border-border-default bg-surface-base p-4">
+  <h3 class="mb-4 text-app-xs uppercase tracking-[0.05em] text-text-secondary font-medium">Export Timeline</h3>
 
   <div class="mb-4">
-    <label class="mb-1 block text-[0.75rem] uppercase tracking-[0.05em] text-text-tertiary" for="format">Export Format</label>
-    <select class="w-full rounded-sm border border-border-strong bg-surface-elevated px-2 py-2 text-app-sm text-text-secondary" id="format" value={selectedFormat} onchange={handleFormatChange} disabled={isExporting}>
+    <label class="mb-1 block text-app-xs uppercase tracking-[0.05em] text-text-tertiary" for="format">Export Format</label>
+    <select class="w-full rounded-xs border border-border-default bg-surface-raised px-2 py-2 text-app-sm text-text-secondary" id="format" value={selectedFormat} onchange={handleFormatChange} disabled={isExporting}>
       {#each EXPORT_FORMATS as format (format.value)}
         <option value={format.value}>{format.label}</option>
       {/each}
     </select>
-    <p class="mt-1 text-[0.75rem] italic text-text-disabled">{formatConfig?.description}</p>
+    <p class="mt-1 text-app-xs text-text-tertiary">{formatConfig?.description}</p>
   </div>
 
   <div class="mb-4">
-    <label class="mb-1 block text-[0.75rem] uppercase tracking-[0.05em] text-text-tertiary" for="framerate">Frame Rate</label>
-    <select class="w-full rounded-sm border border-border-strong bg-surface-elevated px-2 py-2 text-app-sm text-text-secondary" id="framerate" bind:value={frameRate} disabled={isExporting}>
+    <label class="mb-1 block text-app-xs uppercase tracking-[0.05em] text-text-tertiary" for="framerate">Frame Rate</label>
+    <select class="w-full rounded-xs border border-border-default bg-surface-raised px-2 py-2 text-app-sm text-text-secondary" id="framerate" bind:value={frameRate} disabled={isExporting}>
       {#each frameRates as rate (rate)}
         <option value={rate}>{rate} fps</option>
       {/each}
@@ -96,22 +96,22 @@
   </div>
 
   <div class="mb-4 flex items-center">
-    <label class="flex cursor-pointer items-center gap-2 text-app-base text-text-secondary">
-      <input class="h-4 w-4 rounded border border-border-strong bg-surface-elevated" type="checkbox" bind:checked={includeAudio} disabled={isExporting} />
+    <label class="flex cursor-pointer items-center gap-2 text-app-sm text-text-secondary">
+      <input class="h-4 w-4 rounded-xs border border-border-default bg-surface-raised" type="checkbox" bind:checked={includeAudio} disabled={isExporting} />
       Include audio tracks
     </label>
   </div>
 
-  <div class="mb-4 rounded-sm bg-surface-elevated p-3">
-    <div class="mb-1 flex justify-between text-app-sm text-text-tertiary">
+  <div class="mb-4 rounded-xs bg-surface-raised p-3 border border-border-subtle">
+    <div class="mb-1 flex justify-between text-app-xs text-text-tertiary">
       <span>Project:</span>
       <span class="font-mono text-text-secondary">{projectName}</span>
     </div>
-    <div class="mb-1 flex justify-between text-app-sm text-text-tertiary">
+    <div class="mb-1 flex justify-between text-app-xs text-text-tertiary">
       <span>Clips:</span>
       <span class="font-mono text-text-secondary">{timelineState.clips.length}</span>
     </div>
-    <div class="flex justify-between text-app-sm text-text-tertiary">
+    <div class="flex justify-between text-app-xs text-text-tertiary">
       <span>Duration:</span>
       <span class="font-mono text-text-secondary">{getTotalDuration().toFixed(2)}s</span>
     </div>
@@ -120,18 +120,18 @@
   {#if isExporting}
     <div class="mb-4">
       <ProgressBar value={exportProgress} />
-      <span class="mt-2 block text-[0.75rem] text-text-tertiary">Exporting... {Math.round(exportProgress)}%</span>
+      <span class="mt-2 block text-app-xs text-text-tertiary">Exporting... {Math.round(exportProgress)}%</span>
     </div>
   {/if}
 
   {#if exportError}
-    <div class="mb-4 rounded-sm border border-red-500 bg-red-500/10 p-3 text-app-sm text-red-500">
+    <div class="mb-4 rounded-xs border border-accent-destructive bg-accent-destructive/10 p-3 text-app-sm text-accent-destructive">
       <p class="m-0">{exportError}</p>
     </div>
   {/if}
 
   {#if exportSuccess}
-    <div class="mb-4 rounded-sm border border-green-500 bg-green-500/10 p-3 text-app-sm text-green-500">
+    <div class="mb-4 rounded-xs border border-accent-success bg-accent-success/10 p-3 text-app-sm text-accent-success">
       <p class="m-0">{exportSuccess}</p>
     </div>
   {/if}

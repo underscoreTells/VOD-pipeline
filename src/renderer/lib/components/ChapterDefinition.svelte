@@ -487,7 +487,7 @@
 
   .video-preview {
     background: var(--surface-page);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     overflow: hidden;
     flex: 1;
     min-height: 0;
@@ -530,8 +530,8 @@
   }
 
   .timeline-section {
-    background: var(--surface-elevated);
-    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    border-radius: var(--radius-md);
     padding: var(--space-6);
     margin-bottom: var(--space-6);
   }

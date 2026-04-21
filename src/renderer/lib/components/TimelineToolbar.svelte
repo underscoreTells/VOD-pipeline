@@ -45,22 +45,22 @@
   const redoDesc = $derived.by(() => getNextRedoDescription());
 </script>
 
-<div class="flex h-[60px] flex-wrap items-center justify-between gap-4 border-b border-border-default bg-surface-raised px-4 py-2 md:flex-nowrap">
-  <div class="flex items-center gap-4">
-    <button class="flex h-10 w-10 items-center justify-center rounded-full bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover" onclick={togglePlayback} title="Play/Pause (Space, J/K/L shuttle)">
+<div class="flex h-[44px] flex-wrap items-center justify-between gap-4 border-b border-border-default bg-surface-base px-4 md:flex-nowrap">
+  <div class="flex items-center gap-3">
+    <button class="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover" onclick={togglePlayback} title="Play/Pause (Space, J/K/L shuttle)">
       {#if timelineState.isPlaying}
-        <Icon icon={Pause} size={16} />
+        <Icon icon={Pause} size={14} />
       {:else}
-        <Icon icon={Play} size={16} />
+        <Icon icon={Play} size={14} />
       {/if}
     </button>
-    <span class="font-mono text-[1.1rem] tabular-nums text-text-primary">{formatTimecode(timelineState.playheadTime)}</span>
+    <span class="font-mono text-[1rem] tabular-nums text-text-primary">{formatTimecode(timelineState.playheadTime)}</span>
   </div>
 
   <div class="flex items-center gap-2">
-    <IconButton class="h-8 w-8 border border-border-strong bg-surface-hover text-text-secondary hover:border-border-default" icon={Minus} onclick={zoomOut} title="Zoom Out (-)" />
+    <IconButton class="h-7 w-7 border border-border-default bg-transparent text-text-secondary hover:bg-surface-hover" icon={Minus} onclick={zoomOut} title="Zoom Out (-)" />
     <input
-      class="timeline-zoom-slider h-1.5 w-20 appearance-none rounded-full bg-border-default outline-none md:w-[120px]"
+      class="timeline-zoom-slider h-1 w-20 appearance-none rounded-full bg-border-default outline-none md:w-[120px]"
       type="range"
       min="0"
       max="100"
@@ -68,16 +68,16 @@
       oninput={handleZoomChange}
       title="Zoom level"
     />
-    <button class="flex h-8 w-8 items-center justify-center rounded-sm border border-border-strong bg-surface-hover text-text-secondary transition-colors hover:border-border-default hover:bg-border-default" onclick={zoomIn} title="Zoom In (+)">
+    <button class="flex h-7 w-7 items-center justify-center rounded-xs border border-border-default bg-transparent text-text-secondary transition-colors hover:bg-surface-hover" onclick={zoomIn} title="Zoom In (+)">
       +
     </button>
-    <Button size="sm" variant="secondary" onclick={zoomToFit} title="Fit to view (F)">Fit</Button>
+    <Button size="sm" variant="ghost" onclick={zoomToFit} title="Fit to view (F)">Fit</Button>
   </div>
 
   <div class="flex items-center gap-2">
     <Button
       size="sm"
-      variant="secondary"
+      variant="ghost"
       onclick={undo}
       disabled={!canUndo()}
       title={undoDesc ? `Undo: ${undoDesc}` : 'Undo (Ctrl+Z)'}
@@ -86,7 +86,7 @@
     </Button>
     <Button
       size="sm"
-      variant="secondary"
+      variant="ghost"
       onclick={redo}
       disabled={!canRedo()}
       title={redoDesc ? `Redo: ${redoDesc}` : 'Redo (Ctrl+Shift+Z)'}
@@ -97,10 +97,10 @@
 
   <div class="flex items-center gap-2">
     <button
-      class:bg-[#1f2a1f]={timelineState.excludeCutContent}
-      class:border-[#2f4a2f]={timelineState.excludeCutContent}
-      class:text-[#b7f7c2]={timelineState.excludeCutContent}
-      class="rounded-sm border border-border-strong bg-surface-hover px-3 py-1.5 text-app-base text-text-secondary transition-colors hover:border-border-default hover:bg-border-default disabled:pointer-events-none disabled:opacity-40"
+      class:bg-accent-success-subtle={timelineState.excludeCutContent}
+      class:border-accent-success={timelineState.excludeCutContent}
+      class:text-accent-success={timelineState.excludeCutContent}
+      class="rounded-xs border border-border-default bg-transparent px-3 py-1 text-app-sm text-text-secondary transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-40"
       onclick={toggleExcludeCutContent}
       title="Exclude cut content (\\)"
       aria-pressed={timelineState.excludeCutContent}
@@ -111,7 +111,7 @@
 
   <div class="flex items-center gap-2">
     {#if selectionInfo}
-      <span class="text-app-base italic text-text-tertiary">{selectionInfo}</span>
+      <span class="text-app-sm text-text-tertiary">{selectionInfo}</span>
     {/if}
   </div>
 </div>

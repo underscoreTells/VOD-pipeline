@@ -102,7 +102,7 @@
 <div class="flex min-h-[100dvh] flex-col w-full">
   <header class="flex items-center justify-between px-8 py-6 z-10 relative">
     <div class="flex items-center gap-4">
-      <div class="h-8 w-8 rounded-lg bg-surface-elevated border border-border-default flex items-center justify-center">
+      <div class="h-8 w-8 rounded-md bg-surface-raised border border-border-default flex items-center justify-center">
         <Icon icon={Video} size={16} class="text-text-primary" />
       </div>
       <h1 class="m-0 text-app-xl font-bold tracking-tighter text-text-primary">VOD Pipeline</h1>
@@ -138,22 +138,22 @@
               Transform raw streams into polished stories with AI-assisted narrative beat extraction.
             </p>
           </div>
-          <Button variant="primary" onclick={() => showCreateDialog = true} class="shadow-xs/5 font-medium px-6 py-2.5 h-auto">
+          <Button variant="primary" onclick={() => showCreateDialog = true} class="font-medium px-6 py-2.5 h-auto">
             New Project
           </Button>
         </div>
 
         {#if projects.loading}
-          <div class="glass-card p-12 text-center text-text-tertiary max-w-4xl border-dashed">
+          <div class="surface-card p-12 text-center text-text-tertiary max-w-4xl border-dashed">
             <div class="animate-pulse">Loading workspace...</div>
           </div>
         {:else if projects.error}
-          <div class="glass-card p-8 border-accent-destructive bg-accent-destructive/5 text-accent-destructive max-w-4xl">
+          <div class="surface-card p-8 border-accent-destructive bg-accent-destructive/5 text-accent-destructive max-w-4xl">
             {projects.error}
           </div>
         {:else if projects.items.length === 0}
-          <div class="glass-card p-16 flex flex-col items-center justify-center gap-4 text-center max-w-4xl border-dashed">
-            <div class="h-16 w-16 rounded-2xl bg-surface-elevated border border-border-subtle flex items-center justify-center mb-4">
+          <div class="surface-card p-16 flex flex-col items-center justify-center gap-4 text-center max-w-4xl border-dashed">
+            <div class="h-16 w-16 rounded-md bg-surface-raised border border-border-subtle flex items-center justify-center mb-4">
               <Icon icon={Video} size={28} class="text-text-tertiary" />
             </div>
             <h3 class="text-app-xl font-bold tracking-tight m-0 text-text-primary">Ready to cut</h3>
@@ -171,12 +171,12 @@
               <div class="flex flex-col group relative">
                 <button
                   type="button"
-                  class="glass-card flex-1 p-8 text-left transition-all duration-200 hover:bg-surface-elevated active:scale-[0.98] outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus flex flex-col justify-between"
+                  class="surface-card flex-1 p-8 text-left transition-all duration-200 hover:bg-surface-elevated active:scale-[0.98] outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus flex flex-col justify-between"
                   onclick={() => selectProject(project.id)}
                   oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
                 >
                   <div class="flex items-start justify-between w-full">
-                    <div class="h-10 w-10 rounded-xl bg-surface-raised border border-border-default flex items-center justify-center shadow-xs/5">
+                    <div class="h-10 w-10 rounded-md bg-surface-raised border border-border-default flex items-center justify-center">
                        <Icon icon={Video} size={18} class="text-text-primary" />
                     </div>
                   </div>
@@ -221,7 +221,7 @@
               id="projectName"
               type="text"
               bind:value={newProjectName}
-              class="w-full h-10 rounded-lg border border-border-default bg-surface-base px-3 py-2 text-app-md text-text-primary placeholder:text-text-disabled shadow-xs/5 focus:ring-[3px] focus:ring-border-focus focus:border-border-focus transition-all duration-120"
+              class="w-full h-10 rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-md text-text-primary placeholder:text-text-disabled focus:ring-[3px] focus:ring-border-focus focus:border-border-focus transition-all duration-120"
               placeholder="e.g. Mario Odyssey Part 1"
               onkeydown={(e) => {
                 if (e.key === 'Enter' && newProjectName.trim()) {

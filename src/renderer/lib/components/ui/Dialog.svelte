@@ -15,14 +15,14 @@
 
 {#if open}
   <div
-    class="fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/50 backdrop-blur-[2px]"
+    class="fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60"
     role="presentation"
     tabindex="-1"
     onclick={onClose}
     onkeydown={(e) => e.key === 'Escape' && onClose?.()}
   >
     <div
-      class="flex max-h-[90vh] max-w-[90vw] flex-col overflow-hidden rounded-lg border border-border-default bg-surface-raised shadow-[0_8px_32px_rgba(0,0,0,0.3)]"
+      class="flex max-h-[90vh] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border-default bg-surface-raised"
       onclick={(e) => e.stopPropagation()}
     >
       {#if title}

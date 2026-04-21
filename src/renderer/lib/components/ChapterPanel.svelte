@@ -290,8 +290,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-4);
+    padding: 12px 14px;
     border-bottom: 1px solid var(--border-default);
+    background: var(--surface-base);
   }
 
   .header-actions {
@@ -303,36 +304,41 @@
   .panel-header h3 {
     margin: 0;
     color: var(--text-primary);
-    font-size: var(--font-size-base);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
   }
 
   .import-btn {
-    background: var(--accent-primary);
-    color: var(--text-primary);
-    border: none;
-    padding: var(--space-1_5) var(--space-3);
-    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    padding: 4px 10px;
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    font-size: var(--font-size-xs);
-    font-weight: 500;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    transition: all var(--transition-fast);
   }
 
   .import-btn:hover {
-    background: var(--accent-primary-hover);
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .collapse-btn {
-    background: var(--surface-active);
+    background: transparent;
     color: var(--text-secondary);
-    border: 1px solid var(--border-strong);
-    padding: var(--space-1_5) var(--space-3);
-    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    padding: 4px 10px;
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    font-size: var(--font-size-xs);
+    font-size: var(--text-xs);
+    transition: all var(--transition-fast);
   }
 
   .collapse-btn:hover {
-    background: var(--border-strong);
+    background: var(--surface-hover);
     color: var(--text-primary);
   }
 
@@ -340,6 +346,7 @@
     padding: var(--space-8);
     text-align: center;
     color: var(--text-tertiary);
+    font-size: var(--text-sm);
   }
 
   .empty-state {
@@ -348,22 +355,27 @@
   }
 
   .empty-state p {
-    color: var(--text-disabled);
+    color: var(--text-tertiary);
     margin: 0 0 var(--space-4) 0;
+    font-size: var(--text-sm);
   }
 
   .action-btn {
-    background: var(--surface-active);
-    color: var(--text-primary);
-    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
     padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    font-size: var(--font-size-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    transition: all var(--transition-fast);
   }
 
   .action-btn:hover {
-    background: var(--border-strong);
+    background: var(--surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
   }
 
   .chapters-list {
@@ -373,7 +385,7 @@
   }
 
   .asset-group {
-    margin-bottom: var(--space-2);
+    margin-bottom: var(--space-1);
   }
 
   .asset-header {
@@ -381,19 +393,21 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    padding: var(--space-3);
-    background: var(--surface-elevated);
+    padding: 8px 10px;
+    background: transparent;
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-xs);
     cursor: pointer;
     text-align: left;
     color: var(--text-secondary);
-    font-size: var(--font-size-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     transition: background var(--transition-fast) ease;
   }
 
   .asset-header:hover {
     background: var(--surface-hover);
+    color: var(--text-primary);
   }
 
   .toggle-icon {
@@ -424,18 +438,22 @@
   .chapter-list {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
-    padding: var(--space-1) 0 var(--space-1) var(--space-6);
+    padding: var(--space-1) 0;
+    margin-left: 18px;
+    border-left: 1px solid var(--border-subtle);
   }
 
   .chapter-item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
     cursor: pointer;
     transition: background var(--transition-fast) ease;
+    position: relative;
+    margin-left: -1px;
+    border-left: 3px solid transparent;
   }
 
   .chapter-item:hover {
@@ -443,13 +461,18 @@
   }
 
   .chapter-item.selected {
-    background: var(--accent-primary);
+    background: var(--surface-hover);
+    border-left-color: var(--accent-primary);
   }
 
-  .chapter-item.selected .chapter-title,
+  .chapter-item.selected .chapter-title {
+    color: var(--text-primary);
+    font-weight: var(--weight-medium);
+  }
+
   .chapter-item.selected .chapter-range,
   .chapter-item.selected .chapter-time {
-    color: var(--text-primary);
+    color: var(--text-secondary);
   }
 
   .chapter-details {
@@ -464,22 +487,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-secondary);
-    font-size: var(--font-size-sm);
+    font-size: var(--text-sm);
+    line-height: 1.3;
   }
 
   .chapter-range {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-disabled);
-    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
     font-family: var(--font-mono);
   }
 
   .chapter-time {
-    color: var(--text-disabled);
-    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
     font-family: var(--font-mono);
+    flex-shrink: 0;
   }
 
   .chapter-actions {
@@ -496,15 +521,19 @@
 
   .edit-input {
     flex: 1;
-    background: var(--surface-raised);
+    background: var(--surface-base);
     border: 1px solid var(--accent-primary);
     color: var(--text-primary);
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-sm);
+    padding: 4px 8px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-sm);
   }
 
   .individual-files .asset-header {
+    background: transparent;
+  }
+
+  .individual-files .asset-header:hover {
     background: var(--surface-hover);
   }
 </style>

@@ -150,16 +150,20 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: var(--scrollbar-thumb-hover);
   }
-  
-  /* Liquid glass card highlight */
-  .glass-card {
-    @apply relative overflow-hidden bg-surface-base border border-border-default rounded-[var(--radius-2xl)];
-    box-shadow: 0 20px 40px -15px rgba(0,0,0,0.05);
+
+  /* Flat card utility - replaces glass-card */
+  .surface-card {
+    @apply bg-surface-base border border-border-default rounded-md;
   }
-  
-  .glass-card::before {
-    content: '';
-    @apply pointer-events-none absolute inset-0 rounded-[calc(var(--radius-2xl)-1px)];
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.08);
+
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
