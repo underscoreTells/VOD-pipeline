@@ -373,6 +373,12 @@
     @apply bg-surface-base border border-border-default rounded-md;
   }
 
+  .player-dock-surface {
+    border: 1px solid var(--border-overlay);
+    background: var(--surface-overlay);
+    backdrop-filter: blur(8px);
+  }
+
   /* Reduced motion support */
   @media (prefers-reduced-motion: reduce) {
     *,

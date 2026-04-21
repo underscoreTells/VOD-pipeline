@@ -481,7 +481,7 @@
         style={`bottom: ${!isSelectedAssetUnavailable ? 'calc(var(--player-dock-height) + var(--space-2))' : '0px'}`}
       >
       {#if isSelectedAssetUnavailable}
-        <div class="unavailable-state flex h-full w-full flex-col items-center justify-center gap-1 bg-linear-to-b from-[#1f1f1f] to-[#121212] p-3 text-center text-text-secondary">
+        <div class="unavailable-state flex h-full w-full flex-col items-center justify-center gap-1 bg-linear-to-b from-surface-raised to-surface-page p-3 text-center text-text-secondary">
           <p class="unavailable-title m-0 text-app-sm font-medium text-text-primary">Source unavailable</p>
           <p class="unavailable-path m-0 max-w-full break-all text-app-xs leading-[1.3] text-text-tertiary">{selectedAsset?.availability.savedPath ?? selectedAsset?.file_path}</p>
         </div>
@@ -509,7 +509,7 @@
 
       {#if !isSelectedAssetUnavailable}
         <div class="player-dock absolute inset-x-1 bottom-0 flex min-h-[var(--player-dock-height)] flex-col justify-end gap-2">
-          <div class="transport-bar flex items-center gap-2 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] px-2 py-1 backdrop-blur-[8px]">
+          <div class="transport-bar player-dock-surface flex items-center gap-2 rounded-sm px-2 py-1">
             <button
               class="play-btn inline-flex h-7 w-7 flex-none items-center justify-center rounded-sm border border-border-default bg-surface-raised text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
               onclick={togglePlayback}
@@ -534,7 +534,7 @@
             <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">{formatTimecode(timelineCurrentTime)}</span>
           </div>
 
-          <div class="trim-grid grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
+          <div class="trim-grid player-dock-surface grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 rounded-sm p-2">
             <span class="trim-label text-app-xs font-medium text-text-tertiary">In</span>
             <span class="trim-time font-mono text-app-sm tabular-nums text-text-secondary">{formatTimecode(timelineInTime)}</span>
             <div class="trim-actions flex items-center gap-[2px]">
@@ -560,7 +560,7 @@
                   'loop-btn ml-1 inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] transition-all',
                   isLooping
                     ? 'border border-accent-primary bg-accent-primary text-white hover:bg-accent-primary-hover'
-                    : 'border border-white/12 bg-black text-white hover:border-white/25 hover:bg-black/90'
+                    : 'border border-border-default bg-surface-base text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary'
                 )}
                 onclick={() => isLooping = !isLooping}
                 title={isLooping ? 'Disable loop' : 'Enable loop'}

@@ -829,7 +829,7 @@
 
     {#if chapter && asset}
       <div class="player-dock absolute inset-x-1 bottom-0 flex min-h-[var(--player-dock-height)] flex-col justify-end gap-2">
-        <div class="transport-bar flex items-center gap-2 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] px-2 py-1 backdrop-blur-[8px]">
+        <div class="transport-bar player-dock-surface flex items-center gap-2 rounded-sm px-2 py-1">
           <button
             class="play-btn inline-flex h-7 w-7 flex-none items-center justify-center rounded-sm border border-border-default bg-surface-raised text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
             onclick={togglePlayback}
@@ -856,7 +856,7 @@
           </span>
         </div>
 
-        <div class="info-grid grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
+        <div class="info-grid player-dock-surface grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm p-2">
           <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Range</span>
           <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
           <span class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>

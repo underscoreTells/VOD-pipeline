@@ -64,6 +64,7 @@
   --surface-base: #161616;
   --surface-raised: #1a1a1a;
   --surface-elevated: #1c1c1c;
+  --surface-overlay: rgba(18, 18, 18, 0.86);
   --surface-hover: rgba(255, 255, 255, 0.06);
   --surface-active: rgba(255, 255, 255, 0.10);
 
@@ -76,6 +77,7 @@
   --border-subtle: rgba(255, 255, 255, 0.05);
   --border-default: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.14);
+  --border-overlay: rgba(255, 255, 255, 0.08);
   --border-focus: oklch(0.588 0.217 264);
 
   --accent-primary: oklch(0.588 0.217 264);
@@ -115,6 +117,7 @@
   --surface-base: #ffffff;
   --surface-raised: #fafafa;
   --surface-elevated: #f5f5f5;
+  --surface-overlay: rgba(255, 255, 255, 0.92);
   --surface-hover: rgba(0, 0, 0, 0.03);
   --surface-active: rgba(0, 0, 0, 0.06);
 
@@ -127,6 +130,7 @@
   --border-subtle: rgba(0, 0, 0, 0.04);
   --border-default: rgba(0, 0, 0, 0.08);
   --border-strong: rgba(0, 0, 0, 0.14);
+  --border-overlay: rgba(0, 0, 0, 0.08);
   --border-focus: oklch(0.488 0.217 264);
 
   --accent-primary: oklch(0.488 0.217 264);
