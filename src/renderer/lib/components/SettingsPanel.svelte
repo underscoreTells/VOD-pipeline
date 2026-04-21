@@ -85,40 +85,40 @@
 
 {#if settingsState.isSettingsOpen}
   <div
-    class="settings-overlay"
+    class="settings-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60"
     role="dialog"
     aria-modal="true"
     tabindex="-1"
     onclick={handleOverlayClick}
     onkeydown={handleOverlayKeydown}
   >
-    <div class="settings-panel">
-      <div class="settings-header">
-        <h2>Settings</h2>
-        <button class="close-btn" onclick={closeSettings}>×</button>
+    <div class="settings-panel flex max-h-[90vh] w-[90%] max-w-[600px] flex-col rounded-md border border-border-default bg-surface-base">
+      <div class="settings-header flex items-center justify-between border-b border-border-default px-[18px] py-[14px]">
+        <h2 class="m-0 text-app-lg font-semibold text-text-primary">Settings</h2>
+        <button class="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-transparent p-0 text-[1.25rem] text-text-tertiary transition-all hover:bg-surface-hover hover:text-text-primary" onclick={closeSettings}>×</button>
       </div>
       
-      <div class="settings-content scrollbar-thin">
+      <div class="settings-content scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
         <!-- API Keys Section -->
-        <section class="settings-section">
-          <h3>AI Provider API Keys</h3>
-          <p class="section-description">
+        <section class="settings-section mb-8 last:mb-0">
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">AI Provider API Keys</h3>
+          <p class="section-description mb-4 mt-0 text-app-sm leading-[1.5] text-text-tertiary">
             Configure your API keys for AI providers. Keys are stored locally on your device.
           </p>
           
-          <div class="providers-list">
-            {#each providers as provider}
+          <div class="providers-list flex flex-col rounded-[4px] border border-border-default">
+            {#each providers as provider (provider)}
               {@const isVideoProvider = supportsVideo(provider)}
-              <div class="provider-card">
-                <div class="provider-header">
-                  <div class="provider-info">
-                    <span class="provider-name">{getProviderLabel(provider)}</span>
+              <div class="provider-card border-b border-border-subtle bg-transparent p-4 last:border-b-0">
+                <div class="provider-header mb-3 flex items-center justify-between">
+                  <div class="provider-info flex items-center gap-2">
+                    <span class="provider-name text-app-sm font-medium text-text-primary">{getProviderLabel(provider)}</span>
                     {#if isVideoProvider}
-                      <span class="video-badge">Video</span>
+                      <span class="video-badge rounded-[4px] bg-accent-success-subtle px-1.5 py-0.5 text-app-xs font-medium uppercase text-accent-success">Video</span>
                     {/if}
                   </div>
                   <button 
-                    class="test-btn"
+                    class="rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handleTestProvider(provider)}
                     disabled={testingProvider === provider || !settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
                   >
@@ -130,22 +130,30 @@
                   </button>
                 </div>
                 
-                <div class="api-key-input">
+                <div class="api-key-input flex items-center gap-2">
                   <input
+                    class="flex-1 rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 font-mono text-app-sm text-text-primary transition-colors focus:border-accent-primary"
                     type="password"
                     value={settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
                     oninput={(e) => handleApiKeyChange(provider, e.currentTarget.value)}
                     placeholder={`Enter ${getProviderLabel(provider)} API key`}
                   />
                   {#if settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
-                    <span class="key-status configured"><Icon icon={CheckCircle2} size={12} /></span>
+                    <span class="key-status text-app-sm text-accent-success"><Icon icon={CheckCircle2} size={12} /></span>
                   {:else}
-                    <span class="key-status not-configured"><Icon icon={Circle} size={12} /></span>
+                    <span class="key-status text-app-sm text-text-tertiary"><Icon icon={Circle} size={12} /></span>
                   {/if}
                 </div>
                 
                 {#if testResults[provider]}
-                  <div class="test-result" class:success={testResults[provider]?.success} class:error={!testResults[provider]?.success}>
+                  <div
+                    class="test-result mt-2 rounded-[4px] px-2.5 py-1.5 text-app-xs font-medium"
+                    class:bg-accent-success-subtle={Boolean(testResults[provider]?.success)}
+                    class:text-accent-success={Boolean(testResults[provider]?.success)}
+                    class:bg-accent-destructive={!testResults[provider]?.success}
+                    class:text-white={!testResults[provider]?.success}
+                    class:opacity-90={!testResults[provider]?.success}
+                  >
                     {testResults[provider]?.message}
                   </div>
                 {/if}
@@ -155,463 +163,133 @@
         </section>
         
         <!-- Default Provider Selection -->
-        <section class="settings-section">
-          <h3>Default Providers</h3>
+        <section class="settings-section mb-8 last:mb-0">
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Default Providers</h3>
           
-          <div class="select-group">
-            <label for="video-provider">Default Video Provider:</label>
-            <select id="video-provider" bind:value={settingsState.settings.defaultVideoProvider}>
-              {#each videoProviders as provider}
+          <div class="select-group mb-4">
+            <label for="video-provider" class="mb-2 block text-app-sm font-medium text-text-secondary">Default Video Provider:</label>
+            <select id="video-provider" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.defaultVideoProvider}>
+              {#each videoProviders as provider (provider)}
                 {@const apiKey = settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
                 <option value={provider} disabled={!apiKey}>
                   {getProviderLabel(provider)} {!apiKey ? "(no API key)" : ""}
                 </option>
               {/each}
             </select>
-            <p class="help-text">Used for video analysis in the chat panel</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Used for video analysis in the chat panel</p>
           </div>
           
-          <div class="select-group">
-            <label for="text-provider">Default Text Provider:</label>
-            <select id="text-provider" bind:value={settingsState.settings.defaultTextProvider}>
-              {#each providers as provider}
+          <div class="select-group mb-4">
+            <label for="text-provider" class="mb-2 block text-app-sm font-medium text-text-secondary">Default Text Provider:</label>
+            <select id="text-provider" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.defaultTextProvider}>
+              {#each providers as provider (provider)}
                 {@const apiKey = settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
                 <option value={provider} disabled={!apiKey}>
                   {getProviderLabel(provider)} {!apiKey ? "(no API key)" : ""}
                 </option>
               {/each}
             </select>
-            <p class="help-text">Used for text-based analysis and chat</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Used for text-based analysis and chat</p>
           </div>
         </section>
         
         <!-- Application Preferences -->
-        <section class="settings-section">
-          <h3>Application Preferences</h3>
+        <section class="settings-section mb-8 last:mb-0">
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Application Preferences</h3>
           
-          <div class="checkbox-group">
-            <label>
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox" 
                 bind:checked={settingsState.settings.autoGenerateProxies}
               />
               Auto-generate proxy videos for AI analysis
             </label>
-            <p class="help-text">Creates low-resolution proxies (640px, 5fps) when importing videos</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Creates low-resolution proxies (640px, 5fps) when importing videos</p>
           </div>
           
-          <div class="checkbox-group">
-            <label>
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox" 
                 bind:checked={settingsState.settings.proxyGenerationOnImport}
               />
               Start proxy generation immediately on import
             </label>
-            <p class="help-text">If disabled, proxies are generated only when needed for analysis</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">If disabled, proxies are generated only when needed for analysis</p>
           </div>
         </section>
         
         <!-- Chapter Settings -->
-        <section class="settings-section">
-          <h3>Chapter Settings</h3>
+        <section class="settings-section mb-8 last:mb-0">
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Chapter Settings</h3>
           
-          <div class="checkbox-group">
-            <label>
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox" 
                 bind:checked={settingsState.settings.autoChapterNamingEnabled}
               />
               Auto-generate chapter names from transcripts
             </label>
-            <p class="help-text">Uses AI to create descriptive titles based on chapter content</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Uses AI to create descriptive titles based on chapter content</p>
           </div>
           
-          <div class="select-group">
-            <label for="chapter-naming-model">Chapter Naming Model:</label>
-            <select id="chapter-naming-model" bind:value={settingsState.settings.autoChapterNamingModel}>
+          <div class="select-group mb-4">
+            <label for="chapter-naming-model" class="mb-2 block text-app-sm font-medium text-text-secondary">Chapter Naming Model:</label>
+            <select id="chapter-naming-model" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.autoChapterNamingModel}>
               <option value="gpt-4o-mini">GPT-4o Mini (faster)</option>
               <option value="gpt-4o">GPT-4o (more accurate)</option>
               <option value="gemini-1.5-flash">Gemini 1.5 Flash (cheapest)</option>
             </select>
-            <p class="help-text">AI model used for generating chapter titles</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">AI model used for generating chapter titles</p>
           </div>
 
-          <div class="checkbox-group">
-            <label>
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox"
                 bind:checked={settingsState.settings.autoClipNamingEnabled}
               />
               Auto-name manually created clips
             </label>
-            <p class="help-text">Uses a small text model and transcript context when creating clips manually</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Uses a small text model and transcript context when creating clips manually</p>
           </div>
 
-          <div class="select-group">
-            <label for="clip-naming-model">Clip Naming Model:</label>
-            <select id="clip-naming-model" bind:value={settingsState.settings.autoClipNamingModel}>
+          <div class="select-group mb-4">
+            <label for="clip-naming-model" class="mb-2 block text-app-sm font-medium text-text-secondary">Clip Naming Model:</label>
+            <select id="clip-naming-model" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.autoClipNamingModel}>
               <option value="gpt-5-nano">GPT-5 Nano (smallest)</option>
               <option value="gpt-4o-mini">GPT-4o Mini (fallback)</option>
             </select>
-            <p class="help-text">Requires an OpenAI API key</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Requires an OpenAI API key</p>
           </div>
            
-          <div class="checkbox-group">
-            <label>
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox" 
                 bind:checked={settingsState.settings.autoTranscribeOnImport}
               />
               Auto-transcribe chapters on import
             </label>
-            <p class="help-text">Automatically start transcription when chapters are created</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Automatically start transcription when chapters are created</p>
           </div>
         </section>
       </div>
       
-      <div class="settings-footer">
-        <button class="reset-btn" onclick={handleReset}>Reset to Defaults</button>
-        <div class="footer-actions">
-          <button class="cancel-btn" onclick={closeSettings}>Cancel</button>
-          <button class="save-btn" onclick={handleSave}>Save Changes</button>
+      <div class="settings-footer flex items-center justify-between border-t border-border-default px-[18px] py-[14px]">
+        <button class="bg-none rounded-[4px] border-none px-2.5 py-1.5 text-app-sm font-medium text-accent-destructive transition-colors hover:bg-accent-destructive hover:text-white" onclick={handleReset}>Reset to Defaults</button>
+        <div class="footer-actions flex gap-3">
+          <button class="rounded-[4px] border border-border-default bg-transparent px-[14px] py-1.5 text-app-sm font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={closeSettings}>Cancel</button>
+          <button class="rounded-[4px] border-none bg-accent-primary px-[14px] py-1.5 text-app-sm font-medium text-white transition-colors hover:bg-accent-primary-hover" onclick={handleSave}>Save Changes</button>
         </div>
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-  .settings-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-
-  .settings-panel {
-    background: var(--surface-base);
-    border-radius: var(--radius-md);
-    width: 90%;
-    max-width: 600px;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border-default);
-  }
-
-  .settings-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border-default);
-  }
-
-  .settings-header h2 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: var(--text-lg);
-    font-weight: var(--weight-semibold);
-  }
-
-  .close-btn {
-    background: none;
-    border: none;
-    color: var(--text-tertiary);
-    font-size: 1.25rem;
-    cursor: pointer;
-    padding: 0;
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-xs);
-    transition: all var(--transition-fast);
-  }
-
-  .close-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .settings-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--space-5) var(--space-6);
-  }
-
-  .settings-section {
-    margin-bottom: var(--space-8);
-  }
-
-  .settings-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .settings-section h3 {
-    margin: 0 0 var(--space-3) 0;
-    color: var(--text-primary);
-    font-size: var(--text-base);
-    font-weight: var(--weight-semibold);
-  }
-
-  .section-description {
-    color: var(--text-tertiary);
-    font-size: var(--text-sm);
-    margin: 0 0 var(--space-4) 0;
-    line-height: 1.5;
-  }
-
-  .providers-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xs);
-  }
-
-  .provider-card {
-    background: transparent;
-    border-bottom: 1px solid var(--border-subtle);
-    padding: var(--space-4);
-  }
-
-  .provider-card:last-child {
-    border-bottom: none;
-  }
-
-  .provider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: var(--space-3);
-  }
-
-  .provider-info {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .provider-name {
-    color: var(--text-primary);
-    font-weight: var(--weight-medium);
-    font-size: var(--text-sm);
-  }
-
-  .video-badge {
-    background: var(--accent-success-subtle);
-    color: var(--accent-success);
-    font-size: var(--text-xs);
-    padding: 2px 6px;
-    border-radius: var(--radius-xs);
-    font-weight: var(--weight-medium);
-    text-transform: uppercase;
-  }
-
-  .test-btn {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-default);
-    padding: 4px 10px;
-    font-size: var(--text-xs);
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-weight: var(--weight-medium);
-    transition: all var(--transition-fast);
-  }
-
-  .test-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-    border-color: var(--border-strong);
-  }
-
-  .test-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .api-key-input {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .api-key-input input {
-    flex: 1;
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    color: var(--text-primary);
-    padding: 8px 10px;
-    border-radius: var(--radius-xs);
-    font-size: var(--text-sm);
-    font-family: var(--font-mono);
-    transition: border-color var(--transition-fast);
-  }
-
-  .api-key-input input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-  }
-
-  .key-status {
-    font-size: var(--text-sm);
-  }
-
-  .key-status.configured {
-    color: var(--accent-success);
-  }
-
-  .key-status.not-configured {
-    color: var(--text-tertiary);
-  }
-
-  .test-result {
-    margin-top: var(--space-2);
-    padding: 6px 10px;
-    border-radius: var(--radius-xs);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-  }
-
-  .test-result.success {
-    background: var(--accent-success-subtle);
-    color: var(--accent-success);
-  }
-
-  .test-result.error {
-    background: var(--accent-destructive);
-    color: #ffffff;
-    opacity: 0.9;
-  }
-
-  .select-group {
-    margin-bottom: var(--space-4);
-  }
-
-  .select-group label {
-    display: block;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    margin-bottom: var(--space-2);
-  }
-
-  .select-group select {
-    width: 100%;
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    color: var(--text-primary);
-    padding: 8px 10px;
-    border-radius: var(--radius-xs);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: border-color var(--transition-fast);
-  }
-
-  .select-group select:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-  }
-
-  .checkbox-group {
-    margin-bottom: var(--space-4);
-  }
-
-  .checkbox-group label {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    font-weight: var(--weight-medium);
-  }
-
-  .checkbox-group input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent-primary);
-    cursor: pointer;
-  }
-
-  .help-text {
-    margin: 4px 0 0 var(--space-6);
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    line-height: 1.4;
-  }
-
-  .settings-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 18px;
-    border-top: 1px solid var(--border-default);
-  }
-
-  .reset-btn {
-    background: none;
-    border: none;
-    color: var(--accent-destructive);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: var(--radius-xs);
-    font-weight: var(--weight-medium);
-    transition: background var(--transition-fast);
-  }
-
-  .reset-btn:hover {
-    background: var(--accent-destructive);
-    color: #ffffff;
-  }
-
-  .footer-actions {
-    display: flex;
-    gap: var(--space-3);
-  }
-
-  .cancel-btn {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-default);
-    padding: 6px 14px;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    transition: all var(--transition-fast);
-  }
-
-  .cancel-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-    border-color: var(--border-strong);
-  }
-
-  .save-btn {
-    background: var(--accent-primary);
-    color: #ffffff;
-    border: none;
-    padding: 6px 14px;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    transition: background var(--transition-normal);
-  }
-
-  .save-btn:hover {
-    background: var(--accent-primary-hover);
-  }
-</style>

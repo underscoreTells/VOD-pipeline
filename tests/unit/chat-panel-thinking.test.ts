@@ -61,9 +61,9 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toMatch(/message-content[\s\S]*?Keep the intro and tighten the reset\./);
-    expect(body).toContain(">Thinking (1)</summary>");
-    expect(body).toContain(">Steps</div>");
-    expect(body).toContain(">Reasoning</div>");
+    expect(body).toContain("Thought for 1 step");
+    expect(body).toContain(">Thinking...</span>");
+    expect(body).toMatch(/<h2>[\s\S]*Reasoning[\s\S]*<\/h2>/);
     expect(body).toMatch(/thinking-markdown[\s\S]*?The intro sets up the goal/);
     expect(body).not.toContain("message-live-status");
   });
@@ -107,6 +107,7 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("message-live-status");
+    expect(body).toContain("Thinking (1)...");
     expect(body).toContain("Drafting rough-cut proposals...");
     expect(body).toContain("Pass 1 · draftRoughCutProposals");
   });

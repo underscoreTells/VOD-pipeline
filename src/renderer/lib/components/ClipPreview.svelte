@@ -8,11 +8,26 @@
   import { buildPlayableAssetUrl } from '../utils/media';
   import Icon from './ui/Icon.svelte';
   import { ChevronLeft, ChevronRight, Play, Pause, Repeat } from '../constants';
+  import { cn } from '../utils/cn';
 
   const CLIP_END_EPSILON = 0.01;
   const NUDGE_FPS = 30;
   const MIN_CLIP_DURATION = 1 / NUDGE_FPS;
   const NUDGE_EPSILON = 0.0001;
+  const ROLE_BADGE_CLASSES: Record<string, string> = {
+    setup: 'bg-role-setup-subtle text-role-setup',
+    escalation: 'bg-role-escalation-subtle text-role-escalation',
+    twist: 'bg-role-twist-subtle text-role-twist',
+    payoff: 'bg-role-payoff-subtle text-role-payoff',
+    transition: 'bg-role-transition-subtle text-role-transition',
+    unassigned: 'bg-surface-active text-text-tertiary',
+  };
+
+  interface Props {
+    class?: string;
+  }
+
+  let { class: className = '' }: Props = $props();
   
   // Get selected clip
   const selectedClip = $derived.by(() => {
@@ -49,6 +64,10 @@
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function getRoleBadgeClass(role: string | null | undefined): string {
+    return ROLE_BADGE_CLASSES[role ?? 'unassigned'] ?? ROLE_BADGE_CLASSES.unassigned;
   }
 
   function getAssetDuration(assetId: number): number | null {
@@ -305,23 +324,31 @@
   });
 </script>
 
-<div class="clip-preview scrollbar-thin">
+<div
+  class={cn(
+    'clip-preview scrollbar-thin flex h-full min-h-0 flex-col gap-2 overflow-hidden rounded-md border border-border-default bg-surface-base p-2',
+    className,
+  )}
+>
   {#if selectedClip}
     <!-- Header: role badge left, title right with description tooltip -->
-    <header class="preview-header" title={clipDescription}>
-      <span class="role-badge" data-role={selectedClip.role}>
+    <header class="preview-header flex cursor-default items-center justify-between gap-2" title={clipDescription}>
+      <span class={cn('role-badge rounded-full px-2 py-0.5 text-app-xs font-medium capitalize leading-[1.4]', getRoleBadgeClass(selectedClip.role))}>
         {selectedClip.role || 'unassigned'}
       </span>
-      <span class="clip-title">Clip Preview · Track {selectedClip.track_index + 1}</span>
+      <span class="clip-title text-app-xs uppercase tracking-[0.04em] text-text-tertiary">Clip Preview · Track {selectedClip.track_index + 1}</span>
     </header>
     
-    <div class="player-stage">
+    <div class="player-stage relative flex-1 min-h-0" style="--player-dock-height: 110px;">
       <!-- Video Container -->
-      <div class="video-container" class:with-dock={!isSelectedAssetUnavailable}>
+      <div
+        class="video-container absolute inset-x-0 top-0 min-h-0 overflow-hidden rounded-sm bg-black"
+        style={`bottom: ${!isSelectedAssetUnavailable ? 'calc(var(--player-dock-height) + var(--space-2))' : '0px'}`}
+      >
       {#if isSelectedAssetUnavailable}
-        <div class="unavailable-state">
-          <p class="unavailable-title">Source unavailable</p>
-          <p class="unavailable-path">{selectedAsset?.availability.savedPath ?? selectedAsset?.file_path}</p>
+        <div class="unavailable-state flex h-full w-full flex-col items-center justify-center gap-1 bg-linear-to-b from-[#1f1f1f] to-[#121212] p-3 text-center text-text-secondary">
+          <p class="unavailable-title m-0 text-app-sm font-medium text-text-primary">Source unavailable</p>
+          <p class="unavailable-path m-0 max-w-full break-all text-app-xs leading-[1.3] text-text-tertiary">{selectedAsset?.availability.savedPath ?? selectedAsset?.file_path}</p>
         </div>
       {:else}
         <video
@@ -334,7 +361,7 @@
           onpause={handlePause}
           onloadedmetadata={handleVideoLoadedMetadata}
           onerror={handleVideoError}
-          class="preview-video"
+          class="preview-video h-full w-full object-contain"
           preload="metadata"
           playsinline
         >
@@ -345,10 +372,10 @@
       </div>
 
       {#if !isSelectedAssetUnavailable}
-        <div class="player-dock">
-          <div class="transport-bar">
+        <div class="player-dock absolute inset-x-1 bottom-0 flex min-h-[var(--player-dock-height)] flex-col justify-end gap-2">
+          <div class="transport-bar flex items-center gap-2 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] px-2 py-1 backdrop-blur-[8px]">
             <button
-              class="play-btn"
+              class="play-btn inline-flex h-7 w-7 flex-none items-center justify-center rounded-sm border border-border-default bg-surface-raised text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
               onclick={togglePlayback}
               disabled={isSelectedAssetUnavailable}
               aria-label={isPlaying ? 'Pause' : 'Play'}
@@ -356,7 +383,7 @@
               <Icon icon={isPlaying ? Pause : Play} size={14} />
             </button>
             <input
-              class="scrubber"
+              class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
               type="range"
               min="0"
               max={Math.max(0.01, clipDuration)}
@@ -365,33 +392,35 @@
               disabled={clipDuration <= 0 || isSelectedAssetUnavailable}
               oninput={handleScrubInput}
             />
-            <span class="transport-time">{formatTimecode(timelineCurrentTime)}</span>
+            <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">{formatTimecode(timelineCurrentTime)}</span>
           </div>
 
-          <div class="trim-grid">
-            <span class="trim-label">IN</span>
-            <span class="trim-time">{formatTimecode(timelineInTime)}</span>
-            <div class="trim-actions">
-              <button class="nudge-btn" onclick={() => nudgeInPoint(-1)} title="-1 frame">
+          <div class="trim-grid grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
+            <span class="trim-label text-app-xs font-medium uppercase tracking-[0.02em] text-text-tertiary">IN</span>
+            <span class="trim-time font-mono text-app-sm tabular-nums text-text-secondary">{formatTimecode(timelineInTime)}</span>
+            <div class="trim-actions flex items-center gap-[2px]">
+              <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeInPoint(-1)} title="-1 frame">
                 <Icon icon={ChevronLeft} size={12} />
               </button>
-              <button class="nudge-btn" onclick={() => nudgeInPoint(1)} title="+1 frame">
+              <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeInPoint(1)} title="+1 frame">
                 <Icon icon={ChevronRight} size={12} />
               </button>
             </div>
 
-            <span class="trim-label">OUT</span>
-            <span class="trim-time">{formatTimecode(timelineOutTime)}</span>
-            <div class="trim-actions">
-              <button class="nudge-btn" onclick={() => nudgeOutPoint(-1)} title="-1 frame">
+            <span class="trim-label text-app-xs font-medium uppercase tracking-[0.02em] text-text-tertiary">OUT</span>
+            <span class="trim-time font-mono text-app-sm tabular-nums text-text-secondary">{formatTimecode(timelineOutTime)}</span>
+            <div class="trim-actions flex items-center gap-[2px]">
+              <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeOutPoint(-1)} title="-1 frame">
                 <Icon icon={ChevronLeft} size={12} />
               </button>
-              <button class="nudge-btn" onclick={() => nudgeOutPoint(1)} title="+1 frame">
+              <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeOutPoint(1)} title="+1 frame">
                 <Icon icon={ChevronRight} size={12} />
               </button>
               <button
-                class="loop-btn"
-                class:active={isLooping}
+                class="loop-btn ml-1 inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+                class:bg-accent-primary-subtle={isLooping}
+                class:border-accent-primary={isLooping}
+                class:text-accent-primary={isLooping}
                 onclick={() => isLooping = !isLooping}
                 title={isLooping ? 'Disable loop' : 'Enable loop'}
                 aria-label="Toggle loop"
@@ -404,312 +433,8 @@
       {/if}
     </div>
   {:else}
-    <div class="empty-state">
-      <p>Select a clip to preview</p>
+    <div class="empty-state flex min-h-[120px] flex-1 items-center justify-center text-app-sm text-text-disabled">
+      <p class="m-0">Select a clip to preview</p>
     </div>
   {/if}
 </div>
-
-<style>
-  .clip-preview {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    background: var(--surface-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    padding: var(--space-2);
-    min-height: 0;
-    height: 100%;
-    box-sizing: border-box;
-    overflow-x: hidden;
-    overflow-y: hidden;
-  }
-  
-  /* Header */
-  .preview-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    cursor: default;
-  }
-  
-  .role-badge {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--surface-active);
-    color: var(--text-tertiary);
-    text-transform: capitalize;
-    line-height: 1.4;
-  }
-  
-  .role-badge[data-role="setup"] { background: var(--role-setup-subtle); color: var(--role-setup); }
-  .role-badge[data-role="escalation"] { background: var(--role-escalation-subtle); color: var(--role-escalation); }
-  .role-badge[data-role="twist"] { background: var(--role-twist-subtle); color: var(--role-twist); }
-  .role-badge[data-role="payoff"] { background: var(--role-payoff-subtle); color: var(--role-payoff); }
-  .role-badge[data-role="transition"] { background: var(--role-transition-subtle); color: var(--role-transition); }
-  
-  .clip-title {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .player-stage {
-    --player-dock-height: 110px;
-    position: relative;
-    flex: 1;
-    min-height: 0;
-  }
-  
-  /* Video Container */
-  .video-container {
-    position: relative;
-    background: #000;
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .player-stage .video-container {
-    position: absolute;
-    inset: 0;
-  }
-
-  .video-container.with-dock {
-    bottom: calc(var(--player-dock-height) + var(--space-2));
-  }
-
-  .player-dock {
-    position: absolute;
-    left: var(--space-1);
-    right: var(--space-1);
-    bottom: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    gap: var(--space-2);
-    min-height: var(--player-dock-height);
-  }
-  
-  .preview-video {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: contain;
-  }
-
-  .unavailable-state {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: var(--space-1);
-    width: 100%;
-    height: 100%;
-    padding: var(--space-3);
-    box-sizing: border-box;
-    background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
-    color: var(--text-secondary);
-    text-align: center;
-  }
-
-  .unavailable-title {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    color: var(--text-primary);
-  }
-
-  .unavailable-path {
-    margin: 0;
-    font-size: var(--text-xs);
-    line-height: 1.3;
-    color: var(--text-tertiary);
-    word-break: break-all;
-    max-width: 100%;
-  }
-  
-  /* Transport Bar */
-  .transport-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-sm);
-    background: rgba(18, 18, 18, 0.86);
-    backdrop-filter: blur(8px);
-  }
-
-  .play-btn {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--border-default);
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  
-  .play-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .play-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .scrubber {
-    flex: 1;
-    min-width: 0;
-    height: 6px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: var(--surface-hover);
-    border-radius: var(--radius-pill);
-    outline: none;
-  }
-
-  .scrubber:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .scrubber::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-primary);
-    border: 2px solid var(--surface-base);
-    cursor: pointer;
-  }
-
-  .scrubber::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-primary);
-    border: 2px solid var(--surface-base);
-    cursor: pointer;
-  }
-
-  .transport-time {
-    flex: 0 0 auto;
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  
-  /* Trim Controls */
-  .trim-grid {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: var(--space-1) var(--space-2);
-    align-items: center;
-    padding: var(--space-2);
-    background: rgba(18, 18, 18, 0.86);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-sm);
-    backdrop-filter: blur(8px);
-  }
-  
-  .trim-label {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-  
-  .trim-time {
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  
-  .trim-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  
-  .nudge-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: 1px solid var(--border-default);
-    background: var(--surface-base);
-    color: var(--text-tertiary);
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  
-  .nudge-btn:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .loop-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    margin-left: var(--space-1);
-    border: 1px solid var(--border-default);
-    background: var(--surface-base);
-    color: var(--text-tertiary);
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .loop-btn:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .loop-btn.active {
-    background: var(--accent-primary-subtle);
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-  }
-  
-  /* Empty State */
-  .empty-state {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex: 1;
-    min-height: 120px;
-    color: var(--text-disabled);
-    font-size: var(--text-sm);
-  }
-
-  .empty-state p {
-    margin: 0;
-  }
-</style>

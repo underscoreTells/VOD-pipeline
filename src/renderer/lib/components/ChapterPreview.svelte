@@ -25,16 +25,18 @@
   } from '../state/clip-builder.svelte';
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../api/chapters.js';
+  import { cn } from '../utils/cn';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
   interface Props {
+    class?: string;
     chapter: Chapter | null;
     asset: AvailabilityAwareAsset | null;
     clips?: Clip[];
   }
 
-  let { chapter, asset, clips = timelineState.clips }: Props = $props();
+  let { class: className = '', chapter, asset, clips = timelineState.clips }: Props = $props();
 
   let videoRef = $state<HTMLVideoElement | null>(null);
   let currentTime = $state(0);
@@ -610,25 +612,36 @@
   });
 </script>
 
-<div class="chapter-preview">
-  <div class="preview-header">
-    <h3>Chapter Preview</h3>
-    <span class="chapter-title">{previewTitle()}</span>
+<div
+  class={cn(
+    'chapter-preview flex h-full min-h-0 flex-col gap-2 overflow-hidden rounded-md border border-border-default bg-surface-base p-2',
+    className,
+  )}
+>
+  <div class="preview-header flex cursor-default items-center justify-between gap-2">
+    <h3 class="m-0 py-0.5 text-app-xs font-medium uppercase tracking-[0.04em] text-text-primary">Chapter Preview</h3>
+    <span class="chapter-title truncate text-app-xs uppercase tracking-[0.04em] text-text-tertiary">{previewTitle()}</span>
   </div>
 
-  <div class="player-stage">
-    <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()} class:with-dock={chapter && asset}>
+  <div class="player-stage relative flex-1 min-h-0" style="--player-dock-height: 110px;">
+    <div
+      class={cn(
+        'video-frame absolute inset-x-0 top-0 min-h-0 overflow-hidden rounded-md bg-black',
+        (!hasPreview() || assetUnavailable()) && 'bg-linear-to-b from-surface-raised to-surface-page',
+      )}
+      style={`bottom: ${chapter && asset ? 'calc(var(--player-dock-height) + var(--space-2))' : '0px'}`}
+    >
       {#if !hasPreview()}
-        <div class="empty-state">
-          <div class="empty-icon"><Icon icon={Clapperboard} size={40} /></div>
+        <div class="empty-state pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-text-tertiary">
+          <div class="empty-icon flex items-center justify-center opacity-60"><Icon icon={Clapperboard} size={40} /></div>
           <p>Select a chapter to preview</p>
         </div>
       {:else if assetUnavailable()}
-        <div class="unavailable-state">
-          <p class="unavailable-title">Chapter source file is unavailable</p>
-          <p class="unavailable-path">{asset?.availability?.savedPath ?? asset?.file_path}</p>
+        <div class="unavailable-state absolute inset-0 flex flex-col justify-center gap-2 bg-linear-to-b from-surface-base to-surface-page p-5 text-text-secondary">
+          <p class="unavailable-title m-0 font-semibold text-text-primary">Chapter source file is unavailable</p>
+          <p class="unavailable-path m-0 break-all text-app-xs leading-[1.4] text-text-tertiary">{asset?.availability?.savedPath ?? asset?.file_path}</p>
           {#if asset?.availability?.nearestExistingAncestor}
-            <p class="unavailable-ancestor">
+            <p class="unavailable-ancestor m-0 break-all text-app-xs leading-[1.4] text-text-tertiary">
               Nearest existing path: {asset.availability.nearestExistingAncestor}
             </p>
           {/if}
@@ -636,7 +649,7 @@
       {:else}
         <video
           bind:this={videoRef}
-          class="preview-video"
+          class="preview-video h-full w-full object-contain"
           onseeking={handleSeeking}
           onseeked={handleSeeked}
           ontimeupdate={handleTimeUpdate}
@@ -651,10 +664,10 @@
     </div>
 
     {#if chapter && asset}
-      <div class="player-dock">
-        <div class="transport-bar">
+      <div class="player-dock absolute inset-x-1 bottom-0 flex min-h-[var(--player-dock-height)] flex-col justify-end gap-2">
+        <div class="transport-bar flex items-center gap-2 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] px-2 py-1 backdrop-blur-[8px]">
           <button
-            class="play-btn"
+            class="play-btn inline-flex h-7 w-7 flex-none items-center justify-center rounded-sm border border-border-default bg-surface-raised text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
             onclick={togglePlayback}
             disabled={assetUnavailable()}
             aria-label={timelineState.isPlaying ? 'Pause' : 'Play'}
@@ -662,7 +675,7 @@
             <Icon icon={timelineState.isPlaying ? Pause : Play} size={14} />
           </button>
           <input
-            class="scrubber"
+            class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
             type="range"
             min="0"
             max={chapterDuration()}
@@ -671,17 +684,22 @@
             disabled={assetUnavailable()}
             oninput={handleScrubInput}
           />
-          <span class="transport-time">{formatTime(localTime())} / {formatTime(chapterDuration())}</span>
+          <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">
+            {formatTime(localTime())} / {formatTime(chapterDuration())}
+          </span>
         </div>
 
-        <div class="info-grid">
-          <span class="info-label">Range</span>
-          <span class="info-value">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
-          <span class="info-meta">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
+        <div class="info-grid grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
+          <span class="info-label text-app-xs font-medium uppercase tracking-[0.02em] leading-[22px] text-text-tertiary">Range</span>
+          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
+          <span class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
 
-          <span class="info-label">Mode</span>
-          <span class="info-value">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
-          <span class="info-meta" class:info-status={Boolean(reverseStatusMessage)}>
+          <span class="info-label text-app-xs font-medium uppercase tracking-[0.02em] leading-[22px] text-text-tertiary">Mode</span>
+          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
+          <span
+            class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary"
+            class:text-[#fbbf24]={Boolean(reverseStatusMessage)}
+          >
             {reverseStatusMessage ?? formatTime(localTime())}
           </span>
         </div>
@@ -689,269 +707,3 @@
     {/if}
   </div>
 </div>
-
-<style>
-  .chapter-preview {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    background: var(--surface-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    padding: var(--space-2);
-    height: 100%;
-    min-height: 0;
-    box-sizing: border-box;
-    overflow: hidden;
-  }
-
-  .preview-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    cursor: default;
-  }
-
-  .preview-header h3 {
-    margin: 0;
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    line-height: 1.4;
-    padding: 2px 0;
-  }
-
-  .chapter-title {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .player-stage {
-    --player-dock-height: 110px;
-    position: relative;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .video-frame {
-    position: relative;
-    background: #000;
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .player-stage .video-frame {
-    position: absolute;
-    inset: 0;
-  }
-
-  .video-frame.with-dock {
-    bottom: calc(var(--player-dock-height) + var(--space-2));
-  }
-
-  .video-frame.empty {
-    background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface-page) 100%);
-  }
-
-  .preview-video {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: contain;
-  }
-
-  .unavailable-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--space-2);
-    padding: var(--space-5);
-    box-sizing: border-box;
-    background: linear-gradient(180deg, var(--surface-base) 0%, var(--surface-page) 100%);
-    color: var(--text-secondary);
-  }
-
-  .unavailable-title {
-    margin: 0;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .unavailable-path,
-  .unavailable-ancestor {
-    margin: 0;
-    font-size: var(--text-xs);
-    line-height: 1.4;
-    color: var(--text-tertiary);
-    word-break: break-all;
-  }
-
-  .empty-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    color: var(--text-tertiary);
-    text-align: center;
-    pointer-events: none;
-  }
-
-  .empty-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.6;
-  }
-
-  .player-dock {
-    position: absolute;
-    left: var(--space-1);
-    right: var(--space-1);
-    bottom: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    gap: var(--space-2);
-    min-height: var(--player-dock-height);
-  }
-
-  .transport-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-sm);
-    background: rgba(18, 18, 18, 0.86);
-    backdrop-filter: blur(8px);
-  }
-
-  .play-btn {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--border-default);
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .play-btn:hover:not(:disabled) {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .play-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .transport-time {
-    flex: 0 0 auto;
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .info-grid {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    grid-auto-rows: 22px;
-    gap: var(--space-1) var(--space-2);
-    align-items: center;
-    padding: var(--space-2);
-    background: rgba(18, 18, 18, 0.86);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-sm);
-    backdrop-filter: blur(8px);
-  }
-
-  .info-label {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    line-height: 22px;
-  }
-
-  .info-value {
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    line-height: 22px;
-  }
-
-  .info-meta {
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-    line-height: 22px;
-  }
-
-  .info-status {
-    color: #fbbf24;
-  }
-
-  .scrubber {
-    flex: 1;
-    min-width: 0;
-    height: 6px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: var(--surface-hover);
-    border-radius: var(--radius-pill);
-    outline: none;
-  }
-
-  .scrubber:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .scrubber::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-primary);
-    border: 2px solid var(--surface-base);
-    cursor: pointer;
-  }
-
-  .scrubber::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-primary);
-    border: 2px solid var(--surface-base);
-    cursor: pointer;
-  }
-
-</style>

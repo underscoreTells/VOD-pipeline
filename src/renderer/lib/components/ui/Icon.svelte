@@ -9,20 +9,9 @@
     title?: string;
   }
 
-  let { icon: Icon, size = 18, class: className = '', title }: Props = $props();
+let { icon: Icon, size = 18, class: className = '', title }: Props = $props();
 </script>
 
-<span class="icon-wrapper {className}" title={title}>
+<span class={`inline-flex shrink-0 items-center justify-center leading-none text-current ${className}`} title={title}>
   <Icon size={size} />
 </span>
-
-<style>
-  .icon-wrapper {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    flex-shrink: 0;
-    color: currentColor;
-  }
-</style>

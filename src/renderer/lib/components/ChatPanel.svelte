@@ -17,6 +17,13 @@
   import { collapseChat } from "../state/layout.svelte";
   import Icon from './ui/Icon.svelte';
   import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight } from '../constants';
+  import { cn } from "../utils/cn";
+
+  interface Props {
+    class?: string;
+  }
+
+  let { class: className = '' }: Props = $props();
 
   let message = $state("");
   let chatContainer: HTMLDivElement;
@@ -241,29 +248,33 @@
   }
 </script>
 
-<div class="chat-panel">
-  <div class="chat-header">
-    <div class="header-left">
+<div class={cn('chat-panel flex h-full min-h-0 flex-col overflow-hidden bg-surface-base', className)}>
+  <div class="chat-header flex shrink-0 items-center justify-between bg-surface-base px-[14px] py-[10px]">
+    <div class="header-left relative min-w-0 flex-1">
       <button
-        class="conversation-trigger"
+        class="conversation-trigger inline-flex max-w-full min-w-0 items-center gap-1 rounded-sm bg-transparent px-2.5 py-[5px] text-app-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-50"
         onclick={() => showConversationDropdown = !showConversationDropdown}
         disabled={agentState.isStreaming || agentState.isLoadingConversations || !agentState.currentChapterId}
       >
-        <span class="conversation-title">{conversationTitle}</span>
-        <span class="trigger-chevron" class:open={showConversationDropdown}>
+        <span class="conversation-title min-w-0 truncate">{conversationTitle}</span>
+        <span
+          class="trigger-chevron inline-flex shrink-0 items-center text-text-tertiary transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+          class:rotate-180={showConversationDropdown}
+        >
           <Icon icon={ChevronDown} size={14} />
         </span>
       </button>
 
       {#if showConversationDropdown}
-        <div class="dropdown-menu">
+        <div class="dropdown-menu absolute left-0 top-[calc(100%+4px)] z-[var(--z-float)] min-w-[220px] max-w-[300px] overflow-hidden rounded-md bg-surface-elevated py-1 shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
           {#if agentState.conversations.length === 0}
-            <div class="dropdown-empty">No conversations yet</div>
+            <div class="dropdown-empty px-4 py-3 text-app-sm text-text-tertiary">No conversations yet</div>
           {:else}
             {#each agentState.conversations as conversation (conversation.id)}
               <button
-                class="dropdown-item"
-                class:active={conversation.id === agentState.selectedConversationId}
+                class="dropdown-item flex w-full items-center gap-2 bg-transparent px-[14px] py-2 text-left text-app-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
+                class:bg-accent-primary-subtle={conversation.id === agentState.selectedConversationId}
+                class:text-accent-primary={conversation.id === agentState.selectedConversationId}
                 onclick={() => { handleConversationChange(String(conversation.id)); showConversationDropdown = false; }}
                 disabled={agentState.isStreaming}
               >
@@ -271,16 +282,16 @@
               </button>
             {/each}
           {/if}
-          <div class="dropdown-separator"></div>
+          <div class="dropdown-separator my-1 h-px bg-border-subtle"></div>
           <button
-            class="dropdown-item"
+            class="dropdown-item flex w-full items-center gap-2 bg-transparent px-[14px] py-2 text-left text-app-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
             onclick={() => { handleCreateConversation(); showConversationDropdown = false; }}
             disabled={agentState.isStreaming}
           >
             <Icon icon={Plus} size={14} /> New conversation
           </button>
           <button
-            class="dropdown-item danger"
+            class="dropdown-item flex w-full items-center gap-2 bg-transparent px-[14px] py-2 text-left text-app-sm text-accent-destructive transition-colors hover:bg-accent-destructive hover:text-white disabled:pointer-events-none disabled:opacity-50"
             onclick={() => { handleDeleteConversation(); showConversationDropdown = false; }}
             disabled={!agentState.selectedConversationId || agentState.isStreaming}
           >
@@ -290,82 +301,99 @@
       {/if}
     </div>
 
-    <div class="header-right">
-      <select
-        class="provider-pill"
-        value={agentState.selectedProvider}
-        onchange={(e) => setProvider(e.currentTarget.value as any)}
-        disabled={agentState.isStreaming}
-      >
-        {#each providers as provider (provider.value)}
-          <option value={provider.value}>{provider.label}</option>
-        {/each}
-      </select>
-      <button class="close-btn" onclick={collapseChat} title="Hide chat">
+    <div class="header-right flex shrink-0 items-center gap-2">
+      <div class="relative">
+        <select
+          class="provider-pill h-7 appearance-none rounded-full border border-transparent bg-surface-hover pl-2.5 pr-7 text-app-xs text-text-secondary outline-none transition-colors hover:border-border-default hover:text-text-primary focus-visible:border-border-strong disabled:opacity-50"
+          value={agentState.selectedProvider}
+          onchange={(e) => setProvider(e.currentTarget.value as any)}
+          disabled={agentState.isStreaming}
+        >
+          {#each providers as provider (provider.value)}
+            <option value={provider.value}>{provider.label}</option>
+          {/each}
+        </select>
+        <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-text-tertiary">
+          <Icon icon={ChevronDown} size={12} />
+        </span>
+      </div>
+      <button class="close-btn inline-flex h-7 w-7 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary" onclick={collapseChat} title="Hide chat">
         <Icon icon={X} size={16} />
       </button>
     </div>
   </div>
 
-  <div class="chat-messages scrollbar-thin" bind:this={chatContainer}>
+  <div class="chat-messages scrollbar-thin flex flex-1 flex-col overflow-y-auto px-4 py-5" bind:this={chatContainer}>
     {#if !agentState.currentChapterId}
-      <div class="empty-state">
-        <p>Select a chapter to start chatting</p>
+      <div class="empty-state mt-20 self-center px-6 text-center text-text-tertiary">
+        <p class="m-0 text-app-sm">Select a chapter to start chatting</p>
       </div>
     {:else if agentState.conversations.length === 0}
-      <div class="empty-state">
-        <p>No conversations yet for this chapter</p>
-        <p class="hint">Send a message to start one</p>
+      <div class="empty-state mt-20 self-center px-6 text-center text-text-tertiary">
+        <p class="m-0 text-app-sm">No conversations yet for this chapter</p>
+        <p class="hint mt-3 text-app-xs text-text-disabled">Send a message to start one</p>
       </div>
     {:else if agentState.messages.length === 0}
-      <div class="empty-state">
-        <p>Start this conversation with the AI editor</p>
-        <p class="hint">Try: "What should we keep?" or "Analyze this video"</p>
+      <div class="empty-state mt-20 self-center px-6 text-center text-text-tertiary">
+        <p class="m-0 text-app-sm">Start this conversation with the AI editor</p>
+        <p class="hint mt-3 text-app-xs text-text-disabled">Try: "What should we keep?" or "Analyze this video"</p>
       </div>
     {:else}
       {#each agentState.messages as msg (msg.id)}
-        <div class="message {msg.role}">
+        <div
+          class={cn(
+            `message ${msg.role} group/message relative mb-5 max-w-[85%]`,
+            msg.role === 'user'
+              ? 'self-end max-w-[80%] rounded-lg bg-surface-elevated px-4 py-3'
+              : 'self-start',
+          )}
+        >
           {#if msg.role === 'assistant' && getVisibleStreamingStatusLabel(msg)}
-            <div class="streaming-pill" aria-live="polite">
-              <span class="streaming-dot"></span>
+            <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-full bg-accent-primary-subtle px-2.5 py-[3px] text-app-xs font-medium text-accent-primary" aria-live="polite">
+              <span class="streaming-dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary animate-pulse"></span>
               <span>{getVisibleStreamingStatusLabel(msg)}</span>
               {#if getVisibleStreamingStatusMeta(msg)}
-                <span class="streaming-meta">{getVisibleStreamingStatusMeta(msg)}</span>
+                <span class="streaming-meta text-app-xs text-text-tertiary">{getVisibleStreamingStatusMeta(msg)}</span>
               {/if}
             </div>
           {/if}
 
           {#if msg.content}
-            <div class="message-content">
+            <div
+              class={cn(
+                'message-content min-w-0 leading-[1.6]',
+                msg.role === 'user' ? 'text-text-primary' : 'text-text-secondary',
+              )}
+            >
               <MarkdownContent content={msg.content} role={msg.role} />
             </div>
           {/if}
 
           {#if msg.role === 'assistant' && hasThinkingDetails(msg)}
-            <details class="thinking" open={Boolean(msg.isStreaming)}>
-              <summary>
-                <span class="thinking-chevron"><Icon icon={ChevronRight} size={12} /></span>
+            <details class="thinking group/thinking mt-2" open={Boolean(msg.isStreaming)}>
+              <summary class="ui-summary-reset flex list-none items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
+                <span class="thinking-chevron inline-flex items-center text-text-disabled transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-open/thinking:rotate-90"><Icon icon={ChevronRight} size={12} /></span>
                 {#if msg.isStreaming}
                   Thinking{msg.trace.length > 0 ? ` (${msg.trace.length})` : ''}...
                 {:else}
                   Thought for {msg.trace.length} step{msg.trace.length !== 1 ? 's' : ''}
                 {/if}
               </summary>
-              <div class="thinking-body">
+              <div class="thinking-body ml-4 pt-2">
                 {#if msg.trace.length > 0}
-                  <div class="thinking-steps">
+                  <div class="thinking-steps flex flex-col gap-[3px]">
                     {#each msg.trace as entry (entry.id)}
-                      <div class="thinking-step">
-                        <span class="step-label">{entry.label}</span>
+                      <div class="thinking-step text-app-xs text-text-tertiary">
+                        <span class="step-label text-text-tertiary">{entry.label}</span>
                         {#if formatTraceMeta(entry)}
-                          <span class="step-meta">{formatTraceMeta(entry)}</span>
+                          <span class="step-meta ml-2 font-mono text-[0.5625rem] text-text-disabled">{formatTraceMeta(entry)}</span>
                         {/if}
                       </div>
                     {/each}
                   </div>
                 {/if}
                 {#if msg.thinkingMarkdown}
-                  <div class="thinking-reasoning">
+                  <div class="thinking-reasoning thinking-markdown mt-2">
                     <MarkdownContent content={msg.thinkingMarkdown} role="assistant" />
                   </div>
                 {/if}
@@ -373,44 +401,51 @@
             </details>
           {/if}
 
-          <div class="message-time">{formatTime(msg.timestamp)}</div>
+          <div
+            class={cn(
+              'message-time mt-1 text-app-xs text-text-tertiary opacity-0 transition-opacity group-hover/message:opacity-100',
+              msg.role === 'user' ? 'text-right' : 'text-left',
+            )}
+          >
+            {formatTime(msg.timestamp)}
+          </div>
         </div>
       {/each}
     {/if}
   </div>
 
   {#if agentState.suggestions.length > 0}
-    <div class="suggestions-panel scrollbar-thin">
-      <div class="suggestions-header">
-        <span class="suggestions-count">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
-        <div class="suggestions-actions">
+    <div class="suggestions-panel scrollbar-thin mx-3 mb-2 max-h-[240px] shrink-0 overflow-y-auto rounded-lg bg-surface-raised">
+      <div class="suggestions-header flex items-center justify-between px-3 py-2">
+        <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
+        <div class="suggestions-actions flex items-center gap-2">
           <button
-            class="apply-all-btn"
+            class="rounded-full bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
             onclick={handleApplyAllSuggestions}
             disabled={applyingAllSuggestionState || pendingSuggestions.length === 0}
           >
             {applyingAllSuggestionState ? 'Applying...' : 'Apply All'}
           </button>
-          <button class="toggle-chevron" onclick={() => showSuggestions = !showSuggestions}>
+          <button class="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary" onclick={() => showSuggestions = !showSuggestions}>
             <Icon icon={showSuggestions ? ChevronDown : ChevronRight} size={14} />
           </button>
         </div>
       </div>
       {#if showSuggestions}
-        <div class="suggestions-list">
+        <div class="suggestions-list flex flex-col gap-2 px-3 pb-2">
           {#each pendingSuggestions as suggestion (suggestion.id)}
-            <div class="suggestion-row">
-              <div class="suggestion-info">
-                <span class="suggestion-time">{formatSuggestionPrimaryLine(suggestion)}</span>
-                <span class="suggestion-desc">{suggestion.description || 'No description'}</span>
+            <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-hover">
+              <div class="suggestion-info flex min-w-0 flex-1 flex-col gap-0.5">
+                <span class="suggestion-time font-mono text-app-xs text-accent-success">{formatSuggestionPrimaryLine(suggestion)}</span>
+                <span class="suggestion-desc text-app-sm font-medium leading-[1.4] text-text-primary">{suggestion.description || 'No description'}</span>
                 {#if suggestion.reasoning}
-                  <span class="suggestion-reasoning">{suggestion.reasoning}</span>
+                  <span class="suggestion-reasoning text-app-xs leading-[1.4] text-text-tertiary">{suggestion.reasoning}</span>
                 {/if}
               </div>
-              <div class="suggestion-actions">
+              <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100">
                 {#if suggestion.clip_id}
                   <button
-                    class="action-btn preview"
+                    class="rounded-full bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handleCancelSuggestionPreview(suggestion.id)}
                     disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   >
@@ -418,7 +453,7 @@
                   </button>
                 {:else}
                   <button
-                    class="action-btn preview"
+                    class="rounded-full bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handlePreviewSuggestion(suggestion.id)}
                     disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   >
@@ -426,7 +461,7 @@
                   </button>
                 {/if}
                 <button
-                  class="action-btn apply"
+                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   onclick={() => handleApplySuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   title="Apply"
@@ -434,7 +469,7 @@
                   <Icon icon={Check} size={12} />
                 </button>
                 <button
-                  class="action-btn reject"
+                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full bg-transparent p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   onclick={() => handleRejectSuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   title="Reject"
@@ -449,9 +484,10 @@
     </div>
   {/if}
 
-  <div class="composer-wrapper">
-    <form class="composer" onsubmit={handleSubmit}>
+  <div class="composer-wrapper shrink-0 px-3 pb-3">
+    <form class="composer flex items-center rounded-lg border border-border-default bg-surface-raised px-2 py-1 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
       <textarea
+        class="min-h-8 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-1.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
         rows="1"
         bind:value={message}
         bind:this={messageInput}
@@ -462,7 +498,7 @@
       ></textarea>
       <button
         type="submit"
-        class="send-btn"
+        class="send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
         disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId}
         title="Send message"
       >
@@ -471,658 +507,3 @@
     </form>
   </div>
 </div>
-
-<style>
-  .chat-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--surface-base);
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  /* ── Header ── */
-
-  .chat-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
-    background: var(--surface-base);
-    flex-shrink: 0;
-  }
-
-  .header-left {
-    position: relative;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .conversation-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 5px 10px;
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    transition: background var(--transition-fast);
-    max-width: 100%;
-    min-width: 0;
-  }
-
-  .conversation-trigger:hover:not(:disabled) {
-    background: var(--surface-hover);
-  }
-
-  .conversation-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-
-  .trigger-chevron {
-    display: inline-flex;
-    align-items: center;
-    color: var(--text-tertiary);
-    transition: transform var(--transition-spring);
-    flex-shrink: 0;
-  }
-
-  .trigger-chevron.open {
-    transform: rotate(180deg);
-  }
-
-  /* ── Dropdown ── */
-
-  .dropdown-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 220px;
-    max-width: 300px;
-    background: var(--surface-elevated);
-    border-radius: var(--radius-md);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-    z-index: var(--z-float);
-    padding: var(--space-1) 0;
-    overflow: hidden;
-  }
-
-  .dropdown-empty {
-    padding: var(--space-3) var(--space-4);
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-  }
-
-  .dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: 8px 14px;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    text-align: left;
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .dropdown-item:hover:not(:disabled) {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .dropdown-item.active {
-    color: var(--accent-primary);
-    background: var(--accent-primary-subtle);
-  }
-
-  .dropdown-item.danger {
-    color: var(--accent-destructive);
-  }
-
-  .dropdown-item.danger:hover:not(:disabled) {
-    background: var(--accent-destructive);
-    color: #ffffff;
-  }
-
-  .dropdown-separator {
-    height: 1px;
-    margin: var(--space-1) 0;
-    background: var(--border-subtle);
-  }
-
-  /* ── Header Right ── */
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-shrink: 0;
-  }
-
-  .provider-pill {
-    appearance: none;
-    -webkit-appearance: none;
-    padding: 4px 24px 4px 10px;
-    background: var(--surface-hover);
-    border: 1px solid transparent;
-    border-radius: var(--radius-pill);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-    font-family: var(--font-sans);
-    cursor: pointer;
-    outline: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 12px;
-    transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
-  }
-
-  .provider-pill:hover:not(:disabled) {
-    color: var(--text-primary);
-    border-color: var(--border-default);
-  }
-
-  .provider-pill:focus-visible {
-    border-color: var(--border-strong);
-    box-shadow: none;
-  }
-
-  .provider-pill:disabled {
-    opacity: 0.5;
-  }
-
-  .close-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-tertiary);
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .close-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  /* ── Messages ── */
-
-  .chat-messages {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--space-5) var(--space-4);
-    display: flex;
-    flex-direction: column;
-  }
-
-  .empty-state {
-    align-self: center;
-    text-align: center;
-    color: var(--text-tertiary);
-    margin-top: 80px;
-    padding: 0 var(--space-6);
-  }
-
-  .empty-state p {
-    margin: 0;
-    font-size: var(--text-sm);
-  }
-
-  .empty-state .hint {
-    font-size: var(--text-xs);
-    color: var(--text-disabled);
-    margin-top: var(--space-3);
-  }
-
-  .message {
-    margin-bottom: var(--space-5);
-    position: relative;
-  }
-
-  .message.user {
-    align-self: flex-end;
-    max-width: 80%;
-    background: var(--surface-elevated);
-    border-radius: var(--radius-lg);
-    padding: var(--space-3) var(--space-4);
-  }
-
-  .message.assistant {
-    align-self: flex-start;
-    max-width: 85%;
-  }
-
-  .message-content {
-    min-width: 0;
-    line-height: 1.6;
-  }
-
-  .message.user .message-content {
-    color: var(--text-primary);
-  }
-
-  .message.assistant .message-content {
-    color: var(--text-secondary);
-  }
-
-  .message-time {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-    margin-top: 4px;
-  }
-
-  .message.user .message-time {
-    text-align: right;
-  }
-
-  .message.assistant .message-time {
-    text-align: left;
-  }
-
-  .message:hover .message-time {
-    opacity: 1;
-  }
-
-  /* ── Streaming Indicator ── */
-
-  .streaming-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-bottom: var(--space-2);
-    padding: 3px 10px;
-    border-radius: var(--radius-pill);
-    background: var(--accent-primary-subtle);
-    color: var(--accent-primary);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-  }
-
-  .streaming-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: var(--radius-pill);
-    background: var(--accent-primary);
-    animation: streaming-pulse 1.4s ease-in-out infinite;
-    flex-shrink: 0;
-  }
-
-  .streaming-meta {
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-  }
-
-  @keyframes streaming-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
-  }
-
-  /* ── Thinking Traces ── */
-
-  .thinking {
-    margin-top: var(--space-2);
-  }
-
-  .thinking summary {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    list-style: none;
-    cursor: pointer;
-    padding: 2px 0;
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    user-select: none;
-  }
-
-  .thinking summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .thinking summary::before {
-    display: none;
-  }
-
-  .thinking-chevron {
-    display: inline-flex;
-    align-items: center;
-    transition: transform var(--transition-spring);
-    color: var(--text-disabled);
-  }
-
-  .thinking[open] .thinking-chevron {
-    transform: rotate(90deg);
-  }
-
-  .thinking-body {
-    margin-left: var(--space-4);
-    padding-top: var(--space-2);
-  }
-
-  .thinking-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .thinking-step {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-  }
-
-  .step-label {
-    color: var(--text-tertiary);
-  }
-
-  .step-meta {
-    margin-left: var(--space-2);
-    font-family: var(--font-mono);
-    font-size: 0.5625rem;
-    color: var(--text-disabled);
-  }
-
-  .thinking-reasoning {
-    margin-top: var(--space-2);
-  }
-
-  .thinking-reasoning :global(.markdown-content) {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    line-height: 1.5;
-  }
-
-  /* ── Suggestions Panel ── */
-
-  .suggestions-panel {
-    margin: 0 var(--space-3) var(--space-2);
-    background: var(--surface-raised);
-    border-radius: var(--radius-lg);
-    max-height: 240px;
-    overflow-y: auto;
-    flex-shrink: 0;
-  }
-
-  .suggestions-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-2) var(--space-3);
-  }
-
-  .suggestions-count {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-secondary);
-  }
-
-  .suggestions-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .apply-all-btn {
-    padding: 4px 10px;
-    background: var(--accent-success-subtle);
-    border: none;
-    border-radius: var(--radius-pill);
-    color: var(--accent-success);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    transition: all var(--transition-spring);
-  }
-
-  .apply-all-btn:hover:not(:disabled) {
-    background: var(--accent-success);
-    color: #ffffff;
-  }
-
-  .apply-all-btn:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  .apply-all-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .toggle-chevron {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-tertiary);
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .toggle-chevron:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .suggestions-list {
-    padding: 0 var(--space-3) var(--space-2);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .suggestion-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
-    transition: background var(--transition-fast);
-  }
-
-  .suggestion-row:hover {
-    background: var(--surface-hover);
-  }
-
-  .suggestion-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .suggestion-time {
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--accent-success);
-  }
-
-  .suggestion-desc {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    color: var(--text-primary);
-    line-height: 1.4;
-  }
-
-  .suggestion-reasoning {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    line-height: 1.4;
-  }
-
-  .suggestion-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    flex-shrink: 0;
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-  }
-
-  .suggestion-row:hover .suggestion-actions {
-    opacity: 1;
-  }
-
-  .action-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border: none;
-    border-radius: var(--radius-pill);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    transition: all var(--transition-spring);
-  }
-
-  .action-btn:active:not(:disabled) {
-    transform: scale(0.95);
-  }
-
-  .action-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .action-btn.preview {
-    background: var(--accent-primary-subtle);
-    color: var(--accent-primary);
-  }
-
-  .action-btn.preview:hover:not(:disabled) {
-    background: var(--accent-primary);
-    color: #ffffff;
-  }
-
-  .action-btn.apply {
-    background: var(--accent-success-subtle);
-    color: var(--accent-success);
-    width: 26px;
-    height: 26px;
-    padding: 0;
-  }
-
-  .action-btn.apply:hover:not(:disabled) {
-    background: var(--accent-success);
-    color: #ffffff;
-  }
-
-  .action-btn.reject {
-    background: transparent;
-    color: var(--text-tertiary);
-    width: 26px;
-    height: 26px;
-    padding: 0;
-  }
-
-  .action-btn.reject:hover:not(:disabled) {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  /* ── Composer ── */
-
-  .composer-wrapper {
-    padding: 0 var(--space-3) var(--space-3);
-    flex-shrink: 0;
-  }
-
-  .composer {
-    display: flex;
-    align-items: center;
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
-    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
-    transition: border-color var(--transition-fast);
-  }
-
-  .composer:focus-within {
-    border-color: var(--border-strong);
-  }
-
-  .composer textarea {
-    flex: 1;
-    padding: 6px 0;
-    background: transparent;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
-    font-size: var(--text-base);
-    font-family: var(--font-sans);
-    line-height: 1.5;
-    min-height: 32px;
-    max-height: 180px;
-    resize: none;
-    overflow-y: hidden;
-  }
-
-  .composer textarea:focus-visible {
-    box-shadow: none;
-  }
-
-  .composer textarea::placeholder {
-    color: var(--text-tertiary);
-  }
-
-  .send-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background: var(--accent-primary);
-    border: none;
-    border-radius: var(--radius-pill);
-    color: #ffffff;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: all var(--transition-spring);
-  }
-
-  .send-btn:hover:not(:disabled) {
-    background: var(--accent-primary-hover);
-    transform: scale(1.05);
-  }
-
-  .send-btn:active:not(:disabled) {
-    transform: scale(0.95);
-  }
-
-  .send-btn:disabled {
-    background: var(--surface-hover);
-    color: var(--text-disabled);
-    cursor: not-allowed;
-    transform: none;
-  }
-</style>

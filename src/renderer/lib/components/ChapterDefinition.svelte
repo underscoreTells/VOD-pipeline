@@ -267,20 +267,20 @@
   }
 </script>
 
-<div class="chapter-definition" bind:this={definitionContainer}>
-  <div class="definition-top-fixed" style="height: {definitionTopHeight}px">
+<div class="chapter-definition flex h-full flex-col overflow-hidden bg-surface-raised" bind:this={definitionContainer}>
+  <div class="definition-top-fixed flex shrink-0 flex-col gap-4 overflow-hidden border-b border-border-default px-6 pt-6 pb-3" style="height: {definitionTopHeight}px">
     <div class="header">
-      <h2>Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
-      <p class="duration">Duration: {formatTime(duration)}</p>
+      <h2 class="mb-2 mt-0 text-app-xl text-text-primary">Define Chapters - {asset.file_path.split(/[/\\]/).pop()}</h2>
+      <p class="duration m-0 text-app-base text-text-tertiary">Duration: {formatTime(duration)}</p>
     </div>
 
-    <div class="video-preview">
+    <div class="video-preview flex-1 min-h-0 overflow-hidden rounded-md bg-surface-page">
       {#if assetUnavailable}
-        <div class="unavailable-state">
-          <p class="unavailable-title">Chapter source file is unavailable</p>
-          <p class="unavailable-path">{asset.availability?.savedPath ?? asset.file_path}</p>
+        <div class="unavailable-state flex h-full w-full flex-col justify-center gap-2 bg-linear-to-b from-surface-raised to-surface-page p-5 text-text-secondary">
+          <p class="unavailable-title m-0 font-semibold text-text-primary">Chapter source file is unavailable</p>
+          <p class="unavailable-path m-0 break-all text-app-sm leading-[1.4] text-text-tertiary">{asset.availability?.savedPath ?? asset.file_path}</p>
           {#if asset.availability?.nearestExistingAncestor}
-            <p class="unavailable-ancestor">
+            <p class="unavailable-ancestor m-0 break-all text-app-sm leading-[1.4] text-text-tertiary">
               Nearest existing path: {asset.availability.nearestExistingAncestor}
             </p>
           {/if}
@@ -288,7 +288,7 @@
       {:else}
         <video
           bind:this={videoRef}
-          class="definition-video"
+          class="definition-video block h-full w-full bg-black object-contain"
           src={videoSrc}
           ontimeupdate={handleVideoTimeUpdate}
           onloadedmetadata={handleVideoLoadedMetadata}
@@ -304,34 +304,34 @@
   </div>
 
   <div
-    class="definition-resize-handle"
+    class="definition-resize-handle h-[6px] flex-[0_0_6px] touch-none bg-surface-page transition-colors hover:bg-surface-hover"
     role="separator"
     aria-orientation="horizontal"
     onpointerdown={handleDefinitionResize}
   ></div>
-  <div class="definition-scroll scrollbar-thin">
+  <div class="definition-scroll scrollbar-thin flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-6">
     <!-- Timeline Scrubber -->
-    <div class="timeline-section">
-    <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
-      <div class="timeline-bar">
+    <div class="timeline-section mb-6 rounded-md bg-surface-raised p-6">
+    <div class="scrubber-container relative mb-4 h-[60px] cursor-pointer rounded-md bg-surface-base" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
+      <div class="timeline-bar relative h-full overflow-hidden rounded-md bg-linear-to-b from-surface-hover to-surface-base">
         <!-- Playhead -->
           <div
-            class="playhead"
+            class="playhead absolute top-0 bottom-0 z-10 w-0.5 -translate-x-1/2 bg-accent-primary"
             style="left: {playheadPercent}%"
           >
-          <div class="playhead-marker"></div>
+          <div class="playhead-marker absolute left-1/2 top-0 h-0 w-0 -translate-x-1/2 border-x-[5px] border-x-transparent border-b-[8px] border-b-accent-primary"></div>
         </div>
 
         <!-- Selection highlight -->
         {#if hasSelection}
           <div
-            class="selection-highlight"
+            class="selection-highlight absolute top-5 bottom-5 z-[5] rounded-sm border border-accent-success bg-accent-success/30"
             style="left: {selectionStartPercent}%; width: {selectionWidthPercent}%"
           ></div>
         {/if}
 
         <!-- Time markers -->
-        <div class="time-markers">
+        <div class="time-markers absolute inset-x-0 bottom-1 flex justify-between px-2 text-app-xs text-text-disabled">
           <span>0:00</span>
           <span>{formatTime(duration / 2)}</span>
           <span>{formatTime(duration)}</span>
@@ -339,52 +339,52 @@
       </div>
     </div>
 
-    <div class="time-display">
+    <div class="time-display mb-4 text-app-base text-text-tertiary">
       Playhead: <strong>{formatTime(playheadTime)}</strong>
     </div>
 
     <!-- Controls -->
-    <div class="controls">
-      <button class="control-btn" onclick={markStart} disabled={assetUnavailable}>
+    <div class="controls mb-4 flex flex-wrap gap-2">
+      <button class="rounded-sm bg-accent-primary px-4 py-2 text-app-base text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong" onclick={markStart} disabled={assetUnavailable}>
         Mark Start @ {formatTime(playheadTime)}
       </button>
-      <button class="control-btn" onclick={markEnd} disabled={assetUnavailable}>
+      <button class="rounded-sm bg-accent-primary px-4 py-2 text-app-base text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong" onclick={markEnd} disabled={assetUnavailable}>
         Mark End
       </button>
-      <button class="control-btn secondary" onclick={previewSelection} disabled={!hasSelection || assetUnavailable}>
+      <button class="rounded-sm bg-surface-active px-4 py-2 text-app-base text-text-secondary transition-colors hover:bg-border-strong disabled:cursor-not-allowed disabled:bg-border-strong" onclick={previewSelection} disabled={!hasSelection || assetUnavailable}>
         Preview
       </button>
-      <button class="control-btn secondary" onclick={clearSelection} disabled={assetUnavailable}>
+      <button class="rounded-sm bg-surface-active px-4 py-2 text-app-base text-text-secondary transition-colors hover:bg-border-strong disabled:cursor-not-allowed disabled:bg-border-strong" onclick={clearSelection} disabled={assetUnavailable}>
         Clear
       </button>
     </div>
 
     <!-- Selection Info -->
-    <div class="selection-info">
+    <div class="selection-info flex items-center justify-between rounded-sm bg-surface-base p-3">
       {#if hasSelection}
-        <span class="selection-text">
+        <span class="selection-text text-app-base text-accent-success">
           Selection: {formatTime(selectionStart)} - {formatTime(selectionEnd)} ({formatTime(selectionDuration)})
         </span>
-        <button class="add-btn" onclick={addChapter} disabled={assetUnavailable}>
+        <button class="add-btn rounded-sm bg-accent-success px-4 py-2 text-app-base font-medium text-text-inverse transition-[filter] hover:brightness-90 disabled:cursor-not-allowed" onclick={addChapter} disabled={assetUnavailable}>
           + Add Chapter
         </button>
       {:else}
-        <span class="no-selection">No selection made. Mark start and end points.</span>
+        <span class="no-selection text-app-base italic text-text-disabled">No selection made. Mark start and end points.</span>
       {/if}
     </div>
     </div>
 
     <!-- Draft Chapters List -->
-    <div class="chapters-list">
-    <h3>Defined Chapters ({draftChapters.length})</h3>
+    <div class="chapters-list mb-6">
+    <h3 class="mb-4 mt-0 text-app-md text-text-primary">Defined Chapters ({draftChapters.length})</h3>
     
     {#if draftChapters.length === 0}
-      <p class="empty-message">No chapters defined yet. Use the timeline above to create chapters.</p>
+      <p class="empty-message p-8 text-center italic text-text-disabled">No chapters defined yet. Use the timeline above to create chapters.</p>
     {:else}
-      <div class="chapters">
+      <div class="chapters flex flex-col gap-2">
         {#each draftChapters as chapter, i (chapter.id)}
-          <div class="chapter-item">
-            <span class="chapter-number">{i + 1}.</span>
+          <div class="chapter-item flex items-center gap-2 rounded-md bg-surface-hover p-3">
+            <span class="chapter-number min-w-6 text-app-base text-text-disabled">{i + 1}.</span>
             
             {#if editingChapterId === chapter.id}
               <input
@@ -394,13 +394,13 @@
                   if (e.key === "Enter") saveEdit(chapter.id);
                   if (e.key === "Escape") cancelEdit();
                 }}
-                class="edit-input"
+                class="edit-input flex-1 rounded-sm border border-accent-primary bg-surface-raised px-2 py-1 text-app-base text-text-primary"
               />
               <IconButton icon={Check} size={14} onclick={() => saveEdit(chapter.id)} title="Save" />
               <IconButton icon={X} size={14} onclick={cancelEdit} title="Cancel" />
             {:else}
-              <span class="chapter-title">{chapter.title}</span>
-              <span class="chapter-time">
+              <span class="chapter-title flex-1 text-app-base text-text-primary">{chapter.title}</span>
+              <span class="chapter-time font-mono text-app-sm text-text-tertiary">
                 {formatTime(chapter.startTime)} - {formatTime(chapter.endTime)}
               </span>
               <IconButton icon={Pencil} size={14} onclick={() => startEditing(chapter)} title="Edit title" />
@@ -413,12 +413,12 @@
     </div>
 
     <!-- Footer Actions -->
-    <div class="footer">
-      <button class="back-btn" onclick={onCancel}>
+    <div class="footer flex items-center justify-between border-t border-border-default pt-4">
+      <button class="rounded-md border border-border-strong bg-transparent px-5 py-2 text-app-base text-text-tertiary transition-colors hover:border-text-disabled hover:text-text-primary" onclick={onCancel}>
         Back
       </button>
       <button
-        class="create-btn"
+        class="rounded-md bg-accent-primary px-6 py-2 text-app-base font-medium text-text-primary transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:bg-border-strong"
         onclick={handleCreateAll}
         disabled={draftChapters.length === 0}
       >
@@ -427,357 +427,3 @@
     </div>
   </div>
 </div>
-
-<style>
-  .chapter-definition {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--surface-raised);
-    overflow: hidden;
-  }
-
-  .definition-top-fixed {
-    flex: 0 0 auto;
-    padding: var(--space-6);
-    padding-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-default);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    overflow: hidden;
-  }
-
-  .definition-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--space-6);
-    padding-top: var(--space-4);
-  }
-
-  .definition-resize-handle {
-    height: 6px;
-    flex: 0 0 6px;
-    cursor: row-resize;
-    background: var(--surface-page);
-    transition: background var(--transition-normal);
-    touch-action: none;
-  }
-
-  .definition-resize-handle:hover {
-    background: var(--surface-hover);
-  }
-
-  .header {
-    margin-bottom: 0;
-  }
-
-  .header h2 {
-    margin: 0 0 var(--space-2) 0;
-    color: var(--text-primary);
-    font-size: var(--text-xl);
-  }
-
-  .duration {
-    margin: 0;
-    color: var(--text-tertiary);
-    font-size: var(--text-base);
-  }
-
-  .video-preview {
-    background: var(--surface-page);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .definition-video {
-    width: 100%;
-    height: 100%;
-    display: block;
-    background: #000;
-    object-fit: contain;
-  }
-
-  .unavailable-state {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--space-2);
-    width: 100%;
-    height: 100%;
-    padding: var(--space-5);
-    box-sizing: border-box;
-    background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface-page) 100%);
-    color: var(--text-secondary);
-  }
-
-  .unavailable-title {
-    margin: 0;
-    font-weight: var(--weight-semibold);
-    color: var(--text-primary);
-  }
-
-  .unavailable-path,
-  .unavailable-ancestor {
-    margin: 0;
-    font-size: var(--text-sm);
-    line-height: 1.4;
-    color: var(--text-tertiary);
-    word-break: break-all;
-  }
-
-  .timeline-section {
-    background: var(--surface-raised);
-    border-radius: var(--radius-md);
-    padding: var(--space-6);
-    margin-bottom: var(--space-6);
-  }
-
-  .scrubber-container {
-    position: relative;
-    height: 60px;
-    background: var(--surface-base);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    margin-bottom: var(--space-4);
-  }
-
-  .timeline-bar {
-    position: relative;
-    height: 100%;
-    background: linear-gradient(to bottom, var(--surface-hover) 0%, var(--surface-base) 100%);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-  }
-
-  .playhead {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--accent-primary);
-    transform: translateX(-50%);
-    z-index: 10;
-  }
-
-  .playhead-marker {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-bottom: 8px solid var(--accent-primary);
-  }
-
-  .selection-highlight {
-    position: absolute;
-    top: 20px;
-    bottom: 20px;
-    background: rgba(74, 222, 128, 0.3);
-    border: 1px solid var(--accent-success);
-    border-radius: var(--radius-sm);
-    z-index: 5;
-  }
-
-  .time-markers {
-    position: absolute;
-    bottom: 4px;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: space-between;
-    padding: 0 var(--space-2);
-    font-size: var(--text-xs);
-    color: var(--text-disabled);
-  }
-
-  .time-display {
-    color: var(--text-tertiary);
-    font-size: var(--text-base);
-    margin-bottom: var(--space-4);
-  }
-
-  .time-display strong {
-    color: var(--text-primary);
-  }
-
-  .controls {
-    display: flex;
-    gap: var(--space-2);
-    margin-bottom: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  .control-btn {
-    background: var(--accent-primary);
-    color: var(--text-primary);
-    border: none;
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: var(--text-base);
-    transition: background var(--transition-normal);
-  }
-
-  .control-btn:hover:not(:disabled) {
-    background: var(--accent-primary-hover);
-  }
-
-  .control-btn:disabled {
-    background: var(--border-strong);
-    cursor: not-allowed;
-  }
-
-  .control-btn.secondary {
-    background: var(--surface-active);
-    color: var(--text-secondary);
-  }
-
-  .control-btn.secondary:hover:not(:disabled) {
-    background: var(--border-strong);
-  }
-
-  .selection-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-3);
-    background: var(--surface-base);
-    border-radius: var(--radius-sm);
-  }
-
-  .selection-text {
-    color: var(--accent-success);
-    font-size: var(--text-base);
-  }
-
-  .no-selection {
-    color: var(--text-disabled);
-    font-size: var(--text-base);
-    font-style: italic;
-  }
-
-  .add-btn {
-    background: var(--accent-success);
-    color: var(--text-inverse);
-    border: none;
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: var(--text-base);
-    font-weight: var(--weight-medium);
-  }
-
-  .add-btn:hover {
-    filter: brightness(0.9);
-  }
-
-  .chapters-list {
-    margin-bottom: var(--space-6);
-  }
-
-  .chapters-list h3 {
-    margin: 0 0 var(--space-4) 0;
-    color: var(--text-primary);
-    font-size: var(--text-md);
-  }
-
-  .empty-message {
-    color: var(--text-disabled);
-    font-style: italic;
-    text-align: center;
-    padding: var(--space-8);
-  }
-
-  .chapters {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .chapter-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-3);
-    background: var(--surface-hover);
-    border-radius: var(--radius-md);
-  }
-
-  .chapter-number {
-    color: var(--text-disabled);
-    font-size: var(--text-base);
-    min-width: 24px;
-  }
-
-  .chapter-title {
-    flex: 1;
-    color: var(--text-primary);
-    font-size: var(--text-base);
-  }
-
-  .chapter-time {
-    color: var(--text-tertiary);
-    font-size: var(--text-sm);
-    font-family: var(--font-mono);
-  }
-
-  .edit-input {
-    flex: 1;
-    background: var(--surface-raised);
-    border: 1px solid var(--accent-primary);
-    color: var(--text-primary);
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-base);
-  }
-
-  .footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: var(--space-4);
-    border-top: 1px solid var(--border-default);
-  }
-
-  .back-btn {
-    background: none;
-    border: 1px solid var(--border-strong);
-    color: var(--text-tertiary);
-    padding: var(--space-2) var(--space-5);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: var(--text-base);
-  }
-
-  .back-btn:hover {
-    border-color: var(--text-disabled);
-    color: var(--text-primary);
-  }
-
-  .create-btn {
-    background: var(--accent-primary);
-    color: var(--text-primary);
-    border: none;
-    padding: var(--space-2) var(--space-6);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: var(--text-base);
-    font-weight: var(--weight-medium);
-  }
-
-  .create-btn:hover:not(:disabled) {
-    background: var(--accent-primary-hover);
-  }
-
-  .create-btn:disabled {
-    background: var(--border-strong);
-    cursor: not-allowed;
-  }
-</style>

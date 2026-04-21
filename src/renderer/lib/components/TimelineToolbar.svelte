@@ -60,7 +60,7 @@
   <div class="flex items-center gap-2">
     <IconButton class="h-7 w-7 border border-border-default bg-transparent text-text-secondary hover:bg-surface-hover" icon={Minus} onclick={zoomOut} title="Zoom Out (-)" />
     <input
-      class="timeline-zoom-slider h-1 w-20 appearance-none rounded-full bg-border-default outline-none md:w-[120px]"
+      class="timeline-zoom-slider ui-range-thumb-md h-1 w-20 appearance-none rounded-full bg-border-default outline-none md:w-[120px]"
       type="range"
       min="0"
       max="100"
@@ -115,26 +115,3 @@
     {/if}
   </div>
 </div>
-
-<style lang="postcss">
-  @reference "tailwindcss";
-
-  .timeline-zoom-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    background: var(--accent-primary);
-    cursor: pointer;
-  }
-
-  .timeline-zoom-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border: none;
-    border-radius: 9999px;
-    background: var(--accent-primary);
-    cursor: pointer;
-  }
-</style>

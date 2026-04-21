@@ -6,14 +6,21 @@
   import Icon from './ui/Icon.svelte';
   import { ROLE_CONFIG, ROLE_KEYS, Star, ChevronRight, ChevronDown } from '../constants';
   import type { ClipRole, RoleConfig } from '../constants';
+  import { cn } from '../utils/cn';
   
   interface Props {
+    class?: string;
     clips?: Clip[];
     chapterStartTime?: number;
     chapterDuration?: number | null;
   }
   
-  let { clips = timelineState.clips, chapterStartTime = 0, chapterDuration = null }: Props = $props();
+  let {
+    class: className = '',
+    clips = timelineState.clips,
+    chapterStartTime = 0,
+    chapterDuration = null,
+  }: Props = $props();
 
   const sortedClips = $derived.by(() => {
     return [...clips].sort((a, b) => {
@@ -175,52 +182,67 @@
   }
 </script>
 
-<div class="beat-panel">
-  <div class="panel-header">
-    <h3>Clips</h3>
-    <div class="header-actions">
-      <span class="clip-count">{clips.length} total</span>
+<div
+  class={cn(
+    'beat-panel flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border-default bg-surface-base',
+    className,
+  )}
+>
+  <div class="flex items-center justify-between border-b border-border-default bg-surface-base px-[14px] py-3">
+    <h3 class="m-0 text-app-base font-semibold text-text-primary">Clips</h3>
+    <div class="flex items-center gap-2">
+      <span class="font-mono text-app-xs text-text-tertiary">{clips.length} total</span>
       {#if clipSections.length > 0}
-        <button class="section-toggle-btn" onclick={hasAnyCollapsedSections ? expandAllSections : collapseAllSections}>
+        <button
+          class="rounded-[4px] border border-border-default bg-transparent px-2 py-1 text-app-xs text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+          onclick={hasAnyCollapsedSections ? expandAllSections : collapseAllSections}
+        >
           {hasAnyCollapsedSections ? 'Expand Sections' : 'Collapse Sections'}
         </button>
       {/if}
-      <button class="collapse-btn" onclick={collapseBeat}>
+      <button
+        class="rounded-[4px] border border-transparent bg-transparent px-2 py-1 text-app-xs text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
+        onclick={collapseBeat}
+      >
         Hide
       </button>
     </div>
   </div>
   
-  <div class="clip-groups scrollbar-thin">
+  <div class="clip-groups scrollbar-thin flex-1 overflow-y-auto p-2">
     {#each clipSections as section (section.key)}
       {@const roleClips = section.clips}
       {@const config = section.config}
       
-      <div class="role-group">
+      <div class="mb-3 border-b border-border-subtle pb-2 last:mb-0 last:border-b-0 last:pb-0">
         <button
-          class="role-header"
+          class="mb-1 flex w-full items-center gap-2 rounded-r-[4px] border-y-0 border-r-0 border-l-[3px] bg-transparent px-2 py-1.5 text-left text-inherit transition-colors hover:bg-surface-hover"
           style="background-color: {config.subtleCssVar}; border-left-color: {config.cssVar}"
           onclick={() => toggleSection(section.key)}
           aria-expanded={!isSectionCollapsed(section.key)}
         >
-          <span class="section-expand-icon"><Icon icon={isSectionCollapsed(section.key) ? ChevronRight : ChevronDown} size={14} /></span>
-          <span class="role-icon"><Icon icon={config.icon} size={14} /></span>
-          <span class="role-label">{config.label}</span>
-          <span class="role-count">{roleClips.length}</span>
+          <span class="inline-flex w-3 items-center justify-center text-text-tertiary">
+            <Icon icon={isSectionCollapsed(section.key) ? ChevronRight : ChevronDown} size={14} />
+          </span>
+          <span class="inline-flex items-center"><Icon icon={config.icon} size={14} /></span>
+          <span class="flex-1 text-app-sm font-medium text-text-primary">{config.label}</span>
+          <span class="font-mono text-app-xs text-text-tertiary">{roleClips.length}</span>
         </button>
         
         {#if !isSectionCollapsed(section.key)}
-          <div class="clip-list">
+          <div class="ml-1.5 flex flex-col border-l border-border-subtle pl-3.5">
             {#each roleClips as clip (clip.id)}
               {@const clipDuration = Math.max(0, clip.out_point - clip.in_point)}
               {@const localStart = toChapterLocal(clip.start_time)}
               {@const localEnd = chapterDuration !== null
                 ? Math.min(localStart + clipDuration, Math.max(0, chapterDuration))
                 : localStart + clipDuration}
+              {@const isSelected = timelineState.selectedClipIds.has(clip.id)}
               <div 
-                class="clip-item"
-                class:selected={timelineState.selectedClipIds.has(clip.id)}
-                class:discarded={!clip.is_essential}
+                class="mb-px cursor-pointer rounded-r-[4px] border-l-2 border-l-transparent px-2 py-1.5 transition-all hover:bg-surface-hover"
+                class:bg-surface-hover={isSelected}
+                class:border-l-accent-primary={isSelected}
+                class:opacity-50={!clip.is_essential}
                 onclick={() => handleClipClick(clip)}
                 oncontextmenu={(event) => openContextMenu(event, clip)}
                 onkeydown={(e) => e.key === 'Enter' && handleClipClick(clip)}
@@ -228,23 +250,23 @@
                 tabindex="0"
                 aria-haspopup="menu"
               >
-                <div class="clip-time">
-                  <span class="time-start">{formatDuration(localStart)}</span>
-                  <span class="time-separator">→</span>
-                  <span class="time-end">{formatDuration(localEnd)}</span>
+                <div class="mb-0.5 flex items-center gap-1 font-mono text-app-xs text-text-tertiary">
+                  <span>{formatDuration(localStart)}</span>
+                  <span class="opacity-60">→</span>
+                  <span>{formatDuration(localEnd)}</span>
                 </div>
                 
-                <div class="clip-info">
+                <div class="flex items-center justify-between gap-2">
                   {#if clip.description}
-                    <span class="clip-description">{clip.description}</span>
+                    <span class="flex-1 truncate text-app-sm text-text-secondary">{clip.description}</span>
                   {:else}
-                    <span class="clip-description empty">No description</span>
+                    <span class="flex-1 truncate text-app-sm italic text-text-tertiary">No description</span>
                   {/if}
                   
-                  <div class="clip-meta">
-                    <span class="track-badge">T{clip.track_index + 1}</span>
+                  <div class="flex shrink-0 items-center gap-1">
+                    <span class="font-mono text-app-xs text-text-tertiary">T{clip.track_index + 1}</span>
                     {#if clip.is_essential}
-                      <span class="essential-badge" title="Essential"><Icon icon={Star} size={12} /></span>
+                      <span class="inline-flex items-center text-accent-warning" title="Essential"><Icon icon={Star} size={12} /></span>
                     {/if}
                   </div>
                 </div>
@@ -256,16 +278,16 @@
     {/each}
     
     {#if clips.length === 0}
-      <div class="empty-state">
-        <p>No clips yet</p>
-        <p class="hint">Add clips to your timeline to see them here</p>
+      <div class="flex flex-col items-center justify-center p-8 text-center text-text-tertiary">
+        <p class="mb-2 font-medium text-text-secondary">No clips yet</p>
+        <p class="text-app-sm">Add clips to your timeline to see them here</p>
       </div>
     {/if}
   </div>
 
   {#if contextMenu.open}
     <div
-      class="clip-context-menu"
+      class="clip-context-menu fixed z-50 min-w-40 rounded-[4px] border border-border-default bg-surface-raised p-1"
       style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
       role="menu"
       tabindex="-1"
@@ -277,284 +299,13 @@
       }}
       oncontextmenu={(event) => event.preventDefault()}
     >
-      <button class="context-item destructive" role="menuitem" onclick={handleContextDelete}>
+      <button
+        class="w-full rounded-[4px] bg-transparent px-3 py-2 text-left text-app-sm text-role-setup transition-colors hover:bg-surface-hover hover:text-text-primary"
+        role="menuitem"
+        onclick={handleContextDelete}
+      >
         Delete clip
       </button>
     </div>
   {/if}
 </div>
-
-<style>
-  .beat-panel {
-    width: 100%;
-    height: 100%;
-    background: var(--surface-base);
-    border-left: 1px solid var(--border-default);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
-  
-  .panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--border-default);
-    background: var(--surface-base);
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .panel-header h3 {
-    margin: 0;
-    font-size: var(--text-base);
-    font-weight: var(--weight-semibold);
-    color: var(--text-primary);
-  }
-
-  .clip-count {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    font-family: var(--font-mono);
-  }
-
-  .collapse-btn {
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .collapse-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .section-toggle-btn {
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xs);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .section-toggle-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-    border-color: var(--border-strong);
-  }
-  
-  .clip-groups {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--space-2);
-  }
-
-  .role-group {
-    margin-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-subtle);
-    padding-bottom: var(--space-2);
-  }
-
-  .role-group:last-child {
-    border-bottom: none;
-  }
-
-  .role-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 6px 8px;
-    border-left: 3px solid;
-    border-top: none;
-    border-right: none;
-    border-bottom: none;
-    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-    margin-bottom: var(--space-1);
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    color: inherit;
-    background: transparent;
-    transition: background var(--transition-fast);
-  }
-
-  .role-header:hover {
-    background: var(--surface-hover);
-  }
-
-  .section-expand-icon {
-    color: var(--text-tertiary);
-    width: var(--space-3);
-    text-align: center;
-  }
-
-  .role-icon {
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .role-label {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    color: var(--text-primary);
-    flex: 1;
-  }
-
-  .role-count {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    font-family: var(--font-mono);
-  }
-  
-  .clip-list {
-    display: flex;
-    flex-direction: column;
-    padding-left: 14px;
-    border-left: 1px solid var(--border-subtle);
-    margin-left: 6px;
-  }
-
-  .clip-item {
-    padding: 6px 8px;
-    background: transparent;
-    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    border-left: 2px solid transparent;
-    margin-bottom: 1px;
-  }
-
-  .clip-item:hover {
-    background: var(--surface-hover);
-  }
-
-  .clip-item.selected {
-    background: var(--surface-hover);
-    border-left-color: var(--accent-primary);
-  }
-
-  .clip-context-menu {
-    position: fixed;
-    z-index: 50;
-    min-width: 160px;
-    padding: var(--space-1);
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xs);
-  }
-
-  .context-item {
-    width: 100%;
-    text-align: left;
-    padding: var(--space-2) var(--space-3);
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    transition: background var(--transition-fast);
-  }
-
-  .context-item:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .context-item.destructive {
-    color: var(--role-setup);
-  }
-
-  .clip-item.discarded {
-    opacity: 0.5;
-  }
-
-  .clip-time {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    margin-bottom: 2px;
-    font-family: var(--font-mono);
-  }
-
-  .time-separator {
-    color: var(--text-tertiary);
-    opacity: 0.6;
-  }
-
-  .clip-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .clip-description {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-  }
-
-  .clip-description.empty {
-    color: var(--text-tertiary);
-    font-style: italic;
-  }
-
-  .clip-meta {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    flex-shrink: 0;
-  }
-
-  .track-badge {
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    font-family: var(--font-mono);
-  }
-
-  .essential-badge {
-    display: inline-flex;
-    align-items: center;
-    color: var(--accent-warning);
-  }
-
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
-    color: var(--text-tertiary);
-    text-align: center;
-  }
-
-  .empty-state p:first-child {
-    font-weight: var(--weight-medium);
-    margin-bottom: var(--space-2);
-    color: var(--text-secondary);
-  }
-
-  .hint {
-    font-size: var(--text-sm);
-  }
-</style>

@@ -7,13 +7,15 @@
   import Icon from './ui/Icon.svelte';
   import IconButton from './ui/IconButton.svelte';
   import { Video, Folder, Check, X, Pencil, Trash2, ChevronRight, ChevronDown } from '../constants';
+  import { cn } from "../utils/cn";
 
   interface Props {
+    class?: string;
     projectAssets: Asset[];
     onImportClick: () => void;
   }
 
-  let { projectAssets, onImportClick }: Props = $props();
+  let { class: className = '', projectAssets, onImportClick }: Props = $props();
 
   // Track which groups are expanded
   let expandedGroups = $state<Set<number>>(new Set());
@@ -116,48 +118,64 @@
   }
 </script>
 
-<div class="chapter-panel">
-  <div class="panel-header">
-    <h3>Chapters</h3>
-    <div class="header-actions">
-      <button class="import-btn" onclick={onImportClick}>
+<div
+  class={cn(
+    'chapter-panel flex h-full flex-col border-r border-border-default bg-surface-raised',
+    className,
+  )}
+>
+  <div class="flex items-center justify-between border-b border-border-default bg-surface-base px-[14px] py-3">
+    <h3 class="m-0 text-app-base font-semibold text-text-primary">Chapters</h3>
+    <div class="flex items-center gap-2">
+      <button
+        class="rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+        onclick={onImportClick}
+      >
         + Import
       </button>
-      <button class="collapse-btn" onclick={collapseLeft}>
+      <button
+        class="rounded-[4px] border border-transparent bg-transparent px-2.5 py-1 text-app-xs text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
+        onclick={collapseLeft}
+      >
         Hide
       </button>
     </div>
   </div>
 
   {#if chaptersState.isLoading}
-    <div class="loading">Loading chapters...</div>
+    <div class="p-8 text-center text-app-sm text-text-tertiary">Loading chapters...</div>
   {:else if chaptersState.chapters.length === 0}
-    <div class="empty-state">
-      <p>No chapters yet</p>
-      <button class="action-btn" onclick={onImportClick}>
+    <div class="p-8 text-center">
+      <p class="mb-4 text-app-sm text-text-tertiary">No chapters yet</p>
+      <button
+        class="rounded-[4px] border border-border-default bg-transparent px-4 py-2 text-app-sm font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+        onclick={onImportClick}
+      >
         Import videos
       </button>
     </div>
   {:else}
-    <div class="chapters-list scrollbar-thin">
+    <div class="chapters-list scrollbar-thin flex-1 overflow-y-auto p-2">
       {#each vodGroups() as group (group.assetId)}
-        <div class="asset-group">
+        <div class="mb-1">
           <button
-            class="asset-header"
+            class="flex w-full items-center gap-2 rounded-[4px] bg-transparent px-2.5 py-2 text-left text-app-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             onclick={() => toggleGroup(group.assetId)}
           >
-            <span class="toggle-icon">{#if isExpanded(group.assetId)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
-            <span class="asset-icon"><Icon icon={Video} size={14} /></span>
-            <span class="asset-name">{getAssetDisplayName(group.asset)}</span>
-            <span class="chapter-count">({group.chapters.length})</span>
+            <span class="inline-flex w-[14px] items-center justify-center text-text-disabled">{#if isExpanded(group.assetId)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="inline-flex items-center"><Icon icon={Video} size={14} /></span>
+            <span class="flex-1 truncate">{getAssetDisplayName(group.asset)}</span>
+            <span class="text-app-xs text-text-disabled">({group.chapters.length})</span>
           </button>
           
           {#if isExpanded(group.assetId)}
-            <div class="chapter-list">
+            <div class="ml-[18px] flex flex-col border-l border-border-subtle py-1">
               {#each group.chapters as chapter (chapter.id)}
+                {@const selected = isSelected(chapter.id)}
                 <div
-                  class="chapter-item"
-                  class:selected={isSelected(chapter.id)}
+                  class="group/chapter relative ml-[-1px] flex cursor-pointer items-center gap-2 rounded-r-[4px] border-l-[3px] border-l-transparent px-2.5 py-1.5 transition-colors hover:bg-surface-hover"
+                  class:bg-surface-hover={selected}
+                  class:border-l-accent-primary={selected}
                   onclick={() => handleSelectChapter(chapter.id)}
                   onkeydown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -176,21 +194,24 @@
                         if (e.key === "Enter") saveEdit(chapter.id);
                         if (e.key === "Escape") cancelEdit();
                       }}
-                      class="edit-input"
+                      class="flex-1 rounded-[4px] border border-accent-primary bg-surface-base px-2 py-1 text-app-sm text-text-primary"
                       onclick={(e) => e.stopPropagation()}
                     />
                   {:else}
-                    <div class="chapter-details">
-                      <span class="chapter-title">{chapter.title}</span>
-                      <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
+                      <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                     </div>
                   {/if}
                   
-                  <span class="chapter-time">
+                  <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                     {formatTime(chapter.end_time - chapter.start_time)}
                   </span>
                   
-                  <div class="chapter-actions">
+                  <div
+                    class="flex gap-1 opacity-0 transition-opacity group-hover/chapter:opacity-100"
+                    class:opacity-100={selected}
+                  >
                     {#if editingChapterId === chapter.id}
                       <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
                       <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
@@ -207,24 +228,26 @@
       {/each}
 
       {#if individualGroups().length > 0}
-        <div class="asset-group individual-files">
+        <div class="mb-1">
           <button
-            class="asset-header"
+            class="flex w-full items-center gap-2 rounded-[4px] bg-transparent px-2.5 py-2 text-left text-app-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             onclick={() => toggleGroup(-1)}
           >
-            <span class="toggle-icon">{#if isExpanded(-1)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
-            <span class="asset-icon"><Icon icon={Folder} size={14} /></span>
-            <span class="asset-name">Individual Files</span>
-            <span class="chapter-count">({individualGroups().reduce((acc, g) => acc + g.chapters.length, 0)})</span>
+            <span class="inline-flex w-[14px] items-center justify-center text-text-disabled">{#if isExpanded(-1)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="inline-flex items-center"><Icon icon={Folder} size={14} /></span>
+            <span class="flex-1 truncate">Individual Files</span>
+            <span class="text-app-xs text-text-disabled">({individualGroups().reduce((acc, g) => acc + g.chapters.length, 0)})</span>
           </button>
           
           {#if isExpanded(-1)}
-            <div class="chapter-list">
+            <div class="ml-[18px] flex flex-col border-l border-border-subtle py-1">
               {#each individualGroups() as group (group.assetId)}
                 {#each group.chapters as chapter (chapter.id)}
+                  {@const selected = isSelected(chapter.id)}
                   <div
-                    class="chapter-item"
-                    class:selected={isSelected(chapter.id)}
+                    class="group/chapter relative ml-[-1px] flex cursor-pointer items-center gap-2 rounded-r-[4px] border-l-[3px] border-l-transparent px-2.5 py-1.5 transition-colors hover:bg-surface-hover"
+                    class:bg-surface-hover={selected}
+                    class:border-l-accent-primary={selected}
                     onclick={() => handleSelectChapter(chapter.id)}
                     onkeydown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -243,21 +266,24 @@
                           if (e.key === "Enter") saveEdit(chapter.id);
                           if (e.key === "Escape") cancelEdit();
                         }}
-                        class="edit-input"
+                        class="flex-1 rounded-[4px] border border-accent-primary bg-surface-base px-2 py-1 text-app-sm text-text-primary"
                         onclick={(e) => e.stopPropagation()}
                       />
                     {:else}
-                      <div class="chapter-details">
-                        <span class="chapter-title">{chapter.title}</span>
-                        <span class="chapter-range">{formatChapterRange(chapter)}</span>
+                      <div class="flex min-w-0 flex-1 flex-col">
+                        <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
+                        <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                       </div>
                     {/if}
                     
-                    <span class="chapter-time">
+                    <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                       {formatTime(chapter.end_time - chapter.start_time)}
                     </span>
                     
-                    <div class="chapter-actions">
+                    <div
+                      class="flex gap-1 opacity-0 transition-opacity group-hover/chapter:opacity-100"
+                      class:opacity-100={selected}
+                    >
                       {#if editingChapterId === chapter.id}
                         <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
                         <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
@@ -276,264 +302,3 @@
     </div>
   {/if}
 </div>
-
-<style>
-  .chapter-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--surface-raised);
-    border-right: 1px solid var(--border-default);
-  }
-
-  .panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--border-default);
-    background: var(--surface-base);
-  }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .panel-header h3 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: var(--text-base);
-    font-weight: var(--weight-semibold);
-  }
-
-  .import-btn {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-default);
-    padding: 4px 10px;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    transition: all var(--transition-fast);
-  }
-
-  .import-btn:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-  }
-
-  .collapse-btn {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid transparent;
-    padding: 4px 10px;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-size: var(--text-xs);
-    transition: all var(--transition-fast);
-  }
-
-  .collapse-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .loading {
-    padding: var(--space-8);
-    text-align: center;
-    color: var(--text-tertiary);
-    font-size: var(--text-sm);
-  }
-
-  .empty-state {
-    padding: var(--space-8);
-    text-align: center;
-  }
-
-  .empty-state p {
-    color: var(--text-tertiary);
-    margin: 0 0 var(--space-4) 0;
-    font-size: var(--text-sm);
-  }
-
-  .action-btn {
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-default);
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    transition: all var(--transition-fast);
-  }
-
-  .action-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-    border-color: var(--border-strong);
-  }
-
-  .chapters-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--space-2);
-  }
-
-  .asset-group {
-    margin-bottom: var(--space-1);
-  }
-
-  .asset-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: 8px 10px;
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    text-align: left;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    transition: background var(--transition-fast) ease;
-  }
-
-  .asset-header:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-  }
-
-  .toggle-icon {
-    color: var(--text-disabled);
-    width: 14px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .asset-icon {
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .asset-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chapter-count {
-    color: var(--text-disabled);
-    font-size: var(--font-size-xs);
-  }
-
-  .chapter-list {
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-1) 0;
-    margin-left: 18px;
-    border-left: 1px solid var(--border-subtle);
-  }
-
-  .chapter-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 6px 10px;
-    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-    cursor: pointer;
-    transition: background var(--transition-fast) ease;
-    position: relative;
-    margin-left: -1px;
-    border-left: 3px solid transparent;
-  }
-
-  .chapter-item:hover {
-    background: var(--surface-hover);
-  }
-
-  .chapter-item.selected {
-    background: var(--surface-hover);
-    border-left-color: var(--accent-primary);
-  }
-
-  .chapter-item.selected .chapter-title {
-    color: var(--text-primary);
-    font-weight: var(--weight-medium);
-  }
-
-  .chapter-item.selected .chapter-range,
-  .chapter-item.selected .chapter-time {
-    color: var(--text-secondary);
-  }
-
-  .chapter-details {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .chapter-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    line-height: 1.3;
-  }
-
-  .chapter-range {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    font-family: var(--font-mono);
-  }
-
-  .chapter-time {
-    color: var(--text-tertiary);
-    font-size: var(--text-xs);
-    font-family: var(--font-mono);
-    flex-shrink: 0;
-  }
-
-  .chapter-actions {
-    display: flex;
-    gap: var(--space-1);
-    opacity: 0;
-    transition: opacity var(--transition-fast) ease;
-  }
-
-  .chapter-item:hover .chapter-actions,
-  .chapter-item.selected .chapter-actions {
-    opacity: 1;
-  }
-
-  .edit-input {
-    flex: 1;
-    background: var(--surface-base);
-    border: 1px solid var(--accent-primary);
-    color: var(--text-primary);
-    padding: 4px 8px;
-    border-radius: var(--radius-xs);
-    font-size: var(--text-sm);
-  }
-
-  .individual-files .asset-header {
-    background: transparent;
-  }
-
-  .individual-files .asset-header:hover {
-    background: var(--surface-hover);
-  }
-</style>
