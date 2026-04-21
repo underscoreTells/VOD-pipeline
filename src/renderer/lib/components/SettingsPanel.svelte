@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { 
+  import {
     settingsState, 
     loadSettings, 
     saveSettings, 
@@ -11,8 +11,9 @@
     resetSettings,
     type LLMProviderType,
   } from "../state/settings.svelte";
+  import Badge from './ui/Badge.svelte';
   import { Icon } from './ui';
-  import { CheckCircle2, Circle } from '../constants';
+  import { CheckCircle2, Circle, X } from '../constants';
   
   // Load settings on mount
   let testingProvider: LLMProviderType | null = $state(null);
@@ -95,7 +96,15 @@
     <div class="settings-panel flex max-h-[90vh] w-[90%] max-w-[600px] flex-col rounded-md border border-border-default bg-surface-base">
       <div class="settings-header flex items-center justify-between border-b border-border-default px-[18px] py-[14px]">
         <h2 class="m-0 text-app-lg font-semibold text-text-primary">Settings</h2>
-        <button class="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-transparent p-0 text-[1.25rem] text-text-tertiary transition-all hover:bg-surface-hover hover:text-text-primary" onclick={closeSettings}>×</button>
+        <button
+          type="button"
+          class="inline-flex h-7 w-7 items-center justify-center rounded-[6px] border border-transparent bg-transparent p-0 text-text-tertiary transition-all hover:border-border-default hover:bg-surface-hover hover:text-text-primary"
+          onclick={closeSettings}
+          title="Close settings"
+          aria-label="Close settings"
+        >
+          <Icon icon={X} size={14} />
+        </button>
       </div>
       
       <div class="settings-content scrollbar-thin flex-1 overflow-y-auto px-6 py-5">
@@ -114,7 +123,7 @@
                   <div class="provider-info flex items-center gap-2">
                     <span class="provider-name text-app-sm font-medium text-text-primary">{getProviderLabel(provider)}</span>
                     {#if isVideoProvider}
-                      <span class="video-badge rounded-[4px] bg-accent-success-subtle px-1.5 py-0.5 text-app-xs font-medium uppercase text-accent-success">Video</span>
+                      <Badge variant="success" class="video-badge">Video</Badge>
                     {/if}
                   </div>
                   <button 

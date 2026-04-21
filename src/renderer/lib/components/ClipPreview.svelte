@@ -6,6 +6,7 @@
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
+  import Badge from './ui/Badge.svelte';
   import Icon from './ui/Icon.svelte';
   import { ChevronLeft, ChevronRight, Play, Pause, Repeat } from '../constants';
   import { cn } from '../utils/cn';
@@ -14,13 +15,20 @@
   const NUDGE_FPS = 30;
   const MIN_CLIP_DURATION = 1 / NUDGE_FPS;
   const NUDGE_EPSILON = 0.0001;
-  const ROLE_BADGE_CLASSES: Record<string, string> = {
-    setup: 'bg-role-setup-subtle text-role-setup',
-    escalation: 'bg-role-escalation-subtle text-role-escalation',
-    twist: 'bg-role-twist-subtle text-role-twist',
-    payoff: 'bg-role-payoff-subtle text-role-payoff',
-    transition: 'bg-role-transition-subtle text-role-transition',
-    unassigned: 'bg-surface-active text-text-tertiary',
+  const ROLE_BADGE_VARIANTS = {
+    setup: 'setup',
+    escalation: 'escalation',
+    twist: 'twist',
+    payoff: 'payoff',
+    transition: 'transition',
+    unassigned: 'unassigned',
+  } as const;
+
+  type RoleBadgeVariant = typeof ROLE_BADGE_VARIANTS[keyof typeof ROLE_BADGE_VARIANTS];
+
+  function getRoleBadgeVariant(role: string | null | undefined): RoleBadgeVariant {
+    const normalizedRole = (role ?? 'unassigned') as keyof typeof ROLE_BADGE_VARIANTS;
+    return ROLE_BADGE_VARIANTS[normalizedRole] ?? ROLE_BADGE_VARIANTS.unassigned;
   };
 
   interface Props {
@@ -64,10 +72,6 @@
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
-  }
-
-  function getRoleBadgeClass(role: string | null | undefined): string {
-    return ROLE_BADGE_CLASSES[role ?? 'unassigned'] ?? ROLE_BADGE_CLASSES.unassigned;
   }
 
   function getAssetDuration(assetId: number): number | null {
@@ -333,10 +337,10 @@
   {#if selectedClip}
     <!-- Header: role badge left, title right with description tooltip -->
     <header class="preview-header flex cursor-default items-center justify-between gap-2" title={clipDescription}>
-      <span class={cn('role-badge rounded-full px-2 py-0.5 text-app-xs font-medium capitalize leading-[1.4]', getRoleBadgeClass(selectedClip.role))}>
+      <Badge variant={getRoleBadgeVariant(selectedClip.role)} class="role-badge capitalize">
         {selectedClip.role || 'unassigned'}
-      </span>
-      <span class="clip-title text-app-xs uppercase tracking-[0.04em] text-text-tertiary">Clip Preview · Track {selectedClip.track_index + 1}</span>
+      </Badge>
+      <span class="clip-title text-app-xs tracking-[0.02em] text-text-tertiary">Clip preview · track {selectedClip.track_index + 1}</span>
     </header>
     
     <div class="player-stage relative flex-1 min-h-0" style="--player-dock-height: 110px;">
@@ -396,7 +400,7 @@
           </div>
 
           <div class="trim-grid grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
-            <span class="trim-label text-app-xs font-medium uppercase tracking-[0.02em] text-text-tertiary">IN</span>
+            <span class="trim-label text-app-xs font-medium text-text-tertiary">In</span>
             <span class="trim-time font-mono text-app-sm tabular-nums text-text-secondary">{formatTimecode(timelineInTime)}</span>
             <div class="trim-actions flex items-center gap-[2px]">
               <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeInPoint(-1)} title="-1 frame">
@@ -407,7 +411,7 @@
               </button>
             </div>
 
-            <span class="trim-label text-app-xs font-medium uppercase tracking-[0.02em] text-text-tertiary">OUT</span>
+            <span class="trim-label text-app-xs font-medium text-text-tertiary">Out</span>
             <span class="trim-time font-mono text-app-sm tabular-nums text-text-secondary">{formatTimecode(timelineOutTime)}</span>
             <div class="trim-actions flex items-center gap-[2px]">
               <button class="nudge-btn inline-flex h-[22px] w-[22px] items-center justify-center rounded-[4px] border border-border-default bg-surface-base text-text-tertiary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary" onclick={() => nudgeOutPoint(-1)} title="-1 frame">

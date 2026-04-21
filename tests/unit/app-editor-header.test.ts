@@ -78,9 +78,9 @@ describe("App editor header", () => {
 
     expectClassFragment(body, "relative z-10 flex items-center justify-between px-8 py-6");
     expectClassFragment(body, "h-9 w-9");
-    expectClassFragment(body, "rounded-full");
-    expectClassFragment(body, "border-border-subtle");
-    expectClassFragment(body, "bg-surface-elevated");
+    expectClassFragment(body, "rounded-md");
+    expectClassFragment(body, "border-border-default");
+    expectClassFragment(body, "bg-surface-base");
     expect(body).toContain("Your Video Projects");
     expect(countStubComponents(body)).toBe(1);
   });

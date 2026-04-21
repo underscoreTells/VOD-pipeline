@@ -663,7 +663,7 @@
               aria-label="Show chapters panel"
             >
               <Icon icon={ChevronRight} size={14} class="text-text-tertiary transition-colors group-hover:text-text-primary" />
-              <span class="text-[11px] font-medium tracking-[0.08em] [text-orientation:mixed] [writing-mode:vertical-rl]">
+              <span class="text-app-xs font-medium tracking-[0.04em] [text-orientation:mixed] [writing-mode:vertical-rl]">
                 Chapters
               </span>
             </button>
@@ -780,7 +780,7 @@
                   aria-label="Show chat panel"
                 >
                   <Icon icon={ChevronLeft} size={14} class="text-text-tertiary transition-colors group-hover:text-text-primary" />
-                  <span class="text-[11px] font-medium tracking-[0.08em] [text-orientation:mixed] [writing-mode:vertical-rl]">
+                  <span class="text-app-xs font-medium tracking-[0.04em] [text-orientation:mixed] [writing-mode:vertical-rl]">
                     Chat
                   </span>
                 </button>

@@ -47,7 +47,7 @@
 
 <div class="flex h-[44px] flex-wrap items-center justify-between gap-4 border-b border-border-default bg-surface-base px-4 md:flex-nowrap">
   <div class="flex items-center gap-3">
-    <button class="flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover" onclick={togglePlayback} title="Play/Pause (Space, J/K/L shuttle)">
+    <button class="flex h-8 w-8 items-center justify-center rounded-md border border-transparent bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover" onclick={togglePlayback} title="Play/Pause (Space, J/K/L shuttle)">
       {#if timelineState.isPlaying}
         <Icon icon={Pause} size={14} />
       {:else}

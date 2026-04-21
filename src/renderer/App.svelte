@@ -114,7 +114,7 @@
           size={16}
           onclick={toggleTheme}
           title="Toggle theme"
-          class="h-9 w-9 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary transition-all hover:text-text-primary"
+          class="h-9 w-9 rounded-md border border-border-default bg-surface-base text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
         />
         <Button variant="ghost" onclick={openSettings} icon={Settings} class="h-9">
           Settings
@@ -133,7 +133,7 @@
       <section class="flex flex-col gap-12 w-full pt-4 md:pt-10">
         <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 w-full max-w-4xl">
           <div class="flex flex-col gap-2">
-            <h2 class="m-0 text-app-3xl md:text-[3rem] font-bold tracking-tighter leading-none text-text-primary max-w-lg">
+            <h2 class="m-0 max-w-lg text-app-2xl font-bold tracking-tighter leading-none text-text-primary md:text-app-3xl">
               Your Video Projects
             </h2>
             <p class="text-app-md text-text-secondary max-w-md mt-2">
@@ -190,7 +190,7 @@
                   </div>
                 </button>
                 <div class="pt-3 px-1 flex items-center justify-between text-app-sm text-text-secondary">
-                  <span class="font-mono text-xs">{new Date(project.created_at).toLocaleDateString()}</span>
+                  <span class="text-app-xs tabular-nums">{new Date(project.created_at).toLocaleDateString()}</span>
                   <span class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">Open project →</span>
                 </div>
               </div>

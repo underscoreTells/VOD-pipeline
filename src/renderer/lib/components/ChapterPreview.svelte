@@ -619,8 +619,8 @@
   )}
 >
   <div class="preview-header flex cursor-default items-center justify-between gap-2">
-    <h3 class="m-0 py-0.5 text-app-xs font-medium uppercase tracking-[0.04em] text-text-primary">Chapter Preview</h3>
-    <span class="chapter-title truncate text-app-xs uppercase tracking-[0.04em] text-text-tertiary">{previewTitle()}</span>
+    <h3 class="m-0 py-0.5 text-app-xs font-medium text-text-primary">Chapter preview</h3>
+    <span class="chapter-title truncate text-app-sm text-text-tertiary">{previewTitle()}</span>
   </div>
 
   <div class="player-stage relative flex-1 min-h-0" style="--player-dock-height: 110px;">
@@ -690,14 +690,14 @@
         </div>
 
         <div class="info-grid grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm border border-white/8 bg-[rgba(18,18,18,0.86)] p-2 backdrop-blur-[8px]">
-          <span class="info-label text-app-xs font-medium uppercase tracking-[0.02em] leading-[22px] text-text-tertiary">Range</span>
+          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Range</span>
           <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
           <span class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
 
-          <span class="info-label text-app-xs font-medium uppercase tracking-[0.02em] leading-[22px] text-text-tertiary">Mode</span>
-          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
+          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Mode</span>
+          <span class="info-value text-app-sm leading-[22px] text-text-secondary">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
           <span
-            class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary"
+            class="info-meta text-right text-app-sm tabular-nums leading-[22px] text-text-tertiary"
             class:text-[#fbbf24]={Boolean(reverseStatusMessage)}
           >
             {reverseStatusMessage ?? formatTime(localTime())}

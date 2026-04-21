@@ -304,7 +304,7 @@
     <div class="header-right flex shrink-0 items-center gap-2">
       <div class="relative">
         <select
-          class="provider-pill h-7 appearance-none rounded-full border border-transparent bg-surface-hover pl-2.5 pr-7 text-app-xs text-text-secondary outline-none transition-colors hover:border-border-default hover:text-text-primary focus-visible:border-border-strong disabled:opacity-50"
+          class="provider-pill h-7 appearance-none rounded-[6px] border border-border-default bg-surface-base pl-2.5 pr-8 text-app-xs font-medium text-text-secondary outline-none transition-colors hover:border-border-strong hover:text-text-primary focus-visible:border-border-strong disabled:opacity-50"
           value={agentState.selectedProvider}
           onchange={(e) => setProvider(e.currentTarget.value as any)}
           disabled={agentState.isStreaming}
@@ -313,7 +313,7 @@
             <option value={provider.value}>{provider.label}</option>
           {/each}
         </select>
-        <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-text-tertiary">
+        <span class="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-text-tertiary">
           <Icon icon={ChevronDown} size={12} />
         </span>
       </div>
@@ -349,7 +349,7 @@
           )}
         >
           {#if msg.role === 'assistant' && getVisibleStreamingStatusLabel(msg)}
-            <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-full bg-accent-primary-subtle px-2.5 py-[3px] text-app-xs font-medium text-accent-primary" aria-live="polite">
+            <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_20%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary" aria-live="polite">
               <span class="streaming-dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary animate-pulse"></span>
               <span>{getVisibleStreamingStatusLabel(msg)}</span>
               {#if getVisibleStreamingStatusMeta(msg)}
@@ -386,7 +386,7 @@
                       <div class="thinking-step text-app-xs text-text-tertiary">
                         <span class="step-label text-text-tertiary">{entry.label}</span>
                         {#if formatTraceMeta(entry)}
-                          <span class="step-meta ml-2 font-mono text-[0.5625rem] text-text-disabled">{formatTraceMeta(entry)}</span>
+                          <span class="step-meta ml-2 font-mono text-app-xs text-text-disabled">{formatTraceMeta(entry)}</span>
                         {/if}
                       </div>
                     {/each}
@@ -420,7 +420,7 @@
         <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
         <div class="suggestions-actions flex items-center gap-2">
           <button
-            class="rounded-full bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
+            class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle px-2.5 py-1 text-app-xs font-medium text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50"
             onclick={handleApplyAllSuggestions}
             disabled={applyingAllSuggestionState || pendingSuggestions.length === 0}
           >
@@ -445,7 +445,7 @@
               <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100">
                 {#if suggestion.clip_id}
                   <button
-                    class="rounded-full bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handleCancelSuggestionPreview(suggestion.id)}
                     disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   >
@@ -453,7 +453,7 @@
                   </button>
                 {:else}
                   <button
-                    class="rounded-full bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-primary hover:bg-accent-primary hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handlePreviewSuggestion(suggestion.id)}
                     disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   >
@@ -461,7 +461,7 @@
                   </button>
                 {/if}
                 <button
-                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-success)_20%,transparent)] bg-accent-success-subtle p-0 text-accent-success transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-accent-success hover:bg-accent-success hover:text-white active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   onclick={() => handleApplySuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   title="Apply"
@@ -469,7 +469,7 @@
                   <Icon icon={Check} size={12} />
                 </button>
                 <button
-                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full bg-transparent p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  class="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-border-default bg-surface-base p-0 text-text-tertiary transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-border-strong hover:bg-surface-hover hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   onclick={() => handleRejectSuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                   title="Reject"
@@ -498,7 +498,7 @@
       ></textarea>
       <button
         type="submit"
-        class="send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
+        class="send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
         disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId}
         title="Send message"
       >
