@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { Clip } from '$shared/types/database';
   import { getSelectedClips, getClipById } from '../state/timeline.svelte';
   import { chaptersState } from '../state/chapters.svelte';
@@ -6,6 +7,7 @@
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
+  import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
   import Badge from './ui/Badge.svelte';
   import Icon from './ui/Icon.svelte';
   import { ChevronLeft, ChevronRight, Play, Pause, Repeat } from '../constants';
@@ -64,11 +66,21 @@
   
   // Video player state
   let videoRef: HTMLVideoElement | null = $state(null);
+  let scrubberRef: HTMLInputElement | null = $state(null);
   let isLooping = $state(true);
   let isPlaying = $state(false);
+  let isScrubbing = $state(false);
   let currentTime = $state(0);
   let lastVideoSrc = '';
   let nudgeQueue: Promise<void> = Promise.resolve();
+  let resumePlaybackAfterScrub = false;
+  let clearScrubListeners: (() => void) | null = null;
+
+  const seekController = createQueuedMediaSeek({
+    getVideo: () => videoRef,
+    normalizeTime: (time) => clampToClip(time),
+    epsilon: CLIP_END_EPSILON,
+  });
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
@@ -131,6 +143,77 @@
   function clampToClip(time: number): number {
     if (!selectedClip) return time;
     return clamp(time, selectedClip.in_point, selectedClip.out_point);
+  }
+
+  function clearScrubPointerListeners() {
+    clearScrubListeners?.();
+    clearScrubListeners = null;
+  }
+
+  function resetScrubSession() {
+    clearScrubPointerListeners();
+    seekController.reset();
+    isScrubbing = false;
+    resumePlaybackAfterScrub = false;
+  }
+
+  function getScrubTargetTime(input: HTMLInputElement | null): number | null {
+    if (!selectedClip) return null;
+
+    const rawValue = input ? Number(input.value) : clipLocalTime;
+    const localValue = clamp(
+      Number.isFinite(rawValue) ? rawValue : clipLocalTime,
+      0,
+      clipDuration
+    );
+
+    return selectedClip.in_point + localValue;
+  }
+
+  function beginScrubSession() {
+    if (!videoRef || !selectedClip || isScrubbing) return;
+
+    resumePlaybackAfterScrub = !videoRef.paused;
+    if (!videoRef.paused) {
+      videoRef.pause();
+    }
+
+    isScrubbing = true;
+  }
+
+  function finalizeScrubSession(input: HTMLInputElement | null) {
+    if (!videoRef || !selectedClip || !isScrubbing) return;
+
+    const nextTime = getScrubTargetTime(input);
+    if (nextTime === null) return;
+
+    seekController.commit(nextTime);
+    currentTime = nextTime;
+    isScrubbing = false;
+
+    const shouldResumePlayback = resumePlaybackAfterScrub;
+    resumePlaybackAfterScrub = false;
+
+    if (shouldResumePlayback) {
+      void videoRef.play().catch(() => undefined);
+    }
+  }
+
+  function trackScrubPointer(input: HTMLInputElement) {
+    clearScrubPointerListeners();
+
+    const handlePointerEnd = () => {
+      finalizeScrubSession(input);
+      clearScrubPointerListeners();
+    };
+
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+
+    clearScrubListeners = () => {
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+    };
   }
   
   // Derived values
@@ -206,6 +289,10 @@
   function handleTimeUpdate() {
     if (!videoRef) return;
 
+    if (isScrubbing) {
+      return;
+    }
+
     if (!selectedClip) {
       currentTime = videoRef.currentTime;
       return;
@@ -230,6 +317,8 @@
   }
 
   function handleEnded() {
+    if (isScrubbing) return;
+
     if (isLooping && videoRef && selectedClip) {
       videoRef.currentTime = selectedClip.in_point;
       currentTime = selectedClip.in_point;
@@ -256,6 +345,10 @@
     isPlaying = false;
   }
 
+  function handleSeeked() {
+    seekController.handleSeeked();
+  }
+
   function handleVideoLoadedMetadata() {
     if (!videoRef || !selectedClip) return;
     if (videoRef.currentTime < selectedClip.in_point || videoRef.currentTime > selectedClip.out_point) {
@@ -278,11 +371,33 @@
 
   function handleScrubInput(event: Event) {
     if (!videoRef || !selectedClip) return;
-    const value = Number((event.target as HTMLInputElement).value);
-    const local = clamp(value, 0, clipDuration);
-    const nextTime = selectedClip.in_point + local;
-    videoRef.currentTime = nextTime;
+
+    beginScrubSession();
+
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+    const nextTime = getScrubTargetTime(input);
+    if (nextTime === null) return;
+
     currentTime = nextTime;
+    seekController.preview(nextTime);
+  }
+
+  function handleScrubStart(event: PointerEvent) {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return;
+
+    beginScrubSession();
+    trackScrubPointer(event.currentTarget);
+  }
+
+  function handleScrubCommit(event: Event) {
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+
+    finalizeScrubSession(input);
+    clearScrubPointerListeners();
   }
 
   function handleVideoError() {
@@ -293,6 +408,7 @@
   $effect(() => {
     if (!videoRef) return;
     if (videoSrc && videoSrc !== lastVideoSrc) {
+      resetScrubSession();
       lastVideoSrc = videoSrc;
       videoRef.load();
     }
@@ -301,6 +417,7 @@
   // Load clip into video player when selection changes
   $effect(() => {
     if (!videoRef) return;
+    resetScrubSession();
     if (!selectedClip || !selectedAsset) {
       videoRef.pause();
       currentTime = 0;
@@ -325,6 +442,10 @@
       videoRef.addEventListener('loadedmetadata', onLoaded);
       return () => videoRef?.removeEventListener('loadedmetadata', onLoaded);
     }
+  });
+
+  onDestroy(() => {
+    resetScrubSession();
   });
 </script>
 
@@ -359,6 +480,7 @@
           bind:this={videoRef}
           src={videoSrc}
           onseeking={handleSeeking}
+          onseeked={handleSeeked}
           ontimeupdate={handleTimeUpdate}
           onended={handleEnded}
           onplay={handlePlay}
@@ -366,7 +488,7 @@
           onloadedmetadata={handleVideoLoadedMetadata}
           onerror={handleVideoError}
           class="preview-video h-full w-full object-contain"
-          preload="metadata"
+          preload="auto"
           playsinline
         >
           <track kind="captions" />
@@ -387,6 +509,7 @@
               <Icon icon={isPlaying ? Pause : Play} size={14} />
             </button>
             <input
+              bind:this={scrubberRef}
               class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
               type="range"
               min="0"
@@ -394,7 +517,9 @@
               step="0.01"
               value={clipLocalTime}
               disabled={clipDuration <= 0 || isSelectedAssetUnavailable}
+              onpointerdown={handleScrubStart}
               oninput={handleScrubInput}
+              onchange={handleScrubCommit}
             />
             <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">{formatTimecode(timelineCurrentTime)}</span>
           </div>

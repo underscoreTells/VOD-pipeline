@@ -14,8 +14,12 @@
   } from '../utils/chapter-time';
   import {
     timelineState,
+    type TimelineTransportSnapshot,
+    restoreTransport,
     setPlayhead,
     setPlaying,
+    snapshotTransport,
+    stopShuttle,
     togglePlayback,
   } from '../state/timeline.svelte';
   import {
@@ -26,6 +30,7 @@
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
+  import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
@@ -39,10 +44,13 @@
   let { class: className = '', chapter, asset, clips = timelineState.clips }: Props = $props();
 
   let videoRef = $state<HTMLVideoElement | null>(null);
+  let scrubberRef = $state<HTMLInputElement | null>(null);
   let currentTime = $state(0);
   let isCreatingFromSelection = $state(false);
+  let isScrubbing = $state(false);
   let lastChapterId = $state<number | null>(null);
   let isProgrammaticPlayheadSeek = $state(false);
+  let resumeTransportSnapshot = $state<TimelineTransportSnapshot | null>(null);
 
   let reverseProxyStatus = $state<'missing' | 'generating' | 'ready' | 'error'>('missing');
   let reverseProxyUrl = $state<string | null>(null);
@@ -57,6 +65,12 @@
   let activeSource = $state<'normal' | 'reverse'>('normal');
   let currentVideoUrl: string | null = null;
   let pendingGlobalSeekTime: number | null = null;
+  let clearScrubListeners: (() => void) | null = null;
+
+  const seekController = createQueuedMediaSeek({
+    getVideo: () => videoRef,
+    normalizeTime: (time) => normalizeMediaSeekTime(time),
+  });
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
   const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
@@ -114,6 +128,97 @@
     const duration = getChapterDurationSafe(selectedChapter);
     const clampedReverse = clampNumber(reverseTime, 0, duration);
     return clampToChapter(selectedChapter, selectedChapter.end_time - clampedReverse);
+  }
+
+  function normalizeMediaSeekTime(time: number): number {
+    if (!chapter) return Math.max(0, time);
+
+    if (activeSource === 'reverse') {
+      return clampNumber(time, 0, getChapterDurationSafe(chapter));
+    }
+
+    return clampToChapter(chapter, time);
+  }
+
+  function getMediaTimeForGlobalTime(globalTime: number): number {
+    if (!chapter) return globalTime;
+
+    return activeSource === 'reverse'
+      ? toReverseProxyTime(chapter, globalTime)
+      : globalTime;
+  }
+
+  function clearScrubPointerListeners() {
+    clearScrubListeners?.();
+    clearScrubListeners = null;
+  }
+
+  function resetScrubSession() {
+    clearScrubPointerListeners();
+    seekController.reset();
+    isScrubbing = false;
+    isProgrammaticPlayheadSeek = false;
+    resumeTransportSnapshot = null;
+  }
+
+  function getScrubGlobalTime(input: HTMLInputElement | null): number | null {
+    if (!chapter) return null;
+
+    const fallbackLocalTime = localTime();
+    const rawValue = input ? Number(input.value) : fallbackLocalTime;
+    const nextLocalTime = clampNumber(
+      Number.isFinite(rawValue) ? rawValue : fallbackLocalTime,
+      0,
+      chapterDuration()
+    );
+
+    return toChapterGlobalTime(chapter, nextLocalTime);
+  }
+
+  function beginScrubSession() {
+    if (!videoRef || !chapter || !asset || asset.availability?.exists === false || isScrubbing) return;
+
+    resumeTransportSnapshot = snapshotTransport();
+    isScrubbing = true;
+    stopShuttle();
+  }
+
+  function finalizeScrubSession(input: HTMLInputElement | null) {
+    if (!videoRef || !chapter || !isScrubbing) return;
+
+    const nextGlobal = getScrubGlobalTime(input);
+    if (nextGlobal === null) return;
+
+    const nextMedia = getMediaTimeForGlobalTime(nextGlobal);
+    isProgrammaticPlayheadSeek = true;
+    seekController.commit(nextMedia);
+    currentTime = nextGlobal;
+    setPlayhead(nextGlobal);
+    isScrubbing = false;
+
+    const snapshot = resumeTransportSnapshot;
+    resumeTransportSnapshot = null;
+
+    if (snapshot?.isPlaying) {
+      restoreTransport(snapshot);
+    }
+  }
+
+  function trackScrubPointer(input: HTMLInputElement) {
+    clearScrubPointerListeners();
+
+    const handlePointerEnd = () => {
+      finalizeScrubSession(input);
+      clearScrubPointerListeners();
+    };
+
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+
+    clearScrubListeners = () => {
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+    };
   }
 
   function setPitchCorrection(media: HTMLVideoElement, enabled: boolean) {
@@ -234,6 +339,7 @@
     pendingGlobalSeekTime = clampToChapter(chapter, targetGlobalTime);
 
     if (currentVideoUrl !== targetUrl) {
+      seekController.reset();
       currentVideoUrl = targetUrl;
       videoRef.src = targetUrl;
       videoRef.load();
@@ -388,6 +494,10 @@
   function handleTimeUpdate() {
     if (!videoRef || !chapter) return;
 
+    if (isScrubbing) {
+      return;
+    }
+
     if (activeSource === 'reverse') {
       const duration = getChapterDurationSafe(chapter);
       const reverseTime = clampNumber(videoRef.currentTime, 0, duration);
@@ -440,7 +550,10 @@
   }
 
   function handleSeeked() {
-    isProgrammaticPlayheadSeek = false;
+    seekController.handleSeeked();
+    if (!videoRef?.seeking) {
+      isProgrammaticPlayheadSeek = false;
+    }
   }
 
   function handleLoadedMetadata() {
@@ -483,6 +596,7 @@
     void chapterEnd;
     void assetId;
 
+    resetScrubSession();
     reverseProxyRequestToken += 1;
     clearReversePollTimer();
     reverseEnsureRequested = false;
@@ -534,12 +648,12 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter || !asset || asset.availability?.exists === false) return;
+    if (!videoRef || !chapter || !asset || asset.availability?.exists === false || isScrubbing) return;
     applyTransportState();
   });
 
   $effect(() => {
-    if (!videoRef || !chapter || activeSource !== 'reverse') return;
+    if (!videoRef || !chapter || activeSource !== 'reverse' || isScrubbing) return;
     if (!reverseProxyUrl) return;
     if (currentVideoUrl === reverseProxyUrl) return;
 
@@ -547,11 +661,9 @@
   });
 
   $effect(() => {
-    if (!videoRef || !chapter) return;
+    if (!videoRef || !chapter || isScrubbing) return;
     const targetGlobal = clampToChapter(chapter, timelineState.playheadTime);
-    const targetMedia = activeSource === 'reverse'
-      ? toReverseProxyTime(chapter, targetGlobal)
-      : targetGlobal;
+    const targetMedia = getMediaTimeForGlobalTime(targetGlobal);
 
     if (Math.abs(targetMedia - videoRef.currentTime) < 0.05) return;
     isProgrammaticPlayheadSeek = true;
@@ -560,6 +672,7 @@
   });
 
   onDestroy(() => {
+    resetScrubSession();
     clearReversePollTimer();
   });
 
@@ -595,14 +708,36 @@
 
   function handleScrubInput(event: Event) {
     if (!videoRef || !chapter) return;
-    const value = Number((event.target as HTMLInputElement).value);
-    const nextGlobal = toChapterGlobalTime(chapter, value);
-    const nextMedia = activeSource === 'reverse'
-      ? toReverseProxyTime(chapter, nextGlobal)
-      : nextGlobal;
-    videoRef.currentTime = nextMedia;
+
+    beginScrubSession();
+
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+    const nextGlobal = getScrubGlobalTime(input);
+    if (nextGlobal === null) return;
+
+    const nextMedia = getMediaTimeForGlobalTime(nextGlobal);
+    isProgrammaticPlayheadSeek = true;
     currentTime = nextGlobal;
     setPlayhead(nextGlobal);
+    seekController.preview(nextMedia);
+  }
+
+  function handleScrubStart(event: PointerEvent) {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return;
+
+    beginScrubSession();
+    trackScrubPointer(event.currentTarget);
+  }
+
+  function handleScrubCommit(event: Event) {
+    const input = event.currentTarget instanceof HTMLInputElement
+      ? event.currentTarget
+      : scrubberRef;
+
+    finalizeScrubSession(input);
+    clearScrubPointerListeners();
   }
 
   $effect(() => {
@@ -655,7 +790,7 @@
           ontimeupdate={handleTimeUpdate}
           onloadedmetadata={handleLoadedMetadata}
           onerror={handleVideoError}
-          preload="metadata"
+          preload="auto"
           playsinline
         >
           <track kind="captions" />
@@ -675,6 +810,7 @@
             <Icon icon={timelineState.isPlaying ? Pause : Play} size={14} />
           </button>
           <input
+            bind:this={scrubberRef}
             class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
             type="range"
             min="0"
@@ -682,7 +818,9 @@
             step="0.01"
             value={localTime()}
             disabled={assetUnavailable()}
+            onpointerdown={handleScrubStart}
             oninput={handleScrubInput}
+            onchange={handleScrubCommit}
           />
           <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">
             {formatTime(localTime())} / {formatTime(chapterDuration())}

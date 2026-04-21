@@ -26,9 +26,12 @@ import type {
   AgentChatData,
   TimelineAction,
 } from '../../../shared/types/agent-ipc.js';
+import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
+import { normalizeNamingModel } from '../../../shared/llm/naming-models.js';
 import { getAgentBridge } from '../../agent-bridge.js';
 import { getBackendRuntimeStaleness } from '../../dev-runtime.js';
 import { createLogger } from '../../logger.js';
+import { suggestConversationTitle } from '../../services/naming-service.js';
 import {
   appendExecutionTraceEntry,
   serializeExecutionTrace,
@@ -194,8 +197,9 @@ export function registerAgentHandlers(): void {
       ? payload.selectedClipIds.filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value))
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
-      ? payload.agentConfig
+      ? payload.agentConfig as ProviderConfigPayload
       : undefined;
 
     logger.info('agent:chat', projectId, conversationId, provider);
@@ -266,8 +270,19 @@ export function registerAgentHandlers(): void {
 
       const existingMessages = await getChatMessagesByConversation(conversation.id);
       if (conversation.title === 'New conversation' && existingMessages.length === 1) {
+        let generatedTitle: string | null = null;
+        try {
+          generatedTitle = await suggestConversationTitle({
+            message,
+            chapterTitle: chapter.title,
+            model: threadNamingModel,
+            providerConfig: agentConfig,
+          });
+        } catch (error) {
+          logger.warn('agent:thread-title fallback', error);
+        }
         await updateChatConversation(conversation.id, {
-          title: deriveConversationTitle(message),
+          title: generatedTitle ?? deriveConversationTitle(message),
         });
       }
 

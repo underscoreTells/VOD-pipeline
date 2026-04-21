@@ -1,4 +1,14 @@
 import type {
+  ProviderConfigPayload,
+  ProviderConfigProvider,
+} from '../../../shared/contracts/electron-api.js';
+import {
+  DEFAULT_NAMING_MODEL,
+  getNamingModelProvider,
+  normalizeNamingModel,
+  type NamingModelId,
+} from '../../../shared/llm/naming-models.js';
+import type {
   LLMProviderType,
   Settings,
 } from './settings.svelte.js';
@@ -42,9 +52,10 @@ export const defaultSettings: Settings = {
   proxyEncodingMode: 'auto',
   proxyQuality: 'balanced',
   autoChapterNamingEnabled: true,
-  autoChapterNamingModel: 'gpt-4o-mini',
+  autoChapterNamingModel: DEFAULT_NAMING_MODEL,
   autoClipNamingEnabled: true,
-  autoClipNamingModel: 'gpt-5-nano',
+  autoClipNamingModel: DEFAULT_NAMING_MODEL,
+  autoThreadNamingModel: DEFAULT_NAMING_MODEL,
   autoTranscribeOnImport: true,
 };
 
@@ -79,6 +90,43 @@ export function getConfiguredProviders(settings: Settings): LLMProviderType[] {
 
 export function getConfiguredVideoProviders(settings: Settings): LLMProviderType[] {
   return videoProviderOrder.filter((provider) => isProviderConfigured(settings, provider));
+}
+
+export function buildProviderConfig(
+  settings: Settings,
+  defaultProvider?: LLMProviderType
+): ProviderConfigPayload {
+  const providers: ProviderConfigPayload['providers'] = {};
+
+  for (const provider of providerOrder) {
+    const apiKey = getApiKey(settings, provider);
+    if (apiKey) {
+      providers[provider] = apiKey;
+    }
+  }
+
+  return {
+    defaultProvider,
+    providers,
+  };
+}
+
+export function getProviderConfigApiKey(
+  providerConfig: ProviderConfigPayload | null | undefined,
+  provider: ProviderConfigProvider
+): string {
+  const apiKey = providerConfig?.providers?.[provider];
+  return typeof apiKey === 'string' ? apiKey.trim() : '';
+}
+
+export function getNamingModelApiKey(
+  settings: Settings,
+  model: NamingModelId
+): string {
+  return getProviderConfigApiKey(
+    buildProviderConfig(settings),
+    getNamingModelProvider(normalizeNamingModel(model))
+  );
 }
 
 export function validateApiKey(provider: LLMProviderType, key: string): boolean {

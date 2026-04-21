@@ -1,7 +1,10 @@
 <script lang="ts">
   import {
+    NAMING_MODEL_OPTIONS,
+    getNamingModelProvider,
+  } from "../../../shared/llm/naming-models.js";
+  import {
     settingsState, 
-    loadSettings, 
     saveSettings, 
     updateApiKey, 
     testProvider,
@@ -11,6 +14,10 @@
     resetSettings,
     type LLMProviderType,
   } from "../state/settings.svelte";
+  import {
+    buildProviderConfig,
+    getProviderConfigApiKey,
+  } from "../state/settings-helpers.js";
   import Badge from './ui/Badge.svelte';
   import { Icon } from './ui';
   import { CheckCircle2, Circle, X } from '../constants';
@@ -65,11 +72,6 @@
     }
   }
   
-  function maskApiKey(key: string): string {
-    if (key.length <= 8) return key.slice(0, 2) + "•".repeat(key.length - 4) + key.slice(-2);
-    return key.slice(0, 4) + "•".repeat(key.length - 8) + key.slice(-4);
-  }
-
   function handleOverlayClick(event: MouseEvent) {
     if (event.target === event.currentTarget) {
       closeSettings();
@@ -81,6 +83,12 @@
       event.preventDefault();
       closeSettings();
     }
+  }
+
+  function getNamingModelStatusLabel(model: typeof NAMING_MODEL_OPTIONS[number]["id"]): string {
+    const providerConfig = buildProviderConfig(settingsState.settings);
+    const provider = getNamingModelProvider(model);
+    return getProviderConfigApiKey(providerConfig, provider) ? '' : ' (no API key)';
   }
 </script>
 
@@ -231,9 +239,9 @@
           </div>
         </section>
         
-        <!-- Chapter Settings -->
+        <!-- Naming and Transcription -->
         <section class="settings-section mb-8 last:mb-0">
-          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Chapter Settings</h3>
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Naming &amp; Transcription</h3>
           
           <div class="checkbox-group mb-4">
             <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
@@ -250,9 +258,11 @@
           <div class="select-group mb-4">
             <label for="chapter-naming-model" class="mb-2 block text-app-sm font-medium text-text-secondary">Chapter Naming Model:</label>
             <select id="chapter-naming-model" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.autoChapterNamingModel}>
-              <option value="gpt-4o-mini">GPT-4o Mini (faster)</option>
-              <option value="gpt-4o">GPT-4o (more accurate)</option>
-              <option value="gemini-1.5-flash">Gemini 1.5 Flash (cheapest)</option>
+              {#each NAMING_MODEL_OPTIONS as option (option.id)}
+                <option value={option.id}>
+                  {option.label}{getNamingModelStatusLabel(option.id)}
+                </option>
+              {/each}
             </select>
             <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">AI model used for generating chapter titles</p>
           </div>
@@ -272,10 +282,25 @@
           <div class="select-group mb-4">
             <label for="clip-naming-model" class="mb-2 block text-app-sm font-medium text-text-secondary">Clip Naming Model:</label>
             <select id="clip-naming-model" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.autoClipNamingModel}>
-              <option value="gpt-5-nano">GPT-5 Nano (smallest)</option>
-              <option value="gpt-4o-mini">GPT-4o Mini (fallback)</option>
+              {#each NAMING_MODEL_OPTIONS as option (option.id)}
+                <option value={option.id}>
+                  {option.label}{getNamingModelStatusLabel(option.id)}
+                </option>
+              {/each}
             </select>
-            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Requires an OpenAI API key</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Uses the selected provider with chapter transcript context when naming new clips</p>
+          </div>
+
+          <div class="select-group mb-4">
+            <label for="thread-naming-model" class="mb-2 block text-app-sm font-medium text-text-secondary">Chat Thread Naming Model:</label>
+            <select id="thread-naming-model" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.autoThreadNamingModel}>
+              {#each NAMING_MODEL_OPTIONS as option (option.id)}
+                <option value={option.id}>
+                  {option.label}{getNamingModelStatusLabel(option.id)}
+                </option>
+              {/each}
+            </select>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Used to title new chat threads after the first user message</p>
           </div>
            
           <div class="checkbox-group mb-4">

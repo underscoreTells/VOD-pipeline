@@ -16,6 +16,12 @@ interface TimelineStateStore {
   error: string | null;
 }
 
+export interface TimelineTransportSnapshot {
+  isPlaying: boolean;
+  shuttleDirection: -1 | 0 | 1;
+  shuttleSpeed: number;
+}
+
 const MIN_ALLOWED_ZOOM = 0.05;
 const MAX_ALLOWED_ZOOM = 1000;
 
@@ -145,6 +151,20 @@ export function selectAll() {
 
 export function setPlayhead(time: number) {
   timelineState.playheadTime = time;
+}
+
+export function snapshotTransport(): TimelineTransportSnapshot {
+  return {
+    isPlaying: timelineState.isPlaying,
+    shuttleDirection: timelineState.shuttleDirection,
+    shuttleSpeed: timelineState.shuttleSpeed,
+  };
+}
+
+export function restoreTransport(snapshot: TimelineTransportSnapshot) {
+  timelineState.isPlaying = snapshot.isPlaying;
+  timelineState.shuttleDirection = snapshot.shuttleDirection;
+  timelineState.shuttleSpeed = snapshot.shuttleSpeed;
 }
 
 export function setMinZoom(level: number) {

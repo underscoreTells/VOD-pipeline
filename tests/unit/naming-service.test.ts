@@ -1,0 +1,135 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const databaseMocks = vi.hoisted(() => ({
+  getChapter: vi.fn(),
+  getTranscriptsByChapter: vi.fn(),
+}));
+
+const llmMocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+}));
+
+const providerMocks = vi.hoisted(() => ({
+  createLLM: vi.fn(() => ({
+    invoke: llmMocks.invoke,
+  })),
+}));
+
+vi.mock("../../src/electron/database/index.js", () => databaseMocks);
+vi.mock("../../src/agent/providers/index.js", () => providerMocks);
+
+describe("naming service", () => {
+  beforeEach(() => {
+    Object.values(databaseMocks).forEach((mock) => mock.mockReset());
+    Object.values(llmMocks).forEach((mock) => mock.mockReset());
+    Object.values(providerMocks).forEach((mock) => mock.mockReset());
+
+    providerMocks.createLLM.mockReturnValue({
+      invoke: llmMocks.invoke,
+    });
+    databaseMocks.getChapter.mockResolvedValue({
+      id: 7,
+      title: "Treasure Run",
+    });
+    databaseMocks.getTranscriptsByChapter.mockResolvedValue([
+      { text: "We found the chest right here", start_time: 12, end_time: 18 },
+    ]);
+  });
+
+  it("uses OpenAI naming models for clip titles and sanitizes the result", async () => {
+    llmMocks.invoke.mockResolvedValue({
+      content: "\"Golden Chest Drop.\"",
+    });
+
+    const { suggestChapterClipName } = await import("../../src/electron/services/naming-service.js");
+    const result = await suggestChapterClipName({
+      chapterId: 7,
+      inPoint: 10,
+      outPoint: 20,
+      model: "gpt-5-nano",
+      providerConfig: {
+        providers: {
+          openai: "sk-openai",
+        },
+      },
+    });
+
+    expect(providerMocks.createLLM).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "openai",
+      model: "gpt-5-nano",
+      apiKey: "sk-openai",
+      temperature: 0.2,
+      maxTokens: 24,
+    }));
+    expect(result).toBe("Golden Chest Drop");
+  });
+
+  it("uses Gemini naming models for thread titles and extracts text parts", async () => {
+    llmMocks.invoke.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: "\"Boss Fight Plan!\"",
+        },
+      ],
+    });
+
+    const { suggestConversationTitle } = await import("../../src/electron/services/naming-service.js");
+    const result = await suggestConversationTitle({
+      message: "Let's figure out how to stage the boss fight.",
+      chapterTitle: "Boss Fight",
+      model: "gemini-3-flash-preview",
+      providerConfig: {
+        providers: {
+          gemini: "AIza-gemini",
+        },
+      },
+    });
+
+    expect(providerMocks.createLLM).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "gemini",
+      model: "gemini-3-flash-preview",
+      apiKey: "AIza-gemini",
+      maxTokens: 20,
+    }));
+    expect(result).toBe("Boss Fight Plan");
+  });
+
+  it("uses Kimi naming models and returns null when the selected provider key is missing", async () => {
+    llmMocks.invoke.mockResolvedValue({
+      content: "Final Twist Setup",
+    });
+
+    const { suggestConversationTitle } = await import("../../src/electron/services/naming-service.js");
+    const available = await suggestConversationTitle({
+      message: "We need a better title for this callback thread.",
+      chapterTitle: "Callbacks",
+      model: "kimi-k2.5",
+      providerConfig: {
+        providers: {
+          kimi: "sk-kimi",
+        },
+      },
+    });
+
+    expect(providerMocks.createLLM).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "kimi",
+      model: "kimi-k2.5",
+      apiKey: "sk-kimi",
+    }));
+    expect(available).toBe("Final Twist Setup");
+
+    providerMocks.createLLM.mockClear();
+    const missing = await suggestConversationTitle({
+      message: "We need a better title for this callback thread.",
+      chapterTitle: "Callbacks",
+      model: "kimi-k2.5",
+      providerConfig: {
+        providers: {},
+      },
+    });
+
+    expect(providerMocks.createLLM).not.toHaveBeenCalled();
+    expect(missing).toBeNull();
+  });
+});

@@ -10,10 +10,17 @@ import type {
   TimelineState,
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
+import type { NamingModelId } from '../llm/naming-models.js';
 import type { ProjectAsset } from './ipc.js';
 
 export type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
 export type ProxyQuality = 'high' | 'balanced' | 'fast';
+export type ProviderConfigProvider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'kimi';
+
+export interface ProviderConfigPayload {
+  defaultProvider?: ProviderConfigProvider;
+  providers?: Partial<Record<ProviderConfigProvider, string>>;
+}
 
 export interface ProxyOptions {
   encodingMode?: ProxyEncodingMode;
@@ -56,10 +63,8 @@ export interface AgentChatParams {
   provider?: string;
   selectedClipIds?: number[];
   playheadTime?: number;
-  agentConfig?: {
-    defaultProvider?: string;
-    providers?: Record<string, string>;
-  };
+  threadNamingModel?: NamingModelId;
+  agentConfig?: ProviderConfigPayload;
 }
 
 export interface AgentChatResult {
@@ -226,8 +231,8 @@ export interface SuggestClipNameParams {
   chapterId: number;
   inPoint: number;
   outPoint: number;
-  model: string;
-  apiKey: string;
+  model: NamingModelId;
+  providerConfig?: ProviderConfigPayload;
   chapterTitle?: string;
 }
 

@@ -59,6 +59,10 @@ const devRuntimeMocks = vi.hoisted(() => ({
   getBackendRuntimeStaleness: vi.fn(),
 }));
 
+const namingServiceMocks = vi.hoisted(() => ({
+  suggestConversationTitle: vi.fn(),
+}));
+
 vi.mock("electron", () => electronMocks);
 
 vi.mock("../../src/electron/agent-bridge.js", () => ({
@@ -71,6 +75,8 @@ vi.mock("../../src/electron/ipc/handler-support.js", () => handlerSupportMocks);
 
 vi.mock("../../src/electron/dev-runtime.js", () => devRuntimeMocks);
 
+vi.mock("../../src/electron/services/naming-service.js", () => namingServiceMocks);
+
 describe("agent chat handler", () => {
   beforeEach(async () => {
     registeredHandlers.clear();
@@ -79,6 +85,7 @@ describe("agent chat handler", () => {
     Object.values(databaseMocks).forEach((mock) => mock.mockReset());
     Object.values(handlerSupportMocks).forEach((mock) => mock.mockReset());
     devRuntimeMocks.getBackendRuntimeStaleness.mockReset();
+    Object.values(namingServiceMocks).forEach((mock) => mock.mockReset());
 
     databaseMocks.getProject.mockResolvedValue({ id: 1 });
     databaseMocks.getChatConversation.mockResolvedValue({
@@ -97,6 +104,7 @@ describe("agent chat handler", () => {
     });
     databaseMocks.getAssetsForChapter.mockResolvedValue([11]);
     databaseMocks.getSuggestionsByConversation.mockResolvedValue([]);
+    databaseMocks.updateChatConversation.mockResolvedValue(true);
     databaseMocks.getChatMessagesByConversation.mockResolvedValue([
       {
         id: 10,
@@ -128,7 +136,9 @@ describe("agent chat handler", () => {
       suggestionDrafts: [],
       outcome: "proposal",
     });
+    handlerSupportMocks.deriveConversationTitle.mockReturnValue("Fallback title");
     handlerSupportMocks.persistAgentSuggestions.mockResolvedValue([]);
+    namingServiceMocks.suggestConversationTitle.mockResolvedValue(null);
 
     const { registerAgentHandlers } = await import("../../src/electron/ipc/handlers/agent.js");
     registerAgentHandlers();
@@ -187,6 +197,136 @@ describe("agent chat handler", () => {
         message: "Drafted one new clip proposal.",
         outcome: "proposal",
       },
+    });
+  });
+
+  it("uses an AI-generated thread title on the first user message", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatConversation.mockResolvedValue({
+      id: 2,
+      project_id: 1,
+      chapter_id: 3,
+      provider: "gemini",
+      thread_id: "thread-1",
+      title: "New conversation",
+    });
+    namingServiceMocks.suggestConversationTitle.mockResolvedValue("Raid Plan");
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+      threadNamingModel: "gpt-5-nano",
+      agentConfig: {
+        providers: {
+          openai: "sk-openai",
+        },
+      },
+    });
+
+    expect(namingServiceMocks.suggestConversationTitle).toHaveBeenCalledWith({
+      message: "Please provide new clips for this chapter",
+      chapterTitle: undefined,
+      model: "gpt-5-nano",
+      providerConfig: {
+        providers: {
+          openai: "sk-openai",
+        },
+      },
+    });
+    expect(databaseMocks.updateChatConversation).toHaveBeenCalledWith(2, {
+      title: "Raid Plan",
+    });
+  });
+
+  it("falls back to the derived title when the selected naming provider is unavailable", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatConversation.mockResolvedValue({
+      id: 2,
+      project_id: 1,
+      chapter_id: 3,
+      provider: "gemini",
+      thread_id: "thread-1",
+      title: "New conversation",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+      threadNamingModel: "gemini-3-flash-preview",
+      agentConfig: {
+        providers: {},
+      },
+    });
+
+    expect(databaseMocks.updateChatConversation).toHaveBeenCalledWith(2, {
+      title: "Fallback title",
+    });
+  });
+
+  it("falls back to the derived title when AI thread naming throws", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getChatConversation.mockResolvedValue({
+      id: 2,
+      project_id: 1,
+      chapter_id: 3,
+      provider: "gemini",
+      thread_id: "thread-1",
+      title: "New conversation",
+    });
+    namingServiceMocks.suggestConversationTitle.mockRejectedValue(new Error("naming failed"));
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    const result = await chatHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+      threadNamingModel: "kimi-k2.5",
+      agentConfig: {
+        providers: {
+          kimi: "sk-kimi",
+        },
+      },
+    });
+
+    expect(databaseMocks.updateChatConversation).toHaveBeenCalledWith(2, {
+      title: "Fallback title",
+    });
+    expect(result).toMatchObject({
+      success: true,
     });
   });
 });

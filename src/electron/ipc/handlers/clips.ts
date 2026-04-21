@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
 import type { Clip } from '../../../shared/types/database.js';
 import {
   batchUpdateClips,
@@ -10,9 +11,10 @@ import {
   updateClip,
 } from '../../database/index.js';
 import { createLogger } from '../../logger.js';
-import { suggestChapterClipName } from '../../services/clip-naming-service.js';
+import { suggestChapterClipName } from '../../services/naming-service.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import { normalizeNamingModel } from '../../../shared/llm/naming-models.js';
 
 const logger = createLogger('ClipHandlers');
 
@@ -163,10 +165,10 @@ export function registerClipHandlers(): void {
       const chapterId = toNumberOrNull(payload?.chapterId);
       const inPoint = toNumberOrNull(payload?.inPoint);
       const outPoint = toNumberOrNull(payload?.outPoint);
-      const model = typeof payload?.model === 'string' && payload.model.trim().length > 0
-        ? payload.model.trim()
-        : 'gpt-5-nano';
-      const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : '';
+      const model = normalizeNamingModel(payload?.model);
+      const providerConfig = payload?.providerConfig && typeof payload.providerConfig === 'object'
+        ? payload.providerConfig as ProviderConfigPayload
+        : undefined;
 
       if (chapterId === null || !Number.isInteger(chapterId) || chapterId <= 0) {
         return createErrorResponse('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -177,9 +179,6 @@ export function registerClipHandlers(): void {
       if (outPoint === null || outPoint <= inPoint) {
         return createErrorResponse('Out point must be greater than in point', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
-      if (!apiKey) {
-        return createSuccessResponse({ name: null });
-      }
 
       return createSuccessResponse({
         name: await suggestChapterClipName({
@@ -187,7 +186,7 @@ export function registerClipHandlers(): void {
           inPoint,
           outPoint,
           model,
-          apiKey,
+          providerConfig,
           chapterTitle: typeof payload?.chapterTitle === 'string' ? payload.chapterTitle : undefined,
         }),
       });

@@ -1,3 +1,4 @@
+import type { ProviderConfigPayload } from "../../../shared/contracts/electron-api.js";
 import type {
   ChatConversation,
   ChatConversationMessage,
@@ -16,6 +17,7 @@ import {
   resolveConversationSelection,
   shouldChangeChapterContext,
 } from "./agent-session-helpers.js";
+import { buildProviderConfig } from "./settings-helpers.js";
 import {
   createAgentConversation,
   deleteAgentConversation,
@@ -90,29 +92,7 @@ function isStreamingBlocked(): boolean {
 }
 
 export function buildProviderEnvFromSettings() {
-  const providers: Record<string, string> = {};
-  const { settings } = settingsState;
-
-  if (settings.geminiApiKey.trim()) {
-    providers.gemini = settings.geminiApiKey.trim();
-  }
-  if (settings.openaiApiKey.trim()) {
-    providers.openai = settings.openaiApiKey.trim();
-  }
-  if (settings.anthropicApiKey.trim()) {
-    providers.anthropic = settings.anthropicApiKey.trim();
-  }
-  if (settings.openrouterApiKey.trim()) {
-    providers.openrouter = settings.openrouterApiKey.trim();
-  }
-  if (settings.kimiApiKey.trim()) {
-    providers.kimi = settings.kimiApiKey.trim();
-  }
-
-  return {
-    defaultProvider: agentState.selectedProvider,
-    providers,
-  };
+  return buildProviderConfig(settingsState.settings, agentState.selectedProvider) as ProviderConfigPayload;
 }
 
 export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {

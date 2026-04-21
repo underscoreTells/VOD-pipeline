@@ -20,6 +20,7 @@ import {
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
+import { settingsState } from "./settings.svelte";
 
 interface PendingDraft {
   clientRequestId: string;
@@ -136,6 +137,7 @@ export async function sendChatMessage(message: string) {
       provider: agentState.selectedProvider,
       selectedClipIds: Array.from(timelineState.selectedClipIds),
       playheadTime: timelineState.playheadTime,
+      threadNamingModel: settingsState.settings.autoThreadNamingModel,
       agentConfig: buildProviderEnvFromSettings(),
     });
 

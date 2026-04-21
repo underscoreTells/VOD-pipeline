@@ -22,6 +22,7 @@ import {
 } from './undo-redo.svelte';
 import { chaptersState, getSelectedChapter } from './chapters.svelte';
 import { settingsState } from './settings.svelte';
+import { buildProviderConfig } from './settings-helpers.js';
 import {
   configureClipAutoNameQueue,
   enqueueClipAutoName,
@@ -97,7 +98,7 @@ configureClipAutoNameQueue(() => ({
   settings: {
     autoClipNamingEnabled: settingsState.settings.autoClipNamingEnabled,
     autoClipNamingModel: settingsState.settings.autoClipNamingModel,
-    openaiApiKey: settingsState.settings.openaiApiKey,
+    providerConfig: buildProviderConfig(settingsState.settings),
   },
   getClipById,
   resolveChapterForClip,
