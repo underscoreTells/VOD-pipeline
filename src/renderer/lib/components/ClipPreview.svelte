@@ -497,7 +497,7 @@
           onpause={handlePause}
           onloadedmetadata={handleVideoLoadedMetadata}
           onerror={handleVideoError}
-          class="preview-video h-full w-full object-contain"
+          class="preview-video h-full w-full bg-black object-contain"
           preload="auto"
           playsinline
         >

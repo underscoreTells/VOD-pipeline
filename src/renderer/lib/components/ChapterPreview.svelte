@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import type { Chapter, Asset, Clip } from '$shared/types/database';
   import type { AssetAvailability } from '$shared/contracts/ipc';
   import Icon from './ui/Icon.svelte';
@@ -30,6 +30,7 @@
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
+  import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
   import {
     clampPreviewFps,
     getReversePreviewFps,
@@ -614,6 +615,15 @@
     void chapterEnd;
     void assetId;
 
+    const nextChapterStart = chapter
+      ? clampToChapter(chapter, chapter.start_time)
+      : 0;
+    const mediaChange = untrack(() => resolveChapterPreviewMediaChange({
+      asset,
+      activeSource,
+      currentVideoUrl,
+    }));
+
     resetScrubSession();
     reverseProxyRequestToken += 1;
     clearReversePollTimer();
@@ -626,31 +636,32 @@
     reverseStatusMessage = null;
 
     activeSource = 'normal';
-    currentVideoUrl = null;
-    pendingGlobalSeekTime = null;
+    pendingGlobalSeekTime = nextChapterStart;
 
-    if (!asset) {
+    if (mediaChange.decision === 'clear') {
+      currentVideoUrl = null;
       videoRef.removeAttribute('src');
       videoRef.load();
       currentTime = 0;
       return;
     }
 
-    const normalUrl = buildPlayableAssetUrl(asset);
-    if (!normalUrl) {
-      videoRef.pause();
-      videoRef.removeAttribute('src');
-      videoRef.load();
-      currentTime = 0;
-      return;
-    }
+    if (mediaChange.decision === 'reload') {
+      if (!mediaChange.normalUrl) {
+        currentVideoUrl = null;
+        videoRef.removeAttribute('src');
+        videoRef.load();
+        currentTime = 0;
+        return;
+      }
 
-    currentVideoUrl = normalUrl;
-    videoRef.src = normalUrl;
-    pendingGlobalSeekTime = chapter
-      ? clampToChapter(chapter, chapter.start_time)
-      : 0;
-    videoRef.load();
+      currentVideoUrl = mediaChange.normalUrl;
+      videoRef.src = mediaChange.normalUrl;
+      videoRef.load();
+    } else if (videoRef.readyState >= 1) {
+      applyPendingSeek();
+      applyTransportState();
+    }
 
     if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
       void refreshReverseProxy(true);
@@ -802,7 +813,7 @@
       {:else}
         <video
           bind:this={videoRef}
-          class="preview-video h-full w-full object-contain"
+          class="preview-video h-full w-full bg-black object-contain"
           onseeking={handleSeeking}
           onseeked={handleSeeked}
           ontimeupdate={handleTimeUpdate}

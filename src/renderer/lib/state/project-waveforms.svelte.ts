@@ -11,6 +11,12 @@ import { setError } from './timeline.svelte';
 
 const MIX_WAVEFORM_TRACK_INDEX = -1;
 
+export type WaveformUiMode = 'modal' | 'background';
+
+export interface GenerateAssetWaveformUiOptions {
+  uiMode?: WaveformUiMode;
+}
+
 function clampPercent(percent: number): number {
   if (!Number.isFinite(percent)) return 0;
   return Math.max(0, Math.min(100, Math.round(percent)));
@@ -19,7 +25,8 @@ function clampPercent(percent: number): number {
 export async function generateAssetWaveform(
   assetId: number,
   trackIndex: number = 0,
-  options: WaveformGenerateOptions = {}
+  options: WaveformGenerateOptions = {},
+  uiOptions: GenerateAssetWaveformUiOptions = {}
 ) {
   const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
   if (asset?.availability.exists === false) {
@@ -46,8 +53,14 @@ export async function generateAssetWaveform(
 
   const perTrackTier1Progress = new Map<number, number>();
   let displayedPercent = 0;
+  const uiMode = uiOptions.uiMode ?? 'modal';
+  const showModalProgress = uiMode === 'modal';
 
   const updateProgress = (nextPercent: number, tier: number, status: string) => {
+    if (!showModalProgress) {
+      return;
+    }
+
     const clampedPercent = clampPercent(nextPercent);
     const percent = Math.max(displayedPercent, clampedPercent);
     displayedPercent = percent;
@@ -60,8 +73,11 @@ export async function generateAssetWaveform(
     };
   };
 
-  projectDetail.isGeneratingWaveform = true;
-  projectDetail.waveformProgress = { assetId, tier: 0, percent: 0, status: 'Starting...' };
+  if (showModalProgress) {
+    projectDetail.isGeneratingWaveform = true;
+    projectDetail.waveformProgress = { assetId, tier: 0, percent: 0, status: 'Starting...' };
+  }
+
   const unsubscribe = onWaveformProgress((event) => {
     if (event.assetId !== assetId) return;
     const eventTrackIndex = event.trackIndex ?? event.progress.trackIndex ?? trackIndex;
@@ -104,7 +120,9 @@ export async function generateAssetWaveform(
     const result: WaveformGenerationResult = await ipcGenerateWaveform(assetId, trackIndex, options);
 
     if (result.success) {
-      projectDetail.waveformProgress = { assetId, tier: 0, percent: 100, status: 'Complete' };
+      if (showModalProgress) {
+        projectDetail.waveformProgress = { assetId, tier: 0, percent: 100, status: 'Complete' };
+      }
     } else {
       throw new Error(result.error || 'Failed to generate waveform');
     }
@@ -112,7 +130,9 @@ export async function generateAssetWaveform(
     setError((error as Error).message);
   } finally {
     unsubscribe();
-    projectDetail.isGeneratingWaveform = false;
+    if (showModalProgress) {
+      projectDetail.isGeneratingWaveform = false;
+    }
   }
 }
 

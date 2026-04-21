@@ -1,4 +1,5 @@
 import type { Asset } from '$shared/types/database';
+import type { GenerateAssetWaveformUiOptions } from '../state/project-waveforms.svelte.js';
 
 export function getAssetAudioTrackCount(asset: Asset | null): number {
   const trackCount = asset?.metadata?.audioTracks?.length;
@@ -37,7 +38,8 @@ interface WaveformSchedulerDeps {
   generateAssetWaveform: (
     assetId: number,
     trackIndex: number,
-    options: { includeSourceTracks?: boolean; playbackActive?: boolean }
+    options: { includeSourceTracks?: boolean; playbackActive?: boolean },
+    uiOptions?: GenerateAssetWaveformUiOptions
   ) => Promise<unknown>;
   isPlaybackActive: () => boolean;
 }
@@ -95,6 +97,8 @@ export function createChapterWaveformScheduler(deps: WaveformSchedulerDeps) {
             await deps.generateAssetWaveform(assetId, mixWaveformTrackIndex, {
               includeSourceTracks: true,
               playbackActive: deps.isPlaybackActive(),
+            }, {
+              uiMode: 'background',
             });
           } finally {
             waveformInFlight.delete(batchKey);
@@ -122,6 +126,8 @@ export function createChapterWaveformScheduler(deps: WaveformSchedulerDeps) {
             await deps.generateAssetWaveform(assetId, trackIndex, {
               includeSourceTracks: false,
               playbackActive: deps.isPlaybackActive(),
+            }, {
+              uiMode: 'background',
             });
           } finally {
             waveformInFlight.delete(key);

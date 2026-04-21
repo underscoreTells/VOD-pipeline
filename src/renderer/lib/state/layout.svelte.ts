@@ -5,6 +5,7 @@ export interface LayoutState {
   chatHeight: number;
   suggestionsTrayMaxHeight: number;
   clipPreviewWidth: number;
+  leftBottomHeight: number;
   leftCollapsed: boolean;
   chatCollapsed: boolean;
   beatCollapsed: boolean;
@@ -20,6 +21,7 @@ const DEFAULT_PREVIEW_HEIGHT = 280;
 const DEFAULT_CHAT_HEIGHT = 360;
 const DEFAULT_SUGGESTIONS_TRAY_MAX_HEIGHT = 240;
 const DEFAULT_CLIP_PREVIEW_WIDTH = 420;
+const DEFAULT_LEFT_BOTTOM_HEIGHT = 320;
 
 const STORAGE_KEY = "vod-pipeline-layout";
 
@@ -30,6 +32,7 @@ export const layoutState = $state<LayoutState>({
   chatHeight: DEFAULT_CHAT_HEIGHT,
   suggestionsTrayMaxHeight: DEFAULT_SUGGESTIONS_TRAY_MAX_HEIGHT,
   clipPreviewWidth: DEFAULT_CLIP_PREVIEW_WIDTH,
+  leftBottomHeight: DEFAULT_LEFT_BOTTOM_HEIGHT,
   leftCollapsed: false,
   chatCollapsed: false,
   beatCollapsed: false,
@@ -62,6 +65,7 @@ export function loadLayout(): void {
     const chatHeight = readNumber(parsed.chatHeight);
     const suggestionsTrayMaxHeight = readNumber(parsed.suggestionsTrayMaxHeight);
     const clipPreviewWidth = readNumber(parsed.clipPreviewWidth);
+    const leftBottomHeight = readNumber(parsed.leftBottomHeight);
 
     const leftCollapsed = readBoolean(parsed.leftCollapsed);
     const chatCollapsed = readBoolean(parsed.chatCollapsed);
@@ -73,6 +77,7 @@ export function loadLayout(): void {
     if (chatHeight !== null) layoutState.chatHeight = chatHeight;
     if (suggestionsTrayMaxHeight !== null) layoutState.suggestionsTrayMaxHeight = suggestionsTrayMaxHeight;
     if (clipPreviewWidth !== null) layoutState.clipPreviewWidth = clipPreviewWidth;
+    if (leftBottomHeight !== null) layoutState.leftBottomHeight = leftBottomHeight;
 
     if (leftCollapsed !== null) layoutState.leftCollapsed = leftCollapsed;
     if (chatCollapsed !== null) layoutState.chatCollapsed = chatCollapsed;
@@ -96,6 +101,7 @@ export function persistLayout(): void {
       chatHeight: layoutState.chatHeight,
       suggestionsTrayMaxHeight: layoutState.suggestionsTrayMaxHeight,
       clipPreviewWidth: layoutState.clipPreviewWidth,
+      leftBottomHeight: layoutState.leftBottomHeight,
       leftCollapsed: layoutState.leftCollapsed,
       chatCollapsed: layoutState.chatCollapsed,
       beatCollapsed: layoutState.beatCollapsed,
@@ -137,6 +143,10 @@ export function setSuggestionsTrayMaxHeight(height: number): void {
 
 export function setClipPreviewWidth(width: number): void {
   layoutState.clipPreviewWidth = width;
+}
+
+export function setLeftBottomHeight(height: number): void {
+  layoutState.leftBottomHeight = height;
 }
 
 export function collapseLeft(): void {

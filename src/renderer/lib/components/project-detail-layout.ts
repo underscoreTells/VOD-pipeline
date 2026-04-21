@@ -7,9 +7,12 @@ interface LayoutControllerDeps {
   setPreviewHeight: (height: number) => void;
   getClipPreviewWidth: () => number;
   setClipPreviewWidth: (width: number) => void;
+  getLeftBottomHeight: () => number;
+  setLeftBottomHeight: (height: number) => void;
   persistLayout: () => void;
   getEditorMainRef: () => HTMLElement | null;
   getPreviewTopLayoutRef: () => HTMLElement | null;
+  getLeftSidebarStackRef: () => HTMLElement | null;
 }
 
 interface LayoutConstraints {
@@ -22,6 +25,8 @@ interface LayoutConstraints {
   minTimelineHeight: number;
   minClipPreviewWidth: number;
   minChapterPreviewWidth: number;
+  minLeftTopHeight: number;
+  minLeftBottomHeight: number;
 }
 
 export function clampValue(value: number, min: number, max: number): number {
@@ -60,6 +65,30 @@ export function createProjectDetailLayoutController(
   deps: LayoutControllerDeps,
   constraints: LayoutConstraints
 ) {
+  function getMaxLeftBottomHeight(): number {
+    const leftSidebarStackRef = deps.getLeftSidebarStackRef();
+    if (!leftSidebarStackRef) {
+      return Math.max(constraints.minLeftBottomHeight, deps.getLeftBottomHeight());
+    }
+
+    const availableHeight = leftSidebarStackRef.clientHeight;
+    const max = availableHeight - constraints.minLeftTopHeight - constraints.resizeHandleSize;
+    return Math.max(constraints.minLeftBottomHeight, max);
+  }
+
+  function clampLeftBottomHeight(): void {
+    const maxHeight = getMaxLeftBottomHeight();
+    const nextHeight = clampValue(
+      deps.getLeftBottomHeight(),
+      constraints.minLeftBottomHeight,
+      maxHeight
+    );
+    if (nextHeight !== deps.getLeftBottomHeight()) {
+      deps.setLeftBottomHeight(nextHeight);
+      deps.persistLayout();
+    }
+  }
+
   function getMaxClipPreviewWidth(): number {
     const previewTopLayoutRef = deps.getPreviewTopLayoutRef();
     if (!previewTopLayoutRef) {
@@ -85,6 +114,7 @@ export function createProjectDetailLayoutController(
   }
 
   return {
+    clampLeftBottomHeight,
     clampClipPreviewWidth,
     handleLeftResize(event: PointerEvent): void {
       const startX = event.clientX;
@@ -131,6 +161,28 @@ export function createProjectDetailLayoutController(
         const next = clampValue(startHeight + delta, constraints.minPreviewHeight, maxHeight);
         deps.setPreviewHeight(next);
       }, deps.persistLayout);
+    },
+    handleLeftSectionResize(event: PointerEvent): void {
+      if (!deps.getLeftSidebarStackRef()) {
+        return;
+      }
+
+      const startY = event.clientY;
+      const startHeight = deps.getLeftBottomHeight();
+
+      startPointerDrag(event, 'row-resize', (moveEvent) => {
+        const delta = moveEvent.clientY - startY;
+        const maxHeight = getMaxLeftBottomHeight();
+        const next = clampValue(
+          startHeight - delta,
+          constraints.minLeftBottomHeight,
+          maxHeight
+        );
+        deps.setLeftBottomHeight(next);
+      }, () => {
+        clampLeftBottomHeight();
+        deps.persistLayout();
+      });
     },
     handleClipPreviewResize(event: PointerEvent): void {
       if (!deps.getPreviewTopLayoutRef()) {

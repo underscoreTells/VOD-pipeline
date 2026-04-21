@@ -45,6 +45,7 @@
     setRightWidth,
     setPreviewHeight,
     setClipPreviewWidth,
+    setLeftBottomHeight,
     expandLeft,
     expandChat,
     expandBeat,
@@ -114,6 +115,7 @@
   let cleanupTranscription: (() => void) | null = null;
   let editorMainRef = $state<HTMLElement | null>(null);
   let previewTopLayoutRef = $state<HTMLElement | null>(null);
+  let leftSidebarStackRef = $state<HTMLElement | null>(null);
   let previousSelectedChapterId: number | null = null;
   let previousAgentContextKey = $state<string | null>(null);
   let initialChapterLoadEvaluated = $state(false);
@@ -126,6 +128,7 @@
   const MAX_RIGHT_WIDTH = 560;
   const MIN_PREVIEW_HEIGHT = 200;
   const MIN_TIMELINE_HEIGHT = 220;
+  const MIN_LEFT_SIDEBAR_SECTION_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
   const MIX_TRACK_INDEX = 0;
@@ -153,9 +156,12 @@
     setPreviewHeight,
     getClipPreviewWidth: () => layoutState.clipPreviewWidth,
     setClipPreviewWidth,
+    getLeftBottomHeight: () => layoutState.leftBottomHeight,
+    setLeftBottomHeight,
     persistLayout,
     getEditorMainRef: () => editorMainRef,
     getPreviewTopLayoutRef: () => previewTopLayoutRef,
+    getLeftSidebarStackRef: () => leftSidebarStackRef,
   }, {
     resizeHandleSize: RESIZE_HANDLE_SIZE,
     minLeftWidth: MIN_LEFT_WIDTH,
@@ -166,6 +172,8 @@
     minTimelineHeight: MIN_TIMELINE_HEIGHT,
     minClipPreviewWidth: MIN_CLIP_PREVIEW_WIDTH,
     minChapterPreviewWidth: MIN_CHAPTER_PREVIEW_WIDTH,
+    minLeftTopHeight: MIN_LEFT_SIDEBAR_SECTION_HEIGHT,
+    minLeftBottomHeight: MIN_LEFT_SIDEBAR_SECTION_HEIGHT,
   });
   
   // Load project data and chapters on mount
@@ -457,6 +465,23 @@
       observer.disconnect();
     };
   });
+
+  $effect(() => {
+    if (showLeftDock || showClipsDock || !leftSidebarStackRef) return;
+
+    layoutController.clampLeftBottomHeight();
+
+    const observer = new ResizeObserver(() => {
+      if (showLeftDock || showClipsDock) return;
+      layoutController.clampLeftBottomHeight();
+    });
+
+    observer.observe(leftSidebarStackRef);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
   
   const timelineLanes = $derived.by(() => {
     if (selectedChapterAssets.length === 0) {
@@ -613,8 +638,11 @@
             class="chapters-sidebar min-h-0 flex-[0_0_auto] overflow-hidden border-r border-border-default"
             style="width: {layoutState.leftWidth}px"
           >
-            <div class="left-sidebar-stack flex h-full min-h-0 flex-col">
-              <div class="left-sidebar-chapters min-h-[220px] basis-0 flex-1 overflow-hidden">
+            <div class="left-sidebar-stack flex h-full min-h-0 flex-col" bind:this={leftSidebarStackRef}>
+              <div
+                class="left-sidebar-chapters min-h-0 flex-1 overflow-hidden"
+                style="min-height: {MIN_LEFT_SIDEBAR_SECTION_HEIGHT}px"
+              >
                 <ChapterPanel
                   class="h-full border-r-0"
                   projectAssets={projectDetail.assets}
@@ -623,7 +651,17 @@
               </div>
 
               {#if !showClipsDock}
-                <div class="left-sidebar-clips min-h-[220px] basis-0 flex-1 overflow-hidden border-t border-border-default">
+                <div
+                  class="resize-handle-horizontal h-[6px] flex-[0_0_6px] cursor-row-resize touch-none bg-surface-page transition-colors hover:bg-surface-hover"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Resize clips panel"
+                  onpointerdown={layoutController.handleLeftSectionResize}
+                ></div>
+                <div
+                  class="left-sidebar-clips min-h-0 shrink-0 overflow-hidden border-t border-border-default"
+                  style="height: {layoutState.leftBottomHeight}px; min-height: {MIN_LEFT_SIDEBAR_SECTION_HEIGHT}px"
+                >
                   <BeatPanel
                     class="h-full w-full border-l-0"
                     clips={selectedChapterClips}
