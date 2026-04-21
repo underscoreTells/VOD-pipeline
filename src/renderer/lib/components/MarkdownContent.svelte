@@ -26,7 +26,7 @@
 
 <style>
   .markdown-content {
-    font-size: 14px;
+    font-size: var(--text-base);
     line-height: 1.6;
     min-width: 0;
   }
@@ -41,20 +41,20 @@
   .markdown-content :global(h4),
   .markdown-content :global(h5),
   .markdown-content :global(h6) {
-    margin: 0 0 0.65rem;
+    margin: 0 0 var(--space-3);
     line-height: 1.25;
   }
 
   .markdown-content :global(h1) {
-    font-size: 1.25rem;
+    font-size: var(--text-xl);
   }
 
   .markdown-content :global(h2) {
-    font-size: 1.15rem;
+    font-size: var(--text-lg);
   }
 
   .markdown-content :global(h3) {
-    font-size: 1.05rem;
+    font-size: var(--text-md);
   }
 
   .markdown-content :global(p),
@@ -64,7 +64,7 @@
   .markdown-content :global(pre),
   .markdown-content :global(.markdown-table-scroll),
   .markdown-content :global(hr) {
-    margin: 0 0 0.8rem;
+    margin: 0 0 var(--space-3);
   }
 
   .markdown-content :global(p:last-child),
@@ -79,38 +79,38 @@
 
   .markdown-content :global(ul),
   .markdown-content :global(ol) {
-    padding-left: 1.25rem;
+    padding-left: var(--space-5);
   }
 
   .markdown-content :global(li + li) {
-    margin-top: 0.25rem;
+    margin-top: var(--space-1);
   }
 
   .markdown-content :global(blockquote) {
-    border-left: 3px solid rgba(255, 255, 255, 0.18);
-    padding-left: 0.85rem;
-    color: rgba(255, 255, 255, 0.78);
+    border-left: 3px solid var(--border-default);
+    padding-left: var(--space-3);
+    color: var(--text-secondary);
   }
 
   .markdown-content :global(code) {
-    font-family: "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.92em;
   }
 
   .markdown-content :global(:not(pre) > code) {
     display: inline-block;
-    padding: 0.1rem 0.35rem;
-    border-radius: 4px;
-    background: rgba(15, 23, 42, 0.42);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
   }
 
   .markdown-content :global(.markdown-code-block) {
     overflow-x: auto;
-    padding: 0.85rem 0.95rem;
-    border-radius: 8px;
-    background: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-lg);
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-subtle);
   }
 
   .markdown-content :global(pre code) {
@@ -130,20 +130,20 @@
 
   .markdown-content :global(th),
   .markdown-content :global(td) {
-    padding: 0.45rem 0.65rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
     text-align: left;
     vertical-align: top;
   }
 
   .markdown-content :global(th) {
-    font-weight: 600;
-    background: rgba(255, 255, 255, 0.06);
+    font-weight: var(--weight-semibold);
+    background: var(--surface-raised);
   }
 
   .markdown-content :global(hr) {
     border: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    border-top: 1px solid var(--border-default);
   }
 
   .markdown-content :global(a) {
@@ -158,10 +158,10 @@
   }
 
   .markdown-content.user :global(:not(pre) > code) {
-    background: rgba(29, 78, 216, 0.28);
+    background: var(--accent-primary-subtle);
   }
 
   .markdown-content.user :global(.markdown-code-block) {
-    background: rgba(30, 41, 59, 0.62);
+    background: var(--surface-elevated);
   }
 </style>

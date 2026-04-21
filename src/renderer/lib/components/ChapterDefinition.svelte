@@ -5,6 +5,9 @@
   import { settingsState } from "../state/settings.svelte";
   import { buildPlayableAssetUrl } from "../utils/media";
   import { formatTime } from "../utils/time";
+  import Icon from './ui/Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import { Check, X, Pencil, Trash2, ArrowRight } from '../constants';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
@@ -306,7 +309,7 @@
     aria-orientation="horizontal"
     onpointerdown={handleDefinitionResize}
   ></div>
-  <div class="definition-scroll">
+  <div class="definition-scroll scrollbar-thin">
     <!-- Timeline Scrubber -->
     <div class="timeline-section">
     <div class="scrubber-container" onclick={handleScrubberClick} onkeydown={handleScrubberKeydown} role="slider" tabindex="0" aria-label="Timeline scrubber" aria-valuenow={Math.round(playheadTime)} aria-valuemin={0} aria-valuemax={Math.round(duration)}>
@@ -316,7 +319,7 @@
             class="playhead"
             style="left: {playheadPercent}%"
           >
-          <div class="playhead-marker">▲</div>
+          <div class="playhead-marker"></div>
         </div>
 
         <!-- Selection highlight -->
@@ -393,27 +396,15 @@
                 }}
                 class="edit-input"
               />
-              <button class="icon-btn" onclick={() => saveEdit(chapter.id)}>✓</button>
-              <button class="icon-btn" onclick={cancelEdit}>✕</button>
+              <IconButton icon={Check} size={14} onclick={() => saveEdit(chapter.id)} title="Save" />
+              <IconButton icon={X} size={14} onclick={cancelEdit} title="Cancel" />
             {:else}
               <span class="chapter-title">{chapter.title}</span>
               <span class="chapter-time">
                 {formatTime(chapter.startTime)} - {formatTime(chapter.endTime)}
               </span>
-              <button
-                class="icon-btn"
-                onclick={() => startEditing(chapter)}
-                title="Edit title"
-              >
-                ✎
-              </button>
-              <button
-                class="icon-btn delete"
-                onclick={() => deleteDraftChapter(chapter.id)}
-                title="Delete"
-              >
-                🗑
-              </button>
+              <IconButton icon={Pencil} size={14} onclick={() => startEditing(chapter)} title="Edit title" />
+              <IconButton icon={Trash2} size={14} variant="destructive" onclick={() => deleteDraftChapter(chapter.id)} title="Delete" />
             {/if}
           </div>
         {/each}
@@ -431,7 +422,7 @@
         onclick={handleCreateAll}
         disabled={draftChapters.length === 0}
       >
-        Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} →
+        Create {draftChapters.length} Chapter{draftChapters.length !== 1 ? "s" : ""} <Icon icon={ArrowRight} size={14} />
       </button>
     </div>
   </div>
@@ -442,18 +433,18 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #1e1e1e;
+    background: var(--surface-raised);
     overflow: hidden;
   }
 
   .definition-top-fixed {
     flex: 0 0 auto;
-    padding: 1.5rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid #333;
+    padding: var(--space-6);
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border-default);
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
     overflow: hidden;
   }
 
@@ -461,21 +452,21 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 1.5rem;
-    padding-top: 1rem;
+    padding: var(--space-6);
+    padding-top: var(--space-4);
   }
 
   .definition-resize-handle {
     height: 6px;
     flex: 0 0 6px;
     cursor: row-resize;
-    background: #141414;
-    transition: background 0.2s;
+    background: var(--surface-page);
+    transition: background var(--transition-normal);
     touch-action: none;
   }
 
   .definition-resize-handle:hover {
-    background: #2a2a2a;
+    background: var(--surface-hover);
   }
 
   .header {
@@ -483,20 +474,20 @@
   }
 
   .header h2 {
-    margin: 0 0 0.5rem 0;
-    color: #fff;
-    font-size: 1.25rem;
+    margin: 0 0 var(--space-2) 0;
+    color: var(--text-primary);
+    font-size: var(--text-xl);
   }
 
   .duration {
     margin: 0;
-    color: #888;
-    font-size: 0.875rem;
+    color: var(--text-tertiary);
+    font-size: var(--text-base);
   }
 
   .video-preview {
-    background: #111;
-    border-radius: 8px;
+    background: var(--surface-page);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     flex: 1;
     min-height: 0;
@@ -514,51 +505,51 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     width: 100%;
     height: 100%;
-    padding: 1.25rem;
+    padding: var(--space-5);
     box-sizing: border-box;
-    background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
-    color: #d4d4d4;
+    background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface-page) 100%);
+    color: var(--text-secondary);
   }
 
   .unavailable-title {
     margin: 0;
-    font-weight: 600;
-    color: #fff;
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
   }
 
   .unavailable-path,
   .unavailable-ancestor {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--text-sm);
     line-height: 1.4;
-    color: #a0a0a0;
+    color: var(--text-tertiary);
     word-break: break-all;
   }
 
   .timeline-section {
-    background: #252525;
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    background: var(--surface-elevated);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    margin-bottom: var(--space-6);
   }
 
   .scrubber-container {
     position: relative;
     height: 60px;
-    background: #1a1a1a;
-    border-radius: 6px;
+    background: var(--surface-base);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
 
   .timeline-bar {
     position: relative;
     height: 100%;
-    background: linear-gradient(to bottom, #2a2a2a 0%, #1a1a1a 100%);
-    border-radius: 6px;
+    background: linear-gradient(to bottom, var(--surface-hover) 0%, var(--surface-base) 100%);
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
 
@@ -567,7 +558,7 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: #2563eb;
+    background: var(--accent-primary);
     transform: translateX(-50%);
     z-index: 10;
   }
@@ -577,8 +568,11 @@
     top: 0;
     left: 50%;
     transform: translateX(-50%);
-    color: #2563eb;
-    font-size: 8px;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 8px solid var(--accent-primary);
   }
 
   .selection-highlight {
@@ -586,8 +580,8 @@
     top: 20px;
     bottom: 20px;
     background: rgba(74, 222, 128, 0.3);
-    border: 1px solid #4ade80;
-    border-radius: 4px;
+    border: 1px solid var(--accent-success);
+    border-radius: var(--radius-sm);
     z-index: 5;
   }
 
@@ -598,212 +592,192 @@
     right: 0;
     display: flex;
     justify-content: space-between;
-    padding: 0 8px;
-    font-size: 0.625rem;
-    color: #666;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-disabled);
   }
 
   .time-display {
-    color: #888;
-    font-size: 0.875rem;
-    margin-bottom: 1rem;
+    color: var(--text-tertiary);
+    font-size: var(--text-base);
+    margin-bottom: var(--space-4);
   }
 
   .time-display strong {
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .controls {
     display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
     flex-wrap: wrap;
   }
 
   .control-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.875rem;
-    transition: background 0.2s;
+    font-size: var(--text-base);
+    transition: background var(--transition-normal);
   }
 
   .control-btn:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
 
   .control-btn:disabled {
-    background: #444;
+    background: var(--border-strong);
     cursor: not-allowed;
   }
 
   .control-btn.secondary {
-    background: #333;
-    color: #ccc;
+    background: var(--surface-active);
+    color: var(--text-secondary);
   }
 
   .control-btn.secondary:hover:not(:disabled) {
-    background: #444;
+    background: var(--border-strong);
   }
 
   .selection-info {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.75rem;
-    background: #1a1a1a;
-    border-radius: 4px;
+    padding: var(--space-3);
+    background: var(--surface-base);
+    border-radius: var(--radius-sm);
   }
 
   .selection-text {
-    color: #4ade80;
-    font-size: 0.875rem;
+    color: var(--accent-success);
+    font-size: var(--text-base);
   }
 
   .no-selection {
-    color: #666;
-    font-size: 0.875rem;
+    color: var(--text-disabled);
+    font-size: var(--text-base);
     font-style: italic;
   }
 
   .add-btn {
-    background: #4ade80;
-    color: #000;
+    background: var(--accent-success);
+    color: var(--text-inverse);
     border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: var(--text-base);
+    font-weight: var(--weight-medium);
   }
 
   .add-btn:hover {
-    background: #22c55e;
+    filter: brightness(0.9);
   }
 
   .chapters-list {
-    margin-bottom: 1.5rem;
+    margin-bottom: var(--space-6);
   }
 
   .chapters-list h3 {
-    margin: 0 0 1rem 0;
-    color: #fff;
-    font-size: 1rem;
+    margin: 0 0 var(--space-4) 0;
+    color: var(--text-primary);
+    font-size: var(--text-md);
   }
 
   .empty-message {
-    color: #666;
+    color: var(--text-disabled);
     font-style: italic;
     text-align: center;
-    padding: 2rem;
+    padding: var(--space-8);
   }
 
   .chapters {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .chapter-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: #2a2a2a;
-    border-radius: 6px;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--surface-hover);
+    border-radius: var(--radius-md);
   }
 
   .chapter-number {
-    color: #666;
-    font-size: 0.875rem;
+    color: var(--text-disabled);
+    font-size: var(--text-base);
     min-width: 24px;
   }
 
   .chapter-title {
     flex: 1;
-    color: #fff;
-    font-size: 0.875rem;
+    color: var(--text-primary);
+    font-size: var(--text-base);
   }
 
   .chapter-time {
-    color: #888;
-    font-size: 0.75rem;
-    font-family: monospace;
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    font-family: var(--font-mono);
   }
 
   .edit-input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2563eb;
-    color: #fff;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
-  }
-
-  .icon-btn {
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
-    padding: 0.25rem;
-    font-size: 0.875rem;
-    border-radius: 4px;
-  }
-
-  .icon-btn:hover {
-    background: #333;
-    color: #fff;
-  }
-
-  .icon-btn.delete:hover {
-    background: rgba(248, 113, 113, 0.1);
-    color: #f87171;
+    background: var(--surface-raised);
+    border: 1px solid var(--accent-primary);
+    color: var(--text-primary);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
   }
 
   .footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-top: 1rem;
-    border-top: 1px solid #333;
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-default);
   }
 
   .back-btn {
     background: none;
-    border: 1px solid #444;
-    color: #888;
-    padding: 0.625rem 1.25rem;
-    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    color: var(--text-tertiary);
+    padding: var(--space-2) var(--space-5);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--text-base);
   }
 
   .back-btn:hover {
-    border-color: #666;
-    color: #fff;
+    border-color: var(--text-disabled);
+    color: var(--text-primary);
   }
 
   .create-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    padding: 0.625rem 1.5rem;
-    border-radius: 6px;
+    padding: var(--space-2) var(--space-6);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: var(--text-base);
+    font-weight: var(--weight-medium);
   }
 
   .create-btn:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
 
   .create-btn:disabled {
-    background: #444;
+    background: var(--border-strong);
     cursor: not-allowed;
   }
 </style>

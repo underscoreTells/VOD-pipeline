@@ -6,6 +6,8 @@
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
+  import Icon from './ui/Icon.svelte';
+  import { ChevronLeft, ChevronRight } from '../constants';
 
   const CLIP_END_EPSILON = 0.01;
   const NUDGE_FPS = 30;
@@ -301,7 +303,7 @@
   });
 </script>
 
-<div class="clip-preview">
+<div class="clip-preview scrollbar-thin">
   {#if selectedClip}
     <div class="preview-header">
       <h4>Clip Preview</h4>
@@ -347,8 +349,8 @@
           <span class="trim-label">In:</span>
           <span class="trim-time">{formatTimecode(timelineInTime)}</span>
           <div class="trim-buttons">
-            <button onclick={() => nudgeInPoint(-1)} title="-1 frame">◀</button>
-            <button onclick={() => nudgeInPoint(1)} title="+1 frame">▶</button>
+            <button onclick={() => nudgeInPoint(-1)} title="-1 frame"><Icon icon={ChevronLeft} size={14} /></button>
+            <button onclick={() => nudgeInPoint(1)} title="+1 frame"><Icon icon={ChevronRight} size={14} /></button>
           </div>
         </div>
 
@@ -356,8 +358,8 @@
           <span class="trim-label">Out:</span>
           <span class="trim-time">{formatTimecode(timelineOutTime)}</span>
           <div class="trim-buttons">
-            <button onclick={() => nudgeOutPoint(-1)} title="-1 frame">◀</button>
-            <button onclick={() => nudgeOutPoint(1)} title="+1 frame">▶</button>
+            <button onclick={() => nudgeOutPoint(-1)} title="-1 frame"><Icon icon={ChevronLeft} size={14} /></button>
+            <button onclick={() => nudgeOutPoint(1)} title="+1 frame"><Icon icon={ChevronRight} size={14} /></button>
           </div>
         </div>
       </div>
@@ -413,11 +415,11 @@
   .clip-preview {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    background: #1a1a1a;
-    border: 1px solid #2f2f2f;
-    border-radius: 8px;
-    padding: 0.75rem;
+    gap: var(--space-3);
+    background: var(--surface-base);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
     min-height: 0;
     height: 100%;
     box-sizing: border-box;
@@ -433,31 +435,31 @@
   
   .preview-header h4 {
     margin: 0;
-    font-size: 0.875rem;
-    color: #fff;
+    font-size: var(--text-base);
+    color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   
   .role-badge {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
+    font-size: var(--text-sm);
+    padding: var(--space-1) var(--space-2);
     border-radius: 12px;
-    background: #333;
-    color: #888;
+    background: var(--surface-active);
+    color: var(--text-tertiary);
     text-transform: capitalize;
   }
   
-  .role-badge[data-role="setup"] { background: #ef444420; color: #ef4444; }
-  .role-badge[data-role="escalation"] { background: #f9731620; color: #f97316; }
-  .role-badge[data-role="twist"] { background: #eab30820; color: #eab308; }
-  .role-badge[data-role="payoff"] { background: #22c55e20; color: #22c55e; }
-  .role-badge[data-role="transition"] { background: #3b82f620; color: #3b82f6; }
+  .role-badge[data-role="setup"] { background: var(--role-setup-subtle); color: var(--role-setup); }
+  .role-badge[data-role="escalation"] { background: var(--role-escalation-subtle); color: var(--role-escalation); }
+  .role-badge[data-role="twist"] { background: var(--role-twist-subtle); color: var(--role-twist); }
+  .role-badge[data-role="payoff"] { background: var(--role-payoff-subtle); color: var(--role-payoff); }
+  .role-badge[data-role="transition"] { background: var(--role-transition-subtle); color: var(--role-transition); }
   
   .video-container {
     position: relative;
     background: #000;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     flex: 0 0 auto;
     aspect-ratio: 16/9;
@@ -473,19 +475,19 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     width: 100%;
     height: 100%;
-    padding: 1rem;
+    padding: var(--space-4);
     box-sizing: border-box;
     background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
-    color: #d4d4d4;
+    color: var(--text-secondary);
   }
 
   .unavailable-title {
     margin: 0;
     font-weight: 600;
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .unavailable-path,
@@ -500,64 +502,64 @@
   .clip-controls {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
   }
   
   .trim-controls {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .trim-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .trim-label {
     width: 40px;
-    font-size: 0.75rem;
-    color: #888;
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
     text-transform: uppercase;
   }
   
   .trim-time {
     flex: 1;
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.875rem;
-    color: #ccc;
+    font-family: var(--font-mono);
+    font-size: var(--text-base);
+    color: var(--text-secondary);
   }
   
   .trim-buttons {
     display: flex;
-    gap: 0.25rem;
+    gap: var(--space-1);
   }
   
   .trim-buttons button {
     width: 28px;
     height: 28px;
-    border: 1px solid #444;
-    background: #2a2a2a;
-    color: #888;
-    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-hover);
+    color: var(--text-tertiary);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
     transition: all 0.15s;
   }
   
   .trim-buttons button:hover {
-    background: #333;
+    background: var(--surface-active);
     border-color: #555;
-    color: #fff;
+    color: var(--text-primary);
   }
   
   .playback-controls {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid #333;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-default);
   }
 
   .playback-top-row,
@@ -565,29 +567,29 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .play-toggle {
-    padding: 0.35rem 0.75rem;
-    border: 1px solid #444;
-    border-radius: 4px;
-    background: #2a2a2a;
-    color: #ddd;
+    padding: 0.35rem var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-hover);
+    color: var(--text-secondary);
     cursor: pointer;
     font-size: 0.8rem;
   }
 
   .play-toggle:hover {
-    background: #333;
+    background: var(--surface-active);
     border-color: #555;
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .playback-time {
-    color: #bbb;
+    color: var(--text-secondary);
     font-size: 0.8rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -597,8 +599,8 @@
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: #2a2a2a;
-    border-radius: 999px;
+    background: var(--surface-hover);
+    border-radius: var(--radius-pill);
     outline: none;
   }
 
@@ -630,9 +632,9 @@
   .loop-toggle {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: #888;
+    gap: var(--space-2);
+    font-size: var(--text-base);
+    color: var(--text-tertiary);
     cursor: pointer;
   }
   
@@ -641,34 +643,34 @@
   }
   
   .duration {
-    font-size: 0.75rem;
-    color: #666;
-    font-family: 'SF Mono', Monaco, monospace;
+    font-size: var(--text-sm);
+    color: var(--text-disabled);
+    font-family: var(--font-mono);
   }
   
   .clip-info {
-    padding-top: 0.5rem;
-    border-top: 1px solid #333;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-default);
   }
   
   .description {
-    margin: 0 0 0.5rem 0;
-    font-size: 0.875rem;
-    color: #ccc;
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--text-base);
+    color: var(--text-secondary);
     line-height: 1.4;
   }
   
   .description.empty {
-    color: #666;
+    color: var(--text-disabled);
     font-style: italic;
   }
   
   .meta {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-    color: #888;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
   }
   
   .empty-state {
@@ -677,7 +679,7 @@
     justify-content: center;
     flex: 1;
     min-height: 0;
-    color: #666;
-    font-size: 0.875rem;
+    color: var(--text-disabled);
+    font-size: var(--text-base);
   }
 </style>

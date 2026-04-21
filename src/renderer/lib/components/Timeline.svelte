@@ -121,7 +121,7 @@
       <p>Error: {error}</p>
     </div>
   {:else}
-    <div class="tracks-container">
+    <div class="tracks-container scrollbar-thin">
       {#each lanes as lane (lane.id)}
         <TimelineTrack 
           audioUrl={lane.audioUrl}
@@ -152,8 +152,9 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #0f0f0f;
+    background: var(--surface-page);
     overflow: hidden;
+    font-family: var(--font-sans);
   }
   
   .tracks-container {
@@ -168,19 +169,19 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: #888;
-    padding: 2rem;
+    color: var(--text-tertiary);
+    padding: var(--space-8);
   }
   
   .loading-spinner {
     display: inline-block;
     width: 40px;
     height: 40px;
-    border: 3px solid #333;
-    border-top-color: #007bff;
+    border: 3px solid var(--border-default);
+    border-top-color: var(--accent-primary);
     border-radius: 50%;
     animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   @keyframes spin {
@@ -188,11 +189,11 @@
   }
   
   .error {
-    color: #dc3545;
+    color: var(--accent-destructive);
   }
   
   .empty .hint {
-    font-size: 0.875rem;
-    color: #666;
+    font-size: var(--text-base);
+    color: var(--text-disabled);
   }
 </style>

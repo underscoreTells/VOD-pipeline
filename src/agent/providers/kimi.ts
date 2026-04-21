@@ -1,4 +1,8 @@
-import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import {
+  BaseChatModel,
+  type BaseChatModelCallOptions,
+  type BindToolsInput,
+} from "@langchain/core/language_models/chat_models";
 import type { BaseMessage } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration } from "@langchain/core/outputs";
 import { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
@@ -85,11 +89,15 @@ export interface KimiChatModelParams {
   maxTokens?: number;
 }
 
+interface KimiCallOptions extends BaseChatModelCallOptions {
+  tools?: KimiToolDefinition[];
+}
+
 /**
  * Kimi Chat Model implementation
  * Extends BaseChatModel to integrate with LangChain
  */
-export class KimiChatModel extends BaseChatModel {
+export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
@@ -317,7 +325,7 @@ export class KimiChatModel extends BaseChatModel {
     }
   }
 
-  bindTools(tools: unknown[], kwargs?: Record<string, unknown>) {
+  bindTools(tools: BindToolsInput[], kwargs?: Partial<KimiCallOptions>) {
     return this.withConfig({
       tools: tools.map((tool) =>
         isKimiToolDefinition(tool)

@@ -49,6 +49,7 @@
     "@langchain/openai": "^1.2.3",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.3",
+    "lucide-svelte": "^1.0.1",
     "marked": "^18.0.1",
     "remark-gfm": "^4.0.1",
     "svelte": "^5.48.3",

@@ -3,6 +3,9 @@
   import { executeDeleteClip } from '../state/project-detail.svelte';
   import { collapseBeat } from '../state/layout.svelte';
   import type { Clip } from '../../../shared/types/database';
+  import Icon from './ui/Icon.svelte';
+  import { ROLE_CONFIG, ROLE_KEYS, Star, ChevronRight, ChevronDown } from '../constants';
+  import type { ClipRole, RoleConfig } from '../constants';
   
   interface Props {
     clips?: Clip[];
@@ -11,16 +14,6 @@
   }
   
   let { clips = timelineState.clips, chapterStartTime = 0, chapterDuration = null }: Props = $props();
-  
-  // Role configuration with colors and labels
-  const ROLE_CONFIG: Record<string, { color: string; label: string; icon: string }> = {
-    'setup': { color: '#ef4444', label: 'Setup', icon: '🎯' },
-    'escalation': { color: '#f97316', label: 'Escalation', icon: '📈' },
-    'twist': { color: '#eab308', label: 'Twist', icon: '↩️' },
-    'payoff': { color: '#22c55e', label: 'Payoff', icon: '🎉' },
-    'transition': { color: '#3b82f6', label: 'Transition', icon: '➡️' },
-    'unassigned': { color: '#6b7280', label: 'Unassigned', icon: '📝' },
-  };
 
   const sortedClips = $derived.by(() => {
     return [...clips].sort((a, b) => {
@@ -35,12 +28,12 @@
     const sections: Array<{
       key: string;
       role: string;
-      config: { color: string; label: string; icon: string };
+      config: RoleConfig;
       clips: Clip[];
     }> = [];
 
     for (const clip of sortedClips) {
-      const role = clip.role || 'unassigned';
+      const role = (clip.role || 'unassigned') as ClipRole;
       const config = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned;
       const lastSection = sections[sections.length - 1];
 
@@ -198,7 +191,7 @@
     </div>
   </div>
   
-  <div class="clip-groups">
+  <div class="clip-groups scrollbar-thin">
     {#each clipSections as section (section.key)}
       {@const roleClips = section.clips}
       {@const config = section.config}
@@ -206,12 +199,12 @@
       <div class="role-group">
         <button
           class="role-header"
-          style="background-color: {config.color}20; border-left-color: {config.color}"
+          style="background-color: {config.subtleCssVar}; border-left-color: {config.cssVar}"
           onclick={() => toggleSection(section.key)}
           aria-expanded={!isSectionCollapsed(section.key)}
         >
-          <span class="section-expand-icon">{isSectionCollapsed(section.key) ? '▸' : '▾'}</span>
-          <span class="role-icon">{config.icon}</span>
+          <span class="section-expand-icon"><Icon icon={isSectionCollapsed(section.key) ? ChevronRight : ChevronDown} size={14} /></span>
+          <span class="role-icon"><Icon icon={config.icon} size={14} /></span>
           <span class="role-label">{config.label}</span>
           <span class="role-count">{roleClips.length}</span>
         </button>
@@ -251,7 +244,7 @@
                   <div class="clip-meta">
                     <span class="track-badge">T{clip.track_index + 1}</span>
                     {#if clip.is_essential}
-                      <span class="essential-badge" title="Essential">★</span>
+                      <span class="essential-badge" title="Essential"><Icon icon={Star} size={12} /></span>
                     {/if}
                   </div>
                 </div>
@@ -295,8 +288,8 @@
   .beat-panel {
     width: 100%;
     height: 100%;
-    background: #1a1a1a;
-    border-left: 1px solid #333;
+    background: var(--surface-base);
+    border-left: 1px solid var(--border-default);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -307,82 +300,82 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem;
-    border-bottom: 1px solid #333;
-    background: #1e1e1e;
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border-default);
+    background: var(--surface-raised);
   }
 
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .panel-header h3 {
     margin: 0;
-    font-size: 1rem;
-    color: #fff;
+    font-size: var(--text-md);
+    color: var(--text-primary);
   }
   
   .clip-count {
-    font-size: 0.75rem;
-    color: #888;
-    background: #333;
-    padding: 0.25rem 0.5rem;
-    border-radius: 12px;
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    background: var(--surface-active);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-pill);
   }
 
   .collapse-btn {
-    padding: 0.25rem 0.5rem;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
-    font-size: 0.75rem;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-active);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
   .collapse-btn:hover {
-    background: #444;
-    color: #fff;
+    background: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .section-toggle-btn {
-    padding: 0.25rem 0.5rem;
-    background: #2a2a2a;
-    border: 1px solid #3a3a3a;
-    border-radius: 4px;
-    color: #c7c7c7;
-    font-size: 0.75rem;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
   .section-toggle-btn:hover {
-    background: #343434;
-    color: #fff;
+    background: var(--surface-active);
+    color: var(--text-primary);
   }
   
   .clip-groups {
     flex: 1;
     overflow-y: auto;
-    padding: 0.5rem;
+    padding: var(--space-2);
   }
   
   .role-group {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   .role-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem;
+    gap: var(--space-2);
+    padding: var(--space-2);
     border-left: 3px solid;
     border-top: none;
     border-right: none;
     border-bottom: none;
-    border-radius: 4px;
-    margin-bottom: 0.5rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-2);
     width: 100%;
     text-align: left;
     cursor: pointer;
@@ -394,86 +387,86 @@
   }
 
   .section-expand-icon {
-    color: #bbb;
-    font-size: 0.8rem;
-    width: 0.75rem;
+    color: var(--text-tertiary);
+    width: var(--space-3);
     text-align: center;
   }
   
   .role-icon {
-    font-size: 1rem;
+    display: inline-flex;
+    align-items: center;
   }
   
   .role-label {
-    font-size: 0.875rem;
+    font-size: var(--text-base);
     font-weight: 600;
-    color: #fff;
+    color: var(--text-primary);
     flex: 1;
   }
   
   .role-count {
-    font-size: 0.75rem;
-    color: #888;
-    background: #00000040;
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    background: color-mix(in srgb, var(--text-primary) 25%, transparent);
     padding: 0.125rem 0.375rem;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
   }
   
   .clip-list {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: var(--space-1);
   }
   
   .clip-item {
-    padding: 0.5rem;
-    background: #252525;
-    border-radius: 4px;
+    padding: var(--space-2);
+    background: var(--surface-elevated);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
     border: 1px solid transparent;
   }
   
   .clip-item:hover {
-    background: #2a2a2a;
-    border-color: #444;
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
   }
   
   .clip-item.selected {
-    background: #3b82f620;
-    border-color: #3b82f6;
+    background: color-mix(in srgb, var(--accent-primary) 13%, transparent);
+    border-color: var(--accent-primary);
   }
 
   .clip-context-menu {
     position: fixed;
     z-index: 50;
     min-width: 160px;
-    padding: 0.25rem;
-    background: #1f1f1f;
-    border: 1px solid #333;
-    border-radius: 6px;
+    padding: var(--space-1);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   }
 
   .context-item {
     width: 100%;
     text-align: left;
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-2) var(--space-3);
     border: none;
     background: transparent;
-    color: #ddd;
-    font-size: 0.875rem;
-    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
 
   .context-item:hover {
-    background: #2a2a2a;
-    color: #fff;
+    background: var(--surface-hover);
+    color: var(--text-primary);
   }
 
   .context-item.destructive {
-    color: #f87171;
+    color: var(--role-setup);
   }
   
   .clip-item.discarded {
@@ -483,27 +476,27 @@
   .clip-time {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    font-size: 0.75rem;
-    color: #888;
-    margin-bottom: 0.25rem;
-    font-family: 'SF Mono', Monaco, monospace;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-1);
+    font-family: var(--font-mono);
   }
   
   .time-separator {
-    color: #666;
+    color: var(--text-disabled);
   }
   
   .clip-info {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .clip-description {
-    font-size: 0.875rem;
-    color: #ccc;
+    font-size: var(--text-base);
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -511,28 +504,29 @@
   }
   
   .clip-description.empty {
-    color: #666;
+    color: var(--text-disabled);
     font-style: italic;
   }
   
   .clip-meta {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: var(--space-1);
     flex-shrink: 0;
   }
   
   .track-badge {
-    font-size: 0.625rem;
-    color: #888;
-    background: #333;
-    padding: 0.125rem 0.25rem;
-    border-radius: 3px;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    background: var(--surface-active);
+    padding: 0.125rem var(--space-1);
+    border-radius: var(--radius-sm);
   }
   
   .essential-badge {
-    font-size: 0.75rem;
-    color: #fbbf24;
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent-warning);
   }
   
   .empty-state {
@@ -541,16 +535,16 @@
     align-items: center;
     justify-content: center;
     padding: 2rem;
-    color: #666;
+    color: var(--text-disabled);
     text-align: center;
   }
   
   .empty-state p:first-child {
     font-weight: 500;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--space-2);
   }
   
   .hint {
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
   }
 </style>

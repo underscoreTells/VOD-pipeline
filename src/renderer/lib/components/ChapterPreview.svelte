@@ -2,6 +2,8 @@
   import { onDestroy } from 'svelte';
   import type { Chapter, Asset, Clip } from '$shared/types/database';
   import type { AssetAvailability } from '$shared/contracts/ipc';
+  import Icon from './ui/Icon.svelte';
+  import { Clapperboard } from '../constants';
   import { buildPlayableAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
@@ -617,7 +619,7 @@
   <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()}>
     {#if !hasPreview()}
       <div class="empty-state">
-        <div class="empty-icon">🎬</div>
+        <div class="empty-icon"><Icon icon={Clapperboard} size={40} /></div>
         <p>Select a chapter to preview</p>
       </div>
     {:else if assetUnavailable()}
@@ -687,11 +689,11 @@
   .chapter-preview {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    background: #1a1a1a;
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 0.75rem;
+    gap: var(--space-2);
+    background: var(--surface-base);
+    border: 1px solid var(--surface-hover);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
     height: 100%;
     min-height: 0;
     box-sizing: border-box;
@@ -701,20 +703,20 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--space-4);
   }
 
   .preview-header h3 {
     margin: 0;
-    font-size: 0.875rem;
-    color: #fff;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .chapter-title {
-    font-size: 0.875rem;
-    color: #ccc;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -723,14 +725,14 @@
   .video-frame {
     position: relative;
     background: #000;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     flex: 1;
     min-height: 0;
   }
 
   .video-frame.empty {
-    background: linear-gradient(180deg, #1f1f1f 0%, #0f0f0f 100%);
+    background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface-page) 100%);
   }
 
   .preview-video {
@@ -746,25 +748,25 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 0.5rem;
-    padding: 1.25rem;
+    gap: var(--space-2);
+    padding: var(--space-5);
     box-sizing: border-box;
-    background: linear-gradient(180deg, #1c1c1c 0%, #111 100%);
-    color: #d4d4d4;
+    background: linear-gradient(180deg, var(--surface-base) 0%, var(--surface-page) 100%);
+    color: var(--text-secondary);
   }
 
   .unavailable-title {
     margin: 0;
     font-weight: 600;
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .unavailable-path,
   .unavailable-ancestor {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     line-height: 1.4;
-    color: #a0a0a0;
+    color: var(--text-tertiary);
     word-break: break-all;
   }
 
@@ -775,66 +777,68 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
-    color: #777;
+    gap: var(--space-2);
+    color: var(--text-tertiary);
     text-align: center;
     pointer-events: none;
   }
 
   .empty-icon {
-    font-size: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     opacity: 0.6;
   }
 
   .preview-footer {
     display: flex;
     justify-content: space-between;
-    font-size: 0.75rem;
-    color: #888;
-    font-family: 'SF Mono', Monaco, monospace;
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
   }
 
   .timecode {
-    color: #ccc;
+    color: var(--text-secondary);
   }
 
   .preview-controls {
     display: grid;
     grid-template-columns: auto 1fr;
     grid-template-rows: auto auto auto;
-    gap: 0.5rem 1rem;
+    gap: var(--space-2) var(--space-4);
     align-items: center;
-    padding: 0.5rem 0;
+    padding: var(--space-2) 0;
   }
 
   .play-toggle {
     grid-row: 1 / span 2;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    border: 1px solid #2b2b2b;
-    background: #1e1e1e;
-    color: #fff;
-    font-size: 0.875rem;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--surface-hover);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background var(--transition-normal), border-color var(--transition-normal);
   }
 
   .play-toggle:hover {
-    background: #2a2a2a;
-    border-color: #3a3a3a;
+    background: var(--surface-hover);
+    border-color: var(--border-default);
   }
 
   .time-display {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.8rem;
-    color: #ccc;
+    gap: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
   }
 
   .time-divider {
-    color: #666;
+    color: var(--text-disabled);
   }
 
   .scrubber {
@@ -842,8 +846,8 @@
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: #2a2a2a;
-    border-radius: 999px;
+    background: var(--surface-hover);
+    border-radius: var(--radius-full);
     outline: none;
   }
 
@@ -853,8 +857,8 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
+    background: var(--accent-primary);
+    border: 2px solid var(--surface-page);
     cursor: pointer;
   }
 
@@ -862,15 +866,15 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
+    background: var(--accent-primary);
+    border: 2px solid var(--surface-page);
     cursor: pointer;
   }
 
   .reverse-status {
     grid-column: 2;
     grid-row: 3;
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
     color: #fbbf24;
   }
 </style>

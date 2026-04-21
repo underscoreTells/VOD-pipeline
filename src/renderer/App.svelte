@@ -1,8 +1,11 @@
 <script lang="ts">
   import { projects, getSelectedProject, loadProjects, createProject, deleteProject, selectProject } from './lib/state/project.svelte';
   import { settingsState, openSettings, loadSettings } from './lib/state/settings.svelte';
+  import { themeState, toggleTheme } from './lib/state/theme.svelte';
   import ProjectDetail from './lib/components/ProjectDetail.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
+  import Icon from './lib/components/ui/Icon.svelte';
+  import { Video, Sun, Moon, Settings } from './lib/constants';
 
   const selectedProject = $derived.by(() => getSelectedProject());
 
@@ -128,11 +131,11 @@
 <div class="app">
   <header>
     <h1>VOD Pipeline</h1>
+    <button class="settings-btn theme-toggle" onclick={toggleTheme} title="Toggle theme">
+      {#if themeState.current === 'dark'}<Icon icon={Sun} size={18} />{:else}<Icon icon={Moon} size={18} />{/if}
+    </button>
     <button class="settings-btn" onclick={openSettings} title="Settings">
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24M6.34 17.66l-4.24 4.24M23 12h-6m-6 0H1m20.24 4.24l-4.24-4.24M6.34 6.34L2.1 2.1"/>
-      </svg>
+      <Icon icon={Settings} size={18} />
       Settings
     </button>
   </header>
@@ -169,7 +172,7 @@
                 tabindex="0"
               >
                 <div class="project-thumbnail">
-                  <span class="project-icon">📹</span>
+                  <span class="project-icon"><Icon icon={Video} size={20} /></span>
                 </div>
                 <div class="project-info">
                   <h3>{project.name}</h3>
@@ -253,33 +256,47 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    background: #0f0f0f;
+    background: var(--surface-page);
   }
 
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-family: var(--font-sans);
   }
 
   :global(*) {
-    scrollbar-width: none;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
 
   :global(*::-webkit-scrollbar) {
-    width: 0;
-    height: 0;
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+  }
+
+  :global(*::-webkit-scrollbar-track) {
+    background: var(--scrollbar-track);
+  }
+
+  :global(*::-webkit-scrollbar-thumb) {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-pill);
+  }
+
+  :global(*::-webkit-scrollbar-thumb:hover) {
+    background: var(--scrollbar-thumb-hover);
   }
 
   header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #1e1e1e;
-    color: white;
+    background: var(--surface-raised);
+    color: var(--text-primary);
     padding: 1rem 2rem;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--border-default);
   }
 
   header h1 {
@@ -292,18 +309,18 @@
     align-items: center;
     gap: 0.5rem;
     background: transparent;
-    color: #ccc;
-    border: 1px solid #444;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
     padding: 0.5rem 1rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.875rem;
     transition: all 0.2s;
   }
 
   .settings-btn:hover {
-    background: #333;
-    color: #fff;
+    background: var(--surface-active);
+    color: var(--text-primary);
     border-color: #555;
   }
 
@@ -333,9 +350,9 @@
   button {
     padding: 0.5rem 1rem;
     background: #007bff;
-    color: white;
+    color: var(--text-primary);
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.875rem;
   }
@@ -360,7 +377,7 @@
   .loading, .error, .empty {
     text-align: center;
     padding: 2rem;
-    color: #666;
+    color: var(--text-disabled);
   }
 
   .error {
@@ -374,9 +391,9 @@
   }
 
   .project-card {
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 8px;
+    background: var(--text-primary);
+    border: 1px solid var(--text-secondary);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.2s;
@@ -392,9 +409,9 @@
     z-index: 1200;
     min-width: 220px;
     padding: 0.25rem;
-    background: #1e1e1e;
+    background: var(--surface-raised);
     border: 1px solid #3a3a3a;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   }
 
@@ -405,7 +422,7 @@
     border: none;
     background: transparent;
     color: #f4f4f5;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     font-size: 0.875rem;
     line-height: 1.2;
   }
@@ -429,7 +446,9 @@
   }
 
   .project-icon {
-    font-size: 4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .project-info {
@@ -445,7 +464,7 @@
   .project-date {
     margin: 0;
     font-size: 0.875rem;
-    color: #666;
+    color: var(--text-disabled);
   }
 
   .dialog-overlay {
@@ -462,8 +481,8 @@
   }
 
   .dialog {
-    background: white;
-    border-radius: 8px;
+    background: var(--text-primary);
+    border-radius: var(--radius-lg);
     padding: 2rem;
     width: 100%;
     max-width: 400px;
@@ -477,8 +496,8 @@
     width: 100%;
     padding: 0.5rem;
     margin: 1rem 0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    border: 1px solid var(--text-secondary);
+    border-radius: var(--radius-sm);
     font-size: 1rem;
   }
 
@@ -502,11 +521,11 @@
   .project-content {
     padding: 2rem;
     background: #f5f5f5;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
   }
 
   .placeholder {
     text-align: center;
-    color: #666;
+    color: var(--text-disabled);
   }
 </style>

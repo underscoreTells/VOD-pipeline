@@ -366,7 +366,7 @@ async function processMessage(
       writer.write({
         type: "turn_complete",
         requestId,
-        result: result as Record<string, unknown>,
+        result: result as unknown as Record<string, unknown>,
         threadId: threadId || "",
       });
       return;

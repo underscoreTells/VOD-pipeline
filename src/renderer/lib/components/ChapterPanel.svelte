@@ -4,6 +4,9 @@
   import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
   import { formatChapterRange } from "./chapter-panel-helpers.js";
+  import Icon from './ui/Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import { Video, Folder, Check, X, Pencil, Trash2, ChevronRight, ChevronDown } from '../constants';
 
   interface Props {
     projectAssets: Asset[];
@@ -136,16 +139,15 @@
       </button>
     </div>
   {:else}
-    <div class="chapters-list">
-      <!-- VOD Groups -->
+    <div class="chapters-list scrollbar-thin">
       {#each vodGroups() as group (group.assetId)}
         <div class="asset-group">
           <button
             class="asset-header"
             onclick={() => toggleGroup(group.assetId)}
           >
-            <span class="toggle-icon">{isExpanded(group.assetId) ? "▼" : "▶"}</span>
-            <span class="asset-icon">📹</span>
+            <span class="toggle-icon">{#if isExpanded(group.assetId)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="asset-icon"><Icon icon={Video} size={14} /></span>
             <span class="asset-name">{getAssetDisplayName(group.asset)}</span>
             <span class="chapter-count">({group.chapters.length})</span>
           </button>
@@ -190,43 +192,11 @@
                   
                   <div class="chapter-actions">
                     {#if editingChapterId === chapter.id}
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          saveEdit(chapter.id);
-                        }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          cancelEdit();
-                        }}
-                      >
-                        ✕
-                      </button>
+                      <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
+                      <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
                     {:else}
-                      <button
-                        class="action-icon"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          startEditing(chapter);
-                        }}
-                      >
-                        ✎
-                      </button>
-                      <button
-                        class="action-icon delete"
-                        onclick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteChapter(chapter.id);
-                        }}
-                      >
-                        🗑
-                      </button>
+                      <IconButton icon={Pencil} size={14} onclick={(e) => { e.stopPropagation(); startEditing(chapter); }} title="Edit" />
+                      <IconButton icon={Trash2} size={14} variant="destructive" onclick={(e) => { e.stopPropagation(); handleDeleteChapter(chapter.id); }} title="Delete" />
                     {/if}
                   </div>
                 </div>
@@ -236,15 +206,14 @@
         </div>
       {/each}
 
-      <!-- Individual Files Section -->
       {#if individualGroups().length > 0}
         <div class="asset-group individual-files">
           <button
             class="asset-header"
             onclick={() => toggleGroup(-1)}
           >
-            <span class="toggle-icon">{isExpanded(-1) ? "▼" : "▶"}</span>
-            <span class="asset-icon">📁</span>
+            <span class="toggle-icon">{#if isExpanded(-1)}<Icon icon={ChevronDown} size={14} />{:else}<Icon icon={ChevronRight} size={14} />{/if}</span>
+            <span class="asset-icon"><Icon icon={Folder} size={14} /></span>
             <span class="asset-name">Individual Files</span>
             <span class="chapter-count">({individualGroups().reduce((acc, g) => acc + g.chapters.length, 0)})</span>
           </button>
@@ -290,43 +259,11 @@
                     
                     <div class="chapter-actions">
                       {#if editingChapterId === chapter.id}
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            saveEdit(chapter.id);
-                          }}
-                        >
-                          ✓
-                        </button>
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            cancelEdit();
-                          }}
-                        >
-                          ✕
-                        </button>
+                        <IconButton icon={Check} size={14} onclick={(e) => { e.stopPropagation(); saveEdit(chapter.id); }} title="Save" />
+                        <IconButton icon={X} size={14} onclick={(e) => { e.stopPropagation(); cancelEdit(); }} title="Cancel" />
                       {:else}
-                        <button
-                          class="action-icon"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            startEditing(chapter);
-                          }}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          class="action-icon delete"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteChapter(chapter.id);
-                          }}
-                        >
-                          🗑
-                        </button>
+                        <IconButton icon={Pencil} size={14} onclick={(e) => { e.stopPropagation(); startEditing(chapter); }} title="Edit" />
+                        <IconButton icon={Trash2} size={14} variant="destructive" onclick={(e) => { e.stopPropagation(); handleDeleteChapter(chapter.id); }} title="Delete" />
                       {/if}
                     </div>
                   </div>
@@ -345,128 +282,131 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #1e1e1e;
-    border-right: 1px solid #333;
+    background: var(--surface-raised);
+    border-right: 1px solid var(--border-default);
   }
 
   .panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem;
-    border-bottom: 1px solid #333;
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border-default);
   }
 
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .panel-header h3 {
     margin: 0;
-    color: #fff;
-    font-size: 1rem;
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
   }
 
   .import-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
+    padding: var(--space-1_5) var(--space-3);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--font-size-xs);
     font-weight: 500;
   }
 
   .import-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
 
   .collapse-btn {
-    background: #333;
-    color: #ccc;
-    border: 1px solid #444;
-    padding: 0.375rem 0.75rem;
-    border-radius: 4px;
+    background: var(--surface-active);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    padding: var(--space-1_5) var(--space-3);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--font-size-xs);
   }
 
   .collapse-btn:hover {
-    background: #444;
-    color: #fff;
+    background: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .loading {
-    padding: 2rem;
+    padding: var(--space-8);
     text-align: center;
-    color: #888;
+    color: var(--text-tertiary);
   }
 
   .empty-state {
-    padding: 2rem;
+    padding: var(--space-8);
     text-align: center;
   }
 
   .empty-state p {
-    color: #666;
-    margin: 0 0 1rem 0;
+    color: var(--text-disabled);
+    margin: 0 0 var(--space-4) 0;
   }
 
   .action-btn {
-    background: #333;
-    color: #fff;
-    border: 1px solid #444;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    background: var(--surface-active);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--font-size-sm);
   }
 
   .action-btn:hover {
-    background: #444;
+    background: var(--border-strong);
   }
 
   .chapters-list {
     flex: 1;
     overflow-y: auto;
-    padding: 0.5rem;
+    padding: var(--space-2);
   }
 
   .asset-group {
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--space-2);
   }
 
   .asset-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     width: 100%;
-    padding: 0.75rem;
-    background: #252525;
+    padding: var(--space-3);
+    background: var(--surface-elevated);
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     text-align: left;
-    color: #ccc;
-    font-size: 0.875rem;
-    transition: background 0.2s;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    transition: background var(--transition-fast) ease;
   }
 
   .asset-header:hover {
-    background: #2a2a2a;
+    background: var(--surface-hover);
   }
 
   .toggle-icon {
-    font-size: 0.625rem;
-    color: #666;
-    width: 12px;
+    color: var(--text-disabled);
+    width: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .asset-icon {
-    font-size: 1rem;
+    display: inline-flex;
+    align-items: center;
   }
 
   .asset-name {
@@ -477,39 +417,39 @@
   }
 
   .chapter-count {
-    color: #666;
-    font-size: 0.75rem;
+    color: var(--text-disabled);
+    font-size: var(--font-size-xs);
   }
 
   .chapter-list {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.25rem 0 0.25rem 1.5rem;
+    gap: var(--space-1);
+    padding: var(--space-1) 0 var(--space-1) var(--space-6);
   }
 
   .chapter-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background var(--transition-fast) ease;
   }
 
   .chapter-item:hover {
-    background: #2a2a2a;
+    background: var(--surface-hover);
   }
 
   .chapter-item.selected {
-    background: #2563eb;
+    background: var(--accent-primary);
   }
 
   .chapter-item.selected .chapter-title,
   .chapter-item.selected .chapter-range,
   .chapter-item.selected .chapter-time {
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .chapter-details {
@@ -523,30 +463,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #ccc;
-    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
   }
 
   .chapter-range {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #666;
-    font-size: 0.75rem;
-    font-family: monospace;
+    color: var(--text-disabled);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-mono);
   }
 
   .chapter-time {
-    color: #666;
-    font-size: 0.75rem;
-    font-family: monospace;
+    color: var(--text-disabled);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-mono);
   }
 
   .chapter-actions {
     display: flex;
-    gap: 0.25rem;
+    gap: var(--space-1);
     opacity: 0;
-    transition: opacity 0.2s;
+    transition: opacity var(--transition-fast) ease;
   }
 
   .chapter-item:hover .chapter-actions,
@@ -554,37 +494,17 @@
     opacity: 1;
   }
 
-  .action-icon {
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
-    padding: 0.125rem 0.25rem;
-    font-size: 0.75rem;
-    border-radius: 3px;
-  }
-
-  .action-icon:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .action-icon.delete:hover {
-    background: rgba(248, 113, 113, 0.2);
-    color: #f87171;
-  }
-
   .edit-input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2563eb;
-    color: #fff;
-    padding: 0.25rem 0.5rem;
-    border-radius: 3px;
-    font-size: 0.875rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--accent-primary);
+    color: var(--text-primary);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
   }
 
   .individual-files .asset-header {
-    background: #2a2a2a;
+    background: var(--surface-hover);
   }
 </style>

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { chaptersState, setImportChoice, setIsImporting, autoCreateChaptersFromFiles } from "../state/chapters.svelte";
   import { getPathForFile } from "../api/system.js";
+  import Icon from './ui/Icon.svelte';
+  import { Video, FolderOpen } from '../constants';
 
   interface Props {
     projectId: number;
@@ -162,7 +164,7 @@
       role="button"
       tabindex="0"
     >
-      <div class="option-icon">📹</div>
+      <div class="option-icon"><Icon icon={Video} size={32} /></div>
       <h3>Import Full VOD</h3>
       <p class="option-description">
         Import a single large video file and manually define chapters
@@ -183,7 +185,7 @@
       role="button"
       tabindex="0"
     >
-      <div class="option-icon">📁</div>
+      <div class="option-icon"><Icon icon={FolderOpen} size={32} /></div>
       <h3>Import Individual Files</h3>
       <p class="option-description">
         Import pre-cut video files as chapters (each file = 1 chapter)
@@ -202,30 +204,30 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 3rem;
+    padding: var(--space-12);
     min-height: 100%;
   }
 
   h2 {
-    margin: 0 0 2rem 0;
-    color: #fff;
-    font-size: 1.5rem;
+    margin: 0 0 var(--space-8) 0;
+    color: var(--text-primary);
+    font-size: var(--text-2xl);
     font-weight: 500;
   }
 
   .error-message {
     background: rgba(248, 113, 113, 0.1);
     color: #f87171;
-    padding: 0.75rem 1rem;
+    padding: 0.75rem var(--space-4);
     border-radius: 6px;
-    margin-bottom: 1.5rem;
-    font-size: 0.875rem;
+    margin-bottom: var(--space-6);
+    font-size: var(--text-base);
   }
 
   .options-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 2rem;
+    gap: var(--space-8);
     max-width: 800px;
     width: 100%;
   }
@@ -237,17 +239,17 @@
   }
 
   .import-option {
-    background: #252525;
-    border: 2px dashed #444;
-    border-radius: 12px;
-    padding: 2rem;
+    background: var(--surface-elevated);
+    border: 2px dashed var(--border-strong);
+    border-radius: var(--radius-xl);
+    padding: var(--space-8);
     text-align: center;
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
   .import-option:hover {
-    border-color: #2563eb;
+    border-color: var(--accent-primary);
     background: #2a2a2a;
   }
 
@@ -257,42 +259,44 @@
   }
 
   .option-icon {
-    font-size: 3rem;
-    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: var(--space-4);
   }
 
   h3 {
     margin: 0 0 0.75rem 0;
-    color: #fff;
-    font-size: 1.25rem;
+    color: var(--text-primary);
+    font-size: var(--text-xl);
   }
 
   .option-description {
-    margin: 0 0 1.5rem 0;
-    color: #888;
-    font-size: 0.875rem;
+    margin: 0 0 var(--space-6) 0;
+    color: var(--text-tertiary);
+    font-size: var(--text-base);
     line-height: 1.5;
   }
 
   .browse-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    padding: 0.625rem 1.5rem;
+    padding: 0.625rem var(--space-6);
     border-radius: 6px;
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--text-base);
     font-weight: 500;
     transition: background 0.2s;
   }
 
   .browse-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
 
   .drop-hint {
-    margin: 1rem 0 0 0;
-    color: #666;
+    margin: var(--space-4) 0 0 0;
+    color: var(--text-disabled);
     font-size: 0.75rem;
     font-style: italic;
   }

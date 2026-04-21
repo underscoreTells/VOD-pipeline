@@ -360,12 +360,14 @@ export function registerAgentHandlers(): void {
             return;
           }
 
-          executionTrace = appendExecutionTraceEntry(executionTrace, {
-            status: streamMessage.status,
-            message: streamMessage.message,
-            nodeName: streamMessage.nodeName,
-            passIndex: 1,
-          });
+          if (streamMessage.type === 'status') {
+            executionTrace = appendExecutionTraceEntry(executionTrace, {
+              status: streamMessage.status,
+              message: streamMessage.message,
+              nodeName: streamMessage.nodeName,
+              passIndex: 1,
+            });
+          }
         },
       });
 

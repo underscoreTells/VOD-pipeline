@@ -11,6 +11,8 @@
     resetSettings,
     type LLMProviderType,
   } from "../state/settings.svelte";
+  import { Icon } from './ui';
+  import { CheckCircle2, Circle } from '../constants';
   
   // Load settings on mount
   let testingProvider: LLMProviderType | null = $state(null);
@@ -96,7 +98,7 @@
         <button class="close-btn" onclick={closeSettings}>×</button>
       </div>
       
-      <div class="settings-content">
+      <div class="settings-content scrollbar-thin">
         <!-- API Keys Section -->
         <section class="settings-section">
           <h3>AI Provider API Keys</h3>
@@ -136,9 +138,9 @@
                     placeholder={`Enter ${getProviderLabel(provider)} API key`}
                   />
                   {#if settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
-                    <span class="key-status configured">●</span>
+                    <span class="key-status configured"><Icon icon={CheckCircle2} size={12} /></span>
                   {:else}
-                    <span class="key-status not-configured">○</span>
+                    <span class="key-status not-configured"><Icon icon={Circle} size={12} /></span>
                   {/if}
                 </div>
                 
@@ -294,8 +296,8 @@
   }
   
   .settings-panel {
-    background: #1e1e1e;
-    border-radius: 8px;
+    background: var(--surface-raised);
+    border-radius: var(--radius-lg);
     width: 90%;
     max-width: 600px;
     max-height: 90vh;
@@ -308,20 +310,20 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #333;
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--border-default);
   }
   
   .settings-header h2 {
     margin: 0;
-    color: #fff;
-    font-size: 1.25rem;
+    color: var(--text-primary);
+    font-size: var(--text-xl);
   }
   
   .close-btn {
     background: none;
     border: none;
-    color: #888;
+    color: var(--text-tertiary);
     font-size: 1.5rem;
     cursor: pointer;
     padding: 0;
@@ -330,84 +332,84 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
   }
   
   .close-btn:hover {
-    background: #333;
-    color: #fff;
+    background: var(--surface-active);
+    color: var(--text-primary);
   }
   
   .settings-content {
     flex: 1;
     overflow-y: auto;
-    padding: 1.5rem;
+    padding: var(--space-6);
   }
   
   .settings-section {
-    margin-bottom: 2rem;
+    margin-bottom: var(--space-8);
   }
   
   .settings-section h3 {
-    margin: 0 0 0.75rem 0;
-    color: #fff;
-    font-size: 1rem;
+    margin: 0 0 var(--space-3) 0;
+    color: var(--text-primary);
+    font-size: var(--text-md);
   }
   
   .section-description {
-    color: #888;
-    font-size: 0.875rem;
-    margin: 0 0 1rem 0;
+    color: var(--text-tertiary);
+    font-size: var(--text-base);
+    margin: 0 0 var(--space-4) 0;
   }
   
   .providers-list {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--space-4);
   }
   
   .provider-card {
-    background: #252525;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 1rem;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
   }
   
   .provider-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--space-3);
   }
   
   .provider-info {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .provider-name {
-    color: #fff;
+    color: var(--text-primary);
     font-weight: 500;
   }
   
   .video-badge {
-    background: #4ade80;
+    background: var(--accent-success);
     color: #000;
     font-size: 0.625rem;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-weight: 600;
     text-transform: uppercase;
   }
   
   .test-btn {
-    background: #333;
-    color: #fff;
-    border: 1px solid #444;
-    padding: 0.25rem 0.75rem;
-    font-size: 0.75rem;
-    border-radius: 4px;
+    background: var(--surface-active);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    padding: 0.25rem var(--space-3);
+    font-size: var(--text-sm);
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   
@@ -423,120 +425,120 @@
   .api-key-input {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   
   .api-key-input input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    color: #fff;
-    padding: 0.5rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    color: var(--text-primary);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
     font-family: monospace;
   }
   
   .api-key-input input:focus {
     outline: none;
-    border-color: #2563eb;
+    border-color: var(--accent-primary);
   }
   
   .key-status {
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
   }
   
   .key-status.configured {
-    color: #4ade80;
+    color: var(--accent-success);
   }
   
   .key-status.not-configured {
-    color: #666;
+    color: var(--text-disabled);
   }
   
   .test-result {
-    margin-top: 0.5rem;
-    padding: 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
+    margin-top: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
   }
   
   .test-result.success {
     background: rgba(74, 222, 128, 0.1);
-    color: #4ade80;
+    color: var(--accent-success);
   }
   
   .test-result.error {
     background: rgba(248, 113, 113, 0.1);
-    color: #f87171;
+    color: var(--accent-destructive);
   }
   
   .select-group {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   .select-group label {
     display: block;
-    color: #ccc;
-    font-size: 0.875rem;
-    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    margin-bottom: var(--space-2);
   }
   
   .select-group select {
     width: 100%;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    color: #fff;
-    padding: 0.5rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    color: var(--text-primary);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
   }
   
   .select-group select:focus {
     outline: none;
-    border-color: #2563eb;
+    border-color: var(--accent-primary);
   }
   
   .checkbox-group {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   .checkbox-group label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    color: #ccc;
-    font-size: 0.875rem;
+    gap: var(--space-2);
+    color: var(--text-secondary);
+    font-size: var(--text-base);
     cursor: pointer;
   }
   
   .checkbox-group input[type="checkbox"] {
     width: 16px;
     height: 16px;
-    accent-color: #2563eb;
+    accent-color: var(--accent-primary);
   }
   
   .help-text {
-    margin: 0.25rem 0 0 1.5rem;
-    color: #666;
-    font-size: 0.75rem;
+    margin: 0.25rem 0 0 var(--space-6);
+    color: var(--text-disabled);
+    font-size: var(--text-sm);
   }
   
   .settings-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 1.5rem;
-    border-top: 1px solid #333;
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--border-default);
   }
   
   .reset-btn {
     background: none;
     border: none;
-    color: #f87171;
-    font-size: 0.75rem;
+    color: var(--accent-destructive);
+    font-size: var(--text-sm);
     cursor: pointer;
-    padding: 0.5rem;
+    padding: var(--space-2);
   }
   
   .reset-btn:hover {
@@ -545,17 +547,17 @@
   
   .footer-actions {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--space-3);
   }
   
   .cancel-btn {
-    background: #333;
-    color: #fff;
-    border: 1px solid #444;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    background: var(--surface-active);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--text-base);
   }
   
   .cancel-btn:hover {
@@ -563,17 +565,17 @@
   }
   
   .save-btn {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--text-base);
     font-weight: 500;
   }
   
   .save-btn:hover {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
 </style>

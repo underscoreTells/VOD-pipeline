@@ -22,6 +22,7 @@
   } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
+  import { ROLE_CONFIG } from '../constants';
   
   interface Props {
     audioUrl: string;
@@ -75,17 +76,16 @@
 
   const WAVEFORM_TIER_LEVEL = 1;
   
-  // Role colors for clips
   const ROLE_COLORS: Record<string, string> = {
-    'setup': 'rgba(239, 68, 68, 0.6)',      // Red
-    'escalation': 'rgba(249, 115, 22, 0.6)', // Orange
-    'twist': 'rgba(234, 179, 8, 0.6)',      // Yellow
-    'payoff': 'rgba(34, 197, 94, 0.6)',     // Green
-    'transition': 'rgba(59, 130, 246, 0.6)', // Blue
+    'setup': ROLE_CONFIG.setup.subtleCssVar,
+    'escalation': ROLE_CONFIG.escalation.subtleCssVar,
+    'twist': ROLE_CONFIG.twist.subtleCssVar,
+    'payoff': ROLE_CONFIG.payoff.subtleCssVar,
+    'transition': ROLE_CONFIG.transition.subtleCssVar,
   };
   
-  const DEFAULT_COLOR = 'rgba(107, 114, 128, 0.6)';
-  const SELECTION_COLOR = 'rgba(79, 70, 229, 0.2)';
+  const DEFAULT_COLOR = ROLE_CONFIG.unassigned.subtleCssVar;
+  const SELECTION_COLOR = 'var(--accent-primary-subtle)';
   
   // Get clips for this track
   const trackClips = $derived.by(() => {
@@ -207,24 +207,11 @@
       scrollContainer.removeEventListener('pointerdown', handleWaveformPointerDown, true);
       scrollContainer.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer.removeEventListener('scroll', handleScrollContainerScroll);
-      scrollContainer.classList.remove('waveform-scroll-container');
+      scrollContainer.classList.remove('scrollbar-thin');
     }
     scrollContainer = nextScrollContainer;
     if (scrollContainer) {
-      const root = scrollContainer.getRootNode();
-      if (root instanceof ShadowRoot) {
-        const existingStyle = root.querySelector('style[data-waveform-scrollbar]');
-        if (!existingStyle) {
-          const style = document.createElement('style');
-          style.dataset.waveformScrollbar = 'true';
-          style.textContent = `
-            .waveform-scroll-container { scrollbar-width: none; -ms-overflow-style: none; }
-            .waveform-scroll-container::-webkit-scrollbar { width: 0; height: 0; }
-          `;
-          root.appendChild(style);
-        }
-      }
-      scrollContainer.classList.add('waveform-scroll-container');
+      scrollContainer.classList.add('scrollbar-thin');
       scrollContainer.addEventListener('pointerdown', handleWaveformPointerDown, { capture: true });
       scrollContainer.addEventListener('contextmenu', handleWaveformContextMenu, { capture: true });
       scrollContainer.addEventListener('scroll', handleScrollContainerScroll, { passive: true });
@@ -1129,7 +1116,7 @@
       scrollContainer?.removeEventListener('pointerdown', handleWaveformPointerDown, true);
       scrollContainer?.removeEventListener('contextmenu', handleWaveformContextMenu, true);
       scrollContainer?.removeEventListener('scroll', handleScrollContainerScroll);
-      scrollContainer?.classList.remove('waveform-scroll-container');
+      scrollContainer?.classList.remove('scrollbar-thin');
       scrollContainer = null;
       regionsPlugin?.destroy();
       waveSurfer?.destroy();
@@ -1324,29 +1311,29 @@
   .track-container {
     display: flex;
     flex-direction: column;
-    background: #1a1a1a;
-    border-bottom: 1px solid #333;
+    background: var(--surface-base);
+    border-bottom: 1px solid var(--border-default);
   }
   
   .track-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.25rem 0.5rem;
-    background: #2a2a2a;
-    border-bottom: 1px solid #333;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-hover);
+    border-bottom: 1px solid var(--border-default);
     height: 24px;
   }
   
   .track-label {
-    font-size: 0.75rem;
-    color: #aaa;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
     font-weight: 600;
   }
   
   .track-info {
-    font-size: 0.7rem;
-    color: #666;
+    font-size: var(--text-xs);
+    color: var(--text-disabled);
   }
   
   .waveform-container {
@@ -1357,21 +1344,34 @@
   }
 
   .waveform-container.missing {
-    background: linear-gradient(180deg, #151515 0%, #101010 100%);
+    background: var(--surface-page);
   }
 
   .waveform-container.visual-only {
     cursor: default;
   }
 
-  :global(.waveform-scroll-container) {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+  :global(.scrollbar-thin) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
 
-  :global(.waveform-scroll-container::-webkit-scrollbar) {
-    width: 0;
-    height: 0;
+  :global(.scrollbar-thin::-webkit-scrollbar) {
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+  }
+
+  :global(.scrollbar-thin::-webkit-scrollbar-track) {
+    background: var(--scrollbar-track);
+  }
+
+  :global(.scrollbar-thin::-webkit-scrollbar-thumb) {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-pill);
+  }
+
+  :global(.scrollbar-thin::-webkit-scrollbar-thumb:hover) {
+    background: var(--scrollbar-thumb-hover);
   }
 
   .waveform-container.panning {
@@ -1388,60 +1388,60 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #b0b0b0;
-    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
     pointer-events: none;
-    background: rgba(12, 12, 12, 0.55);
+    background: color-mix(in srgb, var(--surface-page) 55%, transparent);
   }
 
   .timeline-clip-context-menu {
     position: fixed;
-    z-index: 80;
+    z-index: var(--z-context-menu);
     min-width: 160px;
-    padding: 0.25rem;
-    background: #1f1f1f;
-    border: 1px solid #333;
-    border-radius: 6px;
+    padding: var(--space-1);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   }
 
   .timeline-context-item {
     width: 100%;
     text-align: left;
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-2) var(--space-3);
     border: none;
     background: transparent;
-    color: #ddd;
-    font-size: 0.875rem;
-    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
 
   .timeline-context-item:hover {
-    background: #2a2a2a;
-    color: #fff;
+    background: var(--surface-hover);
+    color: var(--text-primary);
   }
 
   .timeline-context-item:disabled,
   .timeline-context-item.disabled {
     opacity: 0.45;
     cursor: not-allowed;
-    color: #8a8a8a;
+    color: var(--text-tertiary);
   }
 
   .timeline-context-item:disabled:hover,
   .timeline-context-item.disabled:hover {
     background: transparent;
-    color: #8a8a8a;
+    color: var(--text-tertiary);
   }
 
   .timeline-context-item.destructive {
-    color: #f87171;
+    color: var(--accent-destructive);
   }
   
   :global(.wavesurfer-region) {
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: var(--radius-sm);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 20%, transparent);
   }
 
   :global(.clip-region) {
@@ -1450,11 +1450,11 @@
   }
   
   :global(.wavesurfer-region:hover) {
-    border-color: rgba(255, 255, 255, 0.5);
+    border-color: color-mix(in srgb, var(--text-primary) 50%, transparent);
   }
   
   :global(.wavesurfer-region.selected) {
-    border-color: #fff;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
+    border-color: var(--text-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary) 30%, transparent);
   }
 </style>

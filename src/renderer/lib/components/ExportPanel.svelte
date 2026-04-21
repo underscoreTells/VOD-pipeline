@@ -80,7 +80,7 @@
   const frameRates = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 </script>
 
-<div class="export-panel">
+<div class="export-panel scrollbar-thin">
   <h3>Export Timeline</h3>
   
   <div class="form-group">
@@ -156,22 +156,22 @@
 
 <style>
   .export-panel {
-    background: #1a1a1a;
-    border-top: 1px solid #333;
-    padding: 1rem;
+    background: var(--surface-raised);
+    border-top: 1px solid var(--border-default);
+    padding: var(--space-4);
     min-width: 280px;
   }
   
   h3 {
-    margin: 0 0 1rem 0;
-    font-size: 0.875rem;
-    color: #fff;
+    margin: 0 0 var(--space-4) 0;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   
   .form-group {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   .form-group.checkbox {
@@ -182,27 +182,27 @@
   .form-group.checkbox label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     cursor: pointer;
   }
   
   label {
     display: block;
-    font-size: 0.75rem;
-    color: #888;
-    margin-bottom: 0.25rem;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-1);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   
   select, input[type="checkbox"] {
     width: 100%;
-    padding: 0.5rem;
-    background: #252525;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
-    font-size: 0.875rem;
+    padding: var(--space-2);
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
   }
   
   input[type="checkbox"] {
@@ -216,29 +216,29 @@
   
   select:focus {
     outline: none;
-    border-color: #007bff;
+    border-color: var(--accent-primary);
   }
   
   .help-text {
-    font-size: 0.75rem;
-    color: #666;
-    margin: 0.25rem 0 0 0;
+    font-size: var(--font-size-xs);
+    color: var(--text-disabled);
+    margin: var(--space-1) 0 0 0;
     font-style: italic;
   }
   
   .export-info {
-    background: #252525;
-    border-radius: 4px;
-    padding: 0.75rem;
-    margin-bottom: 1rem;
+    background: var(--surface-elevated);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin-bottom: var(--space-4);
   }
   
   .info-row {
     display: flex;
     justify-content: space-between;
-    font-size: 0.875rem;
-    color: #888;
-    margin-bottom: 0.25rem;
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-1);
   }
   
   .info-row:last-child {
@@ -246,38 +246,38 @@
   }
   
   .info-row span:last-child {
-    color: #ccc;
-    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
   }
   
   .progress-section {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
   
   .progress-bar {
     height: 6px;
-    background: #333;
-    border-radius: 3px;
+    background: var(--surface-active);
+    border-radius: var(--radius-sm);
     overflow: hidden;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--space-2);
   }
   
   .progress-fill {
     height: 100%;
-    background: #007bff;
+    background: var(--accent-primary);
     transition: width 0.2s;
   }
   
   .progress-text {
-    font-size: 0.75rem;
-    color: #888;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
   }
   
   .alert {
-    padding: 0.75rem;
-    border-radius: 4px;
-    margin-bottom: 1rem;
-    font-size: 0.875rem;
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-4);
+    font-size: var(--font-size-sm);
   }
   
   .alert.error {
@@ -298,24 +298,24 @@
   
   .export-btn {
     width: 100%;
-    padding: 0.75rem;
-    background: #007bff;
-    color: white;
+    padding: var(--space-3);
+    background: var(--accent-primary);
+    color: var(--text-primary);
     border: none;
-    border-radius: 4px;
-    font-size: 0.875rem;
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
     font-weight: 500;
     cursor: pointer;
     transition: background 0.2s;
   }
   
   .export-btn:hover:not(:disabled) {
-    background: #0056b3;
+    background: var(--accent-primary-hover);
   }
   
   .export-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    background: #444;
+    background: var(--surface-active);
   }
 </style>

@@ -15,6 +15,8 @@
   import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
   import MarkdownContent from "./MarkdownContent.svelte";
   import { collapseChat } from "../state/layout.svelte";
+  import Icon from './ui/Icon.svelte';
+  import { Check, X } from '../constants';
   
   let message = $state("");
   let chatContainer: HTMLDivElement;
@@ -254,7 +256,7 @@
     </button>
   </div>
   
-  <div class="chat-messages" bind:this={chatContainer}>
+  <div class="chat-messages scrollbar-thin" bind:this={chatContainer}>
     {#if !agentState.currentChapterId}
       <div class="empty-state">
         <p>Select a chapter to start chatting</p>
@@ -327,7 +329,7 @@
   
   <!-- Suggestions Panel -->
   {#if agentState.suggestions.length > 0}
-    <div class="suggestions-panel">
+    <div class="suggestions-panel scrollbar-thin">
       <div class="suggestions-header">
         <h4>Suggestions ({agentState.suggestions.filter(s => s.status === 'pending').length} pending)</h4>
         <div class="suggestions-header-actions">
@@ -380,14 +382,14 @@
                   onclick={() => handleApplySuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                 >
-                  ✓ Apply
+                  <Icon icon={Check} size={14} /> Apply
                 </button>
                 <button
                   class="reject-btn"
                   onclick={() => handleRejectSuggestion(suggestion.id)}
                   disabled={applyingAllSuggestionState || suggestionActionBusy.has(suggestion.id)}
                 >
-                  ✕ Reject
+                  <Icon icon={X} size={14} /> Reject
                 </button>
               </div>
             </div>
@@ -418,8 +420,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #1e1e1e;
-    border-left: 1px solid #333;
+    background: var(--surface-raised);
+    border-left: 1px solid var(--border-default);
     min-height: 0;
   }
   
@@ -427,83 +429,83 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
-    border-bottom: 1px solid #333;
-    background: #252525;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-default);
+    background: var(--surface-elevated);
   }
 
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
   }
   
   .chat-header h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: var(--text-base);
     font-weight: 600;
   }
   
   .provider-select {
-    padding: 4px 8px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 12px;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
   }
 
   .collapse-btn {
-    padding: 4px 8px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
     font-size: 11px;
     cursor: pointer;
   }
 
   .collapse-btn:hover {
-    background: #444;
-    color: #fff;
+    background: var(--surface-hover);
+    color: var(--text-primary);
   }
   
   .chat-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 16px;
+    padding: var(--space-4);
   }
 
   .conversation-toolbar {
     display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid #333;
-    background: #202020;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border-default);
+    background: var(--surface-raised);
   }
 
   .conversation-select {
     flex: 1;
-    padding: 6px 8px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 12px;
+    padding: 6px var(--space-2);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
   }
 
   .toolbar-btn {
     padding: 6px 10px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ddd;
-    font-size: 12px;
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
   .toolbar-btn:hover:not(:disabled) {
-    background: #444;
+    background: var(--surface-hover);
   }
 
   .toolbar-btn:disabled {
@@ -518,32 +520,32 @@
   
   .empty-state {
     text-align: center;
-    color: #888;
+    color: var(--text-tertiary);
     margin-top: 40px;
   }
   
   .empty-state .hint {
-    font-size: 12px;
-    color: #666;
-    margin-top: 8px;
+    font-size: var(--text-sm);
+    color: var(--text-disabled);
+    margin-top: var(--space-2);
   }
   
   .message {
-    margin-bottom: 16px;
-    padding: 12px;
-    border-radius: 8px;
-    background: #2a2a2a;
+    margin-bottom: var(--space-4);
+    padding: var(--space-3);
+    border-radius: var(--radius-lg);
+    background: var(--surface-hover);
   }
   
   .message.user {
-    background: #2563eb;
+    background: var(--accent-primary);
   }
   
   .message-header {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 4px;
-    font-size: 12px;
+    margin-bottom: var(--space-1);
+    font-size: var(--text-sm);
     opacity: 0.7;
   }
   
@@ -554,19 +556,19 @@
   .message-live-status {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     margin: 6px 0 0;
     padding: 7px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(15, 23, 42, 0.36);
     color: #dbeafe;
-    font-size: 12px;
+    font-size: var(--text-sm);
   }
 
   .live-status-dot {
     width: 8px;
     height: 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: #60a5fa;
     box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.16);
     animation: live-status-pulse 1.2s ease-in-out infinite;
@@ -598,14 +600,14 @@
   .message-trace {
     margin-top: 10px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: rgba(15, 23, 42, 0.26);
   }
 
   .message-trace summary {
     cursor: pointer;
-    padding: 8px 10px;
-    font-size: 12px;
+    padding: var(--space-2) 10px;
+    font-size: var(--text-sm);
     color: #cbd5e1;
     user-select: none;
   }
@@ -615,7 +617,7 @@
   }
 
   .thinking-section + .thinking-section {
-    margin-top: 12px;
+    margin-top: var(--space-3);
   }
 
   .thinking-label {
@@ -630,11 +632,11 @@
   .trace-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .trace-entry {
-    padding-top: 8px;
+    padding-top: var(--space-2);
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 
@@ -644,7 +646,7 @@
   }
 
   .trace-label {
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: #e2e8f0;
   }
 
@@ -661,20 +663,20 @@
   .chat-input {
     display: flex;
     align-items: flex-end;
-    gap: 8px;
-    padding: 12px 16px;
-    border-top: 1px solid #333;
-    background: #252525;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--border-default);
+    background: var(--surface-elevated);
   }
   
   .chat-input textarea {
     flex: 1;
-    padding: 8px 12px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 14px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-base);
     line-height: 1.4;
     min-height: 40px;
     max-height: 180px;
@@ -685,32 +687,32 @@
   
   .chat-input textarea:focus {
     outline: none;
-    border-color: #2563eb;
+    border-color: var(--accent-primary);
   }
   
   .chat-input button {
-    padding: 8px 16px;
-    background: #2563eb;
+    padding: var(--space-2) var(--space-4);
+    background: var(--accent-primary);
     border: none;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 14px;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--text-base);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background var(--transition-normal);
   }
   
   .chat-input button:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
   
   .chat-input button:disabled {
-    background: #444;
+    background: var(--surface-hover);
     cursor: not-allowed;
   }
   
   .suggestions-panel {
-    border-top: 1px solid #333;
-    background: #252525;
+    border-top: 1px solid var(--border-default);
+    background: var(--surface-elevated);
     max-height: 300px;
     overflow-y: auto;
   }
@@ -719,43 +721,43 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
-    border-bottom: 1px solid #333;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-default);
   }
 
   .suggestions-header-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
   }
   
   .suggestions-header h4 {
     margin: 0;
     font-size: 13px;
     font-weight: 600;
-    color: #4ade80;
+    color: var(--accent-success);
   }
   
   .toggle-btn {
-    padding: 4px 8px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #888;
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
     font-size: 11px;
     cursor: pointer;
   }
   
   .toggle-btn:hover {
-    background: #444;
-    color: #fff;
+    background: var(--surface-hover);
+    color: var(--text-primary);
   }
 
   .apply-all-btn {
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     background: #14532d;
     border: 1px solid #166534;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: #dcfce7;
     font-size: 11px;
     cursor: pointer;
@@ -771,80 +773,80 @@
   }
   
   .suggestions-list {
-    padding: 12px 16px;
+    padding: var(--space-3) var(--space-4);
   }
   
   .suggestion-card {
-    background: #2a2a2a;
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 12px;
-    margin-bottom: 8px;
+    background: var(--surface-hover);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
   }
   
   .suggestion-time {
-    font-family: monospace;
-    font-size: 12px;
-    color: #4ade80;
-    margin-bottom: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--accent-success);
+    margin-bottom: var(--space-1);
   }
   
   .suggestion-description {
     font-size: 13px;
     font-weight: 500;
-    margin-bottom: 4px;
+    margin-bottom: var(--space-1);
   }
   
   .suggestion-reasoning {
     font-size: 11px;
-    color: #888;
-    margin-bottom: 8px;
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-2);
     line-height: 1.3;
   }
 
   .proposal-error {
     font-size: 11px;
     color: #fca5a5;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
     line-height: 1.3;
   }
   
   .suggestion-actions {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .preview-btn {
-    padding: 4px 12px;
-    border: 1px solid #3b82f6;
-    border-radius: 4px;
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--radius-sm);
     background: #1e3a8a;
     color: #dbeafe;
-    font-size: 12px;
+    font-size: var(--text-sm);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background var(--transition-normal);
   }
 
   .preview-btn:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: var(--accent-primary-hover);
   }
   
   .apply-btn, .reject-btn {
-    padding: 4px 12px;
+    padding: var(--space-1) var(--space-3);
     border: none;
-    border-radius: 4px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background var(--transition-normal);
   }
   
   .apply-btn {
-    background: #4ade80;
+    background: var(--accent-success);
     color: #000;
   }
   
   .apply-btn:hover {
-    background: #22c55e;
+    background: var(--accent-success);
   }
 
   .preview-btn:disabled,
@@ -855,8 +857,8 @@
   }
   
   .reject-btn {
-    background: #444;
-    color: #fff;
+    background: var(--surface-hover);
+    color: var(--text-primary);
   }
   
   .reject-btn:hover {

@@ -1,3 +1,4 @@
+import type { LLMProviderType } from "../../providers/index.js";
 import type { AgentToolDefinition } from "../define-tool.js";
 import {
   compileJsonSchemaLike,
@@ -6,8 +7,14 @@ import {
   type ProviderToolStrategy,
 } from "./base.js";
 
-export class OpenAIToolStrategy implements ProviderToolStrategy<OpenAIFunctionToolDefinition> {
-  readonly provider = "openai" as const;
+export class OpenAIToolStrategy<
+  TProvider extends Extract<LLMProviderType, "openai" | "openrouter" | "kimi"> = "openai",
+> implements ProviderToolStrategy<OpenAIFunctionToolDefinition> {
+  readonly provider: TProvider;
+
+  constructor(provider: TProvider = "openai" as TProvider) {
+    this.provider = provider;
+  }
 
   compileSchema(schema: AgentToolDefinition["schema"]) {
     return compileJsonSchemaLike(schema);
