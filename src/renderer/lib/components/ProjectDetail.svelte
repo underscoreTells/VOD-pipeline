@@ -652,16 +652,9 @@
                 </div>
                 <div class="preview-top-layout" bind:this={previewTopLayoutRef}>
                   {#if showClipPreviewPanel}
-                    <div class="clip-preview-pane" style="width: {layoutState.clipPreviewWidth}px">
+                    <div class="clip-preview-pane">
                       <ClipPreview />
                     </div>
-
-                    <div
-                      class="resize-handle-vertical clip-preview-resize"
-                      role="separator"
-                      aria-orientation="vertical"
-                      onpointerdown={layoutController.handleClipPreviewResize}
-                    ></div>
                   {/if}
 
                   <div class="chapter-preview-pane">
@@ -1129,26 +1122,21 @@
     flex: 1;
     min-height: 0;
     display: flex;
-    gap: 0;
+    gap: var(--space-3);
     align-items: stretch;
   }
 
   .clip-preview-pane {
-    flex: 0 0 auto;
-    min-width: 220px;
+    flex: 1 1 0;
+    min-width: 0;
     min-height: 0;
     overflow: hidden;
   }
 
-  .clip-preview-resize {
-    align-self: stretch;
-  }
-
   .chapter-preview-pane {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     min-height: 0;
-    padding-left: var(--space-3);
   }
 
   .preview-top-layout :global(.clip-preview),
@@ -1164,18 +1152,12 @@
     }
 
     .clip-preview-pane {
-      flex: 1 1 45%;
+      flex: 1 1 auto;
       min-width: 0;
-      width: auto !important;
-    }
-
-    .clip-preview-resize {
-      display: none;
     }
 
     .chapter-preview-pane {
-      flex: 1 1 55%;
-      padding-left: 0;
+      flex: 1 1 auto;
     }
   }
 

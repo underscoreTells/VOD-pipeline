@@ -32,6 +32,7 @@ import {
   Sun,
   Moon,
   Settings,
+  Repeat,
 } from 'lucide-svelte';
 
 export type ClipRole = 'setup' | 'escalation' | 'twist' | 'payoff' | 'transition' | 'unassigned';
@@ -131,4 +132,5 @@ export {
   Sun,
   Moon,
   Settings,
+  Repeat,
 };

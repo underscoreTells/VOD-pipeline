@@ -2,12 +2,12 @@
   import type { Clip } from '$shared/types/database';
   import { getSelectedClips, getClipById } from '../state/timeline.svelte';
   import { chaptersState } from '../state/chapters.svelte';
-  import { formatTime, formatTimecode } from '../state/keyboard.svelte';
+  import { formatTimecode } from '../state/keyboard.svelte';
   import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
   import Icon from './ui/Icon.svelte';
-  import { ChevronLeft, ChevronRight } from '../constants';
+  import { ChevronLeft, ChevronRight, Play, Pause, Repeat } from '../constants';
 
   const CLIP_END_EPSILON = 0.01;
   const NUDGE_FPS = 30;
@@ -35,7 +35,9 @@
     return selectedAsset ? buildPlayableAssetUrl(selectedAsset) : '';
   });
 
-  const isSelectedAssetUnavailable = $derived(() => selectedAsset?.availability.exists === false);
+  const isSelectedAssetUnavailable = $derived.by(() => selectedAsset?.availability.exists === false);
+
+  const clipDescription = $derived.by(() => selectedClip?.description || '');
   
   // Video player state
   let videoRef: HTMLVideoElement | null = $state(null);
@@ -305,23 +307,21 @@
 
 <div class="clip-preview scrollbar-thin">
   {#if selectedClip}
-    <div class="preview-header">
-      <h4>Clip Preview</h4>
+    <!-- Header: role badge left, title right with description tooltip -->
+    <header class="preview-header" title={clipDescription}>
       <span class="role-badge" data-role={selectedClip.role}>
-        {selectedClip.role || 'No role'}
+        {selectedClip.role || 'unassigned'}
       </span>
-    </div>
+      <span class="clip-title">Clip Preview · Track {selectedClip.track_index + 1}</span>
+    </header>
     
-    <div class="video-container">
-      {#if isSelectedAssetUnavailable()}
+    <div class="player-stage">
+      <!-- Video Container -->
+      <div class="video-container" class:with-dock={!isSelectedAssetUnavailable}>
+      {#if isSelectedAssetUnavailable}
         <div class="unavailable-state">
-          <p class="unavailable-title">Clip source file is unavailable</p>
+          <p class="unavailable-title">Source unavailable</p>
           <p class="unavailable-path">{selectedAsset?.availability.savedPath ?? selectedAsset?.file_path}</p>
-          {#if selectedAsset?.availability.nearestExistingAncestor}
-            <p class="unavailable-ancestor">
-              Nearest existing path: {selectedAsset.availability.nearestExistingAncestor}
-            </p>
-          {/if}
         </div>
       {:else}
         <video
@@ -340,69 +340,68 @@
         >
           <track kind="captions" />
         </video>
-      {/if}
-    </div>
-    
-    <div class="clip-controls">
-      <div class="trim-controls">
-        <div class="trim-row">
-          <span class="trim-label">In:</span>
-          <span class="trim-time">{formatTimecode(timelineInTime)}</span>
-          <div class="trim-buttons">
-            <button onclick={() => nudgeInPoint(-1)} title="-1 frame"><Icon icon={ChevronLeft} size={14} /></button>
-            <button onclick={() => nudgeInPoint(1)} title="+1 frame"><Icon icon={ChevronRight} size={14} /></button>
-          </div>
-        </div>
 
-        <div class="trim-row">
-          <span class="trim-label">Out:</span>
-          <span class="trim-time">{formatTimecode(timelineOutTime)}</span>
-          <div class="trim-buttons">
-            <button onclick={() => nudgeOutPoint(-1)} title="-1 frame"><Icon icon={ChevronLeft} size={14} /></button>
-            <button onclick={() => nudgeOutPoint(1)} title="+1 frame"><Icon icon={ChevronRight} size={14} /></button>
+      {/if}
+      </div>
+
+      {#if !isSelectedAssetUnavailable}
+        <div class="player-dock">
+          <div class="transport-bar">
+            <button
+              class="play-btn"
+              onclick={togglePlayback}
+              disabled={isSelectedAssetUnavailable}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
+              <Icon icon={isPlaying ? Pause : Play} size={14} />
+            </button>
+            <input
+              class="scrubber"
+              type="range"
+              min="0"
+              max={Math.max(0.01, clipDuration)}
+              step="0.01"
+              value={clipLocalTime}
+              disabled={clipDuration <= 0 || isSelectedAssetUnavailable}
+              oninput={handleScrubInput}
+            />
+            <span class="transport-time">{formatTimecode(timelineCurrentTime)}</span>
+          </div>
+
+          <div class="trim-grid">
+            <span class="trim-label">IN</span>
+            <span class="trim-time">{formatTimecode(timelineInTime)}</span>
+            <div class="trim-actions">
+              <button class="nudge-btn" onclick={() => nudgeInPoint(-1)} title="-1 frame">
+                <Icon icon={ChevronLeft} size={12} />
+              </button>
+              <button class="nudge-btn" onclick={() => nudgeInPoint(1)} title="+1 frame">
+                <Icon icon={ChevronRight} size={12} />
+              </button>
+            </div>
+
+            <span class="trim-label">OUT</span>
+            <span class="trim-time">{formatTimecode(timelineOutTime)}</span>
+            <div class="trim-actions">
+              <button class="nudge-btn" onclick={() => nudgeOutPoint(-1)} title="-1 frame">
+                <Icon icon={ChevronLeft} size={12} />
+              </button>
+              <button class="nudge-btn" onclick={() => nudgeOutPoint(1)} title="+1 frame">
+                <Icon icon={ChevronRight} size={12} />
+              </button>
+              <button
+                class="loop-btn"
+                class:active={isLooping}
+                onclick={() => isLooping = !isLooping}
+                title={isLooping ? 'Disable loop' : 'Enable loop'}
+                aria-label="Toggle loop"
+              >
+                <Icon icon={Repeat} size={12} />
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-      
-      <div class="playback-controls">
-        <div class="playback-top-row">
-          <button class="play-toggle" onclick={togglePlayback} disabled={isSelectedAssetUnavailable()}>
-            {isPlaying ? 'Pause' : 'Play'}
-          </button>
-          <span class="playback-time">{formatTimecode(timelineCurrentTime)} / {formatTimecode(timelineOutTime)}</span>
-        </div>
-        <input
-          class="clip-scrubber"
-          type="range"
-          min="0"
-          max={Math.max(0.01, clipDuration)}
-          step="0.01"
-          value={clipLocalTime}
-          disabled={clipDuration <= 0 || isSelectedAssetUnavailable()}
-          oninput={handleScrubInput}
-        />
-        <div class="playback-meta-row">
-          <label class="loop-toggle">
-            <input type="checkbox" bind:checked={isLooping} />
-            <span>Loop</span>
-          </label>
-          <span class="duration">Duration: {formatTime(clipDuration)}</span>
-        </div>
-      </div>
-    </div>
-    
-    <div class="clip-info">
-      {#if selectedClip.description}
-        <p class="description">{selectedClip.description}</p>
-      {:else}
-        <p class="description empty">No description</p>
       {/if}
-      
-      <div class="meta">
-        <span>Track {selectedClip.track_index + 1}</span>
-        <span>•</span>
-        <span>{selectedClip.is_essential ? 'Essential' : 'Optional'}</span>
-      </div>
     </div>
   {:else}
     <div class="empty-state">
@@ -415,39 +414,36 @@
   .clip-preview {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
     background: var(--surface-base);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
-    padding: var(--space-3);
+    padding: var(--space-2);
     min-height: 0;
     height: 100%;
     box-sizing: border-box;
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: hidden;
   }
   
+  /* Header */
   .preview-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-  }
-  
-  .preview-header h4 {
-    margin: 0;
-    font-size: var(--text-base);
-    color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    justify-content: space-between;
+    gap: var(--space-2);
+    cursor: default;
   }
   
   .role-badge {
-    font-size: var(--text-sm);
-    padding: var(--space-1) var(--space-2);
-    border-radius: 12px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-pill);
     background: var(--surface-active);
     color: var(--text-tertiary);
     text-transform: capitalize;
+    line-height: 1.4;
   }
   
   .role-badge[data-role="setup"] { background: var(--role-setup-subtle); color: var(--role-setup); }
@@ -456,146 +452,129 @@
   .role-badge[data-role="payoff"] { background: var(--role-payoff-subtle); color: var(--role-payoff); }
   .role-badge[data-role="transition"] { background: var(--role-transition-subtle); color: var(--role-transition); }
   
+  .clip-title {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .player-stage {
+    --player-dock-height: 110px;
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  
+  /* Video Container */
   .video-container {
     position: relative;
     background: #000;
     border-radius: var(--radius-sm);
     overflow: hidden;
-    flex: 0 0 auto;
-    aspect-ratio: 16/9;
+    min-height: 0;
+  }
+
+  .player-stage .video-container {
+    position: absolute;
+    inset: 0;
+  }
+
+  .video-container.with-dock {
+    bottom: calc(var(--player-dock-height) + var(--space-2));
+  }
+
+  .player-dock {
+    position: absolute;
+    left: var(--space-1);
+    right: var(--space-1);
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-height: var(--player-dock-height);
   }
   
   .preview-video {
     width: 100%;
     height: 100%;
     display: block;
+    object-fit: contain;
   }
 
   .unavailable-state {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: var(--space-2);
+    align-items: center;
+    gap: var(--space-1);
     width: 100%;
     height: 100%;
-    padding: var(--space-4);
+    padding: var(--space-3);
     box-sizing: border-box;
     background: linear-gradient(180deg, #1f1f1f 0%, #121212 100%);
     color: var(--text-secondary);
+    text-align: center;
   }
 
   .unavailable-title {
     margin: 0;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     color: var(--text-primary);
   }
 
-  .unavailable-path,
-  .unavailable-ancestor {
+  .unavailable-path {
     margin: 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: #a0a0a0;
+    font-size: var(--text-xs);
+    line-height: 1.3;
+    color: var(--text-tertiary);
     word-break: break-all;
+    max-width: 100%;
   }
   
-  .clip-controls {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-  
-  .trim-controls {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-  
-  .trim-row {
+  /* Transport Bar */
+  .transport-bar {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    background: rgba(18, 18, 18, 0.86);
+    backdrop-filter: blur(8px);
   }
-  
-  .trim-label {
-    width: 40px;
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-  }
-  
-  .trim-time {
-    flex: 1;
-    font-family: var(--font-mono);
-    font-size: var(--text-base);
-    color: var(--text-secondary);
-  }
-  
-  .trim-buttons {
-    display: flex;
-    gap: var(--space-1);
-  }
-  
-  .trim-buttons button {
+
+  .play-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 28px;
     height: 28px;
-    border: 1px solid var(--border-strong);
-    background: var(--surface-hover);
-    color: var(--text-tertiary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: var(--text-sm);
-    transition: all 0.15s;
-  }
-  
-  .trim-buttons button:hover {
-    background: var(--surface-active);
-    border-color: #555;
-    color: var(--text-primary);
-  }
-  
-  .playback-controls {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding-top: var(--space-2);
-    border-top: 1px solid var(--border-default);
-  }
-
-  .playback-top-row,
-  .playback-meta-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .play-toggle {
-    padding: 0.35rem var(--space-3);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface-hover);
+    border: 1px solid var(--border-default);
+    background: var(--surface-raised);
     color: var(--text-secondary);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 0.8rem;
+    transition: all var(--transition-fast);
   }
-
-  .play-toggle:hover {
-    background: var(--surface-active);
-    border-color: #555;
+  
+  .play-btn:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
     color: var(--text-primary);
   }
 
-  .playback-time {
-    color: var(--text-secondary);
-    font-size: 0.8rem;
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
+  .play-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
-  .clip-scrubber {
-    width: 100%;
+  .scrubber {
+    flex: 1;
+    min-width: 0;
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
@@ -604,82 +583,133 @@
     outline: none;
   }
 
-  .clip-scrubber:disabled {
+  .scrubber:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
 
-  .clip-scrubber::-webkit-slider-thumb {
+  .scrubber::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
+    background: var(--accent-primary);
+    border: 2px solid var(--surface-base);
     cursor: pointer;
   }
 
-  .clip-scrubber::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
+  .scrubber::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
-    background: #4f46e5;
-    border: 2px solid #0f0f0f;
+    background: var(--accent-primary);
+    border: 2px solid var(--surface-base);
     cursor: pointer;
   }
-  
-  .loop-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-base);
-    color: var(--text-tertiary);
-    cursor: pointer;
-  }
-  
-  .loop-toggle input {
-    cursor: pointer;
-  }
-  
-  .duration {
-    font-size: var(--text-sm);
-    color: var(--text-disabled);
+
+  .transport-time {
+    flex: 0 0 auto;
     font-family: var(--font-mono);
-  }
-  
-  .clip-info {
-    padding-top: var(--space-2);
-    border-top: 1px solid var(--border-default);
-  }
-  
-  .description {
-    margin: 0 0 var(--space-2) 0;
-    font-size: var(--text-base);
+    font-size: var(--text-xs);
     color: var(--text-secondary);
-    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   
-  .description.empty {
-    color: var(--text-disabled);
-    font-style: italic;
+  /* Trim Controls */
+  .trim-grid {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: var(--space-1) var(--space-2);
+    align-items: center;
+    padding: var(--space-2);
+    background: rgba(18, 18, 18, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    backdrop-filter: blur(8px);
   }
   
-  .meta {
+  .trim-label {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  
+  .trim-time {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .trim-actions {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-sm);
-    color: var(--text-tertiary);
+    gap: 2px;
   }
   
+  .nudge-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border-default);
+    background: var(--surface-base);
+    color: var(--text-tertiary);
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  
+  .nudge-btn:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+
+  .loop-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-left: var(--space-1);
+    border: 1px solid var(--border-default);
+    background: var(--surface-base);
+    color: var(--text-tertiary);
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .loop-btn:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+
+  .loop-btn.active {
+    background: var(--accent-primary-subtle);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+  
+  /* Empty State */
   .empty-state {
     display: flex;
     align-items: center;
     justify-content: center;
     flex: 1;
-    min-height: 0;
+    min-height: 120px;
     color: var(--text-disabled);
-    font-size: var(--text-base);
+    font-size: var(--text-sm);
+  }
+
+  .empty-state p {
+    margin: 0;
   }
 </style>

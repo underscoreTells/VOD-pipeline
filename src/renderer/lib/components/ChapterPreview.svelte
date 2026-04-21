@@ -3,7 +3,7 @@
   import type { Chapter, Asset, Clip } from '$shared/types/database';
   import type { AssetAvailability } from '$shared/contracts/ipc';
   import Icon from './ui/Icon.svelte';
-  import { Clapperboard } from '../constants';
+  import { Clapperboard, Play, Pause } from '../constants';
   import { buildPlayableAssetUrl } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
@@ -52,7 +52,7 @@
   let reverseProxyRequestToken = 0;
   let reverseEnsureRequested = false;
   let reversePollTimerId: number | null = null;
-  let activeSource: 'normal' | 'reverse' = 'normal';
+  let activeSource = $state<'normal' | 'reverse'>('normal');
   let currentVideoUrl: string | null = null;
   let pendingGlobalSeekTime: number | null = null;
 
@@ -616,72 +616,77 @@
     <span class="chapter-title">{previewTitle()}</span>
   </div>
 
-  <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()}>
-    {#if !hasPreview()}
-      <div class="empty-state">
-        <div class="empty-icon"><Icon icon={Clapperboard} size={40} /></div>
-        <p>Select a chapter to preview</p>
-      </div>
-    {:else if assetUnavailable()}
-      <div class="unavailable-state">
-        <p class="unavailable-title">Chapter source file is unavailable</p>
-        <p class="unavailable-path">{asset?.availability?.savedPath ?? asset?.file_path}</p>
-        {#if asset?.availability?.nearestExistingAncestor}
-          <p class="unavailable-ancestor">
-            Nearest existing path: {asset.availability.nearestExistingAncestor}
-          </p>
-        {/if}
-      </div>
-    {:else}
-      <video
-        bind:this={videoRef}
-        class="preview-video"
-        onseeking={handleSeeking}
-        onseeked={handleSeeked}
-        ontimeupdate={handleTimeUpdate}
-        onloadedmetadata={handleLoadedMetadata}
-        onerror={handleVideoError}
-        preload="metadata"
-        playsinline
-      >
-        <track kind="captions" />
-      </video>
-    {/if}
-  </div>
-
-  {#if chapter && asset}
-    <div class="preview-controls">
-      <button class="play-toggle" onclick={togglePlayback} disabled={assetUnavailable()}>
-        {timelineState.isPlaying ? 'Pause' : 'Play'}
-      </button>
-      <div class="time-display">
-        <span class="time-current">{formatTime(localTime())}</span>
-        <span class="time-divider">/</span>
-        <span class="time-total">{formatTime(chapterDuration())}</span>
-      </div>
-      <input
-        class="scrubber"
-        type="range"
-        min="0"
-        max={chapterDuration()}
-        step="0.01"
-        value={localTime()}
-        disabled={assetUnavailable()}
-        oninput={handleScrubInput}
-      />
-      {#if reverseStatusMessage}
-        <div class="reverse-status">{reverseStatusMessage}</div>
+  <div class="player-stage">
+    <div class="video-frame" class:empty={!hasPreview() || assetUnavailable()} class:with-dock={chapter && asset}>
+      {#if !hasPreview()}
+        <div class="empty-state">
+          <div class="empty-icon"><Icon icon={Clapperboard} size={40} /></div>
+          <p>Select a chapter to preview</p>
+        </div>
+      {:else if assetUnavailable()}
+        <div class="unavailable-state">
+          <p class="unavailable-title">Chapter source file is unavailable</p>
+          <p class="unavailable-path">{asset?.availability?.savedPath ?? asset?.file_path}</p>
+          {#if asset?.availability?.nearestExistingAncestor}
+            <p class="unavailable-ancestor">
+              Nearest existing path: {asset.availability.nearestExistingAncestor}
+            </p>
+          {/if}
+        </div>
+      {:else}
+        <video
+          bind:this={videoRef}
+          class="preview-video"
+          onseeking={handleSeeking}
+          onseeked={handleSeeked}
+          ontimeupdate={handleTimeUpdate}
+          onloadedmetadata={handleLoadedMetadata}
+          onerror={handleVideoError}
+          preload="metadata"
+          playsinline
+        >
+          <track kind="captions" />
+        </video>
       {/if}
     </div>
-  {/if}
 
-  <div class="preview-footer">
-    {#if chapter}
-      <span class="range">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
-    {:else}
-      <span class="range">No chapter selected</span>
+    {#if chapter && asset}
+      <div class="player-dock">
+        <div class="transport-bar">
+          <button
+            class="play-btn"
+            onclick={togglePlayback}
+            disabled={assetUnavailable()}
+            aria-label={timelineState.isPlaying ? 'Pause' : 'Play'}
+          >
+            <Icon icon={timelineState.isPlaying ? Pause : Play} size={14} />
+          </button>
+          <input
+            class="scrubber"
+            type="range"
+            min="0"
+            max={chapterDuration()}
+            step="0.01"
+            value={localTime()}
+            disabled={assetUnavailable()}
+            oninput={handleScrubInput}
+          />
+          <span class="transport-time">{formatTime(localTime())} / {formatTime(chapterDuration())}</span>
+        </div>
+
+        <div class="info-grid">
+          <span class="info-label">Range</span>
+          <span class="info-value">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
+          <span class="info-meta">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
+
+          <span class="info-label">Mode</span>
+          <span class="info-value">{activeSource === 'reverse' ? 'Reverse' : 'Forward'}</span>
+          <span class="info-meta" class:info-status={Boolean(reverseStatusMessage)}>
+            {reverseStatusMessage ?? formatTime(localTime())}
+          </span>
+        </div>
+      </div>
     {/if}
-    <span class="timecode">{formatTime(localTime())}</span>
   </div>
 </div>
 
@@ -691,35 +696,49 @@
     flex-direction: column;
     gap: var(--space-2);
     background: var(--surface-base);
-    border: 1px solid var(--surface-hover);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
-    padding: var(--space-3);
+    padding: var(--space-2);
     height: 100%;
     min-height: 0;
     box-sizing: border-box;
+    overflow: hidden;
   }
 
   .preview-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-4);
+    gap: var(--space-2);
+    cursor: default;
   }
 
   .preview-header h3 {
     margin: 0;
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
     color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    line-height: 1.4;
+    padding: 2px 0;
   }
 
   .chapter-title {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .player-stage {
+    --player-dock-height: 110px;
+    position: relative;
+    flex: 1;
+    min-height: 0;
   }
 
   .video-frame {
@@ -727,8 +746,16 @@
     background: #000;
     border-radius: var(--radius-md);
     overflow: hidden;
-    flex: 1;
     min-height: 0;
+  }
+
+  .player-stage .video-frame {
+    position: absolute;
+    inset: 0;
+  }
+
+  .video-frame.with-dock {
+    bottom: calc(var(--player-dock-height) + var(--space-2));
   }
 
   .video-frame.empty {
@@ -790,91 +817,141 @@
     opacity: 0.6;
   }
 
-  .preview-footer {
+  .player-dock {
+    position: absolute;
+    left: var(--space-1);
+    right: var(--space-1);
+    bottom: 0;
     display: flex;
-    justify-content: space-between;
-    font-size: var(--text-xs);
-    color: var(--text-tertiary);
-    font-family: var(--font-mono);
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-height: var(--player-dock-height);
   }
 
-  .timecode {
-    color: var(--text-secondary);
-  }
-
-  .preview-controls {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto auto auto;
-    gap: var(--space-2) var(--space-4);
-    align-items: center;
-    padding: var(--space-2) 0;
-  }
-
-  .play-toggle {
-    grid-row: 1 / span 2;
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--surface-hover);
-    background: var(--surface-raised);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    cursor: pointer;
-    transition: background var(--transition-normal), border-color var(--transition-normal);
-  }
-
-  .play-toggle:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-default);
-  }
-
-  .time-display {
+  .transport-bar {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    background: rgba(18, 18, 18, 0.86);
+    backdrop-filter: blur(8px);
+  }
+
+  .play-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border-default);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .play-btn:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+
+  .play-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .transport-time {
+    flex: 0 0 auto;
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
-  .time-divider {
-    color: var(--text-disabled);
+  .info-grid {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-auto-rows: 22px;
+    gap: var(--space-1) var(--space-2);
+    align-items: center;
+    padding: var(--space-2);
+    background: rgba(18, 18, 18, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    backdrop-filter: blur(8px);
+  }
+
+  .info-label {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    line-height: 22px;
+  }
+
+  .info-value {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    line-height: 22px;
+  }
+
+  .info-meta {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    line-height: 22px;
+  }
+
+  .info-status {
+    color: #fbbf24;
   }
 
   .scrubber {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
     background: var(--surface-hover);
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-pill);
     outline: none;
+  }
+
+  .scrubber:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .scrubber::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--accent-primary);
-    border: 2px solid var(--surface-page);
+    border: 2px solid var(--surface-base);
     cursor: pointer;
   }
 
   .scrubber::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--accent-primary);
-    border: 2px solid var(--surface-page);
+    border: 2px solid var(--surface-base);
     cursor: pointer;
   }
 
-  .reverse-status {
-    grid-column: 2;
-    grid-row: 3;
-    font-size: var(--text-xs);
-    color: #fbbf24;
-  }
 </style>
