@@ -78,10 +78,11 @@
     getWaveformTrackIndices,
     isMkvAsset,
   } from './project-detail-waveforms.js';
+  import ProjectEditorHeader from './ProjectEditorHeader.svelte';
+  import Icon from './ui/Icon.svelte';
+  import { BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
   import type { Project, Asset } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
-  import Icon from './ui/Icon.svelte';
-  import { ArrowLeft, FolderPlus, Share, BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
   
   interface Props {
     project: Project;
@@ -532,39 +533,13 @@
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
-  <!-- Header -->
-  <div class="detail-header flex shrink-0 items-center justify-between border-b border-border-default px-4 py-3">
-    <div class="header-left flex items-center gap-4">
-      <button
-        class="back-btn inline-flex items-center gap-1 rounded-sm bg-transparent px-3 py-2 text-app-sm text-text-secondary transition-all hover:bg-surface-hover hover:text-text-primary"
-        onclick={onBack}
-      >
-        <Icon icon={ArrowLeft} size={16} />
-        <span>Back</span>
-      </button>
-      <h2 class="text-[clamp(1.1rem,1vw+0.95rem,1.5rem)] font-semibold tracking-[-0.01em] text-text-primary">
-        {project.name}
-      </h2>
-    </div>
-    <div class="header-actions flex gap-3">
-      {#if hasContent()}
-        <button
-          class="import-btn inline-flex items-center gap-1 rounded-sm border border-border-default bg-transparent px-3 py-1.5 text-app-sm font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
-          onclick={() => setIsImporting(true)}
-        >
-          <Icon icon={FolderPlus} size={16} />
-          <span>Import More</span>
-        </button>
-      {/if}
-      <button
-        class="export-btn inline-flex items-center gap-1 rounded-sm border border-accent-primary bg-accent-primary px-3 py-1.5 text-app-sm font-medium text-white transition-all hover:border-accent-primary-hover hover:bg-accent-primary-hover"
-        onclick={() => showExportDialog = true}
-      >
-        <Icon icon={Share} size={16} />
-        <span>Export</span>
-      </button>
-    </div>
-  </div>
+  <ProjectEditorHeader
+    projectName={project.name}
+    showImportMore={hasContent()}
+    onBack={onBack}
+    onImportMore={() => setIsImporting(true)}
+    onExport={() => showExportDialog = true}
+  />
   
   <!-- Main Content -->
   <div class="detail-content relative flex min-h-0 flex-1 flex-col overflow-hidden">

@@ -100,26 +100,28 @@
 </script>
 
 <div class="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden">
-  <header class="flex items-center justify-between px-8 py-6 z-10 relative">
-    <div class="flex items-center gap-4">
-      <div class="h-8 w-8 rounded-md bg-surface-raised border border-border-default flex items-center justify-center">
-        <Icon icon={Video} size={16} class="text-text-primary" />
+  {#if !selectedProject}
+    <header class="relative z-10 flex items-center justify-between px-8 py-6">
+      <div class="flex items-center gap-4">
+        <div class="flex h-8 w-8 items-center justify-center rounded-md border border-border-default bg-surface-raised">
+          <Icon icon={Video} size={16} class="text-text-primary" />
+        </div>
+        <h1 class="m-0 text-app-xl font-bold tracking-tighter text-text-primary">VOD Pipeline</h1>
       </div>
-      <h1 class="m-0 text-app-xl font-bold tracking-tighter text-text-primary">VOD Pipeline</h1>
-    </div>
-    <div class="flex items-center gap-3">
-      <IconButton
-        icon={themeState.current === 'dark' ? Sun : Moon}
-        size={16}
-        onclick={toggleTheme}
-        title="Toggle theme"
-        class="h-9 w-9 rounded-full bg-surface-elevated text-text-secondary hover:text-text-primary transition-all border border-border-subtle"
-      />
-      <Button variant="ghost" onclick={openSettings} icon={Settings} class="h-9">
-        Settings
-      </Button>
-    </div>
-  </header>
+      <div class="flex items-center gap-3">
+        <IconButton
+          icon={themeState.current === 'dark' ? Sun : Moon}
+          size={16}
+          onclick={toggleTheme}
+          title="Toggle theme"
+          class="h-9 w-9 rounded-full border border-border-subtle bg-surface-elevated text-text-secondary transition-all hover:text-text-primary"
+        />
+        <Button variant="ghost" onclick={openSettings} icon={Settings} class="h-9">
+          Settings
+        </Button>
+      </div>
+    </header>
+  {/if}
 
   <main
     class={cn(
