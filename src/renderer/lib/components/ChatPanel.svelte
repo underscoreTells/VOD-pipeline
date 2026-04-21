@@ -33,7 +33,7 @@
   let suggestionActionBusy = $state<Map<number, boolean>>(new Map());
   let showConversationDropdown = $state(false);
 
-  const MESSAGE_INPUT_MIN_HEIGHT = 40;
+  const MESSAGE_INPUT_MIN_HEIGHT = 112;
   const MESSAGE_INPUT_MAX_HEIGHT = 180;
 
   const providers = [
@@ -485,9 +485,9 @@
   {/if}
 
   <div class="composer-wrapper shrink-0 px-3 pb-3">
-    <form class="composer flex items-center rounded-lg border border-border-default bg-surface-raised px-2 py-1 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
+    <form class="composer flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
       <textarea
-        class="min-h-8 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-1.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
+        class="min-h-28 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
         rows="1"
         bind:value={message}
         bind:this={messageInput}
@@ -498,7 +498,7 @@
       ></textarea>
       <button
         type="submit"
-        class="send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
+        class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
         disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId}
         title="Send message"
       >
