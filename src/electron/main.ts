@@ -11,16 +11,23 @@ import { createLogger } from './logger.js';
 import { registerMediaProtocol, registerMediaProtocolScheme } from './media-protocol.js';
 
 const logger = createLogger('Main');
+const isDevelopment = process.env.NODE_ENV !== 'production';
 
 loadEnvironment();
 registerMediaProtocolScheme();
+
+// Linux dev environments can fail hard when Chromium's GPU process is unavailable.
+if (process.platform === 'linux' && isDevelopment) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+}
 
 app.whenReady().then(async () => {
   logger.info('Electron app starting...');
   logger.info('Platform:', process.platform);
   logger.info('Node version:', process.version);
   logger.info('Electron version:', process.versions.electron);
-  logger.info('Development mode:', process.env.NODE_ENV !== 'production');
+  logger.info('Development mode:', isDevelopment);
 
   await initializeDatabase();
   await initializeDevRuntimeState();

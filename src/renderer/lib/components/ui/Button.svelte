@@ -1,18 +1,17 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte/elements';
+  import type { Snippet } from 'svelte';
   import type { HTMLButtonAttributes } from 'svelte/elements';
   import Icon from './Icon.svelte';
-  import type { LucideIcon } from 'lucide-svelte';
   import { cn } from '../../utils/cn';
 
   type Variant = 'primary' | 'secondary' | 'ghost' | 'destructive';
-  type Size = 'sm' | 'md';
+  type Size = 'sm' | 'md' | 'icon';
 
   interface Props extends HTMLButtonAttributes {
     variant?: Variant;
     size?: Size;
-    icon?: LucideIcon;
-    iconRight?: LucideIcon;
+    icon?: any;
+    iconRight?: any;
     disabled?: boolean;
     children?: Snippet;
   }
@@ -29,22 +28,23 @@
   }: Props = $props();
 
   const baseClass =
-    'inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-sm border font-medium leading-none transition-colors disabled:pointer-events-none';
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium leading-none transition-all duration-120 ease-out active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus';
 
   const sizeClasses: Record<Size, string> = {
-    md: 'px-3 py-2 text-app-base',
-    sm: 'px-2 py-1 text-app-sm',
+    md: 'h-9 px-4 py-2 text-app-base',
+    sm: 'h-7 px-3 py-1 text-app-sm',
+    icon: 'h-9 w-9 p-0',
   };
 
   const variantClasses: Record<Variant, string> = {
     primary:
-      'border-accent-primary bg-accent-primary text-white hover:border-accent-primary-hover hover:bg-accent-primary-hover active:bg-accent-primary-active',
+      'border-transparent bg-accent-primary text-white hover:opacity-90 shadow-xs/5 relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[inset_0_1px_rgba(255,255,255,0.15)]',
     secondary:
-      'border-border-default bg-surface-elevated text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary',
+      'border-border-default bg-surface-base text-text-primary hover:bg-surface-elevated shadow-xs/5',
     ghost:
-      'border-transparent bg-transparent text-text-secondary hover:bg-surface-elevated hover:text-text-primary',
+      'border-transparent bg-transparent text-text-secondary hover:bg-surface-hover hover:text-text-primary',
     destructive:
-      'border-accent-destructive bg-accent-destructive text-white hover:border-accent-destructive-hover hover:bg-accent-destructive-hover',
+      'border-transparent bg-accent-destructive text-white hover:opacity-90 shadow-xs/5',
   };
 </script>
 

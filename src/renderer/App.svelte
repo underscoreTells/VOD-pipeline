@@ -99,18 +99,23 @@
   }
 </script>
 
-<div class="flex h-screen flex-col">
-  <header class="flex items-center justify-between border-b border-border-default bg-surface-raised px-8 py-4">
-    <h1 class="m-0 text-app-2xl font-semibold text-text-primary">VOD Pipeline</h1>
-    <div class="flex items-center gap-2">
+<div class="flex min-h-[100dvh] flex-col w-full">
+  <header class="flex items-center justify-between px-8 py-6 z-10 relative">
+    <div class="flex items-center gap-4">
+      <div class="h-8 w-8 rounded-lg bg-surface-elevated border border-border-default flex items-center justify-center">
+        <Icon icon={Video} size={16} class="text-text-primary" />
+      </div>
+      <h1 class="m-0 text-app-xl font-bold tracking-tighter text-text-primary">VOD Pipeline</h1>
+    </div>
+    <div class="flex items-center gap-3">
       <IconButton
         icon={themeState.current === 'dark' ? Sun : Moon}
-        size={18}
+        size={16}
         onclick={toggleTheme}
         title="Toggle theme"
-        class="h-10 w-10 border border-border-strong text-text-secondary hover:bg-surface-active"
+        class="h-9 w-9 rounded-full bg-surface-elevated text-text-secondary hover:text-text-primary transition-all border border-border-subtle"
       />
-      <Button variant="secondary" onclick={openSettings} icon={Settings}>
+      <Button variant="ghost" onclick={openSettings} icon={Settings} class="h-9">
         Settings
       </Button>
     </div>
@@ -118,50 +123,75 @@
 
   <main
     class={cn(
-      'flex-1 overflow-auto p-8',
-      selectedProject ? 'overflow-hidden p-0' : 'overflow-auto p-8',
+      'flex-1 w-full',
+      selectedProject ? 'overflow-hidden p-0' : 'overflow-auto p-4 md:p-8 max-w-[1400px] mx-auto',
     )}
   >
     {#if !selectedProject}
-      <section class="mx-auto flex w-full max-w-7xl flex-col gap-8">
-        <div class="flex items-center justify-between gap-4">
-          <h2 class="m-0 text-app-2xl font-semibold text-text-primary">Projects</h2>
-          <Button variant="primary" onclick={() => showCreateDialog = true}>New Project</Button>
+      <section class="flex flex-col gap-12 w-full pt-4 md:pt-10">
+        <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 w-full max-w-4xl">
+          <div class="flex flex-col gap-2">
+            <h2 class="m-0 text-app-3xl md:text-[3rem] font-bold tracking-tighter leading-none text-text-primary max-w-lg">
+              Your Video Projects
+            </h2>
+            <p class="text-app-md text-text-secondary max-w-md mt-2">
+              Transform raw streams into polished stories with AI-assisted narrative beat extraction.
+            </p>
+          </div>
+          <Button variant="primary" onclick={() => showCreateDialog = true} class="shadow-xs/5 font-medium px-6 py-2.5 h-auto">
+            New Project
+          </Button>
         </div>
 
         {#if projects.loading}
-          <p class="rounded-lg border border-border-default bg-surface-raised px-6 py-8 text-center text-text-disabled">
-            Loading projects...
-          </p>
+          <div class="glass-card p-12 text-center text-text-tertiary max-w-4xl border-dashed">
+            <div class="animate-pulse">Loading workspace...</div>
+          </div>
         {:else if projects.error}
-          <p class="rounded-lg border border-accent-destructive bg-accent-destructive/10 px-6 py-8 text-center text-accent-destructive">
+          <div class="glass-card p-8 border-accent-destructive bg-accent-destructive/5 text-accent-destructive max-w-4xl">
             {projects.error}
-          </p>
+          </div>
         {:else if projects.items.length === 0}
-          <p class="rounded-lg border border-border-default bg-surface-raised px-6 py-8 text-center text-text-disabled">
-            No projects yet. Create one to get started!
-          </p>
+          <div class="glass-card p-16 flex flex-col items-center justify-center gap-4 text-center max-w-4xl border-dashed">
+            <div class="h-16 w-16 rounded-2xl bg-surface-elevated border border-border-subtle flex items-center justify-center mb-4">
+              <Icon icon={Video} size={28} class="text-text-tertiary" />
+            </div>
+            <h3 class="text-app-xl font-bold tracking-tight m-0 text-text-primary">Ready to cut</h3>
+            <p class="text-text-secondary m-0 max-w-[30ch]">
+              Drop your first VOD in and let the pipeline extract the story.
+            </p>
+            <Button variant="secondary" onclick={() => showCreateDialog = true} class="mt-4">
+              Create your first project
+            </Button>
+          </div>
         {:else}
-          <div class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-6">
-            {#each projects.items as project (project.id)}
-              <button
-                type="button"
-                class="overflow-hidden rounded-lg border border-border-default bg-surface-raised text-left transition-transform transition-shadow hover:-translate-y-0.5 hover:shadow-lg"
-                onclick={() => selectProject(project.id)}
-                oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
-              >
-                <div class="flex h-[140px] items-center justify-center bg-[linear-gradient(135deg,#667eea_0%,#764ba2_100%)]">
-                  <span class="flex items-center justify-center text-white">
-                    <Icon icon={Video} size={20} />
-                  </span>
+          <!-- Bento Grid Layout -->
+          <div class="grid grid-flow-dense grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-[280px]">
+            {#each projects.items as project, i (project.id)}
+              <div class="flex flex-col group relative">
+                <button
+                  type="button"
+                  class="glass-card flex-1 p-8 text-left transition-all duration-200 hover:bg-surface-elevated active:scale-[0.98] outline-none focus-visible:ring-[3px] focus-visible:ring-border-focus flex flex-col justify-between"
+                  onclick={() => selectProject(project.id)}
+                  oncontextmenu={(event) => openProjectContextMenu(event, project.id, project.name)}
+                >
+                  <div class="flex items-start justify-between w-full">
+                    <div class="h-10 w-10 rounded-xl bg-surface-raised border border-border-default flex items-center justify-center shadow-xs/5">
+                       <Icon icon={Video} size={18} class="text-text-primary" />
+                    </div>
+                  </div>
+                  
+                  <div class="mt-auto">
+                    <h3 class="text-app-xl font-bold tracking-tight text-text-primary m-0 line-clamp-2">
+                      {project.name}
+                    </h3>
+                  </div>
+                </button>
+                <div class="pt-3 px-1 flex items-center justify-between text-app-sm text-text-secondary">
+                  <span class="font-mono text-xs">{new Date(project.created_at).toLocaleDateString()}</span>
+                  <span class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">Open project →</span>
                 </div>
-                <div class="p-4">
-                  <h3 class="mb-2 text-app-lg font-semibold text-text-primary">{project.name}</h3>
-                  <p class="m-0 text-app-sm text-text-disabled">
-                    {new Date(project.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-              </button>
+              </div>
             {/each}
           </div>
 
@@ -184,20 +214,24 @@
       </section>
 
       <Dialog open={showCreateDialog} title="Create New Project" onClose={() => showCreateDialog = false}>
-        <div class="flex w-[400px] max-w-full flex-col gap-4">
-          <input
-            type="text"
-            bind:value={newProjectName}
-            class="w-full rounded-sm border border-border-default bg-surface-elevated px-3 py-2 text-app-md text-text-primary placeholder:text-text-disabled"
-            placeholder="Project name"
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && newProjectName.trim()) {
-                handleCreateProject();
-              }
-            }}
-          />
-          <div class="flex justify-end gap-2">
-            <Button variant="secondary" onclick={() => showCreateDialog = false}>Cancel</Button>
+        <div class="flex w-[400px] max-w-full flex-col gap-6 pt-2">
+          <div class="flex flex-col gap-2">
+            <label for="projectName" class="text-app-sm font-medium text-text-secondary">Project Name</label>
+            <input
+              id="projectName"
+              type="text"
+              bind:value={newProjectName}
+              class="w-full h-10 rounded-lg border border-border-default bg-surface-base px-3 py-2 text-app-md text-text-primary placeholder:text-text-disabled shadow-xs/5 focus:ring-[3px] focus:ring-border-focus focus:border-border-focus transition-all duration-120"
+              placeholder="e.g. Mario Odyssey Part 1"
+              onkeydown={(e) => {
+                if (e.key === 'Enter' && newProjectName.trim()) {
+                  handleCreateProject();
+                }
+              }}
+            />
+          </div>
+          <div class="flex justify-end gap-3">
+            <Button variant="ghost" onclick={() => showCreateDialog = false}>Cancel</Button>
             <Button variant="primary" onclick={handleCreateProject} disabled={!newProjectName.trim()}>
               Create
             </Button>
