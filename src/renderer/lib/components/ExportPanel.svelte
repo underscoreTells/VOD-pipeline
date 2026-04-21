@@ -2,14 +2,15 @@
   import { EXPORT_FORMATS, type ExportFormat } from '../../../pipeline/export/index';
   import { timelineState, getTotalDuration } from '../state/timeline.svelte';
   import { projects } from '../state/project.svelte';
-  
+  import Button from './ui/Button.svelte';
+  import ProgressBar from './ui/ProgressBar.svelte';
+
   interface Props {
     onExport?: (format: ExportFormat, filePath: string, frameRate: number, includeAudio: boolean) => Promise<void>;
   }
-  
+
   let { onExport }: Props = $props();
-  
-  // State
+
   let selectedFormat = $state<ExportFormat>('fcpxml');
   let frameRate = $state(30);
   let includeAudio = $state(true);
@@ -17,33 +18,28 @@
   let exportProgress = $state(0);
   let exportError = $state<string | null>(null);
   let exportSuccess = $state<string | null>(null);
-  
-  // Get current project name
+
   const projectName = $derived.by(() => {
-    const selected = projects.items.find(p => p.id === timelineState.projectId);
+    const selected = projects.items.find((p) => p.id === timelineState.projectId);
     return selected?.name || 'untitled';
   });
-  
-  // Get selected format config
+
   const formatConfig = $derived.by(() => {
-    return EXPORT_FORMATS.find(f => f.value === selectedFormat);
+    return EXPORT_FORMATS.find((f) => f.value === selectedFormat);
   });
-  
-  // Handle format change
+
   function handleFormatChange(event: Event) {
     selectedFormat = (event.target as HTMLSelectElement).value as ExportFormat;
     exportError = null;
     exportSuccess = null;
   }
-  
-  // Handle export
+
   async function handleExport() {
     if (!formatConfig || !onExport) {
       console.warn('Export handler not provided or format not selected');
       return;
     }
 
-    // Show save dialog
     const suggestedFilename = `${projectName}${formatConfig.extension}`;
 
     isExporting = true;
@@ -54,10 +50,8 @@
     let progressInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
-      // For now, use a mock file path - in real implementation this would open a save dialog
       const filePath = suggestedFilename;
 
-      // Simulate progress
       progressInterval = setInterval(() => {
         exportProgress = Math.min(exportProgress + 10, 90);
       }, 100);
@@ -75,247 +69,79 @@
       isExporting = false;
     }
   }
-  
-  // Available frame rates
+
   const frameRates = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 </script>
 
-<div class="export-panel scrollbar-thin">
-  <h3>Export Timeline</h3>
-  
-  <div class="form-group">
-    <label for="format">Export Format</label>
-    <select id="format" value={selectedFormat} onchange={handleFormatChange} disabled={isExporting}>
-      {#each EXPORT_FORMATS as format}
+<div class="scrollbar-thin min-w-[280px] border-t border-border-default bg-surface-raised p-4">
+  <h3 class="mb-4 text-app-sm uppercase tracking-[0.05em] text-text-primary">Export Timeline</h3>
+
+  <div class="mb-4">
+    <label class="mb-1 block text-[0.75rem] uppercase tracking-[0.05em] text-text-tertiary" for="format">Export Format</label>
+    <select class="w-full rounded-sm border border-border-strong bg-surface-elevated px-2 py-2 text-app-sm text-text-secondary" id="format" value={selectedFormat} onchange={handleFormatChange} disabled={isExporting}>
+      {#each EXPORT_FORMATS as format (format.value)}
         <option value={format.value}>{format.label}</option>
       {/each}
     </select>
-    <p class="help-text">{formatConfig?.description}</p>
+    <p class="mt-1 text-[0.75rem] italic text-text-disabled">{formatConfig?.description}</p>
   </div>
-  
-  <div class="form-group">
-    <label for="framerate">Frame Rate</label>
-    <select id="framerate" bind:value={frameRate} disabled={isExporting}>
-      {#each frameRates as rate}
+
+  <div class="mb-4">
+    <label class="mb-1 block text-[0.75rem] uppercase tracking-[0.05em] text-text-tertiary" for="framerate">Frame Rate</label>
+    <select class="w-full rounded-sm border border-border-strong bg-surface-elevated px-2 py-2 text-app-sm text-text-secondary" id="framerate" bind:value={frameRate} disabled={isExporting}>
+      {#each frameRates as rate (rate)}
         <option value={rate}>{rate} fps</option>
       {/each}
     </select>
   </div>
-  
-  <div class="form-group checkbox">
-    <label>
-      <input type="checkbox" bind:checked={includeAudio} disabled={isExporting} />
+
+  <div class="mb-4 flex items-center">
+    <label class="flex cursor-pointer items-center gap-2 text-app-base text-text-secondary">
+      <input class="h-4 w-4 rounded border border-border-strong bg-surface-elevated" type="checkbox" bind:checked={includeAudio} disabled={isExporting} />
       Include audio tracks
     </label>
   </div>
-  
-  <div class="export-info">
-    <div class="info-row">
+
+  <div class="mb-4 rounded-sm bg-surface-elevated p-3">
+    <div class="mb-1 flex justify-between text-app-sm text-text-tertiary">
       <span>Project:</span>
-      <span>{projectName}</span>
+      <span class="font-mono text-text-secondary">{projectName}</span>
     </div>
-    <div class="info-row">
+    <div class="mb-1 flex justify-between text-app-sm text-text-tertiary">
       <span>Clips:</span>
-      <span>{timelineState.clips.length}</span>
+      <span class="font-mono text-text-secondary">{timelineState.clips.length}</span>
     </div>
-    <div class="info-row">
+    <div class="flex justify-between text-app-sm text-text-tertiary">
       <span>Duration:</span>
-      <span>{getTotalDuration().toFixed(2)}s</span>
+      <span class="font-mono text-text-secondary">{getTotalDuration().toFixed(2)}s</span>
     </div>
   </div>
-  
+
   {#if isExporting}
-    <div class="progress-section">
-      <div class="progress-bar">
-        <div class="progress-fill" style="width: {exportProgress}%"></div>
-      </div>
-      <span class="progress-text">Exporting... {Math.round(exportProgress)}%</span>
+    <div class="mb-4">
+      <ProgressBar value={exportProgress} />
+      <span class="mt-2 block text-[0.75rem] text-text-tertiary">Exporting... {Math.round(exportProgress)}%</span>
     </div>
   {/if}
-  
+
   {#if exportError}
-    <div class="alert error">
-      <p>{exportError}</p>
+    <div class="mb-4 rounded-sm border border-red-500 bg-red-500/10 p-3 text-app-sm text-red-500">
+      <p class="m-0">{exportError}</p>
     </div>
   {/if}
-  
+
   {#if exportSuccess}
-    <div class="alert success">
-      <p>{exportSuccess}</p>
+    <div class="mb-4 rounded-sm border border-green-500 bg-green-500/10 p-3 text-app-sm text-green-500">
+      <p class="m-0">{exportSuccess}</p>
     </div>
   {/if}
-  
-  <button
-    class="export-btn"
+
+  <Button
+    class="w-full justify-center py-3"
+    variant="primary"
     onclick={handleExport}
     disabled={isExporting || !onExport || timelineState.clips.length === 0}
   >
     {isExporting ? 'Exporting...' : 'Export Timeline'}
-  </button>
+  </Button>
 </div>
-
-<style>
-  .export-panel {
-    background: var(--surface-raised);
-    border-top: 1px solid var(--border-default);
-    padding: var(--space-4);
-    min-width: 280px;
-  }
-  
-  h3 {
-    margin: 0 0 var(--space-4) 0;
-    font-size: var(--font-size-sm);
-    color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  
-  .form-group {
-    margin-bottom: var(--space-4);
-  }
-  
-  .form-group.checkbox {
-    display: flex;
-    align-items: center;
-  }
-  
-  .form-group.checkbox label {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    cursor: pointer;
-  }
-  
-  label {
-    display: block;
-    font-size: var(--font-size-xs);
-    color: var(--text-tertiary);
-    margin-bottom: var(--space-1);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  
-  select, input[type="checkbox"] {
-    width: 100%;
-    padding: var(--space-2);
-    background: var(--surface-elevated);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    font-size: var(--font-size-sm);
-  }
-  
-  input[type="checkbox"] {
-    width: auto;
-  }
-  
-  select:disabled, input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  
-  select:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-  }
-  
-  .help-text {
-    font-size: var(--font-size-xs);
-    color: var(--text-disabled);
-    margin: var(--space-1) 0 0 0;
-    font-style: italic;
-  }
-  
-  .export-info {
-    background: var(--surface-elevated);
-    border-radius: var(--radius-sm);
-    padding: var(--space-3);
-    margin-bottom: var(--space-4);
-  }
-  
-  .info-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: var(--font-size-sm);
-    color: var(--text-tertiary);
-    margin-bottom: var(--space-1);
-  }
-  
-  .info-row:last-child {
-    margin-bottom: 0;
-  }
-  
-  .info-row span:last-child {
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-  }
-  
-  .progress-section {
-    margin-bottom: var(--space-4);
-  }
-  
-  .progress-bar {
-    height: 6px;
-    background: var(--surface-active);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    margin-bottom: var(--space-2);
-  }
-  
-  .progress-fill {
-    height: 100%;
-    background: var(--accent-primary);
-    transition: width 0.2s;
-  }
-  
-  .progress-text {
-    font-size: var(--font-size-xs);
-    color: var(--text-tertiary);
-  }
-  
-  .alert {
-    padding: var(--space-3);
-    border-radius: var(--radius-sm);
-    margin-bottom: var(--space-4);
-    font-size: var(--font-size-sm);
-  }
-  
-  .alert.error {
-    background: #dc354520;
-    border: 1px solid #dc3545;
-    color: #dc3545;
-  }
-  
-  .alert.success {
-    background: #22c55e20;
-    border: 1px solid #22c55e;
-    color: #22c55e;
-  }
-  
-  .alert p {
-    margin: 0;
-  }
-  
-  .export-btn {
-    width: 100%;
-    padding: var(--space-3);
-    background: var(--accent-primary);
-    color: var(--text-primary);
-    border: none;
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  
-  .export-btn:hover:not(:disabled) {
-    background: var(--accent-primary-hover);
-  }
-  
-  .export-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background: var(--surface-active);
-  }
-</style>

@@ -1,6 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte/elements';
-  import type { HTMLAttributes } from 'svelte/elements';
+  import { cn } from '../../utils/cn';
 
   interface MenuItem {
     label: string;
@@ -54,12 +53,17 @@
 {#if items.length > 0}
   <div
     bind:this={menuRef}
-    class="context-menu"
+    class="fixed z-[var(--z-context-menu)] min-w-[140px] rounded-md border border-border-default bg-surface-raised py-1 shadow-[0_4px_16px_rgba(0,0,0,0.3)]"
     style="left: {adjustPosition().left}; top: {adjustPosition().top}"
   >
     {#each items as item}
       <button
-        class="context-menu-item {item.destructive ? 'destructive' : ''}"
+        class={cn(
+          'block w-full px-3 py-2 text-left text-app-base transition-colors disabled:pointer-events-none',
+          item.destructive
+            ? 'text-accent-destructive hover:bg-accent-destructive hover:text-white'
+            : 'text-text-primary hover:bg-surface-elevated',
+        )}
         onclick={() => { item.action(); onclose(); }}
         disabled={item.disabled}
       >
@@ -68,48 +72,3 @@
     {/each}
   </div>
 {/if}
-
-<style>
-  .context-menu {
-    position: fixed;
-    z-index: var(--z-context-menu);
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-    padding: var(--space-1) 0;
-    min-width: 140px;
-  }
-
-  .context-menu-item {
-    display: block;
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border: none;
-    background: none;
-    color: var(--text-primary);
-    font-size: var(--text-base);
-    font-family: var(--font-sans);
-    text-align: left;
-    cursor: pointer;
-    transition: background var(--transition-fast) ease;
-  }
-
-  .context-menu-item:hover:not(:disabled) {
-    background: var(--surface-elevated);
-  }
-
-  .context-menu-item.destructive {
-    color: var(--accent-destructive);
-  }
-
-  .context-menu-item.destructive:hover:not(:disabled) {
-    background: var(--accent-destructive);
-    color: #fff;
-  }
-
-  .context-menu-item:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-</style>

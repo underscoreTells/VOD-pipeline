@@ -12,7 +12,7 @@
 </script>
 
 {#if safeHref}
-  <a href={safeHref} {title} target="_blank" rel="noopener noreferrer">
+  <a class="text-accent-primary underline decoration-accent-primary/40 underline-offset-2 hover:text-accent-primary-hover" href={safeHref} {title} target="_blank" rel="noopener noreferrer">
     {@render children?.()}
   </a>
 {:else}

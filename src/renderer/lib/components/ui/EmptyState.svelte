@@ -11,45 +11,16 @@
   let { icon, title, description }: Props = $props();
 </script>
 
-<div class="empty-state">
+<div class="flex flex-1 flex-col items-center justify-center px-4 py-8 text-center">
   {#if icon}
-    <div class="empty-icon">
+    <div class="mb-4 text-text-disabled">
       <Icon {icon} size={40} />
     </div>
   {/if}
   {#if title}
-    <p class="empty-title">{title}</p>
+    <p class="mb-2 text-app-md text-text-tertiary">{title}</p>
   {/if}
   {#if description}
-    <p class="empty-description">{description}</p>
+    <p class="text-app-sm text-text-disabled">{description}</p>
   {/if}
 </div>
-
-<style>
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-8) var(--space-4);
-    text-align: center;
-    flex: 1;
-  }
-
-  .empty-icon {
-    color: var(--text-disabled);
-    margin-bottom: var(--space-4);
-  }
-
-  .empty-title {
-    font-size: var(--text-md);
-    color: var(--text-tertiary);
-    margin: 0 0 var(--space-2);
-  }
-
-  .empty-description {
-    font-size: var(--text-sm);
-    color: var(--text-disabled);
-    margin: 0;
-  }
-</style>

@@ -2,6 +2,7 @@
   import type { HTMLButtonAttributes } from 'svelte/elements';
   import Icon from './Icon.svelte';
   import type { LucideIcon } from 'lucide-svelte';
+  import { cn } from '../../utils/cn';
 
   type Variant = 'default' | 'destructive';
 
@@ -22,59 +23,24 @@
     class: className = '',
     ...rest
   }: Props = $props();
+
+  const variantClasses: Record<Variant, string> = {
+    default:
+      'text-text-tertiary hover:bg-surface-elevated hover:text-text-primary active:bg-surface-active',
+    destructive:
+      'text-text-tertiary hover:bg-accent-destructive hover:text-white',
+  };
 </script>
 
 <button
-  class="icon-btn icon-btn-{variant} {className}"
+  class={cn(
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-transparent transition-colors disabled:pointer-events-none',
+    variantClasses[variant],
+    className,
+  )}
   {disabled}
   {title}
   {...rest}
 >
   <Icon {icon} {size} />
 </button>
-
-<style>
-  .icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    transition: all var(--transition-fast) ease;
-    flex-shrink: 0;
-  }
-
-  .icon-btn:hover:not(:disabled) {
-    background: var(--surface-elevated);
-    color: var(--text-primary);
-  }
-
-  .icon-btn:active:not(:disabled) {
-    background: var(--surface-active);
-  }
-
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--border-focus);
-    outline-offset: 1px;
-  }
-
-  .icon-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .icon-btn-destructive {
-    color: var(--text-tertiary);
-  }
-
-  .icon-btn-destructive:hover:not(:disabled) {
-    background: var(--accent-destructive);
-    color: #fff;
-  }
-</style>

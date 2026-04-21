@@ -1,0 +1,145 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@theme inline {
+  --color-surface-page: var(--surface-page);
+  --color-surface-base: var(--surface-base);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-disabled: var(--text-disabled);
+  --color-text-inverse: var(--text-inverse);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-border-focus: var(--border-focus);
+
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-primary-active: var(--accent-primary-active);
+  --color-accent-primary-subtle: var(--accent-primary-subtle);
+  --color-accent-destructive: var(--accent-destructive);
+  --color-accent-destructive-hover: var(--accent-destructive-hover);
+  --color-accent-success: var(--accent-success);
+  --color-accent-success-subtle: var(--accent-success-subtle);
+  --color-accent-warning: var(--accent-warning);
+  --color-accent-warning-subtle: var(--accent-warning-subtle);
+
+  --color-role-setup: var(--role-setup);
+  --color-role-setup-subtle: var(--role-setup-subtle);
+  --color-role-escalation: var(--role-escalation);
+  --color-role-escalation-subtle: var(--role-escalation-subtle);
+  --color-role-twist: var(--role-twist);
+  --color-role-twist-subtle: var(--role-twist-subtle);
+  --color-role-payoff: var(--role-payoff);
+  --color-role-payoff-subtle: var(--role-payoff-subtle);
+  --color-role-transition: var(--role-transition);
+  --color-role-transition-subtle: var(--role-transition-subtle);
+  --color-role-unassigned: var(--role-unassigned);
+  --color-role-unassigned-subtle: var(--role-unassigned-subtle);
+
+  --text-app-xs: var(--text-xs);
+  --text-app-sm: var(--text-sm);
+  --text-app-base: var(--text-base);
+  --text-app-md: var(--text-md);
+  --text-app-lg: var(--text-lg);
+  --text-app-xl: var(--text-xl);
+  --text-app-2xl: var(--text-2xl);
+  --text-app-3xl: var(--text-3xl);
+
+}
+
+@layer base {
+  :root {
+    font-family: var(--font-sans);
+  }
+
+  html,
+  body,
+  #app {
+    width: 100%;
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-page font-sans text-text-primary antialiased;
+  }
+
+  button,
+  [role="button"] {
+    @apply cursor-pointer;
+  }
+
+  button:disabled,
+  input:disabled,
+  textarea:disabled,
+  select:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-semibold text-text-primary;
+  }
+
+  a {
+    @apply text-accent-primary underline-offset-2 transition-colors hover:text-accent-primary-hover;
+  }
+
+  img,
+  video,
+  canvas,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 1px;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-pill);
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+}

@@ -4,7 +4,7 @@
   let { children } = $props<{ children?: Snippet }>();
 </script>
 
-<div class="markdown-table-scroll">
+<div class="overflow-x-auto rounded-lg border border-border-default">
   <table>
     {@render children?.()}
   </table>
