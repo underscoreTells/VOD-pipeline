@@ -5,13 +5,24 @@ import type {
   ProviderConfigProvider,
 } from '../../shared/contracts/electron-api.js';
 import {
+  NAMING_MODEL_OPTIONS,
   getNamingModelProvider,
   type NamingModelId,
+  type NamingModelProvider,
 } from '../../shared/llm/naming-models.js';
 import { getChapter, getTranscriptsByChapter } from '../database/index.js';
 
 const DEFAULT_CHAPTER_TITLE = 'Untitled chapter';
 const NAME_MAX_LENGTH = 80;
+const PROVIDER_FALLBACK_MODELS: Partial<Record<NamingModelProvider, string[]>> = {
+  openai: ['gpt-4o'],
+};
+
+interface NamingRequestAttempt {
+  provider: NamingModelProvider;
+  apiKey: string;
+  model?: string;
+}
 
 export function sanitizeGeneratedName(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -77,6 +88,51 @@ export function getProviderConfigApiKey(
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function appendNamingRequestAttempt(
+  attempts: NamingRequestAttempt[],
+  attemptKeys: Set<string>,
+  providerConfig: ProviderConfigPayload | undefined,
+  provider: NamingModelProvider,
+  model?: string
+): void {
+  const apiKey = getProviderConfigApiKey(providerConfig, provider);
+  if (!apiKey) {
+    return;
+  }
+
+  const attemptKey = `${provider}:${model ?? '(default)'}`;
+  if (attemptKeys.has(attemptKey)) {
+    return;
+  }
+
+  attemptKeys.add(attemptKey);
+  attempts.push({ provider, apiKey, model });
+}
+
+function buildNamingRequestAttempts(input: {
+  model: NamingModelId;
+  providerConfig?: ProviderConfigPayload;
+}): NamingRequestAttempt[] {
+  const attempts: NamingRequestAttempt[] = [];
+  const attemptKeys = new Set<string>();
+  const selectedProvider = getNamingModelProvider(input.model);
+
+  appendNamingRequestAttempt(attempts, attemptKeys, input.providerConfig, selectedProvider, input.model);
+  for (const fallbackModel of PROVIDER_FALLBACK_MODELS[selectedProvider] ?? []) {
+    appendNamingRequestAttempt(attempts, attemptKeys, input.providerConfig, selectedProvider, fallbackModel);
+  }
+
+  for (const option of NAMING_MODEL_OPTIONS) {
+    const provider = getNamingModelProvider(option.id);
+    appendNamingRequestAttempt(attempts, attemptKeys, input.providerConfig, provider, option.id);
+    for (const fallbackModel of PROVIDER_FALLBACK_MODELS[provider] ?? []) {
+      appendNamingRequestAttempt(attempts, attemptKeys, input.providerConfig, provider, fallbackModel);
+    }
+  }
+
+  return attempts;
+}
+
 function buildTranscriptExcerpt(
   transcripts: Array<{ text: string; start_time: number; end_time: number }>,
   inPoint: number,
@@ -121,32 +177,35 @@ async function requestGeneratedName(input: {
   userPrompt: string;
   maxTokens: number;
 }): Promise<string | null> {
-  const provider = getNamingModelProvider(input.model);
-  const apiKey = getProviderConfigApiKey(input.providerConfig, provider);
-  if (!apiKey) {
-    return null;
+  for (const attempt of buildNamingRequestAttempts(input)) {
+    try {
+      // The provider factory strips unsupported temperature params for OpenAI GPT-5 models.
+      const llm = createLLM({
+        provider: attempt.provider,
+        apiKey: attempt.apiKey,
+        ...(attempt.model ? { model: attempt.model } : {}),
+        temperature: 0.2,
+        maxTokens: input.maxTokens,
+      });
+
+      const response = await llm.invoke([
+        new SystemMessage(input.systemPrompt),
+        new HumanMessage(input.userPrompt),
+      ]);
+
+      const generatedName = sanitizeGeneratedName(extractTextFromAIContent(response.content));
+      if (generatedName) {
+        return generatedName;
+      }
+    } catch (error) {
+      console.warn(
+        `[NamingService] Failed to generate name with ${attempt.provider}:${attempt.model ?? 'default'}`,
+        error
+      );
+    }
   }
 
-  try {
-    // The provider factory strips unsupported temperature params for OpenAI GPT-5 models.
-    const llm = createLLM({
-      provider,
-      apiKey,
-      model: input.model,
-      temperature: 0.2,
-      maxTokens: input.maxTokens,
-    });
-
-    const response = await llm.invoke([
-      new SystemMessage(input.systemPrompt),
-      new HumanMessage(input.userPrompt),
-    ]);
-
-    return sanitizeGeneratedName(extractTextFromAIContent(response.content));
-  } catch (error) {
-    console.warn('[NamingService] Failed to generate name:', error);
-    return null;
-  }
+  return null;
 }
 
 export async function suggestChapterClipName(input: {
