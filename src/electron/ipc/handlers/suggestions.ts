@@ -12,6 +12,7 @@ import {
 import type { Clip } from '../../../shared/types/database.js';
 import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
+import { toNumberOrNull } from '../handler-support.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 
 const logger = createLogger('SuggestionHandlers');
@@ -65,11 +66,17 @@ export function registerSuggestionHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SUGGESTION_GET_BY_CHAPTER, async (_, { chapterId, conversationId, status }) => {
     logger.info('suggestion:get-by-chapter', chapterId, conversationId, status);
     try {
-      if (!chapterId || !conversationId) {
+      const normalizedChapterId = toNumberOrNull(chapterId);
+      if (
+        normalizedChapterId === null ||
+        !Number.isInteger(normalizedChapterId) ||
+        normalizedChapterId <= 0 ||
+        !conversationId
+      ) {
         return createErrorResponse('Chapter ID and conversation ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      return createSuccessResponse(await getSuggestionsByConversation(conversationId, chapterId, status));
+      return createSuccessResponse(await getSuggestionsByConversation(conversationId, normalizedChapterId, status));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
@@ -171,11 +178,17 @@ export function registerSuggestionHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY_ALL, async (_, { chapterId, conversationId }) => {
     logger.info('suggestion:apply-all', chapterId, conversationId);
     try {
-      if (!chapterId || !conversationId) {
+      const normalizedChapterId = toNumberOrNull(chapterId);
+      if (
+        normalizedChapterId === null ||
+        !Number.isInteger(normalizedChapterId) ||
+        normalizedChapterId <= 0 ||
+        !conversationId
+      ) {
         return createErrorResponse('Chapter ID and conversation ID are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      const pendingSuggestions = await getSuggestionsByConversation(conversationId, chapterId, 'pending');
+      const pendingSuggestions = await getSuggestionsByConversation(conversationId, normalizedChapterId, 'pending');
       const results: Array<{ suggestionId: number; success: boolean; clip?: Clip; error?: string }> = [];
 
       for (const suggestion of pendingSuggestions) {
