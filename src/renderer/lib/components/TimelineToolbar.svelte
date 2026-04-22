@@ -97,10 +97,11 @@
 
   <div class="flex items-center gap-2">
     <button
-      class:bg-accent-success-subtle={timelineState.excludeCutContent}
-      class:border-accent-success={timelineState.excludeCutContent}
-      class:text-accent-success={timelineState.excludeCutContent}
-      class="rounded-xs border border-border-default bg-transparent px-3 py-1 text-app-sm text-text-secondary transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-40"
+      class={`rounded-xs border px-3 py-1 text-app-sm transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+        timelineState.excludeCutContent
+          ? 'border-accent-primary bg-accent-primary-subtle text-accent-primary hover:border-accent-primary-hover hover:bg-accent-primary-subtle'
+          : 'border-border-default bg-transparent text-text-secondary hover:bg-surface-hover'
+      }`}
       onclick={toggleExcludeCutContent}
       title="Exclude cut content (\\)"
       aria-pressed={timelineState.excludeCutContent}
