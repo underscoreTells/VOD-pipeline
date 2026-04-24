@@ -67,12 +67,14 @@ export interface ConversationWriter {
     message?: string;
     progress?: number;
     nodeName?: string;
+    stepIndex?: number;
   }): void;
   writeAssistantTextDelta(delta: string): void;
   writeToolState(event: {
     toolCallId: string;
     toolName: string;
     state: "pending" | "running" | "completed" | "error";
+    stepIndex?: number;
     message?: string;
     input?: Record<string, unknown>;
     output?: string;

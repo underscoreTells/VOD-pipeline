@@ -144,6 +144,7 @@ export interface ExecutionTraceEntry {
   label: string;
   nodeName?: string;
   passIndex?: number;
+  stepIndex?: number;
   createdAt: string;
 }
 

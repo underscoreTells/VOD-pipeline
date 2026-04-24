@@ -75,6 +75,11 @@ ${suggestionSummary}
 
 Rules:
 - Use chapter-local seconds only for any actionable edit proposal.
+- For clips, inPoint/outPoint describe the source window and startTime describes timeline placement.
+- Clips do not need to be adjacent on the timeline.
+- Leave gaps, compress pacing, or reposition clips when that best matches the user's edit goal.
+- Set startTime intentionally whenever timeline placement matters.
+- Only change update_clip.startTime when you intend to move that clip in the timeline.
 - Prioritize narrative continuity and story progression over isolated highlight density.
 - Do not invent clip identifiers or asset identifiers.
 - Use evidence tools when they are needed for factual verification.

@@ -870,4 +870,72 @@ describe("conversation turn runner", () => {
     expect(result.outcome).toBe("clarification");
     expect(result.assistantResponse).toContain("narrower target");
   });
+
+  it("continues past eight loop iterations when the model keeps making forward progress", async () => {
+    const transcriptCalls: TranscriptDetailRequest[] = [];
+    const scriptedResponses = Array.from({ length: 9 }, (_, index) =>
+      new AIMessage({
+        content: "",
+        tool_calls: [
+          {
+            id: `call_transcript_${index + 1}`,
+            type: "tool_call",
+            name: "loadDetailedTranscriptWindows",
+            args: {
+              requests: [
+                {
+                  windowStart: index * 5,
+                  windowEnd: index * 5 + 4,
+                  reason: `Request ${index + 1}`,
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+
+    scriptedResponses.push(
+      new AIMessage({
+        content: "",
+        tool_calls: [
+          {
+            id: "call_finalize_many_steps",
+            type: "tool_call",
+            name: "finalizeConversationTurn",
+            args: {
+              outcome: "discussion",
+              assistantResponse: "I completed the turn after several evidence passes.",
+            },
+          },
+        ],
+      })
+    );
+
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Keep iterating until you've reviewed every exact line.")],
+      }),
+      {},
+      createDependencies(scriptedResponses, {
+        loadDetailedTranscriptWindows: async (requests) => {
+          transcriptCalls.push(...requests);
+          return [
+            {
+              assetId: 2,
+              windowStart: requests[0]?.windowStart ?? 0,
+              windowEnd: requests[0]?.windowEnd ?? 1,
+              reason: requests[0]?.reason,
+              text: "Detailed transcript window",
+              segments: [{ id: 1, start: 0, end: 1, text: "line" }],
+            },
+          ];
+        },
+      })
+    );
+
+    expect(result.outcome).toBe("discussion");
+    expect(result.assistantResponse).toContain("several evidence passes");
+    expect(transcriptCalls).toHaveLength(9);
+  });
 });

@@ -122,7 +122,10 @@ const createClipSchema = s.object(
       })
     ),
   },
-  { description: "Create a new clip using chapter-local source points." }
+  {
+    description:
+      "Create a new clip using chapter-local source points. Optional startTime places the clip on the timeline in chapter-local seconds."
+  }
 );
 
 const updateClipSchema = s.object(
@@ -159,7 +162,10 @@ const updateClipSchema = s.object(
       })
     ),
   },
-  { description: "Update an existing clip by id." }
+  {
+    description:
+      "Update an existing clip by id. Optional updates.startTime repositions the clip on the timeline in chapter-local seconds."
+  }
 );
 
 const draftRoughCutProposalsSchema = s.object(
@@ -320,7 +326,7 @@ export function createConversationTools(
     defineAgentTool<DraftRoughCutProposalsInput>({
       name: "draftRoughCutProposals",
       description:
-        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Do not describe actionable edits only in prose.",
+        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. For create_clip, startTime is timeline placement while inPoint/outPoint are the source window. For update_clip, updates.startTime repositions the existing clip on the timeline. Do not describe actionable edits only in prose.",
       schema: draftRoughCutProposalsSchema,
       execute: async ({ proposals }) => {
         if (!accumulator.hasSuccessfulVideoEvidence) {

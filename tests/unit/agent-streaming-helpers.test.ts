@@ -67,6 +67,7 @@ describe("agent streaming helpers", () => {
       message: "draftRoughCutProposals completed",
       nodeName: "draftRoughCutProposals",
       passIndex: 1,
+      stepIndex: 2,
     });
 
     expect(updated[1]?.trace).toHaveLength(1);
@@ -75,6 +76,7 @@ describe("agent streaming helpers", () => {
       label: "draftRoughCutProposals completed",
       nodeName: "draftRoughCutProposals",
       passIndex: 1,
+      stepIndex: 2,
     });
   });
 
@@ -85,6 +87,7 @@ describe("agent streaming helpers", () => {
       message: "Thinking...",
       nodeName: "conversation_runner",
       passIndex: 1,
+      stepIndex: 1,
     } as const;
 
     const first = appendTraceEventToDraft(messages, "request-1", event);
@@ -100,6 +103,7 @@ describe("agent streaming helpers", () => {
       message: "Drafting rough-cut proposals...",
       nodeName: "draftRoughCutProposals",
       passIndex: 1,
+      stepIndex: 1,
     });
 
     expect(getVisibleStreamingStatusLabel(updated[1]!)).toBe("Drafting rough-cut proposals...");

@@ -330,6 +330,7 @@ async function runConversationTurn(
             streamMessage.error ??
             `${streamMessage.toolName} ${streamMessage.state}`,
           nodeName: streamMessage.toolName,
+          stepIndex: streamMessage.stepIndex,
         });
         return;
       }
@@ -339,6 +340,7 @@ async function runConversationTurn(
           status: streamMessage.status,
           message: streamMessage.message,
           nodeName: streamMessage.nodeName,
+          stepIndex: streamMessage.stepIndex,
         });
       }
     },

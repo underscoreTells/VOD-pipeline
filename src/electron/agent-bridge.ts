@@ -82,16 +82,11 @@ export class AgentBridge extends EventEmitter {
 
     console.log("[AgentBridge] Starting agent worker process...");
 
-    const agentPath = this.getAgentPath();
+    const launchSpec = this.getWorkerLaunchSpec();
 
-    const appDatabasePath = path.join(app.getPath("userData"), "vod-pipeline.db");
-
-    this.process = spawn("node", [agentPath], {
+    this.process = spawn(launchSpec.command, launchSpec.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        VOD_PIPELINE_DB_PATH: appDatabasePath,
-      },
+      env: launchSpec.env,
     });
 
     this.stdinWriter = new JSONStdinWriter(this.process.stdin!);
@@ -175,6 +170,25 @@ export class AgentBridge extends EventEmitter {
     this.restartAttempts = 0;
   }
 
+  private getWorkerLaunchSpec(): {
+    command: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+  } {
+    const agentPath = this.getAgentPath();
+    const appDatabasePath = path.join(app.getPath("userData"), "vod-pipeline.db");
+
+    return {
+      command: process.execPath,
+      args: [agentPath],
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        VOD_PIPELINE_DB_PATH: appDatabasePath,
+      },
+    };
+  }
+
   private getAgentPath(): string {
     if (app.isPackaged) {
       return path.join(process.resourcesPath, "agent", "index.js");
@@ -247,7 +261,11 @@ export class AgentBridge extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        if (!this.pendingRequests.has(requestId)) {
+          return;
+        }
         this.pendingRequests.delete(requestId);
+        this.sendCancelRequest(requestId);
         reject(
           new Error(`Agent request timeout: ${requestId} (${timeoutMs}ms)`)
         );
@@ -271,6 +289,19 @@ export class AgentBridge extends EventEmitter {
           reject(new Error(`Failed to write to agent stdin: ${message}`));
         });
     });
+  }
+
+  private sendCancelRequest(targetRequestId: string): void {
+    this.stdinWriter
+      ?.writeAsync({
+        type: "cancel",
+        requestId: uuidv4(),
+        targetRequestId,
+      } satisfies AgentInputMessage)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[AgentBridge] Failed to send cancel for ${targetRequestId}: ${message}`);
+      });
   }
 
   async stop(): Promise<void> {

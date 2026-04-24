@@ -3,7 +3,6 @@ import { JSONStdinWriter, JSONStdoutReader } from "./ipc/json-message-transport.
 import { installStdoutProtocolGuard } from "./ipc/stdout-protocol.js";
 import type {
   AgentInputMessage,
-  AgentInputMessageWithoutId,
   DetailedTranscriptWindow,
 } from "../shared/types/agent-ipc.js";
 import type { LLMProviderType } from "./providers/index.js";
@@ -300,6 +299,9 @@ function createConversationWriter(
 
 async function main() {
   console.error("[Agent] Worker process starting...");
+  console.error(
+    `[Agent] Runtime diagnostics: node=${process.version} modules=${process.versions.modules} electron=${process.versions.electron ?? "none"} execPath=${process.execPath}`
+  );
 
   try {
     const inputReader = new JSONStdoutReader(process.stdin);
@@ -308,6 +310,21 @@ async function main() {
     inputReader.on("message", async (message: AgentInputMessage) => {
       const { requestId } = message;
       console.error(`[Agent] Received message type=${message.type} requestId=${requestId}`);
+
+      if (message.type === "cancel") {
+        const activeRequest = activeRequests.get(message.targetRequestId);
+        if (activeRequest) {
+          activeRequest.abort();
+          console.error(
+            `[Agent] Cancelled active request target=${message.targetRequestId} via requestId=${requestId}`
+          );
+        } else {
+          console.error(
+            `[Agent] Ignored cancel for inactive request target=${message.targetRequestId} via requestId=${requestId}`
+          );
+        }
+        return;
+      }
 
       const controller = new AbortController();
       activeRequests.set(requestId, controller);
@@ -349,7 +366,7 @@ async function main() {
 }
 
 async function processMessage(
-  message: AgentInputMessage,
+  message: Extract<AgentInputMessage, { type: "chat" }>,
   writer: JSONStdinWriter,
   controller: AbortController
 ): Promise<void> {

@@ -258,6 +258,87 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       });
     });
 
+    it("preserves an explicit create_clip startTime gap when there is no collision", async () => {
+      const suggestion = await createSuggestion({
+        chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
+        in_point: 25,
+        out_point: 75,
+        description: "Gap-preserving clip",
+        reasoning: "Should keep the requested timeline gap",
+        provider: "gemini",
+        action_type: "create_clip",
+        target_clip_id: null,
+        action_payload_json: JSON.stringify({
+          create: {
+            assetId: testAssetId,
+            trackIndex: 0,
+            startTime: 200,
+          },
+        }),
+        preview_snapshot_json: null,
+        status: "pending",
+        display_order: 0,
+        clip_id: null,
+      });
+
+      const result = await applySuggestionWithClip(suggestion.id);
+
+      expect(result.success).toBe(true);
+      expect(result.clip).toMatchObject({
+        start_time: 200,
+        in_point: 25,
+        out_point: 75,
+      });
+    });
+
+    it("repositions an existing clip when update_clip includes startTime", async () => {
+      const clip = await createClip({
+        project_id: testProjectId,
+        asset_id: testAssetId,
+        track_index: 0,
+        start_time: 25,
+        in_point: 25,
+        out_point: 75,
+        role: null,
+        description: "Movable clip",
+        is_essential: true,
+      });
+
+      const suggestion = await createSuggestion({
+        chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
+        in_point: 25,
+        out_point: 75,
+        description: "Move the clip later",
+        reasoning: "Should preserve the source window while moving the timeline placement",
+        provider: "gemini",
+        action_type: "update_clip",
+        target_clip_id: clip.id,
+        action_payload_json: JSON.stringify({
+          update: {
+            startTime: 180,
+          },
+        }),
+        preview_snapshot_json: null,
+        status: "pending",
+        display_order: 0,
+        clip_id: null,
+      });
+
+      const result = await applySuggestionWithClip(suggestion.id);
+
+      expect(result.success).toBe(true);
+      expect(result.clip).toMatchObject({
+        id: clip.id,
+        start_time: 180,
+        in_point: 25,
+        out_point: 75,
+      });
+    });
+
     it("requires assetId for create_clip suggestions when multiple chapter video assets are available", async () => {
       const secondAssetId = db
         .prepare(

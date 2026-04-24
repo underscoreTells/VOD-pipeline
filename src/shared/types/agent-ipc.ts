@@ -81,12 +81,14 @@ export interface AgentChatData {
 }
 
 export type AgentInputMessage =
-  | ChatInputMessage;
+  | ChatInputMessage
+  | CancelInputMessage;
 
 export type AgentInputMessageWithId = AgentInputMessage;
 
 export type AgentInputMessageWithoutId =
-  | ChatInputMessageWithoutId;
+  | ChatInputMessageWithoutId
+  | CancelInputMessageWithoutId;
 
 export interface ChatInputMessage {
   type: "chat";
@@ -101,6 +103,17 @@ export interface ChatInputMessageWithoutId {
   threadId?: string;
   messages: Array<{ role: string; content: string }>;
   metadata?: Record<string, unknown>;
+}
+
+export interface CancelInputMessage {
+  type: "cancel";
+  requestId: string;
+  targetRequestId: string;
+}
+
+export interface CancelInputMessageWithoutId {
+  type: "cancel";
+  targetRequestId: string;
 }
 
 export type AgentOutputMessage =
@@ -123,6 +136,7 @@ export interface StatusOutputMessage {
   status: string;
   progress?: number;
   nodeName?: string;
+  stepIndex?: number;
   chapterId?: string;
   message?: string;
   metadata?: Record<string, unknown>;
@@ -142,6 +156,7 @@ export interface ToolStateOutputMessage {
   toolCallId: string;
   toolName: string;
   state: "pending" | "running" | "completed" | "error";
+  stepIndex?: number;
   message?: string;
   input?: Record<string, unknown>;
   output?: string;
@@ -178,6 +193,7 @@ export interface AgentStreamStatusEvent extends AgentStreamContext {
   status: string;
   progress?: number;
   nodeName?: string;
+  stepIndex?: number;
   message?: string;
 }
 
@@ -192,6 +208,7 @@ export interface AgentStreamToolStateEvent extends AgentStreamContext {
   toolCallId: string;
   toolName: string;
   state: "pending" | "running" | "completed" | "error";
+  stepIndex?: number;
   message?: string;
   input?: Record<string, unknown>;
   output?: string;
