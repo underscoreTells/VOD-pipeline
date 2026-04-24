@@ -57,6 +57,12 @@ describe("chapter proxy cache validation", () => {
     databaseMocks.updateChapterProxyDefinition.mockResolvedValue(true);
     databaseMocks.updateChapterProxyMetadata.mockResolvedValue(true);
     databaseMocks.updateChapterProxyStatus.mockResolvedValue(true);
+    ffmpegMocks.getVideoMetadata.mockResolvedValue({
+      width: 640,
+      height: 360,
+      fps: 5,
+      duration: 30,
+    });
     ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       fs.writeFileSync(outputPath, "proxy");
@@ -94,6 +100,111 @@ describe("chapter proxy cache validation", () => {
     expect(result).toBe(proxyPath);
     expect(ffmpegMocks.generateAIProxy).not.toHaveBeenCalled();
     expect(databaseMocks.updateChapterProxyDefinition).not.toHaveBeenCalled();
+  });
+
+  it("heals a generating proxy entry when the final proxy file already exists", async () => {
+    const proxyPath = path.join(tempDir, "stale-generating.mp4");
+    fs.writeFileSync(proxyPath, "proxy-ready");
+    const readySize = fs.statSync(proxyPath).size;
+
+    databaseMocks.getChapterProxyByChapterAsset
+      .mockResolvedValueOnce({
+        id: 12,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "generating",
+        start_time: 10,
+        end_time: 40,
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        error_message: null,
+      })
+      .mockResolvedValueOnce({
+        id: 12,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "ready",
+        start_time: 10,
+        end_time: 40,
+        width: 640,
+        height: 360,
+        framerate: 5,
+        file_size: readySize,
+        duration: 30,
+        error_message: null,
+      });
+
+    const { ensureChapterProxyReady } = await import("../../src/electron/ipc/handler-support.js");
+    const result = await ensureChapterProxyReady(
+      { id: 7, start_time: 10, end_time: 40 } as never,
+      { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never
+    );
+
+    expect(result).toBe(proxyPath);
+    expect(ffmpegMocks.generateAIProxy).not.toHaveBeenCalled();
+    expect(databaseMocks.updateChapterProxyDefinition).not.toHaveBeenCalled();
+    expect(databaseMocks.updateChapterProxyMetadata).toHaveBeenCalledWith(12, expect.objectContaining({
+      width: 640,
+      height: 360,
+      framerate: 5,
+      file_size: readySize,
+      duration: 30,
+    }));
+    expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(12, "ready");
+  });
+
+  it("heals a pending proxy entry without backfilling metadata when it is already populated", async () => {
+    const proxyPath = path.join(tempDir, "stale-pending.mp4");
+    fs.writeFileSync(proxyPath, "proxy-ready");
+
+    databaseMocks.getChapterProxyByChapterAsset
+      .mockResolvedValueOnce({
+        id: 13,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "pending",
+        start_time: 10,
+        end_time: 40,
+        width: 640,
+        height: 360,
+        framerate: 5,
+        file_size: 11,
+        duration: 30,
+        error_message: null,
+      })
+      .mockResolvedValueOnce({
+        id: 13,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "ready",
+        start_time: 10,
+        end_time: 40,
+        width: 640,
+        height: 360,
+        framerate: 5,
+        file_size: 11,
+        duration: 30,
+        error_message: null,
+      });
+
+    const { ensureChapterProxyReady } = await import("../../src/electron/ipc/handler-support.js");
+    const result = await ensureChapterProxyReady(
+      { id: 7, start_time: 10, end_time: 40 } as never,
+      { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never
+    );
+
+    expect(result).toBe(proxyPath);
+    expect(ffmpegMocks.generateAIProxy).not.toHaveBeenCalled();
+    expect(databaseMocks.updateChapterProxyDefinition).not.toHaveBeenCalled();
+    expect(databaseMocks.updateChapterProxyMetadata).not.toHaveBeenCalled();
+    expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(13, "ready");
   });
 
   it("regenerates the proxy when the cached file is missing", async () => {

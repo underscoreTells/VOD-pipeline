@@ -312,4 +312,23 @@ describe("agent streaming message actions", () => {
     expect(agentApiMocks.editAgentMessage).not.toHaveBeenCalled();
     expect(agentApiMocks.rerollAgentMessage).not.toHaveBeenCalled();
   });
+
+  it("blocks send while grounding status is still loading", async () => {
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const { sendChatMessage } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+
+    agentState.currentProjectId = "1";
+    agentState.currentChapterId = "3";
+    agentState.selectedConversationId = 2;
+    agentState.conversations = [createConversation()];
+    agentState.messages = [];
+    agentState.isStreaming = false;
+    agentState.isGroundingStatusLoading = true;
+    agentState.groundingStatus = "idle";
+    agentState.error = "stale";
+
+    expect(await sendChatMessage("Try a new cut")).toBe(false);
+    expect(agentState.error).toBeNull();
+    expect(agentApiMocks.agentChat).not.toHaveBeenCalled();
+  });
 });

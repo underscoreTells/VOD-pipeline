@@ -15,6 +15,7 @@ function resetAgentState(): void {
   agentState.isStreaming = false;
   agentState.currentProjectId = "1";
   agentState.currentChapterId = "2";
+  agentState.isGroundingStatusLoading = false;
   agentState.groundingStatus = "ready";
   agentState.groundingMessage = "Video grounding is ready.";
   agentState.groundingRequiredVideoAssetCount = 1;
@@ -99,10 +100,36 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("Video proxy is still preparing");
-    expect(body).toContain("Agent chat is locked until grounding is ready.");
+    expect(body).toContain("You can keep drafting, but send stays disabled until grounding is ready.");
     expect(body).toContain("1/2 video assets ready");
-    expect(body).toContain("Agent chat is locked until video grounding is ready");
-    expect(body).toContain('disabled');
+    expect(body).toContain("Draft while video grounding finishes...");
+
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    expect(composerMatch?.[0]).toBeDefined();
+    expect(composerMatch?.[0]).not.toContain("disabled");
+
+    const sendButtonMatch = body.match(/<button[^>]*title="Send message"[^>]*>/);
+    expect(sendButtonMatch?.[0]).toContain("disabled");
+  });
+
+  it("shows a grounding check banner while status is loading and keeps the composer editable", () => {
+    resetAgentState();
+    agentState.isGroundingStatusLoading = true;
+    agentState.groundingStatus = "idle";
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Checking video grounding");
+    expect(body).toContain("You can keep drafting, but send stays disabled until grounding is ready.");
+    expect(body).not.toContain("video assets ready");
+    expect(body).toContain("Draft while video grounding finishes...");
+
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    expect(composerMatch?.[0]).toBeDefined();
+    expect(composerMatch?.[0]).not.toContain("disabled");
+
+    const sendButtonMatch = body.match(/<button[^>]*title="Send message"[^>]*>/);
+    expect(sendButtonMatch?.[0]).toContain("disabled");
   });
 
   it("shows a destructive grounding banner when proxy generation fails", () => {
@@ -114,9 +141,13 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("Video proxy failed");
-    expect(body).toContain("Agent chat is locked until the chapter proxy can be built.");
+    expect(body).toContain("You can keep drafting, but send stays disabled until the chapter proxy can be built.");
     expect(body).toContain("ffmpeg exited with status 1");
-    expect(body).toContain("Agent chat is locked until video grounding is ready");
+    expect(body).toContain("Draft while video grounding finishes...");
+
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    expect(composerMatch?.[0]).toBeDefined();
+    expect(composerMatch?.[0]).not.toContain("disabled");
   });
 
   it("renders final answer in the bubble and detailed reasoning inside the thinking disclosure", () => {

@@ -19,7 +19,7 @@ import {
   updateChapterProxyMetadata,
   updateChapterProxyStatus,
 } from '../database/index.js';
-import type { Asset, Clip, Suggestion } from '../../shared/types/database.js';
+import type { Asset, ChapterProxy, Clip, Suggestion } from '../../shared/types/database.js';
 import type {
   AgentGroundingStatusData,
   ProxyOptions,
@@ -67,6 +67,8 @@ const OVERVIEW_TRANSCRIPT_CHUNK_SECONDS = 15;
 const OVERVIEW_TRANSCRIPT_MAX_LINES = 320;
 const OVERVIEW_TRANSCRIPT_MAX_CHARS = 30000;
 const CHAPTER_PROXY_TIME_EPSILON = 0.01;
+type ChapterRecord = NonNullable<Awaited<ReturnType<typeof getChapter>>>;
+type ChapterProxyRecord = NonNullable<Awaited<ReturnType<typeof getChapterProxyByChapterAsset>>>;
 
 export function toNumberOrNull(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -693,7 +695,34 @@ export function isChapterProxyReusable(
     return false;
   }
 
-  if (!proxy.file_path || !fs.existsSync(proxy.file_path)) {
+  return isChapterProxyArtifactCurrent(proxy, chapter);
+}
+
+function getReusableChapterProxy(
+  proxy: ChapterProxyRecord | null | undefined,
+  chapter: Pick<ChapterRecord, 'start_time' | 'end_time'>
+): ChapterProxyRecord | null {
+  if (!proxy) {
+    return null;
+  }
+
+  return isChapterProxyReusable(proxy, chapter) ? proxy : null;
+}
+
+function isChapterProxyArtifactCurrent(
+  proxy: Pick<ChapterProxy, 'file_path' | 'start_time' | 'end_time'> | null | undefined,
+  chapter: Pick<ChapterRecord, 'start_time' | 'end_time'>
+): boolean {
+  if (!proxy?.file_path) {
+    return false;
+  }
+
+  try {
+    const stats = fs.statSync(proxy.file_path);
+    if (!stats.isFile() || stats.size <= 0) {
+      return false;
+    }
+  } catch {
     return false;
   }
 
@@ -701,6 +730,62 @@ export function isChapterProxyReusable(
     Math.abs(proxy.start_time - chapter.start_time) <= CHAPTER_PROXY_TIME_EPSILON
     && Math.abs(proxy.end_time - chapter.end_time) <= CHAPTER_PROXY_TIME_EPSILON
   );
+}
+
+async function recoverChapterProxyIfCurrent(
+  proxy: ChapterProxyRecord | null | undefined,
+  chapter: Pick<ChapterRecord, 'id' | 'start_time' | 'end_time'>
+): Promise<ChapterProxyRecord | null> {
+  if (!proxy || proxy.status === 'ready' || !isChapterProxyArtifactCurrent(proxy, chapter)) {
+    return proxy ?? null;
+  }
+
+  const metadataUpdates: Parameters<typeof updateChapterProxyMetadata>[1] = {};
+
+  try {
+    const stats = fs.statSync(proxy.file_path);
+    if (proxy.file_size === null) {
+      metadataUpdates.file_size = stats.size;
+    }
+  } catch {
+    return proxy;
+  }
+
+  const requiresVideoMetadata =
+    proxy.width === null
+    || proxy.height === null
+    || proxy.framerate === null
+    || proxy.duration === null;
+
+  if (requiresVideoMetadata) {
+    try {
+      const metadata = await getVideoMetadata(proxy.file_path);
+      if (proxy.width === null && Number.isFinite(metadata.width)) {
+        metadataUpdates.width = metadata.width;
+      }
+      if (proxy.height === null && Number.isFinite(metadata.height)) {
+        metadataUpdates.height = metadata.height;
+      }
+      if (proxy.framerate === null && Number.isFinite(metadata.fps)) {
+        metadataUpdates.framerate = metadata.fps;
+      }
+      if (proxy.duration === null && Number.isFinite(metadata.duration)) {
+        metadataUpdates.duration = metadata.duration;
+      }
+    } catch (error) {
+      console.warn(
+        `[ChapterProxy] Failed to backfill proxy metadata chapter=${chapter.id} asset=${proxy.asset_id}:`,
+        error
+      );
+    }
+  }
+
+  if (Object.keys(metadataUpdates).length > 0) {
+    await updateChapterProxyMetadata(proxy.id, metadataUpdates);
+  }
+  await updateChapterProxyStatus(proxy.id, 'ready');
+
+  return await getChapterProxyByChapterAsset(chapter.id, proxy.asset_id);
 }
 
 type ReverseProxyVariant = 'full' | 'quick';
@@ -1103,13 +1188,15 @@ export async function ensureChapterReverseProxyQuickReady(
       let inputEndTime = chapter.end_time;
       let fps = 10;
 
-      const chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-      if (isChapterProxyReusable(chapterProxy, chapter)) {
+      let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+      chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+      const reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+      if (reusableChapterProxy) {
         try {
-          const chapterProxyMetadata = await getVideoMetadata(chapterProxy.file_path, 5000);
+          const chapterProxyMetadata = await getVideoMetadata(reusableChapterProxy.file_path, 5000);
           if (chapterProxyMetadata.duration > 0.1) {
             const chapterDuration = Math.max(0.1, chapter.end_time - chapter.start_time);
-            inputPath = chapterProxy.file_path;
+            inputPath = reusableChapterProxy.file_path;
             inputStartTime = 0;
             inputEndTime = Math.min(chapterProxyMetadata.duration, chapterDuration);
             fps = Math.max(5, Math.min(10, Math.round(chapterProxyMetadata.fps) || 5));
@@ -1275,7 +1362,7 @@ async function ensureChapterReverseProxyFullReady(
 }
 
 export async function ensureChapterProxyReady(
-  chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
+  chapter: ChapterRecord,
   asset: Asset,
   encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
   quality: 'high' | 'balanced' | 'fast' = 'balanced'
@@ -1293,8 +1380,15 @@ export async function ensureChapterProxyReady(
 
   const task = (async () => {
     const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-    if (isChapterProxyReusable(existing, chapter)) {
-      return existing.file_path;
+    const reusableExisting = getReusableChapterProxy(existing, chapter);
+    if (reusableExisting) {
+      return reusableExisting.file_path;
+    }
+
+    const recovered = await recoverChapterProxyIfCurrent(existing, chapter);
+    const reusableRecovered = getReusableChapterProxy(recovered, chapter);
+    if (reusableRecovered) {
+      return reusableRecovered.file_path;
     }
 
     const proxyPath = existing?.file_path || getChapterProxyPath(chapter.id, asset.id);
@@ -1319,6 +1413,10 @@ export async function ensureChapterProxyReady(
       });
       chapterProxyId = created.id;
     } else {
+      if (!existing) {
+        throw new Error(`Expected existing chapter proxy for chapter=${chapter.id} asset=${asset.id}`);
+      }
+
       deleteFileIfExists(existing.file_path, 'ChapterProxy');
       await updateChapterProxyDefinition(chapterProxyId, {
         file_path: proxyPath,
@@ -1455,6 +1553,19 @@ export async function getAgentGroundingStatus(
   let hasGenerating = false;
 
   for (const asset of chapterVideoAssets) {
+    let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+    chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+    let reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+
+    if (reusableChapterProxy) {
+      readyVideoAssetCount += 1;
+      assets.push({
+        assetId: asset.id,
+        status: 'ready',
+      });
+      continue;
+    }
+
     if (!asset.file_path || !fs.existsSync(asset.file_path)) {
       hasError = true;
       assets.push({
@@ -1465,14 +1576,14 @@ export async function getAgentGroundingStatus(
       continue;
     }
 
-    let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-
-    if (!isChapterProxyReusable(chapterProxy, chapter) && options?.ensureReady) {
+    if (options?.ensureReady) {
       await ensureChapterProxyReady(chapter, asset);
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+      chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+      reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
     }
 
-    if (isChapterProxyReusable(chapterProxy, chapter)) {
+    if (reusableChapterProxy) {
       readyVideoAssetCount += 1;
       assets.push({
         assetId: asset.id,
@@ -1731,8 +1842,10 @@ export async function buildAgentChatContext(
   const videoAnalysisAssets: Array<{ assetId: number; proxyPath: string }> = [];
   for (const asset of chapterAssets.filter((candidate) => candidate.file_type === 'video')) {
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+    chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+    let reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
 
-    if (!isChapterProxyReusable(chapterProxy, chapter) && options?.ensureChapterProxyReady) {
+    if (!reusableChapterProxy && options?.ensureChapterProxyReady) {
       const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
       await ensureChapterProxyReady(
         chapter,
@@ -1741,12 +1854,14 @@ export async function buildAgentChatContext(
         normalizedProxyOptions.quality
       );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+      chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+      reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
     }
 
-    if (isChapterProxyReusable(chapterProxy, chapter)) {
+    if (reusableChapterProxy) {
       videoAnalysisAssets.push({
         assetId: asset.id,
-        proxyPath: chapterProxy.file_path,
+        proxyPath: reusableChapterProxy.file_path,
       });
     }
   }

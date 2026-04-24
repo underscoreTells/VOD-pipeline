@@ -229,7 +229,7 @@ function isGroundingReadyForAgentMutation(): boolean {
     return true;
   }
 
-  if (agentState.groundingStatus === "ready") {
+  if (!agentState.isGroundingStatusLoading && agentState.groundingStatus === "ready") {
     return true;
   }
 

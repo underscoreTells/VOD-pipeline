@@ -640,11 +640,18 @@ export function registerAgentHandlers(): void {
         throw new AgentHandlerError('Project not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
-      return createSuccessResponse(
-        await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
-          ensureReady,
-        })
+      const groundingStatus = await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
+        ensureReady,
+      });
+
+      logger.info(
+        'agent:grounding-status:result',
+        normalizedChapterId,
+        groundingStatus.status,
+        `${groundingStatus.readyVideoAssetCount}/${groundingStatus.requiredVideoAssetCount}`
       );
+
+      return createSuccessResponse(groundingStatus);
     } catch (error) {
       return createErrorResponse(
         error,

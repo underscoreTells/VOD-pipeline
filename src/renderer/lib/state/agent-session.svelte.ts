@@ -65,6 +65,7 @@ export interface AgentState {
   isStreaming: boolean;
   currentProjectId: string | null;
   currentChapterId: string | null;
+  isGroundingStatusLoading: boolean;
   groundingStatus: AgentGroundingStatus;
   groundingMessage: string | null;
   groundingRequiredVideoAssetCount: number;
@@ -84,6 +85,7 @@ export const agentState = $state<AgentState>({
   isStreaming: false,
   currentProjectId: null,
   currentChapterId: null,
+  isGroundingStatusLoading: false,
   groundingStatus: "idle",
   groundingMessage: null,
   groundingRequiredVideoAssetCount: 0,
@@ -166,10 +168,9 @@ function clearGroundingPoll(): void {
 
 function resetGroundingState(status: AgentGroundingStatus = "idle"): void {
   clearGroundingPoll();
+  agentState.isGroundingStatusLoading = false;
   agentState.groundingStatus = status;
-  agentState.groundingMessage = status === "generating"
-    ? "Video proxy is still preparing. Agent chat is locked until grounding is ready."
-    : null;
+  agentState.groundingMessage = null;
   agentState.groundingRequiredVideoAssetCount = 0;
   agentState.groundingReadyVideoAssetCount = 0;
   agentState.groundingErrorDetail = null;
@@ -221,6 +222,7 @@ async function refreshGroundingStatus(options: {
     }
 
     clearGroundingPoll();
+    agentState.isGroundingStatusLoading = false;
     agentState.groundingStatus = "error";
     agentState.groundingMessage = error instanceof Error
       ? error.message
@@ -237,6 +239,7 @@ async function refreshGroundingStatus(options: {
 
   if (!response.success || !response.data) {
     clearGroundingPoll();
+    agentState.isGroundingStatusLoading = false;
     agentState.groundingStatus = "error";
     agentState.groundingMessage = response.error || "Failed to load agent grounding status.";
     agentState.groundingRequiredVideoAssetCount = 0;
@@ -245,7 +248,17 @@ async function refreshGroundingStatus(options: {
     return;
   }
 
+  agentState.isGroundingStatusLoading = false;
   applyGroundingStatus(response.data);
+
+  if (import.meta.env.DEV) {
+    console.debug(
+      "[AgentSession] grounding-status",
+      options.chapterId,
+      response.data.status,
+      `${response.data.readyVideoAssetCount}/${response.data.requiredVideoAssetCount}`
+    );
+  }
 
   if (response.data.status === "generating") {
     clearGroundingPoll();
@@ -418,7 +431,8 @@ export async function syncAgentContext(
     return;
   }
 
-  resetGroundingState("generating");
+  resetGroundingState("idle");
+  agentState.isGroundingStatusLoading = true;
   agentState.isLoadingConversations = true;
 
   try {

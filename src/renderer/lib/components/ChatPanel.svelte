@@ -30,6 +30,10 @@
   import Icon from './ui/Icon.svelte';
   import TooltipIconButton from './ui/TooltipIconButton.svelte';
   import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight, Copy, GitBranch, Pencil, Repeat, Play } from '../constants';
+  import {
+    canSubmitComposerMessage,
+    shouldInterceptComposerEnter,
+  } from './chat-panel-composer.js';
   import { cn } from "../utils/cn";
 
   interface Props {
@@ -79,9 +83,34 @@
   );
 
   let isBulkSuggestionActionRunning = $derived(bulkSuggestionAction !== null);
-  let isGroundingLocked = $derived(
-    Boolean(agentState.currentChapterId) && agentState.groundingStatus !== 'ready'
+  let isGroundingActionBlocked = $derived(
+    Boolean(agentState.currentChapterId)
+      && (agentState.isGroundingStatusLoading || agentState.groundingStatus !== 'ready')
   );
+
+  let canSubmitCurrentMessage = $derived.by(() =>
+    canSubmitComposerMessage({
+      isEditing: Boolean(editingMessageId),
+      isGroundingActionBlocked,
+      isStreaming: agentState.isStreaming,
+      message,
+    })
+  );
+
+  let composerPlaceholder = $derived.by(() => {
+    if (editingMessageId) {
+      return "Finish editing the selected message...";
+    }
+
+    if (isGroundingActionBlocked) {
+      return "Draft while video grounding finishes...";
+    }
+
+    return "Ask the AI editor...";
+  });
+
+  let isComposerDisabled = $derived(agentState.isStreaming || Boolean(editingMessageId));
+  let isSendDisabled = $derived(!canSubmitCurrentMessage);
 
   let conversationTitle = $derived(
     !agentState.currentChapterId
@@ -92,14 +121,26 @@
   );
 
   let groundingBanner = $derived.by(() => {
-    if (!agentState.currentChapterId || agentState.groundingStatus === 'ready') {
+    if (
+      !agentState.currentChapterId
+      || (!agentState.isGroundingStatusLoading && agentState.groundingStatus === 'ready')
+    ) {
       return null;
+    }
+
+    if (agentState.isGroundingStatusLoading) {
+      return {
+        title: 'Checking video grounding',
+        body: 'You can keep drafting, but send stays disabled until grounding is ready.',
+        progress: null,
+        detail: null,
+      };
     }
 
     if (agentState.groundingStatus === 'missing_video_asset') {
       return {
         title: 'No video proxy source available',
-        body: 'This chapter has no linked video asset, so the agent cannot verify the footage.',
+        body: 'Link a video asset to this chapter. You can keep drafting, but send stays disabled until the agent has grounded video.',
         progress: null,
         detail: null,
       };
@@ -108,7 +149,7 @@
     if (agentState.groundingStatus === 'error') {
       return {
         title: 'Video proxy failed',
-        body: 'Agent chat is locked until the chapter proxy can be built.',
+        body: 'You can keep drafting, but send stays disabled until the chapter proxy can be built.',
         progress: null,
         detail: agentState.groundingErrorDetail,
       };
@@ -121,7 +162,7 @@
 
     return {
       title: 'Video proxy is still preparing',
-      body: 'Agent chat is locked until grounding is ready.',
+      body: 'You can keep drafting, but send stays disabled until grounding is ready.',
       progress,
       detail: null,
     };
@@ -261,7 +302,7 @@
   });
 
   async function submitMessage() {
-    if (!message.trim() || agentState.isStreaming || editingMessageId || isGroundingLocked) return;
+    if (!canSubmitCurrentMessage) return;
 
     const msg = message;
     message = "";
@@ -275,7 +316,11 @@
   }
 
   function handleInputKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (shouldInterceptComposerEnter({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      canSubmit: canSubmitCurrentMessage,
+    })) {
       event.preventDefault();
       void submitMessage();
     }
@@ -290,11 +335,11 @@
   }
 
   function canEditMessage(message: ChatMessage) {
-    return canMutateMessage(message) && !isGroundingLocked && message.role === "user" && !editingMessageId;
+    return canMutateMessage(message) && !isGroundingActionBlocked && message.role === "user" && !editingMessageId;
   }
 
   function canRerollMessage(message: ChatMessage) {
-    return canMutateMessage(message) && !isGroundingLocked && message.role !== "system";
+    return canMutateMessage(message) && !isGroundingActionBlocked && message.role !== "system";
   }
 
   function startEditingMessage(message: ChatMessage) {
@@ -887,19 +932,15 @@
           rows="1"
           bind:value={message}
           bind:this={messageInput}
-          placeholder={isGroundingLocked
-            ? "Agent chat is locked until video grounding is ready"
-            : editingMessageId
-              ? "Finish editing the selected message..."
-              : "Ask the AI editor..."}
-          disabled={isGroundingLocked || agentState.isStreaming || !!editingMessageId}
+          placeholder={composerPlaceholder}
+          disabled={isComposerDisabled}
           oninput={autoResizeMessageInput}
           onkeydown={handleInputKeydown}
         ></textarea>
         <button
           type="submit"
           class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
-          disabled={!message.trim() || isGroundingLocked || agentState.isStreaming || !!editingMessageId}
+          disabled={isSendDisabled}
           title="Send message"
         >
           <Icon icon={ArrowUp} size={16} />
