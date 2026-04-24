@@ -32,6 +32,7 @@ const MAX_TRANSCRIPT_WINDOW_REQUESTS = 3;
 const CLIP_ROLE_VALUES = ["setup", "escalation", "twist", "payoff", "transition"] as const;
 const TURN_OUTCOME_VALUES = ["discussion", "proposal", "clarification"] as const;
 const PLAYHEAD_GROUNDING_WINDOW_SECONDS = 45;
+const KEEP_WINDOW_REMOVAL_PREFIX = /^\s*(cut|remove|trim|drop|skip|omit|delete)\b/i;
 
 export interface ConversationToolDependencies {
   analyzeChapterVideo?: (
@@ -99,7 +100,7 @@ const rangeSuggestionSchema = s.object(
       })
     ),
   },
-  { description: "Suggest a keep or cut window using chapter-local seconds." }
+  { description: "Suggest a kept source window using chapter-local seconds." }
 );
 
 const createClipSchema = s.object(
@@ -126,7 +127,7 @@ const createClipSchema = s.object(
   },
   {
     description:
-      "Create a new clip using chapter-local source points only."
+      "Create a new clip by defining the kept source window using chapter-local source points only."
   }
 );
 
@@ -165,7 +166,7 @@ const updateClipSchema = s.object(
   },
   {
     description:
-      "Update an existing clip by id using chapter-local source points and metadata only."
+      "Update an existing clip by id using chapter-local kept source points and metadata only."
   }
 );
 
@@ -328,11 +329,12 @@ export function createConversationTools(
     defineAgentTool<DraftRoughCutProposalsInput>({
       name: "draftRoughCutProposals",
       description:
-        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Transcript context, detailed transcript windows, selected clips, and the playhead region can ground trims and clip updates without a same-turn video call. Use analyzeChapterVideo when visual confirmation or multi-asset clip creation matters. Clips are source excerpts only, so proposal timing is defined entirely by inPoint/outPoint. Do not describe actionable edits only in prose.",
+        "Create actionable rough-cut proposals. Use range_suggestion as a keep-only shorthand for the kept source window, create_clip for new clips, and update_clip for existing clip edits. Descriptions must describe the kept footage inside the proposed window or updated clip, while reasoning can explain what the edit skips or trims. Transcript context, detailed transcript windows, selected clips, and the playhead region can ground trims and clip updates without a same-turn video call. Use analyzeChapterVideo when visual confirmation or multi-asset clip creation matters. Clips are source excerpts only, so proposal timing is defined entirely by inPoint/outPoint. Do not describe actionable edits only in prose.",
       schema: draftRoughCutProposalsSchema,
       execute: async ({ proposals }) => {
         const accepted = normalizeProposalDrafts(proposals);
         validateProposalGrounding(input, accumulator, accepted);
+        validateKeepWindowDescriptions(accepted);
 
         for (const draft of accepted) {
           if (draft.type === "range_suggestion") {
@@ -431,6 +433,38 @@ function normalizeProposalDrafts(value: ProposalDraft[]): ProposalDraft[] {
   }
 
   return normalized;
+}
+
+function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void {
+  for (const proposal of proposals) {
+    if (proposal.type === "range_suggestion") {
+      validateKeepWindowDescription(proposal.description, "range_suggestion.description");
+      continue;
+    }
+
+    if (proposal.type === "create_clip") {
+      validateKeepWindowDescription(proposal.description, "create_clip.description");
+      continue;
+    }
+
+    validateKeepWindowDescription(
+      proposal.updates.description ?? undefined,
+      "update_clip.updates.description"
+    );
+  }
+}
+
+function validateKeepWindowDescription(
+  description: string | null | undefined,
+  fieldName: string
+): void {
+  if (!description || !KEEP_WINDOW_REMOVAL_PREFIX.test(description)) {
+    return;
+  }
+
+  throw new Error(
+    `${fieldName} uses removal-first wording. Describe the kept footage inside the proposed window; put the cut rationale in reasoning.`
+  );
 }
 
 function getGroundedVideoAssetIds(input: ConversationTurnInput): number[] {

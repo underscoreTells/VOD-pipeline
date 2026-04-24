@@ -397,7 +397,7 @@ function summarizeSuggestions(suggestions: Suggestion[]): string {
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'
         ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`
-        : 'create proposal';
+        : 'keep window';
       return `- ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
         2
       )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();

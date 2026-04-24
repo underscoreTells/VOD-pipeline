@@ -104,6 +104,9 @@ Rules:
 - Preserve setup -> escalation -> payoff continuity, strong transitions, exact payoff wording, and humor that improves pacing or meaningfully pays off a setup.
 - Use chapter-local seconds only for any actionable edit proposal.
 - For clips, inPoint/outPoint describe the kept source window.
+- range_suggestion is a keep-only shorthand for the exact source window that stays in the cut.
+- If the user asks to cut, remove, trim, drop, skip, omit, or delete something, translate that into the kept result window or a clip-boundary update. Do not label the kept window as the removed material.
+- For proposal copy, description must describe what is inside the kept window or updated clip. reasoning may explain what the edit skips, trims, omits, or removes.
 - Chapter clip order is inferred from source timing, so do not propose timeline gaps or manual repositioning.
 - Use create_clip and update_clip only to define or revise source windows and metadata.
 - Prioritize narrative continuity and story progression over isolated highlight density.

@@ -31,6 +31,11 @@ describe("conversation system prompt", () => {
     const prompt = buildConversationSystemPrompt(createInput());
 
     expect(prompt).toContain("inPoint/outPoint describe the kept source window");
+    expect(prompt).toContain("range_suggestion is a keep-only shorthand");
+    expect(prompt).toContain("Do not label the kept window as the removed material");
+    expect(prompt).toContain(
+      "description must describe what is inside the kept window or updated clip"
+    );
     expect(prompt).toContain("Chapter clip order is inferred from source timing");
     expect(prompt).toContain("Use create_clip and update_clip only to define or revise source windows and metadata");
     expect(prompt).toContain("prefer drafting at least one concrete proposal instead of asking for clarification");

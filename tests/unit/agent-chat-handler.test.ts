@@ -279,6 +279,62 @@ describe("agent chat handler", () => {
     });
   });
 
+  it("summarizes keep-window suggestions with keep-oriented wording in follow-up context", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    databaseMocks.getSuggestionsByConversation.mockResolvedValue([
+      {
+        id: 7,
+        chapter_id: 3,
+        conversation_id: 2,
+        chat_message_id: 101,
+        in_point: 12,
+        out_point: 18,
+        description: "Keep the payoff reaction",
+        reasoning: "Skips the slow lead-in.",
+        provider: "gemini",
+        action_type: "create_clip",
+        target_clip_id: null,
+        action_payload_json: null,
+        preview_snapshot_json: null,
+        status: "pending",
+        display_order: 0,
+        created_at: "2026-04-18T12:00:00.000Z",
+        applied_at: null,
+        clip_id: null,
+      },
+    ]);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+    });
+
+    expect(handlerSupportMocks.applyNearLimitTokenGuard).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        suggestionSummary: expect.stringContaining(
+          "keep window 12.00-18.00s status=pending desc=Keep the payoff reaction"
+        ),
+      }),
+      expect.anything()
+    );
+    expect(handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1]?.suggestionSummary).not.toContain(
+      "create proposal"
+    );
+  });
+
   it("reports grounding status through the dedicated IPC handler", async () => {
     handlerSupportMocks.getAgentGroundingStatus.mockResolvedValue({
       status: "ready",

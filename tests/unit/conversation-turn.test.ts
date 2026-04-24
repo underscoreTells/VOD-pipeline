@@ -272,7 +272,7 @@ describe("conversation turn runner", () => {
                     type: "range_suggestion",
                     in_point: 12,
                     out_point: 24,
-                    description: "Trim dead air",
+                    description: "Keep the reaction after the pause",
                     reasoning: "Nothing new happens here.",
                   },
                 ],
@@ -297,7 +297,7 @@ describe("conversation turn runner", () => {
     expect(result.suggestionDrafts?.[0]).toMatchObject({
       in_point: 12,
       out_point: 24,
-      description: "Trim dead air",
+      description: "Keep the reaction after the pause",
     });
   });
 
@@ -608,7 +608,7 @@ describe("conversation turn runner", () => {
                     type: "range_suggestion",
                     in_point: 18,
                     out_point: 36,
-                    description: "Trim the slow reset beat",
+                    description: "Keep the escalation after the slow reset",
                     reasoning: "The middle drifts and repeats information before the next escalation.",
                   },
                 ],
@@ -639,7 +639,7 @@ describe("conversation turn runner", () => {
     expect(result.suggestionDrafts?.[0]).toMatchObject({
       in_point: 18,
       out_point: 36,
-      description: "Trim the slow reset beat",
+      description: "Keep the escalation after the slow reset",
     });
   });
 
@@ -733,7 +733,7 @@ describe("conversation turn runner", () => {
                     type: "range_suggestion",
                     in_point: 20,
                     out_point: 42,
-                    description: "Cut the repetitive explanation loop",
+                    description: "Keep the beat that resumes after the repeated explanation",
                     reasoning: "It repeats the setup without adding new stakes before the next beat.",
                   },
                 ],
@@ -764,7 +764,260 @@ describe("conversation turn runner", () => {
     expect(result.suggestionDrafts?.[0]).toMatchObject({
       in_point: 20,
       out_point: 42,
-      description: "Cut the repetitive explanation loop",
+      description: "Keep the beat that resumes after the repeated explanation",
+    });
+  });
+
+  it("rejects removal-first range_suggestion descriptions and allows one repaired keep-window pass", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Cut the section where I'm just eating.")],
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "bad_range_suggestion",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "range_suggestion",
+                    in_point: 115,
+                    out_point: 123,
+                    description: "Cut the eating section",
+                    reasoning: "This window skips the silent eating stretch and lands on the reaction.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "repaired_range_suggestion",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "range_suggestion",
+                    in_point: 123,
+                    out_point: 131,
+                    description: "Keep the reaction after the eating beat",
+                    reasoning: "This skips the silent eating stretch and lands on the reaction.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_range_suggestion",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse:
+                  "I drafted one kept window that skips the eating stretch and lands on the reaction.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("proposal");
+    expect(result.suggestionDrafts).toHaveLength(1);
+    expect(result.suggestionDrafts?.[0]).toMatchObject({
+      in_point: 123,
+      out_point: 131,
+      description: "Keep the reaction after the eating beat",
+    });
+  });
+
+  it("rejects removal-first create_clip descriptions and accepts repaired kept-window wording", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Pull the payoff into its own clip.")],
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "bad_create_clip",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "create_clip",
+                    inPoint: 30,
+                    outPoint: 48,
+                    description: "Remove the pause before the payoff",
+                    reasoning: "This clip should skip the pause and land on the payoff beat.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "repaired_create_clip",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "create_clip",
+                    inPoint: 48,
+                    outPoint: 64,
+                    description: "Keep the payoff after the pause",
+                    reasoning: "This clip skips the pause and starts on the payoff beat.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_create_clip",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse: "I drafted one new clip that starts on the payoff and skips the pause.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("proposal");
+    expect(result.timelineActions).toHaveLength(1);
+    expect(result.timelineActions?.[0]).toMatchObject({
+      type: "create_clip",
+      inPoint: 48,
+      outPoint: 64,
+      description: "Keep the payoff after the pause",
+    });
+  });
+
+  it("rejects removal-first update_clip descriptions and accepts repaired kept-window wording", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Tighten the selected setup.")],
+        selectedClipIds: [4],
+        context: {
+          ...createInput().context,
+          chapterClips: [
+            {
+              id: 4,
+              assetId: 2,
+              trackIndex: 0,
+              inPoint: 20,
+              outPoint: 42,
+              role: "setup",
+              description: "Loose setup clip",
+              isEssential: true,
+            },
+          ],
+        },
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "bad_update_clip",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "update_clip",
+                    clipId: 4,
+                    updates: {
+                      inPoint: 22,
+                      outPoint: 36,
+                      description: "Trim the dead air",
+                    },
+                    reasoning: "This tighter clip skips the dead air before the setup lands.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "repaired_update_clip",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "update_clip",
+                    clipId: 4,
+                    updates: {
+                      inPoint: 22,
+                      outPoint: 36,
+                      description: "Keep the tighter setup beat",
+                    },
+                    reasoning: "This skips the dead air before the setup lands.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_update_clip",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse: "I tightened the selected setup and removed the dead air before it lands.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("proposal");
+    expect(result.timelineActions).toHaveLength(1);
+    expect(result.timelineActions?.[0]).toMatchObject({
+      type: "update_clip",
+      clipId: 4,
+      updates: {
+        inPoint: 22,
+        outPoint: 36,
+        description: "Keep the tighter setup beat",
+      },
     });
   });
 
