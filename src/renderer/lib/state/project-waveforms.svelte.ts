@@ -7,9 +7,10 @@ import {
   type WaveformResult,
 } from '../api/waveforms.js';
 import { projectDetail } from './project-media.svelte.js';
-import { setError } from './timeline.svelte';
+import { setError, showTimelineNotice } from './timeline.svelte';
 
 const MIX_WAVEFORM_TRACK_INDEX = -1;
+const WAVEFORM_UNAVAILABLE_NOTICE = 'Waveform preview unavailable. Timeline editing still works.';
 
 export type WaveformUiMode = 'modal' | 'background';
 
@@ -18,7 +19,6 @@ export interface GenerateAssetWaveformUiOptions {
 }
 
 let waveformUnavailableForSession = false;
-let waveformUnavailableMessage: string | null = null;
 
 function isWaveformDependencyUnavailableError(message: string): boolean {
   const normalized = message.toLowerCase();
@@ -28,7 +28,6 @@ function isWaveformDependencyUnavailableError(message: string): boolean {
 
 export function resetWaveformDependencyCacheForTests(): void {
   waveformUnavailableForSession = false;
-  waveformUnavailableMessage = null;
 }
 
 function clampPercent(percent: number): number {
@@ -46,9 +45,6 @@ export async function generateAssetWaveform(
   const showModalProgress = uiMode === 'modal';
 
   if (waveformUnavailableForSession) {
-    if (showModalProgress && waveformUnavailableMessage) {
-      setError(waveformUnavailableMessage);
-    }
     return;
   }
 
@@ -152,9 +148,10 @@ export async function generateAssetWaveform(
     const message = error instanceof Error ? error.message : String(error);
     if (isWaveformDependencyUnavailableError(message)) {
       waveformUnavailableForSession = true;
-      waveformUnavailableMessage = message;
+      showTimelineNotice(WAVEFORM_UNAVAILABLE_NOTICE, { autoHideMs: 4000 });
+    } else {
+      setError(message);
     }
-    setError(message);
   } finally {
     unsubscribe();
     if (showModalProgress) {

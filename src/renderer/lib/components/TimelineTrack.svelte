@@ -22,6 +22,7 @@
   } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
+  import { resolveTimelineWaveformLoadPayload } from '../utils/timeline-waveform.js';
   import { ROLE_CONFIG } from '../constants';
   
   interface Props {
@@ -58,6 +59,7 @@
   let isDestroyed = false;
   let loadedAssetId: number | null = null;
   let hasLoadedPeaks = false;
+  let isBlankWaveformFallback = $state(false);
   let waveformDuration = $state<number | null>(null);
   let loadToken = 0;
   let unsubscribeWaveformProgress: (() => void) | null = null;
@@ -86,6 +88,14 @@
   
   const DEFAULT_COLOR = ROLE_CONFIG.unassigned.subtleCssVar;
   const SELECTION_COLOR = 'var(--accent-primary-subtle)';
+  const REAL_WAVEFORM_COLORS = {
+    waveColor: '#4a5568',
+    progressColor: '#3182ce',
+  };
+  const BLANK_WAVEFORM_COLORS = {
+    waveColor: 'transparent',
+    progressColor: 'transparent',
+  };
   
   // Get clips for this track
   const trackClips = $derived.by(() => {
@@ -176,17 +186,14 @@
   let previousSelect = '';
   let loadedChapterKey: string | null = null;
   
-  function buildWaveSurferPeaks(peaks: Array<{ min: number; max: number }>): Float32Array {
-    const values = new Float32Array(peaks.length);
-    for (let i = 0; i < peaks.length; i += 1) {
-      const peak = peaks[i];
-      values[i] = Math.max(Math.abs(peak.min), Math.abs(peak.max));
-    }
-    return values;
-  }
-
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function applyWaveformAppearance(blankFallback: boolean) {
+    if (!waveSurfer) return;
+    isBlankWaveformFallback = blankFallback;
+    waveSurfer.setOptions(blankFallback ? BLANK_WAVEFORM_COLORS : REAL_WAVEFORM_COLORS);
   }
 
   function getPixelsPerSecond(): number {
@@ -926,34 +933,6 @@
     return null;
   }
 
-  function sliceWaveformData(
-    waveformData: { peaks: Array<{ min: number; max: number }>; duration: number },
-    rangeStart: number,
-    rangeEnd: number,
-    assetDurationSeconds: number | null
-  ) {
-    const totalDuration = waveformData.duration;
-    if (!Number.isFinite(totalDuration) || totalDuration <= 0) return null;
-
-    const effectiveAssetDuration = assetDurationSeconds && assetDurationSeconds > 0
-      ? assetDurationSeconds
-      : totalDuration;
-    const safeStart = clamp(rangeStart, 0, effectiveAssetDuration);
-    const safeEnd = clamp(rangeEnd, safeStart + 0.01, effectiveAssetDuration);
-    const durationRatio = totalDuration / effectiveAssetDuration;
-    const start = clamp(safeStart * durationRatio, 0, totalDuration);
-    const end = clamp(safeEnd * durationRatio, start + 0.01, totalDuration);
-    const peaksPerSecond = waveformData.peaks.length / totalDuration;
-    const startIndex = Math.floor(start * peaksPerSecond);
-    const endIndex = Math.ceil(end * peaksPerSecond);
-    const slicedPeaks = waveformData.peaks.slice(startIndex, Math.max(startIndex + 1, endIndex));
-
-    return {
-      peaks: slicedPeaks,
-      duration: end - start,
-    };
-  }
-
   async function loadWaveformForAsset(options: { force?: boolean } = {}) {
     if (!waveSurfer) return;
     if (!audioUrl) return;
@@ -964,14 +943,7 @@
     const waveformData = await loadWaveformCache();
 
     if (isDestroyed || token !== loadToken) return;
-
-    if (!waveformData) {
-      waveformDuration = null;
-      hasLoadedPeaks = false;
-      return;
-    }
-
-    waveformDuration = waveformData.duration;
+    waveformDuration = waveformData?.duration ?? null;
 
     const chapterKey = `${assetId}:${waveformTrackIndex}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
     const shouldReload =
@@ -982,26 +954,24 @@
 
     if (!shouldReload) return;
 
-    const sliced = sliceWaveformData(
+    const payload = resolveTimelineWaveformLoadPayload({
       waveformData,
-      chapterRange.start,
-      chapterRange.end,
-      assetDuration
-    );
-    if (!sliced) {
+      chapterRange,
+      assetDuration,
+    });
+    if (!payload) {
+      isBlankWaveformFallback = false;
       hasLoadedPeaks = false;
       return;
     }
 
-    const loadPeaks = [buildWaveSurferPeaks(sliced.peaks)];
-    const loadDuration = Math.max(0.01, chapterRange.duration);
-
     try {
       isReady = false;
-      await waveSurfer.load(audioUrl, loadPeaks, loadDuration);
+      applyWaveformAppearance(!payload.hasRealWaveform);
+      await waveSurfer.load(audioUrl, payload.peaks, payload.duration);
       loadedAssetId = assetId;
       loadedChapterKey = chapterKey;
-      hasLoadedPeaks = Boolean(waveformData);
+      hasLoadedPeaks = payload.hasRealWaveform;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[TimelineTrack] Failed to load waveform for asset ${assetId}: ${message}`, error);
@@ -1049,8 +1019,8 @@
       waveSurfer = WaveSurfer.create({
         container,
         backend: 'MediaElement',
-        waveColor: '#4a5568',
-        progressColor: '#3182ce',
+        waveColor: REAL_WAVEFORM_COLORS.waveColor,
+        progressColor: REAL_WAVEFORM_COLORS.progressColor,
         cursorColor: '#e53e3e',
         height,
         normalize: true,
@@ -1261,6 +1231,7 @@
   <div
     class="waveform-container relative min-h-[100px] w-full cursor-pointer"
     class:bg-surface-page={missing}
+    class:timeline-track-blank={isBlankWaveformFallback}
     class:cursor-default={!editable}
     class:cursor-grabbing={isPanning}
     class:cursor-crosshair={isSelecting}

@@ -10,6 +10,7 @@ const projectDetailMocks = vi.hoisted(() => ({
 
 const timelineMocks = vi.hoisted(() => ({
   setError: vi.fn(),
+  showTimelineNotice: vi.fn(),
 }));
 
 const waveformApiMocks = vi.hoisted(() => {
@@ -59,6 +60,7 @@ describe("project waveform state", () => {
     };
 
     timelineMocks.setError.mockReset();
+    timelineMocks.showTimelineNotice.mockReset();
     waveformApiMocks.generateWaveform.mockReset();
     waveformApiMocks.getWaveform.mockReset();
     waveformApiMocks.onWaveformProgress.mockClear();
@@ -157,9 +159,11 @@ describe("project waveform state", () => {
     await generateAssetWaveform(1, 0, {}, { uiMode: "background" });
 
     expect(waveformApiMocks.generateWaveform).toHaveBeenCalledTimes(1);
-    expect(timelineMocks.setError).toHaveBeenCalledTimes(1);
-    expect(timelineMocks.setError).toHaveBeenCalledWith(
-      "audiowaveform not found. Install audiowaveform for waveform visualization."
+    expect(timelineMocks.setError).not.toHaveBeenCalled();
+    expect(timelineMocks.showTimelineNotice).toHaveBeenCalledTimes(1);
+    expect(timelineMocks.showTimelineNotice).toHaveBeenCalledWith(
+      "Waveform preview unavailable. Timeline editing still works.",
+      { autoHideMs: 4000 }
     );
   });
 });

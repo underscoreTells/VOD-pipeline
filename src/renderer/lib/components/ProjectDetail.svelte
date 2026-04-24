@@ -36,7 +36,12 @@
   } from '../state/chapters.svelte';
   import { settingsState } from '../state/settings.svelte';
   import { buildProxyOptions } from '../state/settings-helpers.js';
-  import { timelineState, setError, clearSelection as clearTimelineSelection } from '../state/timeline.svelte';
+  import {
+    timelineState,
+    setError,
+    clearTimelineNotice,
+    clearSelection as clearTimelineSelection,
+  } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
   import {
     layoutState,
@@ -929,16 +934,32 @@
     </div>
   {/if}
   
-  <!-- Error Display -->
-  {#if timelineState.error}
-    <div class="error-toast fixed right-4 bottom-4 z-[var(--z-overlay)] flex items-center gap-4 rounded-sm border border-accent-destructive bg-surface-base px-4 py-3 text-accent-destructive">
-      <p>{timelineState.error}</p>
-      <button
-        class="inline-flex items-center bg-transparent p-0 text-accent-destructive hover:opacity-80"
-        onclick={() => setError(null)}
-      >
-        <Icon icon={X} size={14} />
-      </button>
+  {#if timelineState.notice || timelineState.error}
+    <div class="pointer-events-none fixed right-4 bottom-4 z-[var(--z-toast)] flex max-w-sm flex-col gap-2">
+      {#if timelineState.notice}
+        <div class="pointer-events-auto flex items-start gap-3 rounded-sm border border-border-subtle bg-surface-raised px-3 py-2 text-app-sm text-text-secondary shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
+          <p class="m-0 min-w-0 flex-1">{timelineState.notice.message}</p>
+          <button
+            class="inline-flex shrink-0 items-center bg-transparent p-0 text-text-tertiary transition-opacity hover:opacity-80"
+            onclick={clearTimelineNotice}
+            aria-label="Dismiss timeline notice"
+          >
+            <Icon icon={X} size={14} />
+          </button>
+        </div>
+      {/if}
+
+      {#if timelineState.error}
+        <div class="error-toast pointer-events-auto flex items-center gap-4 rounded-sm border border-accent-destructive bg-surface-base px-4 py-3 text-accent-destructive">
+          <p class="m-0 min-w-0 flex-1">{timelineState.error}</p>
+          <button
+            class="inline-flex shrink-0 items-center bg-transparent p-0 text-accent-destructive hover:opacity-80"
+            onclick={() => setError(null)}
+          >
+            <Icon icon={X} size={14} />
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
