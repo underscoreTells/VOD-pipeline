@@ -129,7 +129,6 @@ CREATE TABLE IF NOT EXISTS clips (
   project_id INTEGER NOT NULL,
   asset_id INTEGER NOT NULL,
   track_index INTEGER DEFAULT 0,
-  start_time REAL NOT NULL,
   in_point REAL NOT NULL,
   out_point REAL NOT NULL,
   role TEXT CHECK(role IN ('setup', 'escalation', 'twist', 'payoff', 'transition')),

@@ -27,13 +27,11 @@ function createInput(): ConversationTurnInput {
 }
 
 describe("conversation system prompt", () => {
-  it("explains timeline placement semantics for startTime and source windows", () => {
+  it("explains source-window clip semantics", () => {
     const prompt = buildConversationSystemPrompt(createInput());
 
-    expect(prompt).toContain("inPoint/outPoint describe the source window");
-    expect(prompt).toContain("startTime describes timeline placement");
-    expect(prompt).toContain("Clips do not need to be adjacent");
-    expect(prompt).toContain("Set startTime intentionally whenever timeline placement matters");
-    expect(prompt).toContain("Only change update_clip.startTime when you intend to move that clip");
+    expect(prompt).toContain("inPoint/outPoint describe the kept source window");
+    expect(prompt).toContain("Chapter clip order is inferred from source timing");
+    expect(prompt).toContain("Use create_clip and update_clip only to define or revise source windows and metadata");
   });
 });

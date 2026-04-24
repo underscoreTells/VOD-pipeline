@@ -85,6 +85,10 @@
     getWaveformTrackIndices,
     isMkvAsset,
   } from './project-detail-waveforms.js';
+  import {
+    clipOverlapsChapterSourceRange,
+    compareClipsBySourceTime,
+  } from '../../../shared/utils/clip-timing.js';
   import ProjectEditorHeader from './ProjectEditorHeader.svelte';
   import Icon from './ui/Icon.svelte';
   import { BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
@@ -549,18 +553,12 @@
     if (!selectedChapter) return [];
     if (selectedChapterAssetIds.length === 0) return [];
     const assetIds = new Set(selectedChapterAssetIds);
-    const chapterStart = selectedChapter.start_time;
-    const chapterEnd = selectedChapter.end_time;
-    if (!Number.isFinite(chapterEnd) || chapterEnd <= chapterStart) return [];
+    if (!Number.isFinite(selectedChapter.end_time) || selectedChapter.end_time <= selectedChapter.start_time) return [];
 
-    return timelineState.clips.filter((clip) => {
-      if (!assetIds.has(clip.asset_id)) return false;
-      const duration = clip.out_point - clip.in_point;
-      if (!Number.isFinite(duration) || duration <= 0) return false;
-      const clipStart = clip.start_time;
-      const clipEnd = clip.start_time + duration;
-      return clipEnd > chapterStart && clipStart < chapterEnd;
-    });
+    return timelineState.clips
+      .filter((clip) => assetIds.has(clip.asset_id))
+      .filter((clip) => clipOverlapsChapterSourceRange(clip, selectedChapter))
+      .sort(compareClipsBySourceTime);
   });
 
   const selectedChapterDuration = $derived.by(() => {

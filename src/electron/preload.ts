@@ -106,7 +106,6 @@ const electronAPI: ElectronAPI = {
         projectId: input.projectId,
         assetId: input.assetId,
         trackIndex: input.trackIndex,
-        startTime: input.startTime,
         inPoint: input.inPoint,
         outPoint: input.outPoint,
         role: input.role,

@@ -8,7 +8,6 @@ export interface CreateClipAction {
   type: "create_clip";
   assetId?: number;
   trackIndex?: number;
-  startTime?: number;
   inPoint: number;
   outPoint: number;
   role?: Clip["role"];
@@ -21,7 +20,6 @@ export interface UpdateClipAction {
   type: "update_clip";
   clipId: number;
   updates: {
-    startTime?: number;
     inPoint?: number;
     outPoint?: number;
     role?: Clip["role"];

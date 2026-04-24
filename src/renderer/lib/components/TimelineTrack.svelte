@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import WaveSurfer from 'wavesurfer.js';
   import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
@@ -8,8 +9,8 @@
   import {
     createProjectClip,
     executeDeleteClip,
-    executeMoveClip,
     executeResizeClip,
+    executeSlideClipWindow,
     executeSplitClip,
     executeUpdateClipTiming,
     projectDetail,
@@ -24,6 +25,7 @@
   import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
   import { resolveTimelineWaveformLoadPayload } from '../utils/timeline-waveform.js';
   import { ROLE_CONFIG } from '../constants';
+  import { compareClipsBySourceTime } from '../../../shared/utils/clip-timing.js';
   
   interface Props {
     audioUrl: string;
@@ -65,7 +67,7 @@
   let unsubscribeWaveformProgress: (() => void) | null = null;
   let scrollContainer: HTMLElement | null = null;
   let cleanupRenderListener: (() => void) | null = null;
-  const clipRegions = new Map<number, any>();
+  const clipRegions = new SvelteMap<number, any>();
   let contextMenu = $state({
     open: false,
     x: 0,
@@ -105,9 +107,11 @@
       ? source.filter((clip) => clip.asset_id === assetId)
       : source;
     if (clipTrackIndex < 0) {
-      return assetScopedClips;
+      return [...assetScopedClips].sort(compareClipsBySourceTime);
     }
-    return assetScopedClips.filter((clip) => clip.track_index === clipTrackIndex);
+    return assetScopedClips
+      .filter((clip) => clip.track_index === clipTrackIndex)
+      .sort(compareClipsBySourceTime);
   });
 
   const assetDuration = $derived.by(() => {
@@ -176,7 +180,6 @@
   let dragLastLocalStart = 0;
   let dragLastLocalEnd = 0;
   let dragResizeEdge: 'start' | 'end' | null = null;
-  let dragOriginalStart = 0;
   let dragOriginalIn = 0;
   let dragOriginalOut = 0;
   let dragDidMove = false;
@@ -381,7 +384,6 @@
 
   function canSplitClipAtGlobalTime(clip: Clip, splitTime: number): boolean {
     const split = splitClipAtTimelineTime({
-      clipStartTime: clip.start_time,
       inPoint: clip.in_point,
       outPoint: clip.out_point,
       splitTime,
@@ -446,10 +448,9 @@
 
     const intervals = trackClips
       .map((clip) => {
-        const duration = clip.out_point - clip.in_point;
-        if (!Number.isFinite(duration) || duration <= 0) return null;
-        const start = clip.start_time - chapterRange.start;
-        const end = start + duration;
+        const start = clip.in_point - chapterRange.start;
+        const end = clip.out_point - chapterRange.start;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
         return { start, end };
       })
       .filter((interval): interval is { start: number; end: number } => interval !== null);
@@ -465,7 +466,6 @@
 
     if (!range) return;
 
-    const globalStart = chapterRange.start + range.start;
     const globalIn = chapterRange.start + range.start;
     const globalOut = chapterRange.start + range.end;
 
@@ -473,7 +473,6 @@
       projectDetail.projectId,
       assetId,
       createTrackIndex,
-      globalStart,
       globalIn,
       globalOut,
       undefined,
@@ -589,10 +588,9 @@
     return trackClips
       .filter((clip) => clip.id !== excludeClipId)
       .map((clip) => {
-        const duration = clip.out_point - clip.in_point;
-        if (!Number.isFinite(duration) || duration <= 0) return null;
-        const start = clip.start_time - chapterRange.start;
-        const end = start + duration;
+        const start = clip.in_point - chapterRange.start;
+        const end = clip.out_point - chapterRange.start;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
         return { start, end };
       })
       .filter((interval): interval is ClipCollisionInterval => interval !== null);
@@ -637,11 +635,10 @@
     dragClipId = clipId;
     dragResizeEdge = edge;
     dragClipDuration = duration;
-    dragClipLocalStart = clip.start_time - chapterRange.start;
-    dragClipLocalEnd = dragClipLocalStart + duration;
+    dragClipLocalStart = clip.in_point - chapterRange.start;
+    dragClipLocalEnd = clip.out_point - chapterRange.start;
     dragLastLocalStart = dragClipLocalStart;
     dragLastLocalEnd = dragClipLocalEnd;
-    dragOriginalStart = clip.start_time;
     dragOriginalIn = clip.in_point;
     dragOriginalOut = clip.out_point;
     dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
@@ -682,12 +679,11 @@
       selectClip(dragClickClipId, false);
       dragClipId = dragClickClipId;
       dragClipDuration = duration;
-      dragClipLocalStart = clip.start_time - chapterRange.start;
-      dragClipLocalEnd = dragClipLocalStart + duration;
+      dragClipLocalStart = clip.in_point - chapterRange.start;
+      dragClipLocalEnd = clip.out_point - chapterRange.start;
       dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
       dragLastLocalStart = dragClipLocalStart;
       dragLastLocalEnd = dragClipLocalEnd;
-      dragOriginalStart = clip.start_time;
       dragOriginalIn = clip.in_point;
       dragOriginalOut = clip.out_point;
       dragClickTime = null;
@@ -790,9 +786,19 @@
 
     if (dragMode === 'move' && chapterRange && dragClipId !== null) {
       const newStart = chapterRange.start + dragLastLocalStart;
+      const newEnd = chapterRange.start + dragLastLocalEnd;
       const EPSILON = 0.01;
-      if (Math.abs(newStart - dragOriginalStart) > EPSILON) {
-        void executeMoveClip(dragClipId, dragOriginalStart, newStart);
+      if (
+        Math.abs(newStart - dragOriginalIn) > EPSILON ||
+        Math.abs(newEnd - dragOriginalOut) > EPSILON
+      ) {
+        void executeSlideClipWindow(
+          dragClipId,
+          dragOriginalIn,
+          dragOriginalOut,
+          newStart,
+          newEnd
+        );
       }
     }
 
@@ -802,18 +808,15 @@
       const newEnd = chapterRange.start + dragLastLocalEnd;
 
       if (dragResizeEdge === 'start') {
-        const startDelta = newStart - dragOriginalStart;
-        const newInPoint = dragOriginalIn + startDelta;
-        const startChanged = Math.abs(newStart - dragOriginalStart) > EPSILON;
+        const newInPoint = newStart;
+        const startChanged = Math.abs(newInPoint - dragOriginalIn) > EPSILON;
         const inChanged = Math.abs(newInPoint - dragOriginalIn) > EPSILON;
 
         if (startChanged || inChanged) {
           void executeUpdateClipTiming(
             dragClipId,
-            dragOriginalStart,
             dragOriginalIn,
             dragOriginalOut,
-            newStart,
             newInPoint,
             dragOriginalOut
           );
@@ -986,8 +989,7 @@
     const selection = normalizeSelection(start, end, MIN_SELECTION_SECONDS);
     if (!selection) return;
 
-    const { startTime, inPoint, outPoint } = buildClipTimes(selection);
-    const globalStart = chapterRange.start + startTime;
+    const { inPoint, outPoint } = buildClipTimes(selection);
     const globalIn = chapterRange.start + inPoint;
     const globalOut = chapterRange.start + outPoint;
 
@@ -995,7 +997,6 @@
       projectDetail.projectId,
       assetId,
       createTrackIndex,
-      globalStart,
       globalIn,
       globalOut,
       undefined,
@@ -1165,10 +1166,9 @@
     const chapterStart = chapterRange.start;
 
     for (const clip of trackClips) {
-      const duration = clip.out_point - clip.in_point;
       const color = clip.role ? ROLE_COLORS[clip.role] : DEFAULT_COLOR;
-      const localStart = clip.start_time - chapterStart;
-      const localEnd = localStart + duration;
+      const localStart = clip.in_point - chapterStart;
+      const localEnd = clip.out_point - chapterStart;
 
       const normalized = normalizeRenderableLocalRange(localStart, localEnd);
       if (!normalized) {
@@ -1206,6 +1206,13 @@
     void _clips;
     void _range;
     renderRegions();
+  });
+
+  $effect(() => {
+    const selectedIds = timelineState.selectedClipIds;
+    for (const [clipId, region] of clipRegions.entries()) {
+      region.element?.classList.toggle('selected', selectedIds.has(clipId));
+    }
   });
   
   // Sync scroll position with other tracks

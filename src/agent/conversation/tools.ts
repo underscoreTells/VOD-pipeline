@@ -104,7 +104,6 @@ const createClipSchema = s.object(
     type: s.required(s.literalString("create_clip")),
     assetId: s.optional(s.integer({ minimum: 1 })),
     trackIndex: s.optional(s.integer({ minimum: 0 })),
-    startTime: s.optional(s.number({ minimum: 0 })),
     inPoint: s.required(s.number({ minimum: 0 })),
     outPoint: s.required(s.number({ minimum: 0 })),
     role: s.optional(s.nullable(s.stringEnum(CLIP_ROLE_VALUES))),
@@ -124,7 +123,7 @@ const createClipSchema = s.object(
   },
   {
     description:
-      "Create a new clip using chapter-local source points. Optional startTime places the clip on the timeline in chapter-local seconds."
+      "Create a new clip using chapter-local source points only."
   }
 );
 
@@ -135,7 +134,6 @@ const updateClipSchema = s.object(
     updates: s.required(
       s.object(
         {
-          startTime: s.optional(s.number({ minimum: 0 })),
           inPoint: s.optional(s.number({ minimum: 0 })),
           outPoint: s.optional(s.number({ minimum: 0 })),
           role: s.optional(s.nullable(s.stringEnum(CLIP_ROLE_VALUES))),
@@ -164,7 +162,7 @@ const updateClipSchema = s.object(
   },
   {
     description:
-      "Update an existing clip by id. Optional updates.startTime repositions the clip on the timeline in chapter-local seconds."
+      "Update an existing clip by id using chapter-local source points and metadata only."
   }
 );
 
@@ -326,7 +324,7 @@ export function createConversationTools(
     defineAgentTool<DraftRoughCutProposalsInput>({
       name: "draftRoughCutProposals",
       description:
-        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. For create_clip, startTime is timeline placement while inPoint/outPoint are the source window. For update_clip, updates.startTime repositions the existing clip on the timeline. Do not describe actionable edits only in prose.",
+        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Clips are source excerpts only, so proposal timing is defined entirely by inPoint/outPoint. Do not describe actionable edits only in prose.",
       schema: draftRoughCutProposalsSchema,
       execute: async ({ proposals }) => {
         if (!accumulator.hasSuccessfulVideoEvidence) {

@@ -18,11 +18,11 @@ export interface JSONExportData {
   frameRate: number;
   totalDuration: number;
   clips: Array<{
+    sequenceIndex: number;
     id: number;
     assetId: number;
     trackIndex: number;
     role: string | null;
-    startTime: number;
     inPoint: number;
     outPoint: number;
     duration: number;
@@ -49,12 +49,12 @@ export function generateJSON(options: JSONExportOptions): string {
     projectName,
     frameRate,
     totalDuration,
-    clips: clips.map(clip => ({
+    clips: clips.map((clip, index) => ({
+      sequenceIndex: index,
       id: clip.id,
       assetId: clip.asset_id,
       trackIndex: clip.track_index,
       role: clip.role,
-      startTime: clip.start_time,
       inPoint: clip.in_point,
       outPoint: clip.out_point,
       duration: clip.out_point - clip.in_point,

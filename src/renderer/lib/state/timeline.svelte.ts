@@ -67,7 +67,7 @@ export function getSelectedClips(): Clip[] {
 
 export function getTotalDuration(): number {
   if (timelineState.clips.length === 0) return 0;
-  return Math.max(...timelineState.clips.map(c => c.start_time + (c.out_point - c.in_point)));
+  return Math.max(...timelineState.clips.map((clip) => clip.out_point));
 }
 
 export function getClipsByTrack(): Map<number, Clip[]> {

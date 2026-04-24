@@ -1,5 +1,6 @@
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ConversationTurnInput } from "./types.js";
+import { getClipVisibleRangeInChapter } from "../../shared/utils/clip-timing.js";
 
 const TRANSCRIPT_PREVIEW_CHARS = 12000;
 const MAX_CLIP_PREVIEW_LINES = 18;
@@ -23,10 +24,28 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
   const clipPreview = input.context.chapterClips
     .slice(0, MAX_CLIP_PREVIEW_LINES)
     .map((clip) => {
-      const localStart = chapter ? Math.max(0, clip.startTime - chapter.startTime) : clip.startTime;
-      const localIn = chapter ? Math.max(0, clip.inPoint - chapter.startTime) : clip.inPoint;
-      const localOut = chapter ? Math.max(localIn, clip.outPoint - chapter.startTime) : clip.outPoint;
-      return `- clip#${clip.id} timeline=${localStart.toFixed(2)}s source=${localIn.toFixed(
+      const visibleRange = chapter
+        ? getClipVisibleRangeInChapter(
+            {
+              in_point: clip.inPoint,
+              out_point: clip.outPoint,
+            },
+            {
+              start_time: chapter.startTime,
+              end_time: chapter.endTime,
+            }
+          )
+        : {
+            start: clip.inPoint,
+            end: clip.outPoint,
+          };
+      const localIn = chapter
+        ? Math.max(0, (visibleRange?.start ?? clip.inPoint) - chapter.startTime)
+        : clip.inPoint;
+      const localOut = chapter
+        ? Math.max(localIn, (visibleRange?.end ?? clip.outPoint) - chapter.startTime)
+        : clip.outPoint;
+      return `- clip#${clip.id} source=${localIn.toFixed(
         2
       )}-${localOut.toFixed(2)} role=${clip.role ?? "none"} desc=${clip.description ?? ""}`;
     })
@@ -75,11 +94,9 @@ ${suggestionSummary}
 
 Rules:
 - Use chapter-local seconds only for any actionable edit proposal.
-- For clips, inPoint/outPoint describe the source window and startTime describes timeline placement.
-- Clips do not need to be adjacent on the timeline.
-- Leave gaps, compress pacing, or reposition clips when that best matches the user's edit goal.
-- Set startTime intentionally whenever timeline placement matters.
-- Only change update_clip.startTime when you intend to move that clip in the timeline.
+- For clips, inPoint/outPoint describe the kept source window.
+- Chapter clip order is inferred from source timing, so do not propose timeline gaps or manual repositioning.
+- Use create_clip and update_clip only to define or revise source windows and metadata.
 - Prioritize narrative continuity and story progression over isolated highlight density.
 - Do not invent clip identifiers or asset identifiers.
 - Use evidence tools when they are needed for factual verification.

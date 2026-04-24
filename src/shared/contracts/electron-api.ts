@@ -262,7 +262,6 @@ export interface CreateClipInput {
   projectId: number;
   assetId: number;
   trackIndex: number;
-  startTime: number;
   inPoint: number;
   outPoint: number;
   role?: Clip['role'];

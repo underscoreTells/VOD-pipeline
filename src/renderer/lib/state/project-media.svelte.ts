@@ -13,13 +13,16 @@ import type { AssetAvailability, ProjectAsset } from '../../../shared/contracts/
 import { timelineState, loadTimeline, setClips, createClip, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
 import {
   executeCommand,
-  MoveClipCommand,
   ResizeClipCommand,
   UpdateClipTimingCommand,
   DeleteClipCommand,
   SplitClipCommand,
   clearHistory,
 } from './undo-redo.svelte';
+import {
+  clipOverlapsChapterSourceRange,
+  splitClipAtSourceTime,
+} from '../../../shared/utils/clip-timing.js';
 import { chaptersState, getSelectedChapter } from './chapters.svelte';
 import { settingsState } from './settings.svelte';
 import { buildProviderConfig } from './settings-helpers.js';
@@ -77,17 +80,10 @@ export function getMissingProjectAssets(): ProjectAsset[] {
 }
 
 function resolveChapterForClip(clip: Clip) {
-  const epsilon = 0.01;
   for (const chapter of chaptersState.chapters) {
     const assetIds = chaptersState.chapterAssets.get(chapter.id) ?? [];
     if (!assetIds.includes(clip.asset_id)) continue;
-
-    const clipIn = clip.in_point;
-    const clipOut = clip.out_point;
-    if (clipOut <= chapter.start_time + epsilon) continue;
-    if (clipIn >= chapter.end_time - epsilon) continue;
-
-    return chapter;
+    if (clipOverlapsChapterSourceRange(clip, chapter)) return chapter;
   }
 
   return getSelectedChapter();
@@ -204,7 +200,6 @@ export async function createProjectClip(
   projectId: number,
   assetId: number,
   trackIndex: number,
-  startTime: number,
   inPoint: number,
   outPoint: number,
   role?: Clip['role'],
@@ -216,7 +211,6 @@ export async function createProjectClip(
       projectId,
       assetId,
       trackIndex,
-      startTime,
       inPoint,
       outPoint,
       role,
@@ -271,12 +265,25 @@ export async function deleteProjectClip(id: number): Promise<boolean> {
   }
 }
 
-// Execute move command and save to backend
-export async function executeMoveClip(clipId: number, oldStartTime: number, newStartTime: number) {
-  const command = new MoveClipCommand('Move clip', clipId, oldStartTime, newStartTime);
+// Slide a clip's source window while preserving duration
+export async function executeSlideClipWindow(
+  clipId: number,
+  oldInPoint: number,
+  oldOutPoint: number,
+  newInPoint: number,
+  newOutPoint: number
+) {
+  const command = new UpdateClipTimingCommand(
+    'Slide source window',
+    clipId,
+    oldInPoint,
+    oldOutPoint,
+    newInPoint,
+    newOutPoint
+  );
   const success = await executeCommand(command);
   if (!success) {
-    setError('Failed to move clip');
+    setError('Failed to slide clip source window');
   }
 }
 
@@ -297,20 +304,16 @@ export async function executeResizeClip(
 
 export async function executeUpdateClipTiming(
   clipId: number,
-  oldStartTime: number,
   oldInPoint: number,
   oldOutPoint: number,
-  newStartTime: number,
   newInPoint: number,
   newOutPoint: number
 ) {
   const command = new UpdateClipTimingCommand(
-    'Adjust clip timing',
+    'Adjust clip window',
     clipId,
-    oldStartTime,
     oldInPoint,
     oldOutPoint,
-    newStartTime,
     newInPoint,
     newOutPoint
   );
@@ -366,16 +369,13 @@ export async function executeSplitClip(clipId: number, splitTime: number) {
   if (!clip) return;
   const existingClipIds = new Set(timelineState.clips.map((item) => item.id));
 
-  const duration = clip.out_point - clip.in_point;
-  if (!Number.isFinite(duration) || duration <= 0) return;
-
-  const clipStart = clip.start_time;
-  const clipEnd = clip.start_time + duration;
-
-  if (
-    splitTime <= clipStart + MIN_SPLIT_SEGMENT_DURATION ||
-    splitTime >= clipEnd - MIN_SPLIT_SEGMENT_DURATION
-  ) {
+  const splitWindow = splitClipAtSourceTime({
+    inPoint: clip.in_point,
+    outPoint: clip.out_point,
+    splitTime,
+    minDuration: MIN_SPLIT_SEGMENT_DURATION,
+  });
+  if (!splitWindow) {
     return;
   }
 

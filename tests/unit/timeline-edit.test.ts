@@ -41,16 +41,15 @@ describe('timeline edit utils', () => {
   describe('splitClipAtTimelineTime', () => {
     it('returns split points for a valid split', () => {
       const split = splitClipAtTimelineTime({
-        clipStartTime: 100,
         inPoint: 110,
         outPoint: 130,
-        splitTime: 108,
+        splitTime: 118,
         minDuration: 0.05,
       });
 
       expect(split).toEqual({
+        leftInPoint: 110,
         leftOutPoint: 118,
-        rightStartTime: 108,
         rightInPoint: 118,
         rightOutPoint: 130,
       });

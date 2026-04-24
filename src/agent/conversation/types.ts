@@ -32,7 +32,6 @@ export interface ConversationClipContext {
   id: number;
   assetId: number;
   trackIndex: number;
-  startTime: number;
   inPoint: number;
   outPoint: number;
   role: string | null;

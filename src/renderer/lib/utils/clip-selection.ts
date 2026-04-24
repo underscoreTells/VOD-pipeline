@@ -20,7 +20,6 @@ export function normalizeSelection(
 
 export function buildClipTimes(selection: NormalizedSelection) {
   return {
-    startTime: selection.start,
     inPoint: selection.start,
     outPoint: selection.end,
   };

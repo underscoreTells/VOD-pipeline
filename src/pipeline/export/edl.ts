@@ -10,9 +10,6 @@ export interface EDLOptions {
 export function generateEDL(options: EDLOptions): string {
   const { title, frameRate, clips, reelNames } = options;
   
-  // Sort clips by timeline position
-  const sortedClips = [...clips].sort((a, b) => a.start_time - b.start_time);
-  
   const lines: string[] = [];
   
   // Title line
@@ -23,8 +20,8 @@ export function generateEDL(options: EDLOptions): string {
   // Generate edit entries
   let recordTime = 0; // Current position in the output timeline
   
-  for (let i = 0; i < sortedClips.length; i++) {
-    const clip = sortedClips[i];
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
     const eventNum = i + 1;
     const reel = reelNames?.get(clip.asset_id) || `REEL${clip.asset_id}`;
     const channel = 'V'; // Video channel

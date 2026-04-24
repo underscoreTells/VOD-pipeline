@@ -40,7 +40,7 @@ function focusTimelineClip(clip: Clip | undefined) {
   if (!clip) return;
   upsertTimelineClip(clip);
   selectClip(clip.id, false);
-  setPlayhead(clip.start_time);
+  setPlayhead(clip.in_point);
 }
 
 function removeTimelineClipById(clipId: number | null | undefined) {

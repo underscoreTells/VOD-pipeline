@@ -167,7 +167,6 @@ export interface Clip {
   project_id: number;
   asset_id: number;
   track_index: number;
-  start_time: number;
   in_point: number;
   out_point: number;
   role: 'setup' | 'escalation' | 'twist' | 'payoff' | 'transition' | null;

@@ -16,6 +16,6 @@ describe('clip-selection utils', () => {
     const selection = normalizeSelection(20, 30, 0.25);
     expect(selection).not.toBeNull();
     const clipTimes = buildClipTimes(selection!);
-    expect(clipTimes).toEqual({ startTime: 20, inPoint: 20, outPoint: 30 });
+    expect(clipTimes).toEqual({ inPoint: 20, outPoint: 30 });
   });
 });

@@ -1042,20 +1042,17 @@ export function registerAgentHandlers(): void {
           if (action.type === 'create_clip') {
             const chapterLocalInPoint = action.inPoint;
             const chapterLocalOutPoint = action.outPoint;
-            const chapterLocalStartTime = action.startTime ?? chapterLocalInPoint;
 
-            ensureChapterLocalTime(chapterLocalStartTime, 'startTime');
             ensureChapterLocalTime(chapterLocalInPoint, 'inPoint');
             ensureChapterLocalTime(chapterLocalOutPoint, 'outPoint');
 
-            const startTime = toGlobalTime(chapterLocalStartTime);
             const inPoint = toGlobalTime(chapterLocalInPoint);
             const outPoint = toGlobalTime(chapterLocalOutPoint);
 
             if (outPoint <= inPoint) {
               throw new Error('Out point must be greater than in point');
             }
-            if (startTime < 0 || inPoint < 0) {
+            if (inPoint < 0) {
               throw new Error('Times must be non-negative');
             }
 
@@ -1081,7 +1078,6 @@ export function registerAgentHandlers(): void {
               project_id: projectId,
               asset_id: assetId,
               track_index: action.trackIndex ?? 0,
-              start_time: startTime,
               in_point: inPoint,
               out_point: outPoint,
               role: action.role ?? null,
@@ -1105,10 +1101,6 @@ export function registerAgentHandlers(): void {
           }
 
           const updates: Partial<Clip> = {};
-          if (action.updates.startTime !== undefined) {
-            ensureChapterLocalTime(action.updates.startTime, 'startTime');
-            updates.start_time = toGlobalTime(action.updates.startTime);
-          }
           if (action.updates.inPoint !== undefined) {
             ensureChapterLocalTime(action.updates.inPoint, 'inPoint');
             updates.in_point = toGlobalTime(action.updates.inPoint);
@@ -1132,7 +1124,7 @@ export function registerAgentHandlers(): void {
           if (effectiveOut <= effectiveIn) {
             throw new Error('Out point must be greater than in point');
           }
-          if ((updates.start_time ?? existingClip.start_time) < 0 || effectiveIn < 0) {
+          if (effectiveIn < 0) {
             throw new Error('Times must be non-negative');
           }
 

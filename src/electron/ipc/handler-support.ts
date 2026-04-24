@@ -30,6 +30,7 @@ import type {
   TimelineAction,
   TranscriptDetailRequest,
 } from '../../shared/types/agent-ipc.js';
+import { clipOverlapsChapterSourceRange } from '../../shared/utils/clip-timing.js';
 import {
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
@@ -302,7 +303,6 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         type: 'create_clip',
         assetId: typeof action.assetId === 'number' ? action.assetId : undefined,
         trackIndex: typeof action.trackIndex === 'number' ? action.trackIndex : undefined,
-        startTime: typeof action.startTime === 'number' ? action.startTime : undefined,
         inPoint: action.inPoint,
         outPoint: action.outPoint,
         role: typeof action.role === 'string' || action.role === null ? action.role as Clip['role'] : undefined,
@@ -320,16 +320,12 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
 
       const updatesRecord = updatesRaw as Record<string, unknown>;
       const updates: {
-        startTime?: number;
         inPoint?: number;
         outPoint?: number;
         role?: Clip['role'];
         description?: string | null;
         isEssential?: boolean;
       } = {};
-      if (typeof updatesRecord.startTime === 'number' && Number.isFinite(updatesRecord.startTime)) {
-        updates.startTime = updatesRecord.startTime;
-      }
       if (typeof updatesRecord.inPoint === 'number' && Number.isFinite(updatesRecord.inPoint)) {
         updates.inPoint = updatesRecord.inPoint;
       }
@@ -409,7 +405,6 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
           create: {
             assetId: action.assetId,
             trackIndex: action.trackIndex,
-            startTime: action.startTime,
             role: action.role,
             description: action.description ?? null,
             isEssential: action.isEssential,
@@ -438,7 +433,6 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
 
       const payload = {
         update: {
-          startTime: updates.startTime,
           inPoint: updates.inPoint,
           outPoint: updates.outPoint,
           role: updates.role,
@@ -1923,14 +1917,6 @@ export function queueChapterTranscription<T>(
   return enqueueHeavyMediaJob(getTranscriptionJobKey(chapterId), 'transcription', priority, run);
 }
 
-function clipOverlapsChapter(clip: Clip, chapterStart: number, chapterEnd: number): boolean {
-  const duration = clip.out_point - clip.in_point;
-  if (!Number.isFinite(duration) || duration <= 0) return false;
-  const clipStart = clip.start_time;
-  const clipEnd = clip.start_time + duration;
-  return clipEnd > chapterStart && clipStart < chapterEnd;
-}
-
 export async function buildAgentChatContext(
   projectId: number,
   chapterId?: number,
@@ -1952,7 +1938,6 @@ export async function buildAgentChatContext(
         id: number;
         assetId: number;
         trackIndex: number;
-        startTime: number;
         inPoint: number;
         outPoint: number;
         role: string | null;
@@ -1978,12 +1963,11 @@ export async function buildAgentChatContext(
   const chapterAssets = projectAssets.filter((asset) => chapterAssetSet.has(asset.id));
   const chapterClips = projectClips
     .filter((clip) => chapterAssetSet.has(clip.asset_id))
-    .filter((clip) => clipOverlapsChapter(clip, chapter.start_time, chapter.end_time))
+    .filter((clip) => clipOverlapsChapterSourceRange(clip, chapter))
     .map((clip) => ({
       id: clip.id,
       assetId: clip.asset_id,
       trackIndex: clip.track_index,
-      startTime: clip.start_time,
       inPoint: clip.in_point,
       outPoint: clip.out_point,
       role: clip.role,

@@ -213,7 +213,6 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
       const id = clip.id;
       const assetId = clip.assetId;
       const trackIndex = clip.trackIndex;
-      const startTime = clip.startTime;
       const inPoint = clip.inPoint;
       const outPoint = clip.outPoint;
 
@@ -221,7 +220,6 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
         typeof id !== "number" ||
         typeof assetId !== "number" ||
         typeof trackIndex !== "number" ||
-        typeof startTime !== "number" ||
         typeof inPoint !== "number" ||
         typeof outPoint !== "number"
       ) {
@@ -232,7 +230,6 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
         id,
         assetId,
         trackIndex,
-        startTime,
         inPoint,
         outPoint,
         role: typeof clip.role === "string" ? clip.role : null,

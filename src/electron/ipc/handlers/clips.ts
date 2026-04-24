@@ -45,7 +45,7 @@ function toNumberOrNull(value: unknown): number | null {
 export function registerClipHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.CLIP_CREATE,
-    async (_, { id, createdAt, projectId, assetId, trackIndex, startTime, inPoint, outPoint, role, description, isEssential }) => {
+    async (_, { id, createdAt, projectId, assetId, trackIndex, inPoint, outPoint, role, description, isEssential }) => {
       logger.info('clip:create', id ?? 'auto', projectId, assetId);
       try {
         if (!projectId || !assetId) {
@@ -53,9 +53,6 @@ export function registerClipHandlers(): void {
         }
         if (id !== undefined && (!Number.isInteger(id) || id <= 0)) {
           return createErrorResponse('Clip ID must be a positive integer when provided', IPC_ERROR_CODES.VALIDATION_ERROR);
-        }
-        if (startTime < 0) {
-          return createErrorResponse('Start time must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
         }
         if (inPoint < 0) {
           return createErrorResponse('In point must be >= 0', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -70,7 +67,6 @@ export function registerClipHandlers(): void {
           project_id: projectId,
           asset_id: assetId,
           track_index: trackIndex ?? 0,
-          start_time: startTime,
           in_point: inPoint,
           out_point: outPoint,
           role: role ?? null,

@@ -1,6 +1,80 @@
 import fs from 'node:fs/promises';
 import { generateEDL, generateFCPXML, generateJSON, type ExportFormat } from '../../pipeline/export/index.js';
-import { getAsset, getClipsByProject, getProject } from '../database/index.js';
+import type { Chapter, Clip } from '../../shared/types/database.js';
+import {
+  clipOverlapsChapterSourceRange,
+  compareChaptersForExport,
+  compareClipsForExport,
+  getClipDuration,
+} from '../../shared/utils/clip-timing.js';
+import {
+  getAsset,
+  getAssetsForChapter,
+  getChaptersByProject,
+  getClipsByProject,
+  getProject,
+} from '../database/index.js';
+
+export interface OrderedExportClip {
+  chapter: Chapter;
+  clip: Clip;
+  sequenceIndex: number;
+}
+
+export function deriveOrderedExportClips(params: {
+  chapters: Chapter[];
+  clips: Clip[];
+  chapterAssetIds: Map<number, Set<number>>;
+}): OrderedExportClip[] {
+  const { chapters, clips, chapterAssetIds } = params;
+  const clipsByChapterId = new Map<number, Clip[]>();
+
+  for (const clip of clips) {
+    const matchingChapters = chapters.filter((chapter) => {
+      const assetIds = chapterAssetIds.get(chapter.id);
+      if (!assetIds?.has(clip.asset_id)) {
+        return false;
+      }
+
+      return clipOverlapsChapterSourceRange(clip, chapter);
+    });
+
+    if (matchingChapters.length === 0) {
+      throw new Error(
+        `Export failed: clip ${clip.id} does not map to any chapter via linked asset membership and source overlap.`
+      );
+    }
+
+    if (matchingChapters.length > 1) {
+      throw new Error(
+        `Export failed: clip ${clip.id} maps to multiple chapters (${matchingChapters.map((chapter) => chapter.id).join(', ')}).`
+      );
+    }
+
+    const chapter = matchingChapters[0]!;
+    const chapterClips = clipsByChapterId.get(chapter.id) ?? [];
+    chapterClips.push(clip);
+    clipsByChapterId.set(chapter.id, chapterClips);
+  }
+
+  const orderedChapters = [...chapters].sort(compareChaptersForExport);
+  const ordered: OrderedExportClip[] = [];
+  let sequenceIndex = 0;
+
+  for (const chapter of orderedChapters) {
+    const chapterClips = [...(clipsByChapterId.get(chapter.id) ?? [])].sort(compareClipsForExport);
+    for (const clip of chapterClips) {
+      ordered.push({
+        chapter,
+        clip,
+        sequenceIndex,
+      });
+      sequenceIndex += 1;
+    }
+  }
+
+  return ordered;
+}
 
 export async function exportProjectToFile(input: {
   projectId: number;
@@ -22,7 +96,20 @@ export async function exportProjectToFile(input: {
     throw new Error('No clips in project to export');
   }
 
-  const uniqueAssetIds = [...new Set(clips.map((clip) => clip.asset_id))];
+  const chapters = await getChaptersByProject(projectId);
+  const chapterAssetIds = new Map<number, Set<number>>();
+  for (const chapter of chapters) {
+    chapterAssetIds.set(chapter.id, new Set(await getAssetsForChapter(chapter.id)));
+  }
+
+  const orderedExportClips = deriveOrderedExportClips({
+    chapters,
+    clips,
+    chapterAssetIds,
+  });
+  const orderedClips = orderedExportClips.map((item) => item.clip);
+
+  const uniqueAssetIds = [...new Set(orderedClips.map((clip) => clip.asset_id))];
   const assetPaths = new Map<number, string>();
   const assetDurations = new Map<number, number>();
   const assetTrackIndices = new Map<number, number>();
@@ -36,13 +123,13 @@ export async function exportProjectToFile(input: {
     assetPaths.set(assetId, asset.file_path);
     assetDurations.set(assetId, asset.duration ?? 0);
 
-    const clipWithAsset = clips.find((clip) => clip.asset_id === assetId);
+    const clipWithAsset = orderedClips.find((clip) => clip.asset_id === assetId);
     if (clipWithAsset) {
       assetTrackIndices.set(assetId, clipWithAsset.track_index);
     }
   }
 
-  const totalDuration = Math.max(...clips.map((clip) => clip.start_time + (clip.out_point - clip.in_point)));
+  const totalDuration = orderedClips.reduce((total, clip) => total + getClipDuration(clip), 0);
   const frameRate = options?.frameRate ?? 30;
 
   let content: string;
@@ -52,7 +139,7 @@ export async function exportProjectToFile(input: {
         projectName: project.name,
         projectId,
         frameRate,
-        clips,
+        clips: orderedClips,
         assetPaths,
         assetDurations,
       });
@@ -63,7 +150,7 @@ export async function exportProjectToFile(input: {
         projectName: project.name,
         frameRate,
         totalDuration,
-        clips,
+        clips: orderedClips,
         assetPaths,
         audioTracks: Array.from(assetTrackIndices.entries()).map(([assetId, trackIndex]) => ({
           index: trackIndex,
@@ -75,7 +162,7 @@ export async function exportProjectToFile(input: {
       content = generateEDL({
         title: project.name,
         frameRate,
-        clips,
+        clips: orderedClips,
         reelNames: new Map(Array.from(assetPaths.entries()).map(([id]) => [id, `REEL${id}`])),
       });
       break;
@@ -84,7 +171,7 @@ export async function exportProjectToFile(input: {
   }
 
   await fs.writeFile(filePath, content, 'utf-8');
-  return { filePath, format, clipCount: clips.length };
+  return { filePath, format, clipCount: orderedClips.length };
 }
 
 export function getExportFormats() {

@@ -14,13 +14,10 @@ export function generateFCPXML(options: FCPXMLOptions): string {
   const { projectName, projectId, frameRate, clips, assetPaths } = options;
   
   // Calculate total duration
-  const totalDuration = clips.length > 0 
-    ? Math.max(...clips.map(c => c.start_time + (c.out_point - c.in_point)))
-    : 0;
+  const totalDuration = clips.reduce((sum, clip) => sum + (clip.out_point - clip.in_point), 0);
   
   // Format frame rate
   const frameRateStr = formatFrameRate(frameRate);
-  const timebase = frameRate.toString();
   
   // Build resources (assets)
   const assetResources: string[] = [];
@@ -81,17 +78,19 @@ export function generateFCPXML(options: FCPXMLOptions): string {
 
   // Build spine (clips)
   const spineClips: string[] = [];
+  let accumulatedOffset = 0;
   for (const clip of clips) {
     const assetResourceId = assetIdMap.get(clip.asset_id)!;
     
     const clipDuration = clip.out_point - clip.in_point;
-    const offset = secondsToTimecode(clip.start_time, frameRate);
+    const offset = secondsToTimecode(accumulatedOffset, frameRate);
     const sourceIn = secondsToTimecode(clip.in_point, frameRate);
-    const sourceOut = secondsToTimecode(clip.out_point, frameRate);
     
     spineClips.push(`      <clip name="${escapeXml(clip.description || `Clip ${clip.id}`)}" offset="${offset}" duration="${secondsToTimecode(clipDuration, frameRate)}">
         <asset-clip ref="${assetResourceId}" offset="0s" duration="${secondsToTimecode(clipDuration, frameRate)}" start="${sourceIn}"/> 
       </clip>`);
+
+    accumulatedOffset += clipDuration;
   }
   
   // Build full XML
@@ -116,22 +115,22 @@ ${spineClips.join('\n')}
 
 function formatFrameRate(frameRate: number): string {
   // Convert common frame rates to FCP format names
-  if (Math.abs(frameRate - 23.976) < 0.1) return '1080p23.976';
-  if (Math.abs(frameRate - 24) < 0.1) return '1080p24';
-  if (Math.abs(frameRate - 25) < 0.1) return '1080p25';
-  if (Math.abs(frameRate - 29.97) < 0.1) return '1080p29.97';
-  if (Math.abs(frameRate - 30) < 0.1) return '1080p30';
-  if (Math.abs(frameRate - 50) < 0.1) return '1080p50';
-  if (Math.abs(frameRate - 59.94) < 0.1) return '1080p59.94';
-  if (Math.abs(frameRate - 60) < 0.1) return '1080p60';
+  if (Math.abs(frameRate - 24) < 0.01) return '1080p24';
+  if (Math.abs(frameRate - 25) < 0.01) return '1080p25';
+  if (Math.abs(frameRate - 30) < 0.01) return '1080p30';
+  if (Math.abs(frameRate - 50) < 0.01) return '1080p50';
+  if (Math.abs(frameRate - 60) < 0.01) return '1080p60';
+  if (Math.abs(frameRate - 23.976) < 0.01) return '1080p23.976';
+  if (Math.abs(frameRate - 29.97) < 0.01) return '1080p29.97';
+  if (Math.abs(frameRate - 59.94) < 0.01) return '1080p59.94';
   return `1080p${Math.round(frameRate)}`;
 }
 
 function formatFrameDuration(frameRate: number): string {
   // Format as FCP time duration (e.g., "1001/24000s" for 23.976fps)
-  if (Math.abs(frameRate - 23.976) < 0.1) return '1001/24000s';
-  if (Math.abs(frameRate - 29.97) < 0.1) return '1001/30000s';
-  if (Math.abs(frameRate - 59.94) < 0.1) return '1001/60000s';
+  if (Math.abs(frameRate - 23.976) < 0.01) return '1001/24000s';
+  if (Math.abs(frameRate - 29.97) < 0.01) return '1001/30000s';
+  if (Math.abs(frameRate - 59.94) < 0.01) return '1001/60000s';
   
   const denominator = Math.round(frameRate);
   return `1/${denominator}s`;
@@ -143,13 +142,13 @@ function secondsToTimecode(seconds: number, frameRate: number): string {
   let denominatorMultiplier = 1;
 
   // Handle non-integer frame rates with standard multipliers
-  if (Math.abs(frameRate - 23.976) < 0.1) {
+  if (Math.abs(frameRate - 23.976) < 0.01) {
     multiplier = 1001;
     denominatorMultiplier = 24000;
-  } else if (Math.abs(frameRate - 29.97) < 0.1) {
+  } else if (Math.abs(frameRate - 29.97) < 0.01) {
     multiplier = 1001;
     denominatorMultiplier = 30000;
-  } else if (Math.abs(frameRate - 59.94) < 0.1) {
+  } else if (Math.abs(frameRate - 59.94) < 0.01) {
     multiplier = 1001;
     denominatorMultiplier = 60000;
   } else {

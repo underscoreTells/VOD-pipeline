@@ -33,6 +33,7 @@
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
+  import { getClipVisibleRangeInChapter } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
     getReversePreviewFps,
@@ -93,12 +94,12 @@
     const ranges: Array<{ start: number; end: number }> = [];
     for (const clip of clips) {
       if (clip.asset_id !== asset.id) continue;
-      const duration = clip.out_point - clip.in_point;
-      if (!Number.isFinite(duration) || duration <= 0) continue;
-      const start = clampToChapter(chapter, clip.start_time);
-      const end = clampToChapter(chapter, clip.start_time + duration);
-      if (end <= start) continue;
-      ranges.push({ start, end });
+      const range = getClipVisibleRangeInChapter(clip, chapter);
+      if (!range) continue;
+      ranges.push({
+        start: clampToChapter(chapter, range.start),
+        end: clampToChapter(chapter, range.end),
+      });
     }
 
     ranges.sort((a, b) => a.start - b.start);
@@ -731,7 +732,6 @@
         projectDetail.projectId,
         asset.id,
         0,
-        inPoint,
         inPoint,
         outPoint,
         undefined,
