@@ -27,11 +27,14 @@ function createInput(): ConversationTurnInput {
 }
 
 describe("conversation system prompt", () => {
-  it("explains source-window clip semantics", () => {
+  it("explains source-window clip semantics and aggressive edit bias", () => {
     const prompt = buildConversationSystemPrompt(createInput());
 
     expect(prompt).toContain("inPoint/outPoint describe the kept source window");
     expect(prompt).toContain("Chapter clip order is inferred from source timing");
     expect(prompt).toContain("Use create_clip and update_clip only to define or revise source windows and metadata");
+    expect(prompt).toContain("prefer drafting at least one concrete proposal instead of asking for clarification");
+    expect(prompt).toContain("cut dead air, repeated explanation, reset loops, stalled tangents");
+    expect(prompt).toContain("range_suggestion and update_clip can be grounded by transcript context");
   });
 });

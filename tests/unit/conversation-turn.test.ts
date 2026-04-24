@@ -495,7 +495,7 @@ describe("conversation turn runner", () => {
     expect(result.assistantResponse).toContain("verified asset 5");
   });
 
-  it("can load detailed transcript windows before drafting timeline actions", async () => {
+  it("can load detailed transcript windows before drafting timeline actions without video evidence", async () => {
     let requestedWindows: TranscriptDetailRequest[] = [];
 
     const result = await runConversationTurn(
@@ -505,19 +505,6 @@ describe("conversation turn runner", () => {
       {},
       createDependencies(
         [
-          new AIMessage({
-            content: "",
-            tool_calls: [
-              {
-                id: "call_video",
-                type: "tool_call",
-                name: "analyzeChapterVideo",
-                args: {
-                  focus: "Verify the payoff moment on screen before drafting the clip.",
-                },
-              },
-            ],
-          }),
           new AIMessage({
             content: "",
             tool_calls: [
@@ -601,7 +588,7 @@ describe("conversation turn runner", () => {
     });
   });
 
-  it("lets vague requests finalize as clarification without any regex gate", async () => {
+  it("can draft a grounded trim suggestion for vague pacing requests", async () => {
     const result = await runConversationTurn(
       createInput({
         messages: [new HumanMessage("Make it tighter.")],
@@ -612,13 +599,34 @@ describe("conversation turn runner", () => {
           content: "",
           tool_calls: [
             {
-              id: "final_clarification",
+              id: "call_trim",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "range_suggestion",
+                    in_point: 18,
+                    out_point: 36,
+                    description: "Trim the slow reset beat",
+                    reasoning: "The middle drifts and repeats information before the next escalation.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_trim",
               type: "tool_call",
               name: "finalizeConversationTurn",
               args: {
-                outcome: "clarification",
+                outcome: "proposal",
                 assistantResponse:
-                  "Do you want trim ranges, new clip ideas, or story notes for this section?",
+                  "I drafted one trim to cut the slow reset and keep the chapter moving.",
               },
             },
           ],
@@ -626,15 +634,35 @@ describe("conversation turn runner", () => {
       ])
     );
 
-    expect(result.outcome).toBe("clarification");
-    expect(result.assistantResponse).toContain("trim ranges");
+    expect(result.outcome).toBe("proposal");
+    expect(result.suggestionDrafts).toHaveLength(1);
+    expect(result.suggestionDrafts?.[0]).toMatchObject({
+      in_point: 18,
+      out_point: 36,
+      description: "Trim the slow reset beat",
+    });
   });
 
-  it("forces clarification when the model tries to draft proposals without video evidence", async () => {
+  it("allows selected-clip updates without video evidence when local context grounds the edit", async () => {
     const result = await runConversationTurn(
       createInput({
         messages: [new HumanMessage("Make it tighter.")],
         selectedClipIds: [4],
+        context: {
+          ...createInput().context,
+          chapterClips: [
+            {
+              id: 4,
+              assetId: 2,
+              trackIndex: 0,
+              inPoint: 20,
+              outPoint: 42,
+              role: "setup",
+              description: "Slow setup clip",
+              isEssential: true,
+            },
+          ],
+        },
       }),
       {},
       createDependencies([
@@ -660,7 +688,7 @@ describe("conversation turn runner", () => {
               },
             },
             {
-              id: "call_2",
+              id: "call_finalize",
               type: "tool_call",
               name: "finalizeConversationTurn",
               args: {
@@ -670,17 +698,60 @@ describe("conversation turn runner", () => {
             },
           ],
         }),
+      ])
+    );
+
+    expect(result.outcome).toBe("proposal");
+    expect(result.timelineActions).toHaveLength(1);
+    expect(result.timelineActions?.[0]).toMatchObject({
+      type: "update_clip",
+      clipId: 4,
+      updates: {
+        inPoint: 22,
+        outPoint: 37,
+      },
+    });
+  });
+
+  it("can draft a more engaging cut from transcript and playhead context without video evidence", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Make this more engaging.")],
+      }),
+      {},
+      createDependencies([
         new AIMessage({
           content: "",
           tool_calls: [
             {
-              id: "call_3",
+              id: "call_engagement_cut",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "range_suggestion",
+                    in_point: 20,
+                    out_point: 42,
+                    description: "Cut the repetitive explanation loop",
+                    reasoning: "It repeats the setup without adding new stakes before the next beat.",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_engagement_cut",
               type: "tool_call",
               name: "finalizeConversationTurn",
               args: {
-                outcome: "clarification",
+                outcome: "proposal",
                 assistantResponse:
-                  "I need to inspect the chapter video before proposing concrete edits. Please wait for video grounding to finish.",
+                  "I drafted one cut to remove the repetitive explanation and sharpen the pacing.",
               },
             },
           ],
@@ -688,9 +759,13 @@ describe("conversation turn runner", () => {
       ])
     );
 
-    expect(result.outcome).toBe("clarification");
-    expect(result.timelineActions).toBeUndefined();
-    expect(result.assistantResponse).toContain("inspect the chapter video");
+    expect(result.outcome).toBe("proposal");
+    expect(result.suggestionDrafts).toHaveLength(1);
+    expect(result.suggestionDrafts?.[0]).toMatchObject({
+      in_point: 20,
+      out_point: 42,
+      description: "Cut the repetitive explanation loop",
+    });
   });
 
   it("rejects proposal finalization without drafts and allows one repair pass", async () => {

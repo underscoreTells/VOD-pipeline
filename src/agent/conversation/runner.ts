@@ -44,6 +44,7 @@ interface ConversationRunnerDependencies extends ConversationToolDependencies {
       suggestionDrafts: ConversationRunResult["suggestionDrafts"];
       timelineActions: ConversationRunResult["timelineActions"];
       transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
+      loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
       hasSuccessfulVideoEvidence: boolean;
       videoEvidenceAssetIds: Set<number>;
       finalOutcome?: ConversationRunResult["outcome"];
@@ -94,6 +95,7 @@ export async function runConversationTurn(
     suggestionDrafts: NonNullable<ConversationRunResult["suggestionDrafts"]>;
     timelineActions: NonNullable<ConversationRunResult["timelineActions"]>;
     transcriptDetailRequests: NonNullable<ConversationRunResult["transcriptDetailRequests"]>;
+    loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
     hasSuccessfulVideoEvidence: boolean;
     videoEvidenceAssetIds: Set<number>;
     finalOutcome?: ConversationRunResult["outcome"];
@@ -102,6 +104,7 @@ export async function runConversationTurn(
     suggestionDrafts: [],
     timelineActions: [],
     transcriptDetailRequests: [],
+    loadedDetailedTranscripts: [],
     hasSuccessfulVideoEvidence: false,
     videoEvidenceAssetIds: new Set<number>(),
   };

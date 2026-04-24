@@ -1,33 +1,6 @@
 import type { Asset } from '$shared/types/database';
 import type { GenerateAssetWaveformUiOptions } from '../state/project-waveforms.svelte.js';
 
-export function getAssetAudioTrackCount(asset: Asset | null): number {
-  const trackCount = asset?.metadata?.audioTracks?.length;
-  if (typeof trackCount === 'number' && Number.isInteger(trackCount) && trackCount > 0) {
-    return trackCount;
-  }
-
-  return 1;
-}
-
-export function isMkvAsset(asset: Asset | null): boolean {
-  return Boolean(asset?.file_path?.toLowerCase().endsWith('.mkv'));
-}
-
-export function getWaveformTrackIndices(
-  asset: Asset | null,
-  includeSourceTracks: boolean,
-  mixWaveformTrackIndex: number
-): number[] {
-  const count = getAssetAudioTrackCount(asset);
-  if (!includeSourceTracks || count <= 1) {
-    return [mixWaveformTrackIndex];
-  }
-
-  const sourceTracks = Array.from({ length: count }, (_, index) => index);
-  return [mixWaveformTrackIndex, ...sourceTracks];
-}
-
 interface WaveformSchedulerDeps {
   resolveAsset: (assetId: number) => Asset | null;
   getAssetWaveform: (
@@ -38,7 +11,7 @@ interface WaveformSchedulerDeps {
   generateAssetWaveform: (
     assetId: number,
     trackIndex: number,
-    options: { includeSourceTracks?: boolean; playbackActive?: boolean },
+    options: { playbackActive?: boolean },
     uiOptions?: GenerateAssetWaveformUiOptions
   ) => Promise<unknown>;
   isPlaybackActive: () => boolean;
@@ -51,7 +24,6 @@ export function createChapterWaveformScheduler(deps: WaveformSchedulerDeps) {
   return {
     async ensureChapterWaveforms(
       assetIds: number[],
-      includeSourceTracks: boolean,
       mixWaveformTrackIndex: number
     ): Promise<void> {
       const token = ++waveformCheckToken;
@@ -64,74 +36,26 @@ export function createChapterWaveformScheduler(deps: WaveformSchedulerDeps) {
           continue;
         }
 
-        const sourceTrackCount = getAssetAudioTrackCount(asset);
-        const trackIndices = getWaveformTrackIndices(asset, includeSourceTracks, mixWaveformTrackIndex);
-
-        const shouldBatchGenerateMkvTracks =
-          includeSourceTracks &&
-          sourceTrackCount > 1 &&
-          isMkvAsset(asset);
-
-        if (shouldBatchGenerateMkvTracks) {
-          const batchKey = `${assetId}:${mixWaveformTrackIndex}:batch`;
-          if (waveformInFlight.has(batchKey)) {
-            continue;
-          }
-
-          let hasMissingTrack = false;
-          for (const trackIndex of trackIndices) {
-            const cached = await deps.getAssetWaveform(assetId, trackIndex, 1);
-            if (token !== waveformCheckToken) return;
-            if (!cached) {
-              hasMissingTrack = true;
-              break;
-            }
-          }
-
-          if (!hasMissingTrack) {
-            continue;
-          }
-
-          waveformInFlight.add(batchKey);
-          try {
-            await deps.generateAssetWaveform(assetId, mixWaveformTrackIndex, {
-              includeSourceTracks: true,
-              playbackActive: deps.isPlaybackActive(),
-            }, {
-              uiMode: 'background',
-            });
-          } finally {
-            waveformInFlight.delete(batchKey);
-          }
-
+        const key = `${assetId}:${mixWaveformTrackIndex}`;
+        if (waveformInFlight.has(key)) {
           continue;
         }
 
-        for (const trackIndex of trackIndices) {
-          if (token !== waveformCheckToken) return;
+        const cached = await deps.getAssetWaveform(assetId, mixWaveformTrackIndex, 1);
+        if (token !== waveformCheckToken) return;
+        if (cached) {
+          continue;
+        }
 
-          const key = `${assetId}:${trackIndex}`;
-          if (waveformInFlight.has(key)) {
-            continue;
-          }
-
-          const cached = await deps.getAssetWaveform(assetId, trackIndex, 1);
-          if (token !== waveformCheckToken) return;
-          if (cached) {
-            continue;
-          }
-
-          waveformInFlight.add(key);
-          try {
-            await deps.generateAssetWaveform(assetId, trackIndex, {
-              includeSourceTracks: false,
-              playbackActive: deps.isPlaybackActive(),
-            }, {
-              uiMode: 'background',
-            });
-          } finally {
-            waveformInFlight.delete(key);
-          }
+        waveformInFlight.add(key);
+        try {
+          await deps.generateAssetWaveform(assetId, mixWaveformTrackIndex, {
+            playbackActive: deps.isPlaybackActive(),
+          }, {
+            uiMode: 'background',
+          });
+        } finally {
+          waveformInFlight.delete(key);
         }
       }
     },

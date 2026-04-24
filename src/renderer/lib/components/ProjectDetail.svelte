@@ -81,9 +81,6 @@
   } from './project-detail-transcription.js';
   import {
     createChapterWaveformScheduler,
-    getAssetAudioTrackCount,
-    getWaveformTrackIndices,
-    isMkvAsset,
   } from './project-detail-waveforms.js';
   import {
     clipOverlapsChapterSourceRange,
@@ -118,7 +115,6 @@
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
   let showClipPreviewPanel = $state(true);
-  let showSourceTracks = $state(false);
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
@@ -340,9 +336,6 @@
       .filter((asset) => asset.availability.exists !== false)
       .map((asset) => asset.id);
   });
-  const canShowSourceTracks = $derived.by(() => {
-    return selectedChapterAssets.some((asset) => getAssetAudioTrackCount(asset) > 1);
-  });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
@@ -350,12 +343,6 @@
   const showLeftDock = $derived.by(() => layoutState.leftCollapsed);
   const showRightDock = $derived.by(() => layoutState.chatCollapsed);
   const showClipsDock = $derived.by(() => !layoutState.leftCollapsed && layoutState.beatCollapsed);
-
-  $effect(() => {
-    if (!canShowSourceTracks && showSourceTracks) {
-      showSourceTracks = false;
-    }
-  });
 
   $effect(() => {
     if (selectedChapter && !hasChapterAssets) {
@@ -393,11 +380,9 @@
   });
 
   $effect(() => {
-    const includeSourceTracks = showSourceTracks && canShowSourceTracks;
     if (timelineWaveformAssetIds.length > 0) {
       void waveformScheduler.ensureChapterWaveforms(
         [...timelineWaveformAssetIds],
-        includeSourceTracks,
         MIX_WAVEFORM_TRACK_INDEX
       );
     }
@@ -514,7 +499,6 @@
     const lanes: TimelineLane[] = [];
 
     for (const asset of selectedChapterAssets) {
-      const sourceTrackCount = getAssetAudioTrackCount(asset);
       const assetLabelSuffix = includeAssetNames ? ` - ${getAssetDisplayName(asset)}` : '';
 
       lanes.push({
@@ -528,22 +512,6 @@
         waveformTrackIndex: MIX_WAVEFORM_TRACK_INDEX,
         createTrackIndex: MIX_TRACK_INDEX,
       });
-
-      if (showSourceTracks && sourceTrackCount > 1) {
-        for (let index = 0; index < sourceTrackCount; index += 1) {
-          lanes.push({
-            id: `a${index + 1}-${asset.id}`,
-            label: `A${index + 1}${assetLabelSuffix}`,
-            audioUrl: buildPlayableAssetUrl(asset),
-            missing: asset.availability.exists === false,
-            assetId: asset.id,
-            editable: false,
-            clipTrackIndex: -1,
-            waveformTrackIndex: index,
-            createTrackIndex: MIX_TRACK_INDEX,
-          });
-        }
-      }
     }
 
     return lanes;
@@ -774,18 +742,6 @@
                       <div class="timeline-toolbar-main min-w-0 flex-1">
                         <TimelineToolbar />
                       </div>
-                      {#if canShowSourceTracks}
-                        <button
-                          class={`source-tracks-toggle flex-none rounded-[4px] border px-2.5 py-1 text-app-sm leading-[1.2] transition-all ${
-                            showSourceTracks
-                              ? 'border-accent-primary bg-accent-primary-subtle text-accent-primary'
-                              : 'border-border-default bg-transparent text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary'
-                          }`}
-                          onclick={() => showSourceTracks = !showSourceTracks}
-                        >
-                          {showSourceTracks ? 'Hide Source Tracks' : 'Show Source Tracks'}
-                        </button>
-                      {/if}
                     </div>
                     <div class="timeline-container scrollbar-thin flex-1 overflow-auto">
                       <Timeline 

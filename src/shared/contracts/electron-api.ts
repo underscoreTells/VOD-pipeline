@@ -28,7 +28,6 @@ export interface ProxyOptions {
 }
 
 export interface WaveformGenerateOptions {
-  includeSourceTracks?: boolean;
   playbackActive?: boolean;
 }
 

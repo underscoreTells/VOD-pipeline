@@ -46,7 +46,6 @@ import {
 } from '../../pipeline/ffmpeg.js';
 import {
   generateWaveformTiers,
-  generateWaveformTiersForMkvTracks,
 } from '../../pipeline/waveform.js';
 
 const PROVIDER_CONTEXT_TOKEN_LIMITS: Record<'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi', number> = {
@@ -1815,17 +1814,6 @@ async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
 
     const existingTier1 = await getWaveform(asset.id, -1, 1);
     if (existingTier1) {
-      return;
-    }
-
-    const isMkv = path.extname(asset.file_path).toLowerCase() === '.mkv';
-    if (isMkv) {
-      await generateWaveformTiersForMkvTracks(asset.file_path, asset.id, undefined, {
-        includeTier2: false,
-        playbackActive: false,
-        trackIndices: [-1],
-        maxParallelTracks: 1,
-      });
       return;
     }
 
