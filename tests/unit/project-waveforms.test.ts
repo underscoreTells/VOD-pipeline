@@ -48,6 +48,7 @@ function createAsset(id: number) {
 
 describe("project waveform state", () => {
   beforeEach(() => {
+    vi.resetModules();
     projectDetailMocks.projectDetail.assets = [createAsset(1)];
     projectDetailMocks.projectDetail.isGeneratingWaveform = false;
     projectDetailMocks.projectDetail.waveformProgress = {
@@ -138,5 +139,27 @@ describe("project waveform state", () => {
 
     expect(timelineMocks.setError).toHaveBeenCalledWith("Waveform failed");
     expect(projectDetailMocks.projectDetail.isGeneratingWaveform).toBe(false);
+  });
+
+  it("caches missing audiowaveform failures and skips repeated background retries", async () => {
+    const {
+      generateAssetWaveform,
+      resetWaveformDependencyCacheForTests,
+    } = await import("../../src/renderer/lib/state/project-waveforms.svelte.js");
+    resetWaveformDependencyCacheForTests();
+
+    waveformApiMocks.generateWaveform.mockResolvedValue({
+      success: false,
+      error: "audiowaveform not found. Install audiowaveform for waveform visualization.",
+    });
+
+    await generateAssetWaveform(1, 0, {}, { uiMode: "background" });
+    await generateAssetWaveform(1, 0, {}, { uiMode: "background" });
+
+    expect(waveformApiMocks.generateWaveform).toHaveBeenCalledTimes(1);
+    expect(timelineMocks.setError).toHaveBeenCalledTimes(1);
+    expect(timelineMocks.setError).toHaveBeenCalledWith(
+      "audiowaveform not found. Install audiowaveform for waveform visualization."
+    );
   });
 });

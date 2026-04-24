@@ -94,6 +94,7 @@ const electronAPI: ElectronAPI = {
         assetId,
         ensureReady: options?.ensureReady === true,
         proxyOptions: options?.proxyOptions,
+        requestMode: options?.requestMode,
       }),
   },
   clips: {

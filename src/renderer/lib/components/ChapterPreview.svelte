@@ -270,11 +270,14 @@
     if (!reverseEnsureRequested || reversePollTimerId !== null) return;
     reversePollTimerId = window.setTimeout(() => {
       reversePollTimerId = null;
-      void refreshReverseProxy(false);
+      void refreshReverseProxy(false, 'background');
     }, 5000);
   }
 
-  async function refreshReverseProxy(ensureReady: boolean): Promise<void> {
+  async function refreshReverseProxy(
+    ensureReady: boolean,
+    requestMode: 'background' | 'interactive' = 'background'
+  ): Promise<void> {
     if (!chapter || !asset || asset.file_type !== 'video' || asset.availability?.exists === false) {
       reverseProxyStatus = 'missing';
       reverseProxyUrl = null;
@@ -294,6 +297,7 @@
       const result = await getChapterReverseProxy(chapter.id, asset.id, {
         ensureReady,
         proxyOptions: buildProxyOptions(settingsState.settings),
+        requestMode,
       });
       if (token !== reverseProxyRequestToken) return;
 
@@ -434,7 +438,7 @@
     if (timelineState.shuttleDirection === -1) {
       if (reverseProxyStatus !== 'ready' || !reverseProxyUrl) {
         if (!reverseEnsureRequested) {
-          void refreshReverseProxy(true);
+          void refreshReverseProxy(true, 'interactive');
         }
 
         reverseStatusMessage = reverseProxyStatus === 'error'
@@ -453,7 +457,7 @@
       if (!reverseProxyIsFinal && reverseProxyQuality === 'quick') {
         reverseStatusMessage = 'Using quick reverse cache while high quality finishes...';
         if (!reverseEnsureRequested) {
-          void refreshReverseProxy(true);
+          void refreshReverseProxy(true, 'interactive');
         }
       } else {
         reverseStatusMessage = null;
@@ -669,7 +673,7 @@
     }
 
     if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
-      void refreshReverseProxy(true);
+      void refreshReverseProxy(true, 'background');
     }
   });
 

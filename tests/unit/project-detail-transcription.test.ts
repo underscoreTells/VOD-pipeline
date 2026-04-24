@@ -26,7 +26,7 @@ describe("project detail transcription helpers", () => {
     expect(setTranscriptionError).toHaveBeenNthCalledWith(2, 2, "missing whisper");
   });
 
-  it("starts background transcriptions after a successful availability check", async () => {
+  it("forwards background transcription requests after a successful availability check", async () => {
     const startChapterTranscription = vi.fn().mockResolvedValue({ success: true });
 
     await autoTranscribeChapters(
@@ -39,11 +39,11 @@ describe("project detail transcription helpers", () => {
         startChapterTranscription,
         setTranscriptionError: vi.fn(),
       },
-      { awaitCompletion: true }
+      { awaitCompletion: true, background: true }
     );
 
-    expect(startChapterTranscription).toHaveBeenNthCalledWith(1, 11, undefined);
-    expect(startChapterTranscription).toHaveBeenNthCalledWith(2, 12, undefined);
+    expect(startChapterTranscription).toHaveBeenNthCalledWith(1, 11, { background: true });
+    expect(startChapterTranscription).toHaveBeenNthCalledWith(2, 12, { background: true });
   });
 
   it("reopens projects with skip-if-exists transcription requests", async () => {
@@ -61,6 +61,6 @@ describe("project detail transcription helpers", () => {
       }
     );
 
-    expect(startChapterTranscription).toHaveBeenCalledWith(3, { skipIfExists: true });
+    expect(startChapterTranscription).toHaveBeenCalledWith(3, { skipIfExists: true, background: true });
   });
 });

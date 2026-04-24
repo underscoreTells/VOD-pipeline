@@ -17,6 +17,20 @@ export interface GenerateAssetWaveformUiOptions {
   uiMode?: WaveformUiMode;
 }
 
+let waveformUnavailableForSession = false;
+let waveformUnavailableMessage: string | null = null;
+
+function isWaveformDependencyUnavailableError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('audiowaveform not found')
+    || normalized.includes('install audiowaveform');
+}
+
+export function resetWaveformDependencyCacheForTests(): void {
+  waveformUnavailableForSession = false;
+  waveformUnavailableMessage = null;
+}
+
 function clampPercent(percent: number): number {
   if (!Number.isFinite(percent)) return 0;
   return Math.max(0, Math.min(100, Math.round(percent)));
@@ -28,6 +42,16 @@ export async function generateAssetWaveform(
   options: WaveformGenerateOptions = {},
   uiOptions: GenerateAssetWaveformUiOptions = {}
 ) {
+  const uiMode = uiOptions.uiMode ?? 'modal';
+  const showModalProgress = uiMode === 'modal';
+
+  if (waveformUnavailableForSession) {
+    if (showModalProgress && waveformUnavailableMessage) {
+      setError(waveformUnavailableMessage);
+    }
+    return;
+  }
+
   const asset = projectDetail.assets.find((item) => item.id === assetId) ?? null;
   if (asset?.availability.exists === false) {
     return;
@@ -53,8 +77,6 @@ export async function generateAssetWaveform(
 
   const perTrackTier1Progress = new Map<number, number>();
   let displayedPercent = 0;
-  const uiMode = uiOptions.uiMode ?? 'modal';
-  const showModalProgress = uiMode === 'modal';
 
   const updateProgress = (nextPercent: number, tier: number, status: string) => {
     if (!showModalProgress) {
@@ -127,7 +149,12 @@ export async function generateAssetWaveform(
       throw new Error(result.error || 'Failed to generate waveform');
     }
   } catch (error) {
-    setError((error as Error).message);
+    const message = error instanceof Error ? error.message : String(error);
+    if (isWaveformDependencyUnavailableError(message)) {
+      waveformUnavailableForSession = true;
+      waveformUnavailableMessage = message;
+    }
+    setError(message);
   } finally {
     unsubscribe();
     if (showModalProgress) {

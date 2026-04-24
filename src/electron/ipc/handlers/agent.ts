@@ -625,6 +625,10 @@ export function registerAgentHandlers(): void {
     const projectId = toNumberOrNull(payload?.projectId);
     const chapterId = toNumberOrNull(payload?.chapterId);
     const ensureReady = payload?.ensureReady === true;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
 
     logger.info('agent:grounding-status', projectId, chapterId, ensureReady);
 
@@ -642,6 +646,7 @@ export function registerAgentHandlers(): void {
 
       const groundingStatus = await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
         ensureReady,
+        proxyOptions,
       });
 
       logger.info(

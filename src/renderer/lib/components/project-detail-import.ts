@@ -58,7 +58,7 @@ export async function importProjectFiles(
     await autoTranscribeChapters(
       created.map((chapter) => chapter.id),
       deps,
-      { awaitCompletion: false }
+      { awaitCompletion: false, background: true }
     );
   }
 
@@ -100,6 +100,7 @@ export async function createProjectChaptersFromDefinition(
   if (deps.autoTranscribeOnImport) {
     await autoTranscribeChapters(createdChapterIds, deps, {
       awaitCompletion: false,
+      background: true,
     });
   }
 

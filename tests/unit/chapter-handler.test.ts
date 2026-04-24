@@ -133,4 +133,39 @@ describe("chapter handlers", () => {
       quality: "fast",
     });
   });
+
+  it("promotes reverse proxy warmups to interactive mode when reverse playback requests them", async () => {
+    const handler = registeredHandlers.get(IPC_CHANNELS.CHAPTER_REVERSE_PROXY_GET);
+    handlerSupportMocks.getChapterReverseProxyStatus
+      .mockResolvedValueOnce({ status: "generating" })
+      .mockResolvedValueOnce({ status: "generating" });
+
+    const result = await handler?.({}, {
+      chapterId: 11,
+      assetId: 12,
+      ensureReady: true,
+      requestMode: "interactive",
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "fast",
+      },
+    });
+    await Promise.resolve();
+
+    expect(handlerSupportMocks.ensureChapterReverseProxyQuickReady).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 11 }),
+      expect.objectContaining({ id: 12 }),
+      { encodingMode: "gpu", quality: "fast" },
+      { priority: "interactive", executionMode: "interactive" }
+    );
+    expect(handlerSupportMocks.scheduleChapterReverseProxyFullWarm).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 11 }),
+      expect.objectContaining({ id: 12 }),
+      { encodingMode: "gpu", quality: "fast" }
+    );
+    expect(result).toEqual({
+      success: true,
+      data: { status: "generating" },
+    });
+  });
 });

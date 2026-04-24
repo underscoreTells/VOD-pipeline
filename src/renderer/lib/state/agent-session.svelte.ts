@@ -21,7 +21,7 @@ import {
   resolveConversationSelection,
   shouldChangeChapterContext,
 } from "./agent-session-helpers.js";
-import { buildProviderConfig } from "./settings-helpers.js";
+import { buildProviderConfig, buildProxyOptions } from "./settings-helpers.js";
 import {
   createAgentConversation,
   deleteAgentConversation,
@@ -215,6 +215,7 @@ async function refreshGroundingStatus(options: {
       projectId: options.projectId,
       chapterId: options.chapterId,
       ensureReady: options.ensureReady,
+      proxyOptions: buildProxyOptions(settingsState.settings),
     });
   } catch (error) {
     if (!isCurrentGroundingContextRequest(options.requestToken, options.requestContextKey)) {

@@ -93,6 +93,7 @@ export interface AgentGroundingStatusParams {
   projectId: string;
   chapterId: string;
   ensureReady?: boolean;
+  proxyOptions?: ProxyOptions;
 }
 
 export interface AgentGroundingStatusResult {
@@ -378,6 +379,7 @@ export interface GetChapterReverseProxyResult {
 export interface GetChapterReverseProxyOptions {
   ensureReady?: boolean;
   proxyOptions?: ProxyOptions;
+  requestMode?: 'background' | 'interactive';
 }
 
 export interface TimelineStateResult {

@@ -39,6 +39,34 @@ interface ProxyEncodingPlan {
   fallbackReason?: string;
 }
 
+export async function validateVideoFile(
+  filePath: string,
+  timeoutMs: number = 5000
+): Promise<VideoMetadata | null> {
+  console.log(`[FFmpeg] Validating video: ${filePath}`);
+
+  const stats = fs.statSync(filePath);
+  if (!stats.isFile()) {
+    console.log(`[FFmpeg] Validation failed: not a file`);
+    return null;
+  }
+  console.log(`[FFmpeg] File exists, size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+
+  const ext = path.extname(filePath).toLowerCase();
+  console.log(`[FFmpeg] Extension: ${ext}`);
+
+  const validExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
+  if (!validExtensions.includes(ext)) {
+    console.log(`[FFmpeg] Validation failed: extension ${ext} not in valid list`);
+    return null;
+  }
+
+  console.log(`[FFmpeg] Attempting metadata extraction with ${Math.floor(timeoutMs / 1000)}s timeout...`);
+  const metadata = await getVideoMetadata(filePath, timeoutMs);
+  console.log(`[FFmpeg] Validation successful`);
+  return metadata;
+}
+
 /**
  * Get video metadata using ffprobe
  * @param filePath Path to video file
@@ -492,30 +520,7 @@ function parseFFprobeOutput(data: FFprobeOutput): VideoMetadata {
  */
 export async function isValidVideo(filePath: string): Promise<boolean> {
   try {
-    console.log(`[FFmpeg] Validating video: ${filePath}`);
-
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) {
-      console.log(`[FFmpeg] Validation failed: not a file`);
-      return false;
-    }
-    console.log(`[FFmpeg] File exists, size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-
-    const ext = path.extname(filePath).toLowerCase();
-    console.log(`[FFmpeg] Extension: ${ext}`);
-
-    const validExtensions = ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts', '.mts'];
-
-    if (!validExtensions.includes(ext)) {
-      console.log(`[FFmpeg] Validation failed: extension ${ext} not in valid list`);
-      return false;
-    }
-
-    // Try to get metadata with short timeout for quick validation
-    console.log(`[FFmpeg] Attempting metadata extraction with 5s timeout...`);
-    await getVideoMetadata(filePath, 5000);
-    console.log(`[FFmpeg] Validation successful`);
-    return true;
+    return (await validateVideoFile(filePath, 5000)) !== null;
   } catch (error) {
     console.log(`[FFmpeg] Validation failed with error:`, error);
     return false;
@@ -683,8 +688,11 @@ async function executeProxyGeneration(
 
   const args: string[] = [
     ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
+    ...(trimRange ? [
+      '-ss', trimRange.startTime.toString(),
+      '-t', (trimRange.endTime - trimRange.startTime).toString(),
+    ] : []),
     '-i', inputPath,
-    ...(trimRange ? ['-ss', trimRange.startTime.toString(), '-to', trimRange.endTime.toString()] : []),
     ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
     ...encodingPlan.videoArgs,
     '-c:a', 'aac',
@@ -936,7 +944,6 @@ async function runChunkedChapterReverseGeneration(params: {
 
       args.push(
         '-f', 'mp4',
-        '-movflags', '+faststart',
         '-y', chunkPath
       );
 
@@ -978,7 +985,8 @@ async function runChunkedChapterReverseGeneration(params: {
       '-safe', '0',
       '-i', concatListPath,
       '-c:v', 'copy',
-      ...(hasAudio ? ['-c:a', 'aac', '-b:a', '128k'] : ['-an']),
+      ...(hasAudio ? ['-c:a', 'copy'] : ['-an']),
+      '-f', 'mp4',
       '-movflags', '+faststart',
       '-y', outputPath,
     ];
@@ -1003,6 +1011,7 @@ export async function generateChapterReverseProxy(
     quality?: ProxyGenerationQuality;
     chunkDurationSec?: number;
     maxParallelChunks?: number;
+    executionMode?: 'background' | 'interactive';
   }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
@@ -1016,6 +1025,7 @@ export async function generateChapterReverseProxy(
   const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000;
   const encodingMode = options.encodingMode ?? 'auto';
   const quality = options.quality ?? 'high';
+  const executionMode = options.executionMode ?? 'background';
 
   if (!Number.isFinite(startTime) || startTime < 0) {
     throw new FFmpegError('Reverse proxy startTime must be a finite number >= 0', 'INVALID_OPTIONS');
@@ -1032,6 +1042,9 @@ export async function generateChapterReverseProxy(
   if (quality !== 'high' && quality !== 'balanced' && quality !== 'fast') {
     throw new FFmpegError('Reverse proxy quality must be high, balanced, or fast', 'INVALID_OPTIONS');
   }
+  if (executionMode !== 'background' && executionMode !== 'interactive') {
+    throw new FFmpegError('Reverse proxy executionMode must be background or interactive', 'INVALID_OPTIONS');
+  }
 
   const inputMetadata = await getVideoMetadata(inputPath);
   const hasAudio = Array.isArray(inputMetadata.audioTracks) && inputMetadata.audioTracks.length > 0;
@@ -1043,12 +1056,17 @@ export async function generateChapterReverseProxy(
 
   const generateWithPlan = async (encodingPlan: ProxyEncodingPlan): Promise<void> => {
     const cpuCount = Math.max(1, os.cpus().length);
-    const defaultParallelism = encodingPlan.useGPU
-      ? Math.max(1, Math.min(4, Math.floor(cpuCount / 4) || 1))
-      : Math.max(1, Math.min(8, Math.floor(cpuCount / 2) || 1));
-    const maxParallelChunks = Math.max(1, Math.floor(options.maxParallelChunks ?? defaultParallelism));
+    const defaultParallelism = executionMode === 'background'
+      ? 1
+      : encodingPlan.useGPU
+        ? Math.max(1, Math.min(2, Math.floor(cpuCount / 4) || 1))
+        : Math.max(1, Math.min(2, Math.floor(cpuCount / 2) || 1));
+    const requestedParallelism = Math.max(1, Math.floor(options.maxParallelChunks ?? defaultParallelism));
+    const maxParallelChunks = executionMode === 'background'
+      ? 1
+      : Math.min(2, requestedParallelism);
     console.log(
-      `[ReverseProxy] Generating reverse proxy with backend=${encodingPlan.backend}, chunk=${chunkDurationSec}s, workers=${maxParallelChunks}`
+      `[ReverseProxy] Generating reverse proxy with backend=${encodingPlan.backend}, chunk=${chunkDurationSec}s, workers=${maxParallelChunks}, mode=${executionMode}`
     );
 
     await runChunkedChapterReverseGeneration({

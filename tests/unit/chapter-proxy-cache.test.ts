@@ -281,4 +281,36 @@ describe("chapter proxy cache validation", () => {
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(4, "generating");
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(4, "ready");
   });
+
+  it("uses an mp4-suffixed temp path for quick reverse proxy generation", async () => {
+    ffmpegMocks.generateChapterReverseProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "reverse-proxy");
+      return {
+        width: 640,
+        height: 360,
+        framerate: 10,
+        fileSize: 13,
+        duration: 30,
+      };
+    });
+    databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue(null);
+
+    const { ensureChapterReverseProxyQuickReady } = await import("../../src/electron/ipc/handler-support.js");
+    const result = await ensureChapterReverseProxyQuickReady(
+      { id: 7, start_time: 10, end_time: 40 } as never,
+      { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never
+    );
+
+    expect(result).toContain("chapter_7_asset_11_reverse_preview_quick.mp4");
+    expect(ffmpegMocks.generateChapterReverseProxy).toHaveBeenCalledWith(
+      "/tmp/input.mp4",
+      expect.stringMatching(/chapter_7_asset_11_reverse_preview_quick\.partial\.0\.mp4$/),
+      expect.objectContaining({
+        executionMode: "background",
+        maxParallelChunks: 1,
+      })
+    );
+    expect(fs.existsSync(result as string)).toBe(true);
+  });
 });

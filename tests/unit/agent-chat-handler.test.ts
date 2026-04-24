@@ -297,6 +297,7 @@ describe("agent chat handler", () => {
 
     expect(handlerSupportMocks.getAgentGroundingStatus).toHaveBeenCalledWith(1, 3, {
       ensureReady: true,
+      proxyOptions: undefined,
     });
     expect(result).toEqual({
       success: true,
