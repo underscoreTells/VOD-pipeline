@@ -223,6 +223,19 @@ function getStreamingMutationContext():
   };
 }
 
+function isGroundingReadyForAgentMutation(): boolean {
+  if (!agentState.currentChapterId) {
+    return true;
+  }
+
+  if (agentState.groundingStatus === "ready") {
+    return true;
+  }
+
+  agentState.error = null;
+  return false;
+}
+
 async function refreshSuggestions(conversationId: number): Promise<void> {
   if (!agentState.currentChapterId || agentState.selectedConversationId !== conversationId) {
     return;
@@ -330,6 +343,10 @@ export async function sendChatMessage(message: string) {
     return false;
   }
 
+  if (!isGroundingReadyForAgentMutation()) {
+    return false;
+  }
+
   const mutationContext = getStreamingMutationContext();
   if (!mutationContext) {
     return false;
@@ -384,6 +401,10 @@ export async function rerollMessage(targetMessage: ChatMessage) {
     || targetMessage.role === "system"
     || targetMessage.databaseId === null
   ) {
+    return false;
+  }
+
+  if (!isGroundingReadyForAgentMutation()) {
     return false;
   }
 
@@ -447,6 +468,10 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
     || targetMessage.databaseId === null
     || !message.trim()
   ) {
+    return false;
+  }
+
+  if (!isGroundingReadyForAgentMutation()) {
     return false;
   }
 

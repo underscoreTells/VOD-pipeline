@@ -67,6 +67,40 @@ export interface AgentChatParams {
   agentConfig?: ProviderConfigPayload;
 }
 
+export type AgentGroundingStatus =
+  | 'idle'
+  | 'missing_video_asset'
+  | 'generating'
+  | 'ready'
+  | 'error';
+
+export interface AgentGroundingAssetStatus {
+  assetId: number;
+  status: Exclude<AgentGroundingStatus, 'idle' | 'missing_video_asset'>;
+  error?: string;
+}
+
+export interface AgentGroundingStatusData {
+  status: AgentGroundingStatus;
+  requiredVideoAssetCount: number;
+  readyVideoAssetCount: number;
+  assets: AgentGroundingAssetStatus[];
+  message: string;
+}
+
+export interface AgentGroundingStatusParams {
+  projectId: string;
+  chapterId: string;
+  ensureReady?: boolean;
+}
+
+export interface AgentGroundingStatusResult {
+  success: boolean;
+  data?: AgentGroundingStatusData;
+  error?: string;
+  code?: string;
+}
+
 export interface AgentRerollMessageParams {
   clientRequestId: string;
   projectId: string;
@@ -442,6 +476,7 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;
+    getGroundingStatus: (params: AgentGroundingStatusParams) => Promise<AgentGroundingStatusResult>;
     rerollMessage: (params: AgentRerollMessageParams) => Promise<AgentChatResult>;
     editMessage: (params: AgentEditMessageParams) => Promise<AgentChatResult>;
     branchMessage: (params: AgentBranchMessageParams) => Promise<AgentConversationCreateResult>;

@@ -127,7 +127,7 @@ interface Props {
 **Priority:** High  
 **Files:** 
 - `src/renderer/lib/state/chapters.svelte.ts` (update)
-- `src/electron/ipc/handlers.ts` (update if needed)
+- `src/electron/ipc/handlers/chapters.ts` (update if needed)
 
 **Flow:**
 1. User defines chapters in ChapterDefinition component

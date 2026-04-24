@@ -5,7 +5,6 @@ import {
   validateCanonicalSchema,
 } from "./runtime.js";
 import { getProviderToolStrategy } from "./registry.js";
-import type { CompiledProviderTool } from "./strategies/base.js";
 
 export interface ExecutableTool<TParsed = unknown> {
   name: string;
@@ -15,7 +14,6 @@ export interface ExecutableTool<TParsed = unknown> {
 
 export interface ProviderBoundToolSet {
   provider: LLMProviderType;
-  compiledTools: CompiledProviderTool[];
   bindPayload: unknown[];
   executableToolMap: Map<string, ExecutableTool>;
 }
@@ -32,7 +30,6 @@ export function bindAgentToolsForProvider(
 
   return {
     provider,
-    compiledTools,
     bindPayload: strategy.buildBindPayload(compiledTools),
     executableToolMap,
   };

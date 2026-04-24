@@ -34,8 +34,9 @@ const TURN_OUTCOME_VALUES = ["discussion", "proposal", "clarification"] as const
 export interface ConversationToolDependencies {
   analyzeChapterVideo?: (
     input: ConversationTurnInput,
-    focus: string
+    request: AnalyzeChapterVideoInput
   ) => Promise<{
+    assetId?: number;
     summary: string;
     observations: Array<{
       in_point?: number;
@@ -53,12 +54,15 @@ export interface ConversationToolAccumulator {
   suggestionDrafts: AgentSuggestionDraft[];
   timelineActions: TimelineAction[];
   transcriptDetailRequests: TranscriptDetailRequest[];
+  hasSuccessfulVideoEvidence: boolean;
+  videoEvidenceAssetIds: Set<number>;
   finalOutcome?: TurnOutcome;
   finalAssistantResponse?: string;
 }
 
 interface AnalyzeChapterVideoInput {
   focus: string;
+  assetId?: number;
 }
 
 interface LoadDetailedTranscriptWindowsInput {
@@ -208,6 +212,7 @@ const analyzeChapterVideoSchema = s.object(
         maxLength: 400,
       })
     ),
+    assetId: s.optional(s.integer({ minimum: 1 })),
   },
   { description: "The evidence question to answer from the chapter video." }
 );
@@ -229,6 +234,7 @@ const finalizeConversationTurnSchema = s.object(
 );
 
 const videoEvidenceSchema = z.object({
+  assetId: z.number().int().positive().optional(),
   summary: z.string().trim().min(1).max(4000),
   observations: z
     .array(
@@ -262,7 +268,7 @@ export function createConversationTools(
       description:
         "Inspect the current chapter video for factual visual evidence only. Use this when you need to verify what happens on screen before answering. This tool never makes recommendations.",
       schema: analyzeChapterVideoSchema,
-      execute: async ({ focus }) => {
+      execute: async ({ focus, assetId }) => {
         writer?.writeStatus({
           status: "analyzing_video",
           message: "Gathering visual evidence from the chapter video...",
@@ -270,7 +276,15 @@ export function createConversationTools(
           nodeName: "conversation_runner",
         });
 
-        const evidence = await analyzeChapterVideoImpl(input, focus);
+        const evidence = await analyzeChapterVideoImpl(input, { focus, assetId });
+        if (
+          typeof evidence.assetId === "number" &&
+          Number.isFinite(evidence.assetId) &&
+          input.context.videoAnalysisAssets.some((asset) => asset.assetId === evidence.assetId)
+        ) {
+          accumulator.hasSuccessfulVideoEvidence = true;
+          accumulator.videoEvidenceAssetIds.add(evidence.assetId);
+        }
         return JSON.stringify(evidence);
       },
     }),
@@ -309,7 +323,14 @@ export function createConversationTools(
         "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Do not describe actionable edits only in prose.",
       schema: draftRoughCutProposalsSchema,
       execute: async ({ proposals }) => {
+        if (!accumulator.hasSuccessfulVideoEvidence) {
+          throw new Error(
+            "Actionable proposals require successful analyzeChapterVideo evidence earlier in the same turn."
+          );
+        }
+
         const accepted = normalizeProposalDrafts(proposals);
+        validateProposalGrounding(input, accumulator, accepted);
 
         for (const draft of accepted) {
           if (draft.type === "range_suggestion") {
@@ -349,6 +370,12 @@ export function createConversationTools(
         if (outcome === "proposal" && !hasDrafts) {
           throw new Error(
             "A proposal turn must include at least one accepted draftRoughCutProposals result before finalizing."
+          );
+        }
+
+        if (outcome === "proposal" && !accumulator.hasSuccessfulVideoEvidence) {
+          throw new Error(
+            "A proposal turn requires successful analyzeChapterVideo evidence first. Call analyzeChapterVideo or finalize as clarification explaining that the video proxy is not ready."
           );
         }
 
@@ -410,9 +437,66 @@ function normalizeProposalDrafts(value: ProposalDraft[]): ProposalDraft[] {
   return normalized;
 }
 
+function getGroundedVideoAssetIds(input: ConversationTurnInput): number[] {
+  return input.context.videoAnalysisAssets.map((asset) => asset.assetId);
+}
+
+function resolveGroundedVideoAsset(
+  input: ConversationTurnInput,
+  requestedAssetId?: number
+): { assetId: number; proxyPath: string } | null {
+  const groundedAssets = input.context.videoAnalysisAssets;
+  if (groundedAssets.length === 0) {
+    return null;
+  }
+
+  if (requestedAssetId === undefined) {
+    if (groundedAssets.length > 1) {
+      throw new Error("assetId is required when multiple grounded video assets are available.");
+    }
+
+    return groundedAssets[0] ?? null;
+  }
+
+  const selectedAsset = groundedAssets.find((asset) => asset.assetId === requestedAssetId);
+  if (!selectedAsset) {
+    throw new Error(`No grounded video asset is available for assetId ${requestedAssetId}.`);
+  }
+
+  return selectedAsset;
+}
+
+function validateProposalGrounding(
+  input: ConversationTurnInput,
+  accumulator: ConversationToolAccumulator,
+  proposals: ProposalDraft[]
+): void {
+  const groundedVideoAssetIds = getGroundedVideoAssetIds(input);
+  const requiresExplicitAssetId = groundedVideoAssetIds.length > 1;
+
+  for (const proposal of proposals) {
+    if (proposal.type !== "create_clip") {
+      continue;
+    }
+
+    if (requiresExplicitAssetId && proposal.assetId === undefined) {
+      throw new Error("assetId is required when multiple grounded video assets are available.");
+    }
+
+    if (
+      typeof proposal.assetId === "number" &&
+      !accumulator.videoEvidenceAssetIds.has(proposal.assetId)
+    ) {
+      throw new Error(
+        `create_clip for assetId ${proposal.assetId} requires analyzeChapterVideo evidence for that same asset earlier in the turn.`
+      );
+    }
+  }
+}
+
 async function analyzeChapterVideoEvidence(
   input: ConversationTurnInput,
-  focus: string
+  request: AnalyzeChapterVideoInput
 ): Promise<z.infer<typeof videoEvidenceSchema>> {
   if (
     !input.selectedProvider ||
@@ -424,7 +508,8 @@ async function analyzeChapterVideoEvidence(
     };
   }
 
-  if (!input.context.proxyPath) {
+  const groundedAsset = resolveGroundedVideoAsset(input, request.assetId);
+  if (!groundedAsset) {
     return {
       summary:
         "No chapter proxy video is ready yet, so I could not inspect the visuals directly.",
@@ -435,17 +520,21 @@ async function analyzeChapterVideoEvidence(
   const agentConfig = await loadConfig();
   const llmConfig = getProviderLLMConfig(agentConfig, input.selectedProvider);
   const llm = createLLM(llmConfig);
-  const prompt = buildVideoEvidencePrompt(focus);
+  const prompt = buildVideoEvidencePrompt(request.focus);
   const provider = input.selectedProvider as VideoProvider;
   const videoMessage = await createVideoMessage({
     provider,
-    videoPath: input.context.proxyPath,
+    videoPath: groundedAsset.proxyPath,
     textPrompt: prompt,
     transcriptContext: input.context.transcript,
   });
 
   const response = await llm.invoke([videoMessage]);
-  return parseVideoEvidenceResponse(getMessageText(response.content));
+  const parsed = parseVideoEvidenceResponse(getMessageText(response.content));
+  return {
+    ...parsed,
+    assetId: groundedAsset.assetId,
+  };
 }
 
 function buildVideoEvidencePrompt(focus: string): string {

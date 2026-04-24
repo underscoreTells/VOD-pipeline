@@ -16,6 +16,7 @@ const electronAPI: ElectronAPI = {
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
+    getGroundingStatus: (params) => ipcRenderer.invoke('agent:grounding-status', params),
     rerollMessage: (params) => ipcRenderer.invoke('agent:reroll-message', params),
     editMessage: (params) => ipcRenderer.invoke('agent:edit-message', params),
     branchMessage: (params) => ipcRenderer.invoke('agent:branch-message', params),

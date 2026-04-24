@@ -2,12 +2,16 @@
 
 This document is a forward-looking target architecture and roadmap. For the currently implemented runtime, use `docs/architecture/current-state.md`.
 
+## Current Status
+
+This document is a forward-looking target architecture and roadmap. The current runtime is the conversation runner described in `docs/architecture/current-state.md`, not the graph-oriented design below.
+
 ## Tech Stack
 
 - **Desktop**: Electron + TypeScript
 - **UI**: Svelte 5 + TypeScript (runes API, .svelte.ts state files)
 - **Package Manager**: pnpm
-- **Agent System**: LangChain + LangGraph (multi-agent subgraphs)
+- **Agent System**: Current runtime uses a tool-driven conversation runner; LangGraph orchestration below is deferred roadmap work
 - **Database**: SQLite (local project storage)
 - **Video Processing**: FFmpeg (local, via child_process)
 - **Transcription**: Whisper (local via faster-whisper, or cloud alternative)
@@ -35,9 +39,9 @@ This document is a forward-looking target architecture and roadmap. For the curr
 ┌─────────────────────────────────────────────────────────────┐
 │  Agent Child Process                                       │
 │  ─────────────────────────────────────────────────────────  │
-│  - LangChain + LangGraph                                    │
-│  - Main orchestrator graph                                 │
-│  - Chapter subgraphs (spawned in parallel)                 │
+│  - Current runtime: conversation turn runner               │
+│  - Roadmap target: orchestrator graph                      │
+│  - Roadmap target: chapter subgraphs (parallel)            │
 │  - LLM API calls (multi-provider)                          │
 │  - Streaming responses to main                             │
 │  - Audio/video analysis logic                              │
@@ -55,6 +59,8 @@ This document is a forward-looking target architecture and roadmap. For the curr
 ```
 
 ## Agent Workflow
+
+The workflow below is a target-state roadmap, not the currently implemented execution model.
 
 ### Multi-Agent Pattern: Orchestrator-Worker
 
@@ -182,7 +188,8 @@ vod-pipeline/
 │   ├── electron/                    # Electron main process
 │   │   ├── main.ts                  # Entry point, window management
 │   │   ├── ipc/
-│   │   │   ├── handlers.ts          # Main → Renderer IPC handlers
+│   │   │   ├── register.ts          # IPC registration entrypoint
+│   │   │   ├── handlers/            # Main → Renderer IPC handlers
 │   │   │   ├── channels.ts          # IPC channel definitions
 │   │   │   └── agent-bridge.ts      # Main ↔ Agent child process IPC
 │   │   └── database/

@@ -238,20 +238,4 @@ describeAgentChat("Agent Chat Integration", () => {
     });
   });
 
-  it.skip("should handle stop request", async () => {
-    const longRunningRequest = sendAndWait({
-      type: "chat",
-      requestId: "test-7",
-      messages: [{ role: "user", content: "Very long request..." }],
-    });
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    const stopResponse = await sendAndWait({
-      type: "stop",
-      requestId: "test-7",
-    });
-
-    expect(stopResponse.type).toBe("turn_complete");
-  });
 });

@@ -80,4 +80,4 @@ pnpm dist           # Build distributable Electron package
 
 This is an active personal project focused on quality and iteration speed, with local-first workflows and pluggable AI providers.
 
-The current runtime agent is the chapter-aware conversation runner described in `docs/architecture/current-state.md`. The older LangGraph subgraph design remains a roadmap item in `PLAN.md`, not an implemented workflow.
+The implemented agent is the chapter-aware conversation runner described in `docs/architecture/current-state.md`. `PLAN.md` is a roadmap document only; graph-based orchestration there is deferred design work, not the current runtime.

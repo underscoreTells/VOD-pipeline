@@ -41,6 +41,6 @@ This note tracks the cleanup work that turns the current branch into a trustwort
 
 ## Transitional Areas
 
-- `src/electron/ipc/handlers.ts` is still the legacy implementation for the more complex chapter, transcription, agent, waveform, and suggestion flows.
+- The old monolithic IPC handler file has been replaced by `src/electron/ipc/register.ts` plus focused modules under `src/electron/ipc/handlers/`.
 - `src/electron/database/db.ts` is still the implementation source behind the new database index and repository boundaries.
 - Future cleanup should continue by moving the remaining legacy IPC/database logic into the new handler and repository modules rather than adding new code to the legacy files.

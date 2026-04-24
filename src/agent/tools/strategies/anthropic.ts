@@ -23,10 +23,6 @@ export class AnthropicToolStrategy implements ProviderToolStrategy<AnthropicTool
         name: tool.name,
         description: tool.description,
         input_schema: compiledSchema,
-        ...(Array.isArray(tool.examples) && tool.examples.length > 0
-          ? { input_examples: tool.examples }
-          : {}),
-        ...(tool.metadata?.anthropicStrict ? { strict: true } : {}),
       },
     };
   }

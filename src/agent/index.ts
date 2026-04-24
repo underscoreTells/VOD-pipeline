@@ -164,6 +164,31 @@ function asDetailedTranscriptWindows(value: unknown): DetailedTranscriptWindow[]
   return windows;
 }
 
+function asVideoAnalysisAssets(
+  value: unknown
+): ConversationContextPayload["videoAnalysisAssets"] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      if (
+        typeof item.assetId !== "number" ||
+        !Number.isFinite(item.assetId) ||
+        typeof item.proxyPath !== "string" ||
+        item.proxyPath.trim().length === 0
+      ) {
+        return null;
+      }
+
+      return {
+        assetId: item.assetId,
+        proxyPath: item.proxyPath,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+}
+
 function buildConversationInput(message: Extract<AgentInputMessage, { type: "chat" }>): ConversationTurnInput {
   const metadata = isRecord(message.metadata) ? message.metadata : {};
   const contextRaw = isRecord(metadata.context) ? metadata.context : {};
@@ -220,37 +245,13 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
       (clip): clip is NonNullable<typeof clip> => clip !== null
     );
 
-  const assetsRaw = Array.isArray(contextRaw.assets) ? contextRaw.assets : [];
-  const assets = assetsRaw
-    .map((asset) => {
-      if (!isRecord(asset) || typeof asset.id !== "number" || typeof asset.filePath !== "string") {
-        return null;
-      }
-
-      return {
-        id: asset.id,
-        filePath: asset.filePath,
-        duration:
-          typeof asset.duration === "number" && Number.isFinite(asset.duration)
-            ? asset.duration
-            : undefined,
-        fileType: typeof asset.fileType === "string" ? asset.fileType : undefined,
-        audioTrackCount:
-          typeof asset.audioTrackCount === "number" && Number.isFinite(asset.audioTrackCount)
-            ? asset.audioTrackCount
-            : undefined,
-      };
-    })
-    .filter((asset): asset is NonNullable<typeof asset> => asset !== null);
-
   const context: ConversationContextPayload = {
     chapter,
     chapterAssetIds: asNumberArray(contextRaw.chapterAssetIds),
     chapterClips,
     transcript: typeof contextRaw.transcript === "string" ? contextRaw.transcript : undefined,
     detailedTranscripts: asDetailedTranscriptWindows(contextRaw.detailedTranscripts),
-    proxyPath: typeof contextRaw.proxyPath === "string" ? contextRaw.proxyPath : undefined,
-    assets,
+    videoAnalysisAssets: asVideoAnalysisAssets(contextRaw.videoAnalysisAssets),
     suggestionSummary:
       typeof contextRaw.suggestionSummary === "string" ? contextRaw.suggestionSummary : undefined,
   };
@@ -352,45 +353,22 @@ async function processMessage(
   writer: JSONStdinWriter,
   controller: AbortController
 ): Promise<void> {
-  const { type, requestId } = message;
-  const threadId = "threadId" in message ? message.threadId : undefined;
+  const { requestId, threadId } = message;
+  const metadata = isRecord(message.metadata) ? message.metadata : {};
+  const ipcAgentConfig = normalizeAgentConfig(metadata.agentConfig);
+  setIpcConfig(ipcAgentConfig);
 
-  switch (type) {
-    case "chat": {
-      const metadata = isRecord(message.metadata) ? message.metadata : {};
-      const ipcAgentConfig = normalizeAgentConfig(metadata.agentConfig);
-      setIpcConfig(ipcAgentConfig);
+  const result = await runConversationTurn(buildConversationInput(message), {
+    signal: controller.signal,
+    writer: createConversationWriter(requestId, writer),
+  });
 
-      const result = await runConversationTurn(buildConversationInput(message), {
-        signal: controller.signal,
-        writer: createConversationWriter(requestId, writer),
-      });
-
-      writer.write({
-        type: "turn_complete",
-        requestId,
-        result: result as unknown as Record<string, unknown>,
-        threadId: threadId || "",
-      });
-      return;
-    }
-
-    case "stop": {
-      const targetController = activeRequests.get(message.requestId);
-      if (targetController) {
-        targetController.abort();
-      }
-      return;
-    }
-
-    default:
-      writer.write({
-        type: "error",
-        requestId,
-        error: `Unknown message type: ${type}`,
-        code: "UNKNOWN_MESSAGE_TYPE",
-      });
-  }
+  writer.write({
+    type: "turn_complete",
+    requestId,
+    result: result as unknown as Record<string, unknown>,
+    threadId: threadId || "",
+  });
 }
 
 process.on("SIGTERM", async () => {

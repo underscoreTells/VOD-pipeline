@@ -41,11 +41,6 @@ describeAgentSpawn("Agent Spawn Integration", () => {
   }, 15000);
 
   afterEach(async () => {
-    if (stdinWriter) {
-      stdinWriter.write({ type: "stop", requestId: "cleanup" });
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-
     if (agentProcess) {
       agentProcess.kill();
       agentProcess = null;

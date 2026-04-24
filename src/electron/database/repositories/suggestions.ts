@@ -291,17 +291,40 @@ async function createSuggestionTimelineClip(
   const actionPayload = parseSuggestionActionPayload(suggestion);
   const createPayload = actionPayload?.create;
 
-  const assetIds = await getAssetsForChapter(chapter.id);
-  if (assetIds.length === 0) {
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  if (chapterAssetIds.length === 0) {
     return { success: false, error: 'No assets found for this chapter' };
   }
 
-  let assetId = assetIds[0];
-  if (typeof createPayload?.assetId === 'number' && assetIds.includes(createPayload.assetId)) {
-    assetId = createPayload.assetId;
+  const chapterAssets = await Promise.all(chapterAssetIds.map(async (assetId) => await getAsset(assetId)));
+  const chapterVideoAssets = chapterAssets.filter(
+    (asset): asset is NonNullable<typeof asset> => asset !== null && asset.file_type === 'video'
+  );
+
+  if (chapterVideoAssets.length === 0) {
+    return { success: false, error: 'No video assets found for this chapter' };
   }
 
-  const asset = await getAsset(assetId);
+  let assetId: number | undefined;
+  if (typeof createPayload?.assetId === 'number') {
+    const selectedAsset = chapterVideoAssets.find((asset) => asset.id === createPayload.assetId);
+    if (!selectedAsset) {
+      return {
+        success: false,
+        error: `Asset ${createPayload.assetId} is not a linked video asset for chapter ${chapter.id}`,
+      };
+    }
+    assetId = selectedAsset.id;
+  } else if (chapterVideoAssets.length === 1) {
+    assetId = chapterVideoAssets[0]?.id;
+  } else {
+    return {
+      success: false,
+      error: 'assetId is required when multiple chapter video assets are available',
+    };
+  }
+
+  const asset = assetId ? await getAsset(assetId) : null;
   if (!asset) {
     return { success: false, error: 'Asset not found' };
   }
@@ -339,8 +362,6 @@ async function createSuggestionTimelineClip(
 
     const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
     startTime = rightmostEnd;
-    const shiftAmount = startTime - normalizedWindow.inPoint;
-    inPoint = normalizedWindow.inPoint + shiftAmount;
   }
 
   if (inPoint >= outPoint) {

@@ -24,6 +24,7 @@ This document describes the implemented architecture after the resumable-base re
 
 - The implemented agent path is `chat -> runConversationTurn(...) -> turn_complete`.
 - The worker does not implement a separate `analyze-chapters` request flow.
+- The worker does not use LangGraph or a checkpointer today.
 - The runtime prompt surface is split between:
   - `src/agent/conversation/context-builder.ts`
     - `buildConversationSystemPrompt()` builds the canonical system prompt from chapter, clip, transcript, and proposal context.
@@ -79,4 +80,5 @@ This document describes the implemented architecture after the resumable-base re
 - Generated runtime artifacts belong in `dist/`, not `src/`.
 - `database/schema.sql` is the bootstrap schema for new databases.
 - Incremental schema changes are tracked through database migration code, not ad hoc emitted source artifacts.
-- `src/electron/database/db.ts` and `src/electron/ipc/handlers.ts` remain transitional legacy implementations behind newer entrypoints; new callers should not depend on them directly.
+- `src/electron/database/db.ts` remains a transitional legacy implementation behind newer repository entrypoints; new callers should prefer `src/electron/database/index.ts` and `src/electron/database/repositories/`.
+- IPC handlers are split under `src/electron/ipc/handlers/` and registered through `src/electron/ipc/register.ts`; there is no current monolithic `src/electron/ipc/handlers.ts`.

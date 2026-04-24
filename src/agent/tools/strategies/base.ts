@@ -24,8 +24,6 @@ export interface AnthropicToolDefinition {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
-  input_examples?: unknown[];
-  strict?: boolean;
 }
 
 export interface GeminiFunctionDeclaration {

@@ -52,11 +52,11 @@ import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   applyNearLimitTokenGuard,
   buildAgentChatContext,
+  getAgentGroundingStatus,
   normalizeConversationProvider,
   normalizeTimelineActions,
-  parseAgentGraphResult,
+  parseConversationTurnResult,
   persistAgentSuggestions,
-  scheduleChapterMediaPrewarm,
   toNumberOrNull,
 } from '../handler-support.js';
 
@@ -191,6 +191,29 @@ async function resolveConversationThreadId(
   return threadId;
 }
 
+async function assertChapterGroundingReady(
+  projectId: number,
+  chapterId: number
+): Promise<void> {
+  const grounding = await getAgentGroundingStatus(projectId, chapterId, {
+    ensureReady: false,
+  });
+
+  if (grounding.status === 'ready') {
+    return;
+  }
+
+  const assetError = grounding.assets.find((asset) => asset.status === 'error')?.error;
+  const message = assetError
+    ? `${grounding.message} ${assetError}`
+    : grounding.message;
+
+  throw new AgentHandlerError(
+    message,
+    IPC_ERROR_CODES.AGENT_PROXY_NOT_READY
+  );
+}
+
 function sanitizeConversationHistory(
   messages: ChatConversationMessage[]
 ): Array<{ role: string; content: string }> {
@@ -255,16 +278,6 @@ async function runConversationTurn(
     suggestionSummary: summarizeSuggestions(existingSuggestions),
   };
 
-  if (chapterAssetIds.length > 0 && !initialContext.proxyPath) {
-    const primaryAssetId = chapterAssetIds[0];
-    void scheduleChapterMediaPrewarm(options.chapter.id, primaryAssetId).catch((error) => {
-      console.warn(
-        `[ChapterPrewarm] Failed scheduling from chat chapter=${options.chapter.id} asset=${primaryAssetId}:`,
-        error
-      );
-    });
-  }
-
   const guardedInitialPayload = applyNearLimitTokenGuard(
     options.conversationHistory,
     contextWithSuggestions,
@@ -301,7 +314,6 @@ async function runConversationTurn(
       projectId: String(options.projectId),
       chapterId: String(options.chapter.id),
       conversationId: options.conversation.id,
-      passIndex: 1,
     },
     onStreamEvent: (streamMessage) => {
       if (streamMessage.type === 'assistant_text_delta') {
@@ -316,7 +328,6 @@ async function runConversationTurn(
             streamMessage.error ??
             `${streamMessage.toolName} ${streamMessage.state}`,
           nodeName: streamMessage.toolName,
-          passIndex: 1,
         });
         return;
       }
@@ -326,7 +337,6 @@ async function runConversationTurn(
           status: streamMessage.status,
           message: streamMessage.message,
           nodeName: streamMessage.nodeName,
-          passIndex: 1,
         });
       }
     },
@@ -342,7 +352,7 @@ async function runConversationTurn(
   const finalResult = response.result && typeof response.result === 'object'
     ? (response.result as Record<string, unknown>)
     : {};
-  const finalParsed = parseAgentGraphResult(finalResult, chapterDuration, chapterAssetIds);
+  const finalParsed = parseConversationTurnResult(finalResult, chapterDuration, chapterAssetIds);
   const assistantMessage = finalParsed.message || 'Analysis complete';
   const thinkingMarkdown = finalParsed.thinkingMarkdown;
   const persistedAssistantMessage = await createChatMessage({
@@ -397,6 +407,7 @@ export const AGENT_HANDLER_CHANNELS = [
   IPC_CHANNELS.AGENT_CONVERSATION_MESSAGES,
   IPC_CHANNELS.AGENT_CONVERSATION_DELETE,
   IPC_CHANNELS.AGENT_CHAT,
+  IPC_CHANNELS.AGENT_GROUNDING_STATUS,
   IPC_CHANNELS.AGENT_REROLL_MESSAGE,
   IPC_CHANNELS.AGENT_EDIT_MESSAGE,
   IPC_CHANNELS.AGENT_BRANCH_MESSAGE,
@@ -550,6 +561,7 @@ export function registerAgentHandlers(): void {
         provider,
         { requireFreshRuntime: true }
       );
+      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const persistedUserMessage = await createChatMessage({
@@ -602,6 +614,38 @@ export function registerAgentHandlers(): void {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.AGENT_GROUNDING_STATUS, async (_, payload) => {
+    const projectId = toNumberOrNull(payload?.projectId);
+    const chapterId = toNumberOrNull(payload?.chapterId);
+    const ensureReady = payload?.ensureReady === true;
+
+    logger.info('agent:grounding-status', projectId, chapterId, ensureReady);
+
+    try {
+      const normalizedProjectId = requireProjectId(projectId);
+      const normalizedChapterId = chapterId;
+      if (!normalizedChapterId) {
+        throw new AgentHandlerError('Chapter ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const project = await getProject(normalizedProjectId);
+      if (!project) {
+        throw new AgentHandlerError('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+
+      return createSuccessResponse(
+        await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
+          ensureReady,
+        })
+      );
+    } catch (error) {
+      return createErrorResponse(
+        error,
+        error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
+      );
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.AGENT_REROLL_MESSAGE, async (_, payload) => {
     const clientRequestId =
       typeof payload?.clientRequestId === 'string' ? payload.clientRequestId.trim() : '';
@@ -642,6 +686,7 @@ export function registerAgentHandlers(): void {
         provider,
         { requireFreshRuntime: true }
       );
+      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === normalizedMessageId);
@@ -749,6 +794,7 @@ export function registerAgentHandlers(): void {
         provider,
         { requireFreshRuntime: true }
       );
+      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const targetMessage = await getChatMessageByConversation(
         syncedConversation.id,

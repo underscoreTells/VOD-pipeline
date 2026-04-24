@@ -54,9 +54,9 @@ pnpm typecheck
 
 Three-process design:
 - **Main Process** (Electron): App shell, database, FFmpeg/Whisper orchestration, IPC bridge
-- **Agent Worker Process** (child_process): LangChain + LangGraph, multi-agent orchestration
-  - Current implementation: conversation runner with tool calls and streaming IPC
-  - Roadmap: orchestrator-worker LangGraph graph
+- **Agent Worker Process** (child_process): tool-driven conversation runner
+  - Current implementation: single-turn conversation loop with provider-native tool calls and streaming IPC
+  - Roadmap: graph orchestration remains deferred design work in `PLAN.md`
 - **Renderer Process** (Svelte 5): Chat UI, timeline visualization, project management
 
 ### Core Modules
@@ -69,12 +69,12 @@ Three-process design:
    - Spawns agent child process
 
 2. **Agent System** (`src/agent/`)
-   - Current runtime: tool-driven conversation runner
-   - Pluggable LLM provider architecture (Gemini, OpenAI, Anthropic)
-   - Dynamic system prompt plus tool-specific evidence prompts
-   - LangGraph orchestrator/subgraph design is planned, not wired into the current worker
-   - Context management (transcripts, chat logs, video metadata)
-   - Streaming via custom writer + tool-state messages
+  - Current runtime: tool-driven conversation runner
+  - Pluggable LLM provider architecture (Gemini, OpenAI, Anthropic)
+  - Dynamic system prompt plus tool-specific evidence prompts
+  - LangGraph orchestrator/subgraph design is roadmap-only, not wired into the current worker
+  - Context management (transcripts, chat logs, proposal summaries)
+  - Streaming via custom writer + tool-state messages
 
 3. **Svelte 5 UI** (`src/renderer/`)
    - Chat interface (agent interaction)

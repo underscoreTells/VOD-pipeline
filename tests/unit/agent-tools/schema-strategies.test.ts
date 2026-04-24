@@ -38,8 +38,6 @@ const schemaStrategyTestTool = defineAgentTool({
     },
     { description: "A provider strategy compilation fixture." }
   ),
-  examples: [{ items: [{ type: TEST_MODES[0], count: 1 }] }],
-  metadata: { anthropicStrict: true },
   execute: async (input) => JSON.stringify(input),
 });
 
@@ -60,7 +58,7 @@ function createConversationInput(): ConversationTurnInput {
       chapterClips: [],
       transcript: "Setup in the first minute, payoff near the end.",
       detailedTranscripts: [],
-      proxyPath: "/tmp/chapter-proxy.mp4",
+      videoAnalysisAssets: [{ assetId: 7, proxyPath: "/tmp/chapter-proxy.mp4" }],
       suggestionSummary: "- none",
     },
   };
@@ -81,13 +79,11 @@ describe("provider-aware tool schema strategies", () => {
     }
   );
 
-  it("emits native Anthropic tools with input_schema and examples", () => {
+  it("emits native Anthropic tools with input_schema", () => {
     const bound = bindAgentToolsForProvider("anthropic", [schemaStrategyTestTool]);
     expect(bound.bindPayload[0]).toMatchObject({
       name: "schemaStrategyTestTool",
       input_schema: expect.any(Object),
-      input_examples: [{ items: [{ type: TEST_MODES[0], count: 1 }] }],
-      strict: true,
     });
   });
 
@@ -117,6 +113,8 @@ describe("provider-aware tool schema strategies", () => {
         suggestionDrafts: [],
         timelineActions: [],
         transcriptDetailRequests: [],
+        hasSuccessfulVideoEvidence: false,
+        videoEvidenceAssetIds: new Set<number>(),
       };
       const toolDefinitions = createConversationTools(
         { ...createConversationInput(), selectedProvider: provider },
@@ -126,15 +124,10 @@ describe("provider-aware tool schema strategies", () => {
       );
 
       const bound = bindAgentToolsForProvider(provider, toolDefinitions);
-      const compiledDraftTool = bound.compiledTools.find(
-        (tool) => tool.name === "draftRoughCutProposals"
-      );
-      const compiledFinalizeTool = bound.compiledTools.find(
-        (tool) => tool.name === "finalizeConversationTurn"
-      );
+      const serialized = JSON.stringify(bound.bindPayload);
 
-      expect(compiledDraftTool).toBeDefined();
-      expect(compiledFinalizeTool).toBeDefined();
+      expect(serialized).toContain("draftRoughCutProposals");
+      expect(serialized).toContain("finalizeConversationTurn");
     }
   );
 
@@ -143,6 +136,8 @@ describe("provider-aware tool schema strategies", () => {
       suggestionDrafts: [],
       timelineActions: [],
       transcriptDetailRequests: [],
+      hasSuccessfulVideoEvidence: false,
+      videoEvidenceAssetIds: new Set<number>(),
     };
 
     const toolDefinitions = createConversationTools(

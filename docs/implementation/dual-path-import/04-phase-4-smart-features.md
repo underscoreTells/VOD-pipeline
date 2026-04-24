@@ -5,7 +5,7 @@
 ### 12. Add Auto-Naming IPC Handler Using LLM on Transcript
 **Priority:** Medium  
 **Files:**
-- `src/electron/ipc/handlers.ts` (new handler)
+- `src/electron/ipc/handlers/chapters.ts` (new handler)
 - `src/electron/ipc/channels.ts` (new channel)
 - `src/electron/preload.ts` (expose to renderer)
 - `src/agent/utils/chapter-naming.ts` (new utility)
@@ -87,7 +87,7 @@ Already implemented in Phase 3 - ChapterPanel groups by asset.
 ### 14. Update Transcription Flow for Per-Chapter Extraction
 **Priority:** Medium  
 **Files:**
-- `src/electron/ipc/handlers.ts` - `TRANSCRIBE_CHAPTER` handler
+- `src/electron/ipc/handlers/transcription.ts` - `TRANSCRIBE_CHAPTER` handler
 - `src/pipeline/whisper.ts` (may need audio extraction)
 
 **Current Flow:**
@@ -146,8 +146,8 @@ const adjustedTranscript = transcript.segments.map(seg => ({
 **Priority:** Medium  
 **Files:**
 - `src/renderer/lib/components/BeatPanel.svelte`
-- `src/electron/ipc/handlers.ts` (add beats handler if needed)
-- `src/electron/database/db.ts` (add beats query)
+- `src/electron/ipc/handlers/chapters.ts` (add beats handler if needed)
+- `src/electron/database/repositories/chapters.ts` (add beats query)
 
 **Current State:**
 BeatPanel shows `clips` passed as prop. Need to add support for showing `beats` for a chapter.

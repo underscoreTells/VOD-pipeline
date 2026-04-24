@@ -41,6 +41,7 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
         )} reason=${window.reason ?? "n/a"}`
     )
     .join("\n");
+  const groundedVideoAssetIds = input.context.videoAnalysisAssets.map((asset) => asset.assetId);
 
   const suggestionSummary =
     typeof input.context.suggestionSummary === "string" && input.context.suggestionSummary.trim().length > 0
@@ -66,6 +67,9 @@ ${transcriptPreview || "No transcript excerpt loaded."}
 Detailed transcript windows already in context:
 ${detailedTranscriptSummary || "- none loaded"}
 
+Grounded video assets available for analysis:
+${groundedVideoAssetIds.length > 0 ? `- [${groundedVideoAssetIds.join(", ")}]` : "- none"}
+
 Existing proposal summary for this conversation:
 ${suggestionSummary}
 
@@ -75,6 +79,9 @@ Rules:
 - Do not invent clip identifiers or asset identifiers.
 - Use evidence tools when they are needed for factual verification.
 - Use analyzeChapterVideo for on-screen evidence and loadDetailedTranscriptWindows for exact dialogue timing.
+- All actionable proposals require successful analyzeChapterVideo evidence in the same turn.
+- If video evidence is unavailable, do not draft proposals. Finalize as clarification and explain that the video proxy is not ready.
+- If multiple grounded video assets are available, analyzeChapterVideo must specify assetId and create_clip must specify assetId.
 - If you provide actionable rough-cut edits, you MUST call draftRoughCutProposals first.
 - Never describe concrete trims, clip inserts, clip updates, or reorder proposals only in prose.
 - If the request is too unclear to answer safely or too underspecified for edits, end with clarification.

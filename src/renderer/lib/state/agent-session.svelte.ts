@@ -1,4 +1,8 @@
-import type { ProviderConfigPayload } from "../../../shared/contracts/electron-api.js";
+import type {
+  AgentGroundingStatus,
+  AgentGroundingStatusData,
+  ProviderConfigPayload,
+} from "../../../shared/contracts/electron-api.js";
 import type {
   ChatConversation,
   ChatConversationMessage,
@@ -21,6 +25,7 @@ import { buildProviderConfig } from "./settings-helpers.js";
 import {
   createAgentConversation,
   deleteAgentConversation,
+  getAgentGroundingStatus,
   getAgentConversationMessages,
   getSuggestions,
   listAgentConversations,
@@ -60,6 +65,11 @@ export interface AgentState {
   isStreaming: boolean;
   currentProjectId: string | null;
   currentChapterId: string | null;
+  groundingStatus: AgentGroundingStatus;
+  groundingMessage: string | null;
+  groundingRequiredVideoAssetCount: number;
+  groundingReadyVideoAssetCount: number;
+  groundingErrorDetail: string | null;
   error: string | null;
 }
 
@@ -74,10 +84,17 @@ export const agentState = $state<AgentState>({
   isStreaming: false,
   currentProjectId: null,
   currentChapterId: null,
+  groundingStatus: "idle",
+  groundingMessage: null,
+  groundingRequiredVideoAssetCount: 0,
+  groundingReadyVideoAssetCount: 0,
+  groundingErrorDetail: null,
   error: null,
 });
 
 let chapterLoadToken = 0;
+let groundingLoadToken = 0;
+let groundingPollTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function setStreamingBlockedError() {
   agentState.error = "Wait for the current response to finish before changing chat context.";
@@ -138,6 +155,113 @@ function isCurrentConversationContextRequest(
     { token, contextKey },
     { token: chapterLoadToken, contextKey: getCurrentConversationContextKey() }
   );
+}
+
+function clearGroundingPoll(): void {
+  if (groundingPollTimeout) {
+    clearTimeout(groundingPollTimeout);
+    groundingPollTimeout = null;
+  }
+}
+
+function resetGroundingState(status: AgentGroundingStatus = "idle"): void {
+  clearGroundingPoll();
+  agentState.groundingStatus = status;
+  agentState.groundingMessage = status === "generating"
+    ? "Video proxy is still preparing. Agent chat is locked until grounding is ready."
+    : null;
+  agentState.groundingRequiredVideoAssetCount = 0;
+  agentState.groundingReadyVideoAssetCount = 0;
+  agentState.groundingErrorDetail = null;
+}
+
+function getCurrentGroundingContextKey(): string {
+  return buildConversationContextKey(
+    agentState.currentProjectId,
+    agentState.currentChapterId
+  );
+}
+
+function isCurrentGroundingContextRequest(
+  token: number,
+  contextKey: string
+): boolean {
+  return isConversationContextRequestCurrent(
+    { token, contextKey },
+    { token: groundingLoadToken, contextKey: getCurrentGroundingContextKey() }
+  );
+}
+
+function applyGroundingStatus(data: AgentGroundingStatusData): void {
+  agentState.groundingStatus = data.status;
+  agentState.groundingMessage = data.message;
+  agentState.groundingRequiredVideoAssetCount = data.requiredVideoAssetCount;
+  agentState.groundingReadyVideoAssetCount = data.readyVideoAssetCount;
+  agentState.groundingErrorDetail =
+    data.assets.find((asset) => asset.status === "error" && asset.error)?.error ?? null;
+}
+
+async function refreshGroundingStatus(options: {
+  chapterId: string;
+  projectId: string;
+  requestContextKey: string;
+  requestToken: number;
+  ensureReady: boolean;
+}): Promise<void> {
+  let response;
+  try {
+    response = await getAgentGroundingStatus({
+      projectId: options.projectId,
+      chapterId: options.chapterId,
+      ensureReady: options.ensureReady,
+    });
+  } catch (error) {
+    if (!isCurrentGroundingContextRequest(options.requestToken, options.requestContextKey)) {
+      return;
+    }
+
+    clearGroundingPoll();
+    agentState.groundingStatus = "error";
+    agentState.groundingMessage = error instanceof Error
+      ? error.message
+      : "Failed to load agent grounding status.";
+    agentState.groundingRequiredVideoAssetCount = 0;
+    agentState.groundingReadyVideoAssetCount = 0;
+    agentState.groundingErrorDetail = null;
+    return;
+  }
+
+  if (!isCurrentGroundingContextRequest(options.requestToken, options.requestContextKey)) {
+    return;
+  }
+
+  if (!response.success || !response.data) {
+    clearGroundingPoll();
+    agentState.groundingStatus = "error";
+    agentState.groundingMessage = response.error || "Failed to load agent grounding status.";
+    agentState.groundingRequiredVideoAssetCount = 0;
+    agentState.groundingReadyVideoAssetCount = 0;
+    agentState.groundingErrorDetail = null;
+    return;
+  }
+
+  applyGroundingStatus(response.data);
+
+  if (response.data.status === "generating") {
+    clearGroundingPoll();
+    groundingPollTimeout = setTimeout(() => {
+      void refreshGroundingStatus({
+        chapterId: options.chapterId,
+        projectId: options.projectId,
+        requestContextKey: options.requestContextKey,
+        requestToken: options.requestToken,
+        ensureReady: false,
+      });
+    }, 5000);
+    return;
+  }
+
+  clearGroundingPoll();
 }
 
 function clearChapterConversationState(clearSuggestions: boolean): void {
@@ -283,25 +407,37 @@ export async function syncAgentContext(
   }
 
   const token = ++chapterLoadToken;
+  const groundingToken = ++groundingLoadToken;
   agentState.currentProjectId = projectId;
   agentState.currentChapterId = chapterId;
   clearChapterConversationState(true);
 
   if (!projectId || !chapterId) {
     agentState.isLoadingConversations = false;
+    resetGroundingState("idle");
     return;
   }
 
+  resetGroundingState("generating");
   agentState.isLoadingConversations = true;
 
   try {
-    await loadChapterConversations({
-      chapterId,
-      preserveSelection: false,
-      projectId,
-      requestContextKey: nextContextKey,
-      requestToken: token,
-    });
+    await Promise.all([
+      loadChapterConversations({
+        chapterId,
+        preserveSelection: false,
+        projectId,
+        requestContextKey: nextContextKey,
+        requestToken: token,
+      }),
+      refreshGroundingStatus({
+        chapterId,
+        projectId,
+        requestContextKey: nextContextKey,
+        requestToken: groundingToken,
+        ensureReady: true,
+      }),
+    ]);
   } finally {
     if (isCurrentConversationContextRequest(token, nextContextKey)) {
       agentState.isLoadingConversations = false;

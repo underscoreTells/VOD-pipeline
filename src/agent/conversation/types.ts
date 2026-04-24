@@ -40,22 +40,16 @@ export interface ConversationClipContext {
   isEssential: boolean;
 }
 
-export interface ConversationAssetContext {
-  id: number;
-  filePath: string;
-  duration?: number | null;
-  fileType?: string | null;
-  audioTrackCount?: number;
-}
-
 export interface ConversationContextPayload {
   chapter?: ConversationChapterContext;
   chapterAssetIds: number[];
   chapterClips: ConversationClipContext[];
   transcript?: string;
   detailedTranscripts: DetailedTranscriptWindow[];
-  proxyPath?: string;
-  assets?: ConversationAssetContext[];
+  videoAnalysisAssets: Array<{
+    assetId: number;
+    proxyPath: string;
+  }>;
   suggestionSummary?: string;
 }
 

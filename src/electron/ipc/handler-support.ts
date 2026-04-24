@@ -19,6 +19,7 @@ import {
   updateChapterProxyStatus,
 } from '../database/index.js';
 import type { Asset, Clip, Suggestion } from '../../shared/types/database.js';
+import type { AgentGroundingStatusData } from '../../shared/contracts/electron-api.js';
 import type {
   DetailedTranscriptWindow,
   TimelineAction,
@@ -451,7 +452,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
     .filter((item): item is PersistableSuggestionDraft => Boolean(item));
 }
 
-export function parseAgentGraphResult(
+export function parseConversationTurnResult(
   result: Record<string, unknown>,
   chapterDuration: number | null,
   chapterAssetIds: number[]
@@ -1249,6 +1250,130 @@ async function ensureChapterProxyReady(
   }
 }
 
+function isChapterProxyReady(
+  proxy: Awaited<ReturnType<typeof getChapterProxyByChapterAsset>>
+): proxy is NonNullable<typeof proxy> {
+  return Boolean(proxy?.status === 'ready' && fs.existsSync(proxy.file_path));
+}
+
+function getGroundingStatusMessage(
+  status: AgentGroundingStatusData['status']
+): string {
+  switch (status) {
+    case 'missing_video_asset':
+      return 'This chapter has no linked video asset. Agent chat requires video grounding and is locked.';
+    case 'error':
+      return 'Video proxy failed to build. Agent chat is locked until grounding is available.';
+    case 'ready':
+      return 'Video grounding is ready.';
+    case 'idle':
+      return '';
+    case 'generating':
+    default:
+      return 'Video proxy is still preparing. Agent chat is locked until grounding is ready.';
+  }
+}
+
+export async function getAgentGroundingStatus(
+  projectId: number,
+  chapterId: number,
+  options?: {
+    ensureReady?: boolean;
+  }
+): Promise<AgentGroundingStatusData> {
+  const chapter = await getChapter(chapterId);
+  if (!chapter) {
+    throw new Error(`Chapter not found: ${chapterId}`);
+  }
+  if (chapter.project_id !== projectId) {
+    throw new Error(`Chapter ${chapterId} does not belong to project ${projectId}`);
+  }
+
+  const [projectAssets, chapterAssetIds] = await Promise.all([
+    getAssetsByProject(projectId),
+    getAssetsForChapter(chapter.id),
+  ]);
+  const chapterAssetSet = new Set(chapterAssetIds);
+  const chapterVideoAssets = projectAssets.filter(
+    (asset) => chapterAssetSet.has(asset.id) && asset.file_type === 'video'
+  );
+
+  if (chapterVideoAssets.length === 0) {
+    return {
+      status: 'missing_video_asset',
+      requiredVideoAssetCount: 0,
+      readyVideoAssetCount: 0,
+      assets: [],
+      message: getGroundingStatusMessage('missing_video_asset'),
+    };
+  }
+
+  const assets: AgentGroundingStatusData['assets'] = [];
+  let readyVideoAssetCount = 0;
+  let hasError = false;
+  let hasGenerating = false;
+
+  for (const asset of chapterVideoAssets) {
+    if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+      hasError = true;
+      assets.push({
+        assetId: asset.id,
+        status: 'error',
+        error: 'Source media file is missing.',
+      });
+      continue;
+    }
+
+    let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+
+    if (!isChapterProxyReady(chapterProxy) && options?.ensureReady) {
+      await ensureChapterProxyReady(chapter, asset);
+      chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+    }
+
+    if (isChapterProxyReady(chapterProxy)) {
+      readyVideoAssetCount += 1;
+      assets.push({
+        assetId: asset.id,
+        status: 'ready',
+      });
+      continue;
+    }
+
+    if (chapterProxy?.status === 'error') {
+      hasError = true;
+      assets.push({
+        assetId: asset.id,
+        status: 'error',
+        error: chapterProxy.error_message ?? 'Video proxy generation failed.',
+      });
+      continue;
+    }
+
+    hasGenerating = true;
+    assets.push({
+      assetId: asset.id,
+      status: 'generating',
+    });
+  }
+
+  const status: AgentGroundingStatusData['status'] = hasError
+    ? 'error'
+    : readyVideoAssetCount === chapterVideoAssets.length
+      ? 'ready'
+      : hasGenerating
+        ? 'generating'
+        : 'error';
+
+  return {
+    status,
+    requiredVideoAssetCount: chapterVideoAssets.length,
+    readyVideoAssetCount,
+    assets,
+    message: getGroundingStatusMessage(status),
+  };
+}
+
 async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
   const lockKey = `${asset.id}:-1`;
   const inFlight = chapterWaveformPrewarmLocks.get(lockKey);
@@ -1380,13 +1505,7 @@ export async function buildAgentChatContext(
       }>,
       transcript: '',
       detailedTranscripts,
-      proxyPath: undefined as string | undefined,
-      assets: projectAssets.map((asset) => ({
-        id: asset.id,
-        filePath: asset.file_path,
-        duration: asset.duration,
-        fileType: asset.file_type,
-      })),
+      videoAnalysisAssets: [] as Array<{ assetId: number; proxyPath: string }>,
     };
   }
 
@@ -1423,26 +1542,22 @@ export async function buildAgentChatContext(
     chapter.end_time
   );
 
-  let proxyPath: string | undefined;
-  if (chapterAssets.length > 0) {
-    const primaryAsset = chapterAssets[0];
-    const chapterProxy = await getChapterProxyByChapterAsset(chapter.id, primaryAsset.id);
+  const videoAnalysisAssets: Array<{ assetId: number; proxyPath: string }> = [];
+  for (const asset of chapterAssets.filter((candidate) => candidate.file_type === 'video')) {
+    let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
 
-    if (chapterProxy?.status === 'ready' && fs.existsSync(chapterProxy.file_path)) {
-      proxyPath = chapterProxy.file_path;
-    } else if (options?.ensureChapterProxyReady) {
-      proxyPath = await ensureChapterProxyReady(chapter, primaryAsset);
+    if (!isChapterProxyReady(chapterProxy) && options?.ensureChapterProxyReady) {
+      await ensureChapterProxyReady(chapter, asset);
+      chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+    }
+
+    if (isChapterProxyReady(chapterProxy)) {
+      videoAnalysisAssets.push({
+        assetId: asset.id,
+        proxyPath: chapterProxy.file_path,
+      });
     }
   }
-
-  const assets = chapterAssets
-    .map((asset) => ({
-      id: asset.id,
-      filePath: asset.file_path,
-      duration: asset.duration,
-      fileType: asset.file_type,
-      audioTrackCount: Array.isArray(asset.metadata?.audioTracks) ? asset.metadata.audioTracks.length : 0,
-    }));
 
   return {
     chapter: {
@@ -1455,7 +1570,6 @@ export async function buildAgentChatContext(
     chapterClips,
     transcript,
     detailedTranscripts,
-    proxyPath,
-    assets,
+    videoAnalysisAssets,
   };
 }

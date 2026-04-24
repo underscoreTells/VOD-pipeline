@@ -48,7 +48,7 @@ function createInput(overrides: Partial<ConversationTurnInput> = {}): Conversati
       chapterClips: [],
       transcript: "[0.00-15.00] Setup lands cleanly. [15.00-45.00] Middle drifts.",
       detailedTranscripts: [],
-      proxyPath: "/tmp/chapter-proxy.mp4",
+      videoAnalysisAssets: [{ assetId: 2, proxyPath: "/tmp/chapter-proxy.mp4" }],
       suggestionSummary: "- none",
     },
     ...overrides,
@@ -60,8 +60,12 @@ function createDependencies(
   overrides: {
     onBind?: (tools: unknown[]) => void;
     analyzeChapterVideo?: (
-      focus: string
-    ) => Promise<{ summary: string; observations: Array<{ note: string; in_point?: number; out_point?: number }> }>;
+      request: { focus: string; assetId?: number }
+    ) => Promise<{
+      assetId?: number;
+      summary: string;
+      observations: Array<{ note: string; in_point?: number; out_point?: number }>;
+    }>;
     loadDetailedTranscriptWindows?: (
       requests: TranscriptDetailRequest[]
     ) => Promise<DetailedTranscriptWindow[]>;
@@ -69,11 +73,12 @@ function createDependencies(
 ) {
   return {
     createModel: async () => new ScriptedToolModel(responses, overrides.onBind),
-    analyzeChapterVideo: async (_input: ConversationTurnInput, focus: string) =>
+    analyzeChapterVideo: async (_input: ConversationTurnInput, request: { focus: string; assetId?: number }) =>
       overrides.analyzeChapterVideo
-        ? overrides.analyzeChapterVideo(focus)
+        ? overrides.analyzeChapterVideo(request)
         : {
-            summary: `Observed video for: ${focus}`,
+            assetId: request.assetId ?? 2,
+            summary: `Observed video for: ${request.focus}`,
             observations: [{ in_point: 12, out_point: 18, note: "Visual confirmation" }],
           },
     loadDetailedTranscriptWindows: async (
@@ -124,6 +129,19 @@ describe("conversation turn runner", () => {
                 {
                   id: "call_1",
                   type: "tool_call",
+                  name: "analyzeChapterVideo",
+                  args: {
+                    focus: "Verify the strongest setup beat before drafting a clip.",
+                  },
+                },
+              ],
+            }),
+            new AIMessage({
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_2",
+                  type: "tool_call",
                   name: "draftRoughCutProposals",
                   args: {
                     proposals: [
@@ -142,7 +160,7 @@ describe("conversation turn runner", () => {
               content: "",
               tool_calls: [
                 {
-                  id: "call_2",
+                  id: "call_3",
                   type: "tool_call",
                   name: "finalizeConversationTurn",
                   args: {
@@ -234,6 +252,19 @@ describe("conversation turn runner", () => {
             {
               id: "call_1",
               type: "tool_call",
+              name: "analyzeChapterVideo",
+              args: {
+                focus: "Check whether the slow middle section has any visual payoff worth keeping.",
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_2",
+              type: "tool_call",
               name: "draftRoughCutProposals",
               args: {
                 proposals: [
@@ -248,7 +279,7 @@ describe("conversation turn runner", () => {
               },
             },
             {
-              id: "call_2",
+              id: "call_3",
               type: "tool_call",
               name: "finalizeConversationTurn",
               args: {
@@ -328,9 +359,10 @@ describe("conversation turn runner", () => {
           }),
         ],
         {
-          analyzeChapterVideo: async (focus) => {
+          analyzeChapterVideo: async ({ focus }) => {
             analyzeCalls.push(focus);
             return {
+              assetId: 2,
               summary: "The reveal is visually distinct and well-timed.",
               observations: [{ in_point: 95, out_point: 118, note: "Strong visual payoff" }],
             };
@@ -344,6 +376,125 @@ describe("conversation turn runner", () => {
     expect(result.suggestionDrafts?.[0]?.description).toBe("Keep the reveal");
   });
 
+  it("requires assetId on analyzeChapterVideo when multiple grounded video assets are available", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        context: {
+          ...createInput().context,
+          chapterAssetIds: [2, 5],
+          videoAnalysisAssets: [
+            { assetId: 2, proxyPath: "/tmp/chapter-proxy-2.mp4" },
+            { assetId: 5, proxyPath: "/tmp/chapter-proxy-5.mp4" },
+          ],
+        },
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_video",
+              type: "tool_call",
+              name: "analyzeChapterVideo",
+              args: { focus: "Check which camera angle has the stronger reveal." },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_finalize",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "clarification",
+                assistantResponse:
+                  "I need you to specify which video asset to inspect before I can verify the footage.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("clarification");
+    expect(result.assistantResponse).toContain("which video asset");
+  });
+
+  it("requires multi-asset create_clip proposals to stay on the grounded asset", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        context: {
+          ...createInput().context,
+          chapterAssetIds: [2, 5],
+          videoAnalysisAssets: [
+            { assetId: 2, proxyPath: "/tmp/chapter-proxy-2.mp4" },
+            { assetId: 5, proxyPath: "/tmp/chapter-proxy-5.mp4" },
+          ],
+        },
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_video",
+              type: "tool_call",
+              name: "analyzeChapterVideo",
+              args: {
+                focus: "Inspect the reaction angle for the payoff.",
+                assetId: 5,
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_proposal",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "create_clip",
+                    assetId: 2,
+                    inPoint: 118,
+                    outPoint: 140,
+                    description: "Reaction payoff clip",
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_finalize",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "clarification",
+                assistantResponse:
+                  "I only verified asset 5, so I need matching video evidence before drafting a clip from asset 2.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("clarification");
+    expect(result.timelineActions).toBeUndefined();
+    expect(result.assistantResponse).toContain("verified asset 5");
+  });
+
   it("can load detailed transcript windows before drafting timeline actions", async () => {
     let requestedWindows: TranscriptDetailRequest[] = [];
 
@@ -354,6 +505,19 @@ describe("conversation turn runner", () => {
       {},
       createDependencies(
         [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "call_video",
+                type: "tool_call",
+                name: "analyzeChapterVideo",
+                args: {
+                  focus: "Verify the payoff moment on screen before drafting the clip.",
+                },
+              },
+            ],
+          }),
           new AIMessage({
             content: "",
             tool_calls: [
@@ -466,7 +630,7 @@ describe("conversation turn runner", () => {
     expect(result.assistantResponse).toContain("trim ranges");
   });
 
-  it("lets vague requests finalize as proposals when the model has enough selected-context evidence", async () => {
+  it("forces clarification when the model tries to draft proposals without video evidence", async () => {
     const result = await runConversationTurn(
       createInput({
         messages: [new HumanMessage("Make it tighter.")],
@@ -506,15 +670,27 @@ describe("conversation turn runner", () => {
             },
           ],
         }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_3",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "clarification",
+                assistantResponse:
+                  "I need to inspect the chapter video before proposing concrete edits. Please wait for video grounding to finish.",
+              },
+            },
+          ],
+        }),
       ])
     );
 
-    expect(result.outcome).toBe("proposal");
-    expect(result.timelineActions).toHaveLength(1);
-    expect(result.timelineActions?.[0]).toMatchObject({
-      type: "update_clip",
-      clipId: 4,
-    });
+    expect(result.outcome).toBe("clarification");
+    expect(result.timelineActions).toBeUndefined();
+    expect(result.assistantResponse).toContain("inspect the chapter video");
   });
 
   it("rejects proposal finalization without drafts and allows one repair pass", async () => {
@@ -592,6 +768,19 @@ describe("conversation turn runner", () => {
               type: "tool_call",
               name: "draftTimelineActions",
               args: {},
+            },
+          ],
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_video",
+              type: "tool_call",
+              name: "analyzeChapterVideo",
+              args: {
+                focus: "Verify the recovered setup beat visually before drafting a clip.",
+              },
             },
           ],
         }),

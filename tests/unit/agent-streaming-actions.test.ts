@@ -6,6 +6,7 @@ const agentApiMocks = vi.hoisted(() => ({
   createAgentConversation: vi.fn(),
   deleteAgentConversation: vi.fn(),
   editAgentMessage: vi.fn(),
+  getAgentGroundingStatus: vi.fn(),
   getAgentConversationMessages: vi.fn(),
   getSuggestions: vi.fn(),
   listAgentConversations: vi.fn(),
@@ -98,6 +99,16 @@ describe("agent streaming message actions", () => {
       success: true,
       data: [],
     });
+    agentApiMocks.getAgentGroundingStatus.mockResolvedValue({
+      success: true,
+      data: {
+        status: "ready",
+        requiredVideoAssetCount: 1,
+        readyVideoAssetCount: 1,
+        assets: [{ assetId: 11, status: "ready" }],
+        message: "Video grounding is ready.",
+      },
+    });
     agentApiMocks.getAgentConversationMessages.mockResolvedValue({
       success: true,
       data: [],
@@ -115,6 +126,11 @@ describe("agent streaming message actions", () => {
     agentState.messages = [];
     agentState.suggestions = [];
     agentState.isStreaming = false;
+    agentState.groundingStatus = "ready";
+    agentState.groundingMessage = "Video grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 1;
+    agentState.groundingReadyVideoAssetCount = 1;
+    agentState.groundingErrorDetail = null;
     agentState.error = null;
 
     agentApiMocks.agentChat.mockResolvedValue({
@@ -160,6 +176,11 @@ describe("agent streaming message actions", () => {
     ];
     agentState.suggestions = [];
     agentState.isStreaming = false;
+    agentState.groundingStatus = "ready";
+    agentState.groundingMessage = "Video grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 1;
+    agentState.groundingReadyVideoAssetCount = 1;
+    agentState.groundingErrorDetail = null;
     agentState.error = null;
 
     agentApiMocks.editAgentMessage.mockResolvedValue({
@@ -206,6 +227,11 @@ describe("agent streaming message actions", () => {
     ];
     agentState.suggestions = [];
     agentState.isStreaming = false;
+    agentState.groundingStatus = "ready";
+    agentState.groundingMessage = "Video grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 1;
+    agentState.groundingReadyVideoAssetCount = 1;
+    agentState.groundingErrorDetail = null;
     agentState.error = null;
 
     agentApiMocks.rerollAgentMessage.mockResolvedValue({
@@ -234,5 +260,38 @@ describe("agent streaming message actions", () => {
       content: "Land on the ladder payoff.",
     });
     expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
+  });
+
+  it("blocks send, edit, and reroll mutations when grounding is not ready", async () => {
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const {
+      sendChatMessage,
+      editMessage,
+      rerollMessage,
+    } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+
+    agentState.currentProjectId = "1";
+    agentState.currentChapterId = "3";
+    agentState.selectedConversationId = 2;
+    agentState.conversations = [createConversation()];
+    agentState.messages = [
+      createMessage(10, "user", "Setup", "2026-04-18T12:00:00.000Z"),
+      createMessage(11, "assistant", "Keep the setup.", "2026-04-18T12:01:00.000Z"),
+    ];
+    agentState.isStreaming = false;
+    agentState.groundingStatus = "generating";
+    agentState.groundingMessage = "Video proxy is still preparing. Agent chat is locked until grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 1;
+    agentState.groundingReadyVideoAssetCount = 0;
+    agentState.groundingErrorDetail = null;
+    agentState.error = "stale";
+
+    expect(await sendChatMessage("Try a new cut")).toBe(false);
+    expect(await editMessage(agentState.messages[0], "Sharper setup")).toBe(false);
+    expect(await rerollMessage(agentState.messages[1])).toBe(false);
+    expect(agentState.error).toBeNull();
+    expect(agentApiMocks.agentChat).not.toHaveBeenCalled();
+    expect(agentApiMocks.editAgentMessage).not.toHaveBeenCalled();
+    expect(agentApiMocks.rerollAgentMessage).not.toHaveBeenCalled();
   });
 });

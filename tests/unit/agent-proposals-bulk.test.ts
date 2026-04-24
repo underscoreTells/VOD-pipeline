@@ -4,6 +4,7 @@ import type { Suggestion } from "../../src/shared/types/database.js";
 const agentApiMocks = vi.hoisted(() => ({
   createAgentConversation: vi.fn(),
   deleteAgentConversation: vi.fn(),
+  getAgentGroundingStatus: vi.fn(),
   getAgentConversationMessages: vi.fn(),
   listAgentConversations: vi.fn(),
   applyAllSuggestions: vi.fn(),
@@ -76,6 +77,7 @@ describe("agent proposal bulk actions", () => {
     agentApiMocks.createAgentConversation.mockReset();
     agentApiMocks.cancelSuggestionPreview.mockReset();
     agentApiMocks.deleteAgentConversation.mockReset();
+    agentApiMocks.getAgentGroundingStatus.mockReset();
     agentApiMocks.getAgentConversationMessages.mockReset();
     agentApiMocks.getSuggestions.mockReset();
     agentApiMocks.listAgentConversations.mockReset();
@@ -117,6 +119,16 @@ describe("agent proposal bulk actions", () => {
     agentApiMocks.deleteAgentConversation.mockResolvedValue({
       success: true,
     });
+    agentApiMocks.getAgentGroundingStatus.mockResolvedValue({
+      success: true,
+      data: {
+        status: "ready",
+        requiredVideoAssetCount: 1,
+        readyVideoAssetCount: 1,
+        assets: [{ assetId: 11, status: "ready" }],
+        message: "Video grounding is ready.",
+      },
+    });
 
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
     agentState.currentProjectId = "1";
@@ -124,6 +136,11 @@ describe("agent proposal bulk actions", () => {
     agentState.selectedConversationId = 12;
     agentState.suggestions = [];
     agentState.timelineProposals = [];
+    agentState.groundingStatus = "ready";
+    agentState.groundingMessage = "Video grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 1;
+    agentState.groundingReadyVideoAssetCount = 1;
+    agentState.groundingErrorDetail = null;
     agentState.error = null;
   });
 

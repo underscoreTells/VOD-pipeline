@@ -79,6 +79,9 @@
   );
 
   let isBulkSuggestionActionRunning = $derived(bulkSuggestionAction !== null);
+  let isGroundingLocked = $derived(
+    Boolean(agentState.currentChapterId) && agentState.groundingStatus !== 'ready'
+  );
 
   let conversationTitle = $derived(
     !agentState.currentChapterId
@@ -87,6 +90,42 @@
         ? 'No conversations'
         : currentConversation?.title || 'Select conversation'
   );
+
+  let groundingBanner = $derived.by(() => {
+    if (!agentState.currentChapterId || agentState.groundingStatus === 'ready') {
+      return null;
+    }
+
+    if (agentState.groundingStatus === 'missing_video_asset') {
+      return {
+        title: 'No video proxy source available',
+        body: 'This chapter has no linked video asset, so the agent cannot verify the footage.',
+        progress: null,
+        detail: null,
+      };
+    }
+
+    if (agentState.groundingStatus === 'error') {
+      return {
+        title: 'Video proxy failed',
+        body: 'Agent chat is locked until the chapter proxy can be built.',
+        progress: null,
+        detail: agentState.groundingErrorDetail,
+      };
+    }
+
+    const progress =
+      agentState.groundingRequiredVideoAssetCount > 0
+        ? `${agentState.groundingReadyVideoAssetCount}/${agentState.groundingRequiredVideoAssetCount} video assets ready`
+        : null;
+
+    return {
+      title: 'Video proxy is still preparing',
+      body: 'Agent chat is locked until grounding is ready.',
+      progress,
+      detail: null,
+    };
+  });
 
   function autoResizeMessageInput() {
     if (!messageInput) return;
@@ -222,7 +261,7 @@
   });
 
   async function submitMessage() {
-    if (!message.trim() || agentState.isStreaming || editingMessageId) return;
+    if (!message.trim() || agentState.isStreaming || editingMessageId || isGroundingLocked) return;
 
     const msg = message;
     message = "";
@@ -251,7 +290,11 @@
   }
 
   function canEditMessage(message: ChatMessage) {
-    return canMutateMessage(message) && message.role === "user" && !editingMessageId;
+    return canMutateMessage(message) && !isGroundingLocked && message.role === "user" && !editingMessageId;
+  }
+
+  function canRerollMessage(message: ChatMessage) {
+    return canMutateMessage(message) && !isGroundingLocked && message.role !== "system";
   }
 
   function startEditingMessage(message: ChatMessage) {
@@ -536,7 +579,8 @@
   <div class="chat-messages scrollbar-thin flex flex-1 flex-col overflow-y-auto px-4 py-5" bind:this={chatContainer}>
     {#if !agentState.currentChapterId}
       <div class="empty-state mt-20 self-center px-6 text-center text-text-tertiary">
-        <p class="m-0 text-app-sm">Select a chapter to start chatting</p>
+        <p class="m-0 text-app-sm">Select a chapter before chatting</p>
+        <p class="hint mt-3 text-app-xs text-text-disabled">Choose a chapter from the left sidebar to start a conversation with the AI editor.</p>
       </div>
     {:else if agentState.conversations.length === 0}
       <div class="empty-state mt-20 self-center px-6 text-center text-text-tertiary">
@@ -657,7 +701,7 @@
                   class="h-6 w-6 rounded-[6px] border border-border-default bg-surface-base text-text-tertiary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
                   icon={Repeat}
                   onclick={() => handleRerollMessage(msg)}
-                  disabled={!canMutateMessage(msg) || !!editingMessageId}
+                  disabled={!canRerollMessage(msg) || !!editingMessageId}
                   tooltip="Reroll response"
                   type="button"
                 />
@@ -823,26 +867,44 @@
     </div>
   {/if}
 
-  <div class="composer-wrapper shrink-0 px-3 pb-3">
-    <form class="composer flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
-      <textarea
-        class="min-h-28 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
-        rows="1"
-        bind:value={message}
-        bind:this={messageInput}
-        placeholder={editingMessageId ? "Finish editing the selected message..." : "Ask the AI editor..."}
-        disabled={agentState.isStreaming || !agentState.currentChapterId || !!editingMessageId}
-        oninput={autoResizeMessageInput}
-        onkeydown={handleInputKeydown}
-      ></textarea>
-      <button
-        type="submit"
-        class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
-        disabled={!message.trim() || agentState.isStreaming || !agentState.currentChapterId || !!editingMessageId}
-        title="Send message"
-      >
-        <Icon icon={ArrowUp} size={16} />
-      </button>
-    </form>
-  </div>
+  {#if agentState.currentChapterId}
+    <div class="composer-wrapper shrink-0 px-3 pb-3">
+      {#if groundingBanner}
+        <div class="mb-3 rounded-lg border border-accent-destructive bg-accent-destructive/10 px-3 py-2 text-accent-destructive">
+          <div class="text-app-xs font-semibold uppercase tracking-[0.06em]">{groundingBanner.title}</div>
+          <div class="mt-1 text-app-sm">{groundingBanner.body}</div>
+          {#if groundingBanner.progress}
+            <div class="mt-1 text-app-xs">{groundingBanner.progress}</div>
+          {/if}
+          {#if groundingBanner.detail}
+            <div class="mt-1 text-app-xs">{groundingBanner.detail}</div>
+          {/if}
+        </div>
+      {/if}
+      <form class="composer flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
+        <textarea
+          class="min-h-28 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
+          rows="1"
+          bind:value={message}
+          bind:this={messageInput}
+          placeholder={isGroundingLocked
+            ? "Agent chat is locked until video grounding is ready"
+            : editingMessageId
+              ? "Finish editing the selected message..."
+              : "Ask the AI editor..."}
+          disabled={isGroundingLocked || agentState.isStreaming || !!editingMessageId}
+          oninput={autoResizeMessageInput}
+          onkeydown={handleInputKeydown}
+        ></textarea>
+        <button
+          type="submit"
+          class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
+          disabled={!message.trim() || isGroundingLocked || agentState.isStreaming || !!editingMessageId}
+          title="Send message"
+        >
+          <Icon icon={ArrowUp} size={16} />
+        </button>
+      </form>
+    </div>
+  {/if}
 </div>

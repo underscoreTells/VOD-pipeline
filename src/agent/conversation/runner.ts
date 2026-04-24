@@ -45,6 +45,8 @@ interface ConversationRunnerDependencies extends ConversationToolDependencies {
       suggestionDrafts: ConversationRunResult["suggestionDrafts"];
       timelineActions: ConversationRunResult["timelineActions"];
       transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
+      hasSuccessfulVideoEvidence: boolean;
+      videoEvidenceAssetIds: Set<number>;
       finalOutcome?: ConversationRunResult["outcome"];
       finalAssistantResponse?: string;
     },
@@ -73,12 +75,16 @@ export async function runConversationTurn(
     suggestionDrafts: NonNullable<ConversationRunResult["suggestionDrafts"]>;
     timelineActions: NonNullable<ConversationRunResult["timelineActions"]>;
     transcriptDetailRequests: NonNullable<ConversationRunResult["transcriptDetailRequests"]>;
+    hasSuccessfulVideoEvidence: boolean;
+    videoEvidenceAssetIds: Set<number>;
     finalOutcome?: ConversationRunResult["outcome"];
     finalAssistantResponse?: string;
   } = {
     suggestionDrafts: [],
     timelineActions: [],
     transcriptDetailRequests: [],
+    hasSuccessfulVideoEvidence: false,
+    videoEvidenceAssetIds: new Set<number>(),
   };
 
   const createToolsImpl = dependencies.createTools ?? createConversationTools;

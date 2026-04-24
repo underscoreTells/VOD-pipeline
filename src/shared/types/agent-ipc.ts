@@ -81,14 +81,12 @@ export interface AgentChatData {
 }
 
 export type AgentInputMessage =
-  | ChatInputMessage
-  | StopInputMessage;
+  | ChatInputMessage;
 
 export type AgentInputMessageWithId = AgentInputMessage;
 
 export type AgentInputMessageWithoutId =
-  | ChatInputMessageWithoutId
-  | StopInputMessageWithoutId;
+  | ChatInputMessageWithoutId;
 
 export interface ChatInputMessage {
   type: "chat";
@@ -102,17 +100,6 @@ export interface ChatInputMessageWithoutId {
   type: "chat";
   threadId?: string;
   messages: Array<{ role: string; content: string }>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface StopInputMessage {
-  type: "stop";
-  requestId: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface StopInputMessageWithoutId {
-  type: "stop";
   metadata?: Record<string, unknown>;
 }
 
@@ -183,7 +170,7 @@ export interface AgentStreamContext {
   projectId: string;
   chapterId: string;
   conversationId: number;
-  passIndex: number;
+  passIndex?: number;
 }
 
 export interface AgentStreamStatusEvent extends AgentStreamContext {

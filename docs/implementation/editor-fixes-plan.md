@@ -372,7 +372,7 @@ export function setTranscriptionProgress(chapterId: number, progress: { percent:
 - `src/renderer/lib/components/ProjectDetail.svelte`
 - `src/renderer/lib/state/agent.svelte.ts`
 - `src/electron/ipc/channels.ts`
-- `src/electron/ipc/handlers.ts`
+- `src/electron/ipc/handlers/agent.ts`
 - `src/electron/agent-bridge.ts`
 
 **Intent**

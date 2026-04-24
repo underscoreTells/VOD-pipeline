@@ -1,29 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
 import Database from "better-sqlite3";
 import {
-  initializeDatabase,
-  createProject,
-  createAsset,
-  createChapter,
-  addAssetToChapter,
-    createSuggestion,
-    getSuggestion,
-    applySuggestionWithClip,
-    getSuggestionsByConversation,
-    getSuggestionsByChapter,
-    rejectSuggestion,
-  getClipsByProject,
-  getClip,
+  applySuggestionWithClip,
+  createClip,
+  createSuggestion,
+  getSuggestionsByConversation,
+  getSuggestionsByChapter,
+  rejectSuggestion,
   setDatabaseForTesting,
 } from "../../src/electron/database/index.js";
 import { combinePrerequisites, requireNativeModule, requireSupportedNode } from "../helpers/prerequisites.js";
 
 const suggestionPrerequisite = combinePrerequisites(
   requireSupportedNode(),
-  requireNativeModule('better-sqlite3')
+  requireNativeModule("better-sqlite3")
 );
 const describeSuggestionClip = suggestionPrerequisite.ok ? describe : describe.skip;
 
@@ -219,6 +212,92 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe("No assets found for this chapter");
     });
+
+    it("preserves the drafted source window when collision resolution shifts timeline placement", async () => {
+      await createClip({
+        project_id: testProjectId,
+        asset_id: testAssetId,
+        track_index: 0,
+        start_time: 0,
+        in_point: 100,
+        out_point: 150,
+        role: null,
+        description: "Existing clip",
+        is_essential: true,
+      });
+
+      const suggestion = await createSuggestion({
+        chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
+        in_point: 25,
+        out_point: 75,
+        description: "Collision candidate",
+        reasoning: "Should preserve original footage",
+        provider: "gemini",
+        action_type: "create_clip",
+        target_clip_id: null,
+        action_payload_json: JSON.stringify({
+          create: {
+            trackIndex: 0,
+          },
+        }),
+        preview_snapshot_json: null,
+        status: "pending",
+        display_order: 0,
+        clip_id: null,
+      });
+
+      const result = await applySuggestionWithClip(suggestion.id);
+
+      expect(result.success).toBe(true);
+      expect(result.clip).toMatchObject({
+        start_time: 50,
+        in_point: 25,
+        out_point: 75,
+      });
+    });
+
+    it("requires assetId for create_clip suggestions when multiple chapter video assets are available", async () => {
+      const secondAssetId = db
+        .prepare(
+          "INSERT INTO assets (project_id, file_path, file_type, duration) VALUES (?, ?, ?, ?)"
+        )
+        .run(testProjectId, "/test/video-b.mp4", "video", 3600).lastInsertRowid as number;
+      db.prepare("INSERT INTO chapter_assets (chapter_id, asset_id) VALUES (?, ?)").run(
+        testChapterId,
+        secondAssetId
+      );
+
+      const suggestion = await createSuggestion({
+        chapter_id: testChapterId,
+        conversation_id: null,
+        chat_message_id: null,
+        in_point: 120.5,
+        out_point: 180,
+        description: "Ambiguous asset",
+        reasoning: "Should fail without explicit assetId",
+        provider: "gemini",
+        action_type: "create_clip",
+        target_clip_id: null,
+        action_payload_json: JSON.stringify({
+          create: {
+            trackIndex: 0,
+          },
+        }),
+        preview_snapshot_json: null,
+        status: "pending",
+        display_order: 0,
+        clip_id: null,
+      });
+
+      const result = await applySuggestionWithClip(suggestion.id);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(
+        "assetId is required when multiple chapter video assets are available"
+      );
+    });
   });
 
   describe("Suggestion Types", () => {
@@ -397,43 +476,37 @@ describe("Clip Creation from Suggestion", () => {
 });
 
 describe("Clip Collision Detection (Code Review Fix)", () => {
-  // Test the collision detection algorithm logic
-  
   function detectCollision(
     newStart: number,
     newEnd: number,
     existingClips: Array<{ start_time: number; in_point: number; out_point: number }>
   ): Array<{ start_time: number; in_point: number; out_point: number }> {
-    return existingClips.filter(clip => {
+    return existingClips.filter((clip) => {
       const clipStart = clip.start_time;
       const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
       return newStart < clipEnd && newEnd > clipStart;
     });
   }
-  
-  function calculateTrimmedTiming(
+
+  function calculateResolvedTiming(
     suggestion: { in_point: number; out_point: number },
     existingClips: Array<{ start_time: number; in_point: number; out_point: number }>
   ): { start_time: number; in_point: number; out_point: number } {
     let startTime = suggestion.in_point;
-    let inPoint = suggestion.in_point;
+    const inPoint = suggestion.in_point;
     const outPoint = suggestion.out_point;
     const proposedEnd = startTime + (outPoint - inPoint);
     
     const overlapping = detectCollision(startTime, proposedEnd, existingClips);
     
     if (overlapping.length > 0) {
-      // Find rightmost overlapping clip
       const rightmost = overlapping.reduce((latest, clip) => {
         const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
         const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
         return clipEnd > latestEnd ? clip : latest;
       });
       
-      const rightmostEnd = rightmost.start_time + (rightmost.out_point - rightmost.in_point);
-      startTime = rightmostEnd;
-      const shiftAmount = startTime - suggestion.in_point;
-      inPoint = suggestion.in_point + shiftAmount;
+      startTime = rightmost.start_time + (rightmost.out_point - rightmost.in_point);
     }
     
     return { start_time: startTime, in_point: inPoint, out_point: outPoint };
@@ -463,22 +536,16 @@ describe("Clip Collision Detection (Code Review Fix)", () => {
     expect(overlaps.length).toBe(0);
   });
 
-  it("should trim second clip when collision detected", () => {
+  it("moves only the timeline placement when collision is detected", () => {
     const existingClips = [
       { start_time: 0, in_point: 120, out_point: 180 }, // ends at 60s
     ];
-    
-    // Suggestion that would overlap: starts at 30s (before first clip ends at 60s)
-    const suggestion = { in_point: 300, out_point: 360 }; // Would start at 30, end at 90, overlapping
-    // Actually, let's place it at 30s timeline position to create collision
-    
-    const result = calculateTrimmedTiming({ in_point: 30, out_point: 90 }, existingClips);
-    
-    // Should be trimmed to start at 60s (end of first clip)
+
+    const result = calculateResolvedTiming({ in_point: 30, out_point: 90 }, existingClips);
+
     expect(result.start_time).toBe(60);
-    expect(result.in_point).toBe(60); // Shifted by 30s (30 + 30 = 60)
-    expect(result.out_point).toBe(90); // Unchanged
-    // Duration: 90 - 60 = 30s (trimmed from 60s to 30s)
+    expect(result.in_point).toBe(30);
+    expect(result.out_point).toBe(90);
   });
 
   it("should keep original timing when no collision", () => {
@@ -486,46 +553,39 @@ describe("Clip Collision Detection (Code Review Fix)", () => {
     
     const suggestion = { in_point: 120, out_point: 180 };
     
-    const result = calculateTrimmedTiming(suggestion, existingClips);
+    const result = calculateResolvedTiming(suggestion, existingClips);
     
     expect(result.start_time).toBe(120);
     expect(result.in_point).toBe(120);
     expect(result.out_point).toBe(180);
   });
 
-  it("should reject suggestion when fully consumed by existing clips", () => {
+  it("keeps the original source duration even after multiple overlaps", () => {
     const existingClips = [
       { start_time: 0, in_point: 100, out_point: 150 },   // duration 50s, ends at 50s
       { start_time: 50, in_point: 200, out_point: 250 },  // duration 50s, ends at 100s
     ];
     
-    // Suggestion that overlaps both: would start at 25s, end at 75s
     const suggestion = { in_point: 25, out_point: 75 };
     
-    const result = calculateTrimmedTiming(suggestion, existingClips);
+    const result = calculateResolvedTiming(suggestion, existingClips);
     
-    // Should be placed after rightmost clip (ends at 100s)
     expect(result.start_time).toBe(100);
-    expect(result.in_point).toBe(100); // 25 + (100 - 25) = 100
-    expect(result.out_point).toBe(75); // Unchanged
-    // Note: in_point (100) >= out_point (75), so this would be rejected by createClip validation
-    // The applySuggestionWithClip function checks for inPoint >= outPoint and returns an error
+    expect(result.in_point).toBe(25);
+    expect(result.out_point).toBe(75);
   });
 
-  it("should place trimmed clip adjacent to previous clip (no gap)", () => {
+  it("places the moved clip adjacent to the previous clip without changing its source window", () => {
     const existingClips = [
       { start_time: 0, in_point: 120, out_point: 180 }, // duration 60s, ends at 60s
     ];
     
-    // Suggestion that would start at 30s (overlaps with clip that ends at 60s)
     const suggestion = { in_point: 30, out_point: 90 };
     
-    const result = calculateTrimmedTiming(suggestion, existingClips);
+    const result = calculateResolvedTiming(suggestion, existingClips);
     
-    // Should start exactly where previous clip ends
     expect(result.start_time).toBe(60);
-    expect(result.in_point).toBe(60); // Shifted: 30 + (60 - 30) = 60
-    expect(result.out_point).toBe(90); // Unchanged
-    // No gap between clips
+    expect(result.in_point).toBe(30);
+    expect(result.out_point).toBe(90);
   });
 });

@@ -4,6 +4,8 @@ import type {
   AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
+  AgentGroundingStatusParams,
+  AgentGroundingStatusResult,
   AgentConversationCreateParams,
   AgentConversationCreateResult,
   AgentConversationListParams,
@@ -25,6 +27,8 @@ export type {
   AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
+  AgentGroundingStatusParams,
+  AgentGroundingStatusResult,
   AgentConversationCreateParams,
   AgentConversationCreateResult,
   AgentConversationListParams,
@@ -40,6 +44,12 @@ export type {
 
 export async function agentChat(params: AgentChatParams): Promise<AgentChatResult> {
   return await getElectronApi().agent.chat(params);
+}
+
+export async function getAgentGroundingStatus(
+  params: AgentGroundingStatusParams
+): Promise<AgentGroundingStatusResult> {
+  return await getElectronApi().agent.getGroundingStatus(params);
 }
 
 export async function rerollAgentMessage(

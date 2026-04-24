@@ -84,14 +84,12 @@ export class AgentBridge extends EventEmitter {
 
     const agentPath = this.getAgentPath();
 
-    const checkpointerDbPath = path.join(app.getPath("userData"), "agent-checkpoints.db");
     const appDatabasePath = path.join(app.getPath("userData"), "vod-pipeline.db");
 
     this.process = spawn("node", [agentPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        AGENT_CHECKPOINTER_DB_PATH: checkpointerDbPath,
         VOD_PIPELINE_DB_PATH: appDatabasePath,
       },
     });
@@ -278,19 +276,18 @@ export class AgentBridge extends EventEmitter {
   async stop(): Promise<void> {
     console.log("[AgentBridge] Stopping agent...");
 
-    try {
-      await this.send({ type: "stop" }, { timeoutMs: 5000 });
-    } catch (error) {
-      console.warn("[AgentBridge] Failed to send stop signal:", error);
+    const processRef = this.process;
+    this.stdinWriter?.end();
+    if (processRef && !processRef.killed) {
+      processRef.kill("SIGTERM");
+      const forcedKillTimer = setTimeout(() => {
+        if (!processRef.killed) {
+          processRef.kill("SIGKILL");
+        }
+      }, 5000);
+      forcedKillTimer.unref?.();
     }
 
-    setTimeout(() => {
-      if (this.process) {
-        this.process.kill();
-      }
-    }, 5000);
-
-    this.stdinWriter?.end();
     this.clearProcessReferences();
     this.rejectPendingRequests("Agent shut down");
 

@@ -15,6 +15,11 @@ function resetAgentState(): void {
   agentState.isStreaming = false;
   agentState.currentProjectId = "1";
   agentState.currentChapterId = "2";
+  agentState.groundingStatus = "ready";
+  agentState.groundingMessage = "Video grounding is ready.";
+  agentState.groundingRequiredVideoAssetCount = 1;
+  agentState.groundingReadyVideoAssetCount = 1;
+  agentState.groundingErrorDetail = null;
   agentState.error = null;
 }
 
@@ -61,6 +66,57 @@ function createSuggestion(
 describe("chat panel thinking disclosure", () => {
   afterEach(() => {
     resetAgentState();
+  });
+
+  it("shows chapter-selection guidance and hides the composer when no chapter is selected", () => {
+    resetAgentState();
+    agentState.currentChapterId = null;
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Select a chapter before chatting");
+    expect(body).toContain("Choose a chapter from the left sidebar to start a conversation with the AI editor.");
+    expect(body).not.toContain("Ask the AI editor...");
+    expect(body).not.toContain('title="Send message"');
+  });
+
+  it("renders the composer when a chapter is selected", () => {
+    resetAgentState();
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Ask the AI editor...");
+    expect(body).toContain('title="Send message"');
+  });
+
+  it("shows a destructive grounding banner and disabled composer while proxies are generating", () => {
+    resetAgentState();
+    agentState.groundingStatus = "generating";
+    agentState.groundingMessage = "Video proxy is still preparing. Agent chat is locked until grounding is ready.";
+    agentState.groundingRequiredVideoAssetCount = 2;
+    agentState.groundingReadyVideoAssetCount = 1;
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Video proxy is still preparing");
+    expect(body).toContain("Agent chat is locked until grounding is ready.");
+    expect(body).toContain("1/2 video assets ready");
+    expect(body).toContain("Agent chat is locked until video grounding is ready");
+    expect(body).toContain('disabled');
+  });
+
+  it("shows a destructive grounding banner when proxy generation fails", () => {
+    resetAgentState();
+    agentState.groundingStatus = "error";
+    agentState.groundingMessage = "Video proxy failed to build. Agent chat is locked until grounding is available.";
+    agentState.groundingErrorDetail = "ffmpeg exited with status 1";
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Video proxy failed");
+    expect(body).toContain("Agent chat is locked until the chapter proxy can be built.");
+    expect(body).toContain("ffmpeg exited with status 1");
+    expect(body).toContain("Agent chat is locked until video grounding is ready");
   });
 
   it("renders final answer in the bubble and detailed reasoning inside the thinking disclosure", () => {
@@ -145,9 +201,9 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).not.toContain("suggestions-wrapper");
-    expect(body).not.toContain("Preview All");
-    expect(body).not.toContain("Reject All");
-    expect(body).not.toContain("Apply All");
+    expect(body).not.toContain('aria-label="Preview all suggestions"');
+    expect(body).not.toContain('aria-label="Reject all suggestions"');
+    expect(body).not.toContain('aria-label="Apply all suggestions"');
   });
 
   it("renders bulk suggestion actions, sticky header markup, and resize handle for pending suggestions", () => {
@@ -172,9 +228,9 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body).toContain("Preview All");
-    expect(body).toContain("Reject All");
-    expect(body).toContain("Apply All");
+    expect(body).toContain('aria-label="Preview all suggestions"');
+    expect(body).toContain('aria-label="Reject all suggestions"');
+    expect(body).toContain('aria-label="Apply all suggestions"');
     expect(body).toContain("suggestions-resize-handle");
     expect(body).toContain("suggestions-header sticky top-0");
     expect(body).toContain("text-app-2xs");
@@ -207,9 +263,9 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body.match(/>Reroll</g)).toHaveLength(2);
-    expect(body.match(/>Copy</g)).toHaveLength(2);
-    expect(body.match(/>Branch</g)).toHaveLength(2);
-    expect(body.match(/>Edit</g)).toHaveLength(1);
+    expect(body.match(/aria-label="Reroll response"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Copy message"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Branch conversation"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Edit message"/g)).toHaveLength(1);
   });
 });

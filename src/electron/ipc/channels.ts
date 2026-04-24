@@ -32,6 +32,7 @@ export const IPC_CHANNELS = {
 
   // Agent channels
   AGENT_CHAT: 'agent:chat',
+  AGENT_GROUNDING_STATUS: 'agent:grounding-status',
   AGENT_REROLL_MESSAGE: 'agent:reroll-message',
   AGENT_EDIT_MESSAGE: 'agent:edit-message',
   AGENT_BRANCH_MESSAGE: 'agent:branch-message',
@@ -107,6 +108,7 @@ export const IPC_ERROR_CODES = {
   TIMEOUT: 'TIMEOUT',
   WAVEFORM_GENERATION_FAILED: 'WAVEFORM_GENERATION_FAILED',
   EXPORT_GENERATION_FAILED: 'EXPORT_GENERATION_FAILED',
+  AGENT_PROXY_NOT_READY: 'AGENT_PROXY_NOT_READY',
 } as const;
 
 export type IPCErrorCode = typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES];
