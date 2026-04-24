@@ -2072,7 +2072,7 @@ class HybridTimeline {
 ### References
 
 - **Project Plan:** `/PLAN.md`
-- **Phase 1-3 Plan:** `/docs/phase-1-3-plan.md`
+- **Archived phase plans:** `/docs/archive/phase-1-plan.md`, `/docs/archive/phase-2-plan.md`, `/docs/archive/phase-3a-plan.md`, `/docs/archive/phase-3b-plan.md`
 - **wavesurfer.js:** https://wavesurfer.xyz
 - **vis-timeline:** https://visjs.github.io/vis-timeline/
 - **Svelte 5 Runes:** https://svelte.dev/docs/runes

@@ -213,8 +213,8 @@ interface Props {
 ```
 
 **Integration with AI:**
-When AI analyzes a chapter:
-1. Agent generates beats via `analyze-chapters`
+When the future chapter-analysis workflow is implemented:
+1. Agent generates beats via a dedicated chapter-analysis pass
 2. Beats saved to database with `chapter_id`
 3. BeatPanel displays them
 4. User can convert beats to timeline clips

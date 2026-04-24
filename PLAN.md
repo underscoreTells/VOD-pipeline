@@ -1,5 +1,7 @@
 # VOD Pipeline - Implementation Plan
 
+This document is a forward-looking target architecture and roadmap. For the currently implemented runtime, use `docs/architecture/current-state.md`.
+
 ## Tech Stack
 
 - **Desktop**: Electron + TypeScript

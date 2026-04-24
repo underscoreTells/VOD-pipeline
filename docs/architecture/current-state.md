@@ -15,9 +15,32 @@ This document describes the implemented architecture after the resumable-base re
   - state orchestration
   - preload-backed API calls
 - Agent worker owns:
-  - LangGraph orchestration
+  - conversation turn orchestration
   - provider selection
   - streaming NDJSON transport
+  - tool execution and tool-state streaming
+
+## Agent Runtime
+
+- The implemented agent path is `chat -> runConversationTurn(...) -> turn_complete`.
+- The worker does not implement a separate `analyze-chapters` request flow.
+- The runtime prompt surface is split between:
+  - `src/agent/conversation/context-builder.ts`
+    - `buildConversationSystemPrompt()` builds the canonical system prompt from chapter, clip, transcript, and proposal context.
+  - `src/agent/conversation/tools.ts`
+    - tool contracts define the actionable protocol for the model
+    - `buildVideoEvidencePrompt()` is the canonical tool-scoped evidence prompt for visual inspection
+- The live tool loop is responsible for:
+  - gathering transcript and video evidence
+  - drafting rough-cut proposals
+  - finalizing the assistant response
+
+## Prompt Map
+
+- System prompt source: `src/agent/conversation/context-builder.ts`
+- Tool prompt source: `src/agent/conversation/tools.ts`
+- Active prompt modules under `src/agent/prompts/`: none
+- Active `analyze-chapters` workflow: none
 
 ## Key Module Boundaries
 

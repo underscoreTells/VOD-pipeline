@@ -138,7 +138,20 @@ describe("conversation turn runner", () => {
                 },
               ],
             }),
-            new AIMessage("I drafted one clip proposal."),
+            new AIMessage({
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_2",
+                  type: "tool_call",
+                  name: "finalizeConversationTurn",
+                  args: {
+                    outcome: "proposal",
+                    assistantResponse: "I drafted one clip proposal for the strongest setup beat.",
+                  },
+                },
+              ],
+            }),
           ],
           {
             onBind: (tools) => {
@@ -179,13 +192,29 @@ describe("conversation turn runner", () => {
     }
   );
 
-  it("answers discussion requests directly without creating drafts", async () => {
+  it("finalizes discussion turns without drafting proposals", async () => {
     const result = await runConversationTurn(
       createInput({
         messages: [new HumanMessage("What is the story arc of this chapter?")],
       }),
       {},
-      createDependencies([new AIMessage("The setup is clear, the middle loses momentum, and the payoff lands well.")])
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_discussion",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "discussion",
+                assistantResponse:
+                  "The setup is clear, the middle loses momentum, and the payoff lands well.",
+              },
+            },
+          ],
+        }),
+      ])
     );
 
     expect(result.outcome).toBe("discussion");
@@ -194,7 +223,7 @@ describe("conversation turn runner", () => {
     expect(result.timelineActions).toBeUndefined();
   });
 
-  it("accepts range suggestion drafts from the proposal tool", async () => {
+  it("requires draftRoughCutProposals before finalizing a proposal turn", async () => {
     const result = await runConversationTurn(
       createInput(),
       {},
@@ -218,9 +247,17 @@ describe("conversation turn runner", () => {
                 ],
               },
             },
+            {
+              id: "call_2",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse: "I drafted one cut proposal for the slow patch in the middle.",
+              },
+            },
           ],
         }),
-        new AIMessage("I drafted one cut proposal for the slow patch in the middle."),
       ])
     );
 
@@ -274,7 +311,21 @@ describe("conversation turn runner", () => {
               },
             ],
           }),
-          new AIMessage("I checked the visuals and drafted one keep recommendation around the reveal."),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "call_finalize",
+                type: "tool_call",
+                name: "finalizeConversationTurn",
+                args: {
+                  outcome: "proposal",
+                  assistantResponse:
+                    "I checked the visuals and drafted one keep recommendation around the reveal.",
+                },
+              },
+            ],
+          }),
         ],
         {
           analyzeChapterVideo: async (focus) => {
@@ -343,7 +394,21 @@ describe("conversation turn runner", () => {
               },
             ],
           }),
-          new AIMessage("I drafted one timeline proposal after checking a precise transcript window around the payoff."),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "call_finalize",
+                type: "tool_call",
+                name: "finalizeConversationTurn",
+                args: {
+                  outcome: "proposal",
+                  assistantResponse:
+                    "I drafted one timeline proposal after checking a precise transcript window around the payoff.",
+                },
+              },
+            ],
+          }),
         ],
         {
           loadDetailedTranscriptWindows: async (requests) => {
@@ -372,51 +437,144 @@ describe("conversation turn runner", () => {
     });
   });
 
-  it("returns an immediate clarification for ambiguous requests", async () => {
-    const result = await runConversationTurn(createInput({
-      messages: [new HumanMessage("Make it tighter.")],
-    }));
+  it("lets vague requests finalize as clarification without any regex gate", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Make it tighter.")],
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "final_clarification",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "clarification",
+                assistantResponse:
+                  "Do you want trim ranges, new clip ideas, or story notes for this section?",
+              },
+            },
+          ],
+        }),
+      ])
+    );
 
     expect(result.outcome).toBe("clarification");
     expect(result.assistantResponse).toContain("trim ranges");
   });
 
-  it("repairs one prose-only proposal turn by forcing a structured draft", async () => {
+  it("lets vague requests finalize as proposals when the model has enough selected-context evidence", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Make it tighter.")],
+        selectedClipIds: [4],
+      }),
+      {},
+      createDependencies([
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "tool_call",
+              name: "draftRoughCutProposals",
+              args: {
+                proposals: [
+                  {
+                    type: "update_clip",
+                    clipId: 4,
+                    updates: {
+                      inPoint: 22,
+                      outPoint: 37,
+                    },
+                    reasoning: "Tightens the selected beat without losing the setup.",
+                  },
+                ],
+              },
+            },
+            {
+              id: "call_2",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse: "I tightened the selected section with one targeted clip update.",
+              },
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(result.outcome).toBe("proposal");
+    expect(result.timelineActions).toHaveLength(1);
+    expect(result.timelineActions?.[0]).toMatchObject({
+      type: "update_clip",
+      clipId: 4,
+    });
+  });
+
+  it("rejects proposal finalization without drafts and allows one repair pass", async () => {
     const result = await runConversationTurn(
       createInput({
         messages: [new HumanMessage("Please provide new clips following your advice.")],
       }),
       {},
       createDependencies([
-        new AIMessage("Add a setup clip and a payoff clip around the bug sequence."),
         new AIMessage({
           content: "",
           tool_calls: [
             {
-              id: "call_repaired",
+              id: "bad_finalize",
               type: "tool_call",
-              name: "draftRoughCutProposals",
+              name: "finalizeConversationTurn",
               args: {
-                proposals: [
-                  {
-                    type: "create_clip",
-                    inPoint: 30,
-                    outPoint: 60,
-                    description: "TTS technical troubleshooting",
-                    reasoning: "Restores the setup beat before the lag payoff.",
-                  },
-                ],
+                outcome: "proposal",
+                assistantResponse: "I drafted a few ideas for you.",
               },
             },
           ],
         }),
-        new AIMessage("I drafted one new clip proposal for the missing setup beat."),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "repaired_finalize",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "clarification",
+                assistantResponse:
+                  "Do you want new clips, trim ranges, or specific updates to the current selection?",
+              },
+            },
+          ],
+        }),
       ])
     );
 
-    expect(result.outcome).toBe("proposal");
-    expect(result.timelineActions).toHaveLength(1);
-    expect(result.assistantResponse).toContain("drafted one new clip proposal");
+    expect(result.outcome).toBe("clarification");
+    expect(result.assistantResponse).toContain("new clips");
+    expect(result.timelineActions).toBeUndefined();
+  });
+
+  it("repairs one plain-text termination attempt, then fails closed if the model still skips the finalizer", async () => {
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("What is the story arc of this chapter?")],
+      }),
+      {},
+      createDependencies([
+        new AIMessage("The setup is clear and the payoff lands."),
+        new AIMessage("The middle is still the weakest section."),
+      ])
+    );
+
+    expect(result.outcome).toBe("clarification");
+    expect(result.assistantResponse).toContain("did not finalize correctly");
   });
 
   it("allows one unknown-tool repair before succeeding", async () => {
@@ -455,9 +613,17 @@ describe("conversation turn runner", () => {
                 ],
               },
             },
+            {
+              id: "call_finalize",
+              type: "tool_call",
+              name: "finalizeConversationTurn",
+              args: {
+                outcome: "proposal",
+                assistantResponse: "I recovered and drafted the clip proposal.",
+              },
+            },
           ],
         }),
-        new AIMessage("I recovered and drafted the clip proposal."),
       ])
     );
 
@@ -466,7 +632,7 @@ describe("conversation turn runner", () => {
     expect(result.assistantResponse).toContain("recovered");
   });
 
-  it("fails when identical tool calls repeat without progress", async () => {
+  it("still terminates safely after repeated identical tool calls", async () => {
     const repeatedCall = new AIMessage({
       content: "",
       tool_calls: [
@@ -491,30 +657,20 @@ describe("conversation turn runner", () => {
         messages: [new HumanMessage("Please provide new clips following your advice.")],
       }),
       {},
-      createDependencies([repeatedCall, repeatedCall, repeatedCall])
-    );
-
-    expect(result.outcome).toBe("clarification");
-    expect(result.assistantResponse).toContain("repeated tool call");
-  });
-
-  it("can end a proposal turn with requestClarification", async () => {
-    const result = await runConversationTurn(
-      createInput({
-        messages: [new HumanMessage("Make this better.")],
-        selectedClipIds: [4],
-      }),
-      {},
       createDependencies([
+        repeatedCall,
+        repeatedCall,
         new AIMessage({
           content: "",
           tool_calls: [
             {
-              id: "clarify",
+              id: "final_after_repeat",
               type: "tool_call",
-              name: "requestClarification",
+              name: "finalizeConversationTurn",
               args: {
-                question: "Do you want trim ranges, new clips, or story notes for this selected section?",
+                outcome: "clarification",
+                assistantResponse:
+                  "I need a narrower target before I can keep requesting the same transcript window.",
               },
             },
           ],
@@ -523,6 +679,6 @@ describe("conversation turn runner", () => {
     );
 
     expect(result.outcome).toBe("clarification");
-    expect(result.assistantResponse).toContain("trim ranges");
+    expect(result.assistantResponse).toContain("narrower target");
   });
 });

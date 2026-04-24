@@ -1,10 +1,6 @@
 import { AIMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { buildConversationMessages } from "./context-builder.js";
 import {
-  buildAmbiguousClarificationMessage,
-  routeTurnIntent,
-} from "./intent-router.js";
-import {
   createConversationModel,
   invokeConversationModelStep,
   resolveConversationProvider,
@@ -49,10 +45,10 @@ interface ConversationRunnerDependencies extends ConversationToolDependencies {
       suggestionDrafts: ConversationRunResult["suggestionDrafts"];
       timelineActions: ConversationRunResult["timelineActions"];
       transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
-      clarificationQuestion?: string;
+      finalOutcome?: ConversationRunResult["outcome"];
+      finalAssistantResponse?: string;
     },
-    dependencies: ConversationToolDependencies,
-    options: { includeProposalTools: boolean }
+    dependencies: ConversationToolDependencies
   ) => AgentToolDefinition[];
 }
 
@@ -65,52 +61,28 @@ export async function runConversationTurn(
   dependencies: ConversationRunnerDependencies = {}
 ): Promise<ConversationRunResult> {
   const writer = options.writer;
-  const latestUserMessage = getLatestUserMessage(input.messages);
-  const route = routeTurnIntent({
-    latestUserMessage,
-    selectedClipIds: input.selectedClipIds,
-    playheadTime: input.playheadTime,
-  });
-
-  if (route.intent === "ambiguous") {
-    const clarification = buildAmbiguousClarificationMessage();
-    writer?.writeStatus({
-      status: "requesting_clarification",
-      message: route.reason,
-      progress: 100,
-      nodeName: "conversation_runner",
-    });
-    streamAssistantText(writer, clarification);
-    return {
-      assistantResponse: clarification,
-      thinkingMarkdown: undefined,
-      outcome: "clarification",
-    };
-  }
 
   writer?.writeStatus({
     status: "processing_chat",
-    message: route.reason,
+    message: "Reviewing the request and available chapter context...",
     progress: 0,
     nodeName: "conversation_runner",
   });
 
-  const accumulator: Required<
-    Pick<ConversationRunResult, "suggestionDrafts" | "timelineActions" | "transcriptDetailRequests">
-  > & { clarificationQuestion?: string } = {
+  const accumulator: {
+    suggestionDrafts: NonNullable<ConversationRunResult["suggestionDrafts"]>;
+    timelineActions: NonNullable<ConversationRunResult["timelineActions"]>;
+    transcriptDetailRequests: NonNullable<ConversationRunResult["transcriptDetailRequests"]>;
+    finalOutcome?: ConversationRunResult["outcome"];
+    finalAssistantResponse?: string;
+  } = {
     suggestionDrafts: [],
     timelineActions: [],
     transcriptDetailRequests: [],
   };
 
   const createToolsImpl = dependencies.createTools ?? createConversationTools;
-  const toolDefinitions = createToolsImpl(
-    input,
-    writer,
-    accumulator,
-    dependencies,
-    { includeProposalTools: route.intent === "proposal" }
-  );
+  const toolDefinitions = createToolsImpl(input, writer, accumulator, dependencies);
   const resolvedProvider = await resolveConversationProvider(input.selectedProvider);
   const boundTools = bindAgentToolsForProvider(resolvedProvider, toolDefinitions);
 
@@ -118,9 +90,9 @@ export async function runConversationTurn(
     ? await dependencies.createModel(input)
     : await createConversationModel(input.selectedProvider);
 
-  const workingMessages = [...buildConversationMessages(input, route.intent)];
+  const workingMessages = [...buildConversationMessages(input)];
   const toolCallCounts = new Map<string, number>();
-  let structuredRepairCount = 0;
+  let finalizeRepairCount = 0;
   let protocolFailureCount = 0;
 
   for (let step = 1; step <= MAX_LOOP_STEPS; step += 1) {
@@ -141,48 +113,20 @@ export async function runConversationTurn(
     });
 
     if (response.toolCalls.length === 0) {
-      const finalText = response.text.trim() || getDefaultTerminalMessage(route.intent);
-
-      if (route.intent === "proposal") {
-        const hasDrafts =
-          accumulator.suggestionDrafts.length > 0 || accumulator.timelineActions.length > 0;
-        if (!hasDrafts) {
-          if (structuredRepairCount < MAX_STRUCTURED_REPAIRS) {
-            structuredRepairCount += 1;
-            workingMessages.push(response.rawMessage);
-            workingMessages.push(
-              new SystemMessage(
-                "This is a proposal turn. Before finishing, you must either call draftRoughCutProposals with actionable edits or call requestClarification if the request is too unclear."
-              )
-            );
-            continue;
-          }
-
-          return createControlledFailure(
-            "I couldn't turn that into reliable rough-cut proposals this turn. Please be more specific about the edit you want."
-          );
-        }
+      if (finalizeRepairCount < MAX_STRUCTURED_REPAIRS) {
+        finalizeRepairCount += 1;
+        workingMessages.push(response.rawMessage);
+        workingMessages.push(
+          new SystemMessage(
+            "You must end every turn by calling finalizeConversationTurn exactly once. Call finalizeConversationTurn now with outcome set to discussion, proposal, or clarification, and set assistantResponse to the exact user-facing reply. Do not answer in plain text without the finalizer."
+          )
+        );
+        continue;
       }
 
-      writer?.writeStatus({
-        status: "processing_chat_complete",
-        progress: 100,
-        nodeName: "conversation_runner",
-      });
-      streamAssistantText(writer, finalText);
-      return {
-        assistantResponse: finalText,
-        thinkingMarkdown: undefined,
-        outcome: route.intent === "proposal" ? "proposal" : "discussion",
-        suggestionDrafts:
-          accumulator.suggestionDrafts.length > 0 ? accumulator.suggestionDrafts : undefined,
-        timelineActions:
-          accumulator.timelineActions.length > 0 ? accumulator.timelineActions : undefined,
-        transcriptDetailRequests:
-          accumulator.transcriptDetailRequests.length > 0
-            ? accumulator.transcriptDetailRequests
-            : undefined,
-      };
+      return createControlledFailure(
+        "I couldn't complete this turn because the response did not finalize correctly. Please retry."
+      );
     }
 
     workingMessages.push(response.rawMessage);
@@ -287,48 +231,17 @@ export async function runConversationTurn(
         }
       }
 
-      if (toolCall.name === "requestClarification" && accumulator.clarificationQuestion) {
-        writer?.writeStatus({
-          status: "requesting_clarification",
-          progress: 100,
-          nodeName: "conversation_runner",
-        });
-        streamAssistantText(writer, accumulator.clarificationQuestion);
-        return {
-          assistantResponse: accumulator.clarificationQuestion,
-          thinkingMarkdown: undefined,
-          outcome: "clarification",
-          transcriptDetailRequests:
-            accumulator.transcriptDetailRequests.length > 0
-              ? accumulator.transcriptDetailRequests
-              : undefined,
-        };
+      if (toolCall.name === "finalizeConversationTurn" && accumulator.finalOutcome) {
+        return finalizeConversationResult(writer, accumulator);
       }
 
-      workingMessages.push(
-        new ToolMessage({
-          content,
-          tool_call_id: toolCall.id,
-        })
-      );
+      workingMessages.push(new ToolMessage({ content, tool_call_id: toolCall.id }));
     }
   }
 
   return createControlledFailure(
     "I couldn't finish the tool loop for this turn. Please retry with a more specific request."
   );
-}
-
-function getLatestUserMessage(messages: BaseMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message._getType() === "human") {
-      const content = message.content;
-      return typeof content === "string" ? content : JSON.stringify(content ?? "");
-    }
-  }
-
-  return "";
 }
 
 function stableJson(value: unknown): string {
@@ -360,12 +273,51 @@ function createControlledFailure(message: string): ConversationRunResult {
   };
 }
 
-function getDefaultTerminalMessage(intent: "discussion" | "proposal"): string {
-  if (intent === "proposal") {
-    return "I drafted a rough-cut response for this section.";
+function finalizeConversationResult(
+  writer: ConversationWriter | undefined,
+  accumulator: {
+    suggestionDrafts: ConversationRunResult["suggestionDrafts"];
+    timelineActions: ConversationRunResult["timelineActions"];
+    transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
+    finalOutcome?: ConversationRunResult["outcome"];
+    finalAssistantResponse?: string;
+  }
+): ConversationRunResult {
+  const assistantResponse =
+    typeof accumulator.finalAssistantResponse === "string"
+      ? accumulator.finalAssistantResponse.trim()
+      : "";
+
+  if (!accumulator.finalOutcome || !assistantResponse) {
+    return createControlledFailure(
+      "I couldn't complete this turn because the response did not finalize correctly. Please retry."
+    );
   }
 
-  return "I reviewed the chapter and put together an answer.";
+  writer?.writeStatus({
+    status: "processing_chat_complete",
+    progress: 100,
+    nodeName: "conversation_runner",
+  });
+  streamAssistantText(writer, assistantResponse);
+
+  return {
+    assistantResponse,
+    thinkingMarkdown: undefined,
+    outcome: accumulator.finalOutcome,
+    suggestionDrafts:
+      accumulator.suggestionDrafts && accumulator.suggestionDrafts.length > 0
+        ? accumulator.suggestionDrafts
+        : undefined,
+    timelineActions:
+      accumulator.timelineActions && accumulator.timelineActions.length > 0
+        ? accumulator.timelineActions
+        : undefined,
+    transcriptDetailRequests:
+      accumulator.transcriptDetailRequests && accumulator.transcriptDetailRequests.length > 0
+        ? accumulator.transcriptDetailRequests
+        : undefined,
+  };
 }
 
 function assertNotAborted(signal?: AbortSignal): void {

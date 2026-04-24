@@ -4,16 +4,16 @@
 
 An Electron desktop application that transforms Twitch VODs into cohesive YouTube long-form videos (DougDoug/Ludwig/PointCrow style). Features an AI agent that helps convert raw livestreams into rough cuts with essential narrative beats identified and non-destructive exports to professional NLEs.
 
-**See @PLAN.md for detailed implementation plan including database schema, folder structure, IPC protocol, and development phases.**
+**See @PLAN.md for the forward-looking implementation roadmap including database schema, folder structure, IPC protocol, and development phases.**
 
-**See @docs/phase-1-3-plan.md for detailed task breakdown of phases 1-3 with specific implementation details.**
+**See @docs/archive/phase-1-plan.md, @docs/archive/phase-2-plan.md, @docs/archive/phase-3a-plan.md, and @docs/archive/phase-3b-plan.md for archived phase breakdowns.**
 
 ## Tech Stack
 
 - **Desktop**: Electron + TypeScript
 - **UI**: Svelte 5 + TypeScript (runes API, .svelte.ts state files)
 - **Package Manager**: pnpm
-- **Agent System**: LangChain + LangGraph (multi-agent subgraphs with orchestrator-worker pattern)
+- **Agent System**: Current runtime uses a tool-driven conversation runner; LangGraph multi-agent subgraphs remain roadmap work
 - **Database**: SQLite (local project storage)
 - **Video Processing**: FFmpeg (local execution via child_process)
 - **Transcription**: Whisper (local via faster-whisper, or cloud alternative)
@@ -55,6 +55,8 @@ pnpm typecheck
 Three-process design:
 - **Main Process** (Electron): App shell, database, FFmpeg/Whisper orchestration, IPC bridge
 - **Agent Worker Process** (child_process): LangChain + LangGraph, multi-agent orchestration
+  - Current implementation: conversation runner with tool calls and streaming IPC
+  - Roadmap: orchestrator-worker LangGraph graph
 - **Renderer Process** (Svelte 5): Chat UI, timeline visualization, project management
 
 ### Core Modules
@@ -67,12 +69,12 @@ Three-process design:
    - Spawns agent child process
 
 2. **Agent System** (`src/agent/`)
-   - LangChain + LangGraph multi-agent system
+   - Current runtime: tool-driven conversation runner
    - Pluggable LLM provider architecture (Gemini, OpenAI, Anthropic)
-   - Main orchestrator graph with chapter subgraphs
-   - Prompt templates for narrative analysis
+   - Dynamic system prompt plus tool-specific evidence prompts
+   - LangGraph orchestrator/subgraph design is planned, not wired into the current worker
    - Context management (transcripts, chat logs, video metadata)
-   - Streaming via custom writer + messages modes
+   - Streaming via custom writer + tool-state messages
 
 3. **Svelte 5 UI** (`src/renderer/`)
    - Chat interface (agent interaction)
@@ -101,9 +103,10 @@ Three-process design:
 2. **Transcription**: Whisper runs in background (local or cloud), auto-added to project
 3. **AI Analysis**:
    - Phase 0: Asset import and transcription (background job)
-   - Phase 1: Conversational setup - user chats with agent, feeds chapter transcripts/summaries, describes vision for finished video
-   - Phase 2: Parallel chapter analysis - main agent spawns one sub-agent per chapter (via LangGraph Send API), each gets transcript + video + instructions from main agent
-   - Phase 3: Story cohesion meta-pass - main agent reviews all chapter analyses, identifies through-lines/callbacks, recommends chapter ordering
+   - Current runtime: conversational chapter editing with context-aware prompts, transcript evidence, video evidence, and proposal drafting
+   - Roadmap Phase 1: conversational setup - user chats with agent, feeds chapter transcripts/summaries, describes vision for finished video
+   - Roadmap Phase 2: parallel chapter analysis - main agent spawns one sub-agent per chapter (via LangGraph Send API), each gets transcript + video + instructions from main agent
+   - Roadmap Phase 3: story cohesion meta-pass - main agent reviews all chapter analyses, identifies through-lines/callbacks, recommends chapter ordering
 4. **Exports**: Generate XML/EDL/AAF for DaVinci Resolve/Premiere/FCP
 5. **Refinement**: User adjusts cuts in professional NLE → Final export
 
@@ -120,13 +123,11 @@ Three-process design:
 
 ## AI Agent Capabilities
 
-The agent acts as a senior video editor assistant:
+The current runtime agent acts as a senior video editor assistant:
 
-- **Narrative Analysis**: Identifies story arcs, turning points, setup→payoff dependencies
-- **Beat Extraction**: Finds essential moments (setup, escalation, twist, payoff, transition)
-- **Fluff Detection**: Identifies repetitive sections, dead air, off-topic content
-- **Visual Verification**: Confirms visual events and tightens cut points when needed
-- **Story Cohesion**: Recommends chapter order, callbacks, through-lines
+- **Chapter Conversation**: Responds to editing requests using chapter transcript and timeline context
+- **Evidence Gathering**: Loads detailed transcript windows and optional video evidence before making claims
+- **Proposal Drafting**: Produces structured rough-cut suggestions and timeline actions
 - **Conversational Interface**: Responds to requests like "make this more engaging," "find the payoff to this setup," "what can I cut?"
 
 ## Export Formats
@@ -140,9 +141,9 @@ The agent acts as a senior video editor assistant:
 
 1. **Core Infrastructure** - Electron app, FFmpeg wrapper, Whisper integration, SQLite schemas
 2. **Chapter Management** - Manual chapter selection, transcription, project persistence
-3. **AI Agent Foundation** - LLM provider abstraction, prompt templates, basic chat interface
-4. **Beat Extraction** - Per-chapter analysis, essential vs optional identification
-5. **Story Cohesion** - Meta-pass across chapters, narrative glue
+3. **AI Agent Foundation** - LLM provider abstraction, prompt-driven chat interface, evidence tools
+4. **Beat Extraction** - Roadmap: per-chapter analysis, essential vs optional identification
+5. **Story Cohesion** - Roadmap: meta-pass across chapters, narrative glue
 6. **NLE Exports** - XML/EDL generation, timeline reconstruction
 7. **UI Refinement** - Timeline visualization, clip management, project browser
 8. **Optimization** - Local/cloud toggle, cost monitoring, performance tuning

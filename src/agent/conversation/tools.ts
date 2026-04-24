@@ -16,6 +16,7 @@ import type {
   ConversationTurnInput,
   ConversationWriter,
   ProposalDraft,
+  TurnOutcome,
 } from "./types.js";
 import {
   AgentToolDefinition,
@@ -28,6 +29,7 @@ const MAX_VIDEO_OBSERVATIONS = 12;
 const MAX_PROPOSAL_DRAFTS = 16;
 const MAX_TRANSCRIPT_WINDOW_REQUESTS = 3;
 const CLIP_ROLE_VALUES = ["setup", "escalation", "twist", "payoff", "transition"] as const;
+const TURN_OUTCOME_VALUES = ["discussion", "proposal", "clarification"] as const;
 
 export interface ConversationToolDependencies {
   analyzeChapterVideo?: (
@@ -51,7 +53,8 @@ export interface ConversationToolAccumulator {
   suggestionDrafts: AgentSuggestionDraft[];
   timelineActions: TimelineAction[];
   transcriptDetailRequests: TranscriptDetailRequest[];
-  clarificationQuestion?: string;
+  finalOutcome?: TurnOutcome;
+  finalAssistantResponse?: string;
 }
 
 interface AnalyzeChapterVideoInput {
@@ -66,8 +69,9 @@ interface DraftRoughCutProposalsInput {
   proposals: ProposalDraft[];
 }
 
-interface RequestClarificationInput {
-  question: string;
+interface FinalizeConversationTurnInput {
+  outcome: TurnOutcome;
+  assistantResponse: string;
 }
 
 const rangeSuggestionSchema = s.object(
@@ -208,16 +212,20 @@ const analyzeChapterVideoSchema = s.object(
   { description: "The evidence question to answer from the chapter video." }
 );
 
-const requestClarificationSchema = s.object(
+const finalizeConversationTurnSchema = s.object(
   {
-    question: s.required(
+    outcome: s.required(s.stringEnum(TURN_OUTCOME_VALUES)),
+    assistantResponse: s.required(
       s.string({
         minLength: 1,
-        maxLength: 400,
+        maxLength: 4000,
       })
     ),
   },
-  { description: "A clarification question to ask instead of guessing." }
+  {
+    description:
+      "Terminate the turn with the user-facing assistant response and declared outcome.",
+  }
 );
 
 const videoEvidenceSchema = z.object({
@@ -241,8 +249,7 @@ export function createConversationTools(
   input: ConversationTurnInput,
   writer: ConversationWriter | undefined,
   accumulator: ConversationToolAccumulator,
-  dependencies: ConversationToolDependencies = {},
-  options: { includeProposalTools: boolean }
+  dependencies: ConversationToolDependencies = {}
 ): AgentToolDefinition[] {
   const analyzeChapterVideoImpl =
     dependencies.analyzeChapterVideo ?? analyzeChapterVideoEvidence;
@@ -296,51 +303,71 @@ export function createConversationTools(
         });
       },
     }),
-  ];
+    defineAgentTool<DraftRoughCutProposalsInput>({
+      name: "draftRoughCutProposals",
+      description:
+        "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Do not describe actionable edits only in prose.",
+      schema: draftRoughCutProposalsSchema,
+      execute: async ({ proposals }) => {
+        const accepted = normalizeProposalDrafts(proposals);
 
-  if (options.includeProposalTools) {
-    tools.push(
-      defineAgentTool<DraftRoughCutProposalsInput>({
-        name: "draftRoughCutProposals",
-        description:
-          "Create actionable rough-cut proposals. Use range_suggestion for keep/cut windows, create_clip for new clips, and update_clip for existing clip edits. Do not describe actionable edits only in prose.",
-        schema: draftRoughCutProposalsSchema,
-        execute: async ({ proposals }) => {
-          const accepted = normalizeProposalDrafts(proposals);
-
-          for (const draft of accepted) {
-            if (draft.type === "range_suggestion") {
-              accumulator.suggestionDrafts.push({
-                in_point: draft.in_point,
-                out_point: draft.out_point,
-                description: draft.description,
-                reasoning: draft.reasoning,
-              });
-              continue;
-            }
-
-            accumulator.timelineActions.push(draft);
+        for (const draft of accepted) {
+          if (draft.type === "range_suggestion") {
+            accumulator.suggestionDrafts.push({
+              in_point: draft.in_point,
+              out_point: draft.out_point,
+              description: draft.description,
+              reasoning: draft.reasoning,
+            });
+            continue;
           }
 
-          const rejectedCount = proposals.length - accepted.length;
-          return JSON.stringify({
-            acceptedCount: accepted.length,
-            rejectedCount,
-          });
-        },
-      }),
-      defineAgentTool<RequestClarificationInput>({
-        name: "requestClarification",
-        description:
-          "Use this when the user wants actionable edits but the scope or timing is too unclear to draft safely. This ends the turn with a clarifying question instead of guessing.",
-        schema: requestClarificationSchema,
-        execute: async ({ question }) => {
-          accumulator.clarificationQuestion = question;
-          return JSON.stringify({ question });
-        },
-      })
-    );
-  }
+          accumulator.timelineActions.push(draft);
+        }
+
+        const rejectedCount = proposals.length - accepted.length;
+        return JSON.stringify({
+          acceptedCount: accepted.length,
+          rejectedCount,
+        });
+      },
+    }),
+    defineAgentTool<FinalizeConversationTurnInput>({
+      name: "finalizeConversationTurn",
+      description:
+        "Terminate the turn exactly once with the declared outcome and the assistantResponse that should be shown to the user.",
+      schema: finalizeConversationTurnSchema,
+      execute: async ({ outcome, assistantResponse }) => {
+        const normalizedAssistantResponse = assistantResponse.trim();
+        if (!normalizedAssistantResponse) {
+          throw new Error("assistantResponse must include visible user-facing text.");
+        }
+
+        const hasDrafts =
+          accumulator.suggestionDrafts.length > 0 || accumulator.timelineActions.length > 0;
+
+        if (outcome === "proposal" && !hasDrafts) {
+          throw new Error(
+            "A proposal turn must include at least one accepted draftRoughCutProposals result before finalizing."
+          );
+        }
+
+        if (outcome === "discussion" && hasDrafts) {
+          throw new Error(
+            "A discussion turn cannot finalize after drafting actionable proposals. Use proposal or clarification instead."
+          );
+        }
+
+        accumulator.finalOutcome = outcome;
+        accumulator.finalAssistantResponse = normalizedAssistantResponse;
+
+        return JSON.stringify({
+          outcome,
+          assistantResponse: accumulator.finalAssistantResponse,
+        });
+      },
+    }),
+  ];
 
   return tools;
 }

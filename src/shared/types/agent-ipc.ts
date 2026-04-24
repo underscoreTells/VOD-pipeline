@@ -82,14 +82,12 @@ export interface AgentChatData {
 
 export type AgentInputMessage =
   | ChatInputMessage
-  | AnalyzeChaptersInputMessage
   | StopInputMessage;
 
 export type AgentInputMessageWithId = AgentInputMessage;
 
 export type AgentInputMessageWithoutId =
   | ChatInputMessageWithoutId
-  | AnalyzeChaptersInputMessageWithoutId
   | StopInputMessageWithoutId;
 
 export interface ChatInputMessage {
@@ -104,33 +102,6 @@ export interface ChatInputMessageWithoutId {
   type: "chat";
   threadId?: string;
   messages: Array<{ role: string; content: string }>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface AnalyzeChaptersInputMessage {
-  type: "analyze-chapters";
-  requestId: string;
-  threadId?: string;
-  projectId: string;
-  chapters: Array<{
-    id: string;
-    transcript: string;
-    videoPath?: string;
-  }>;
-  instructions: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface AnalyzeChaptersInputMessageWithoutId {
-  type: "analyze-chapters";
-  threadId?: string;
-  projectId: string;
-  chapters: Array<{
-    id: string;
-    transcript: string;
-    videoPath?: string;
-  }>;
-  instructions: string;
   metadata?: Record<string, unknown>;
 }
 

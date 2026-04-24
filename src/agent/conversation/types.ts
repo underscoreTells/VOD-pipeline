@@ -8,7 +8,6 @@ import type {
   TranscriptDetailRequest,
 } from "../../shared/types/agent-ipc.js";
 
-export type TurnIntent = "discussion" | "proposal" | "ambiguous";
 export type TurnOutcome = ConversationTurnResult["outcome"];
 
 export type ProposalDraft =

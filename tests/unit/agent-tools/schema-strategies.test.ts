@@ -111,7 +111,7 @@ describe("provider-aware tool schema strategies", () => {
   });
 
   it.each(["openai", "anthropic", "gemini", "openrouter", "kimi"] as const)(
-    "compiles conversation proposal tools for %s",
+    "compiles conversation proposal and finalizer tools for %s",
     (provider) => {
       const accumulator = {
         suggestionDrafts: [],
@@ -122,16 +122,41 @@ describe("provider-aware tool schema strategies", () => {
         { ...createConversationInput(), selectedProvider: provider },
         undefined,
         accumulator,
-        {},
-        { includeProposalTools: true }
+        {}
       );
 
       const bound = bindAgentToolsForProvider(provider, toolDefinitions);
       const compiledDraftTool = bound.compiledTools.find(
         (tool) => tool.name === "draftRoughCutProposals"
       );
+      const compiledFinalizeTool = bound.compiledTools.find(
+        (tool) => tool.name === "finalizeConversationTurn"
+      );
 
       expect(compiledDraftTool).toBeDefined();
+      expect(compiledFinalizeTool).toBeDefined();
     }
   );
+
+  it("always exposes proposal tools regardless of the latest user wording", () => {
+    const accumulator = {
+      suggestionDrafts: [],
+      timelineActions: [],
+      transcriptDetailRequests: [],
+    };
+
+    const toolDefinitions = createConversationTools(
+      {
+        ...createConversationInput(),
+        messages: [new HumanMessage("What is the story arc of this chapter?")],
+      },
+      undefined,
+      accumulator,
+      {}
+    );
+
+    expect(toolDefinitions.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["draftRoughCutProposals", "finalizeConversationTurn"])
+    );
+  });
 });

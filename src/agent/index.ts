@@ -383,15 +383,6 @@ async function processMessage(
       return;
     }
 
-    case "analyze-chapters":
-      writer.write({
-        type: "error",
-        requestId,
-        error: "analyze-chapters not implemented",
-        code: "NOT_IMPLEMENTED",
-      });
-      return;
-
     default:
       writer.write({
         type: "error",

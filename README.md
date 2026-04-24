@@ -6,14 +6,14 @@ An Electron desktop app for turning long Twitch VODs into cohesive, long-form Yo
 
 - Imports full VODs and chapter media into a local-first editing project
 - Transcribes content with Whisper tooling
-- Uses a multi-agent workflow (LangChain + LangGraph) to identify key beats, cut candidates, and story flow
+- Uses a tool-driven conversational agent to reason over chapter context, inspect evidence, and draft rough-cut proposals
 - Helps prepare non-destructive exports for professional NLE tools (XML/EDL/AAF goals)
 
 ## Tech stack
 
 - **Desktop:** Electron + TypeScript
 - **UI:** Svelte 5 + TypeScript
-- **Agent orchestration:** LangChain + LangGraph
+- **Agent runtime:** LangChain-powered conversation runner with tool calls and streaming IPC
 - **Database:** SQLite
 - **Video tooling:** FFmpeg + audiowaveform
 - **Package manager:** pnpm
@@ -62,7 +62,7 @@ pnpm dist           # Build distributable Electron package
 
 - `src/electron/` – Electron main process, IPC, orchestration
 - `src/renderer/` – Svelte renderer UI
-- `src/agent/` – AI agent graph, providers, prompts
+- `src/agent/` – AI agent runtime, conversation loop, providers, and transport
 - `src/pipeline/` – Media pipeline integrations (FFmpeg/Whisper/export)
 - `src/shared/` – Shared types and contracts
 - `database/` – SQLite schema and migration assets
@@ -70,7 +70,7 @@ pnpm dist           # Build distributable Electron package
 
 ## Documentation
 
-- `PLAN.md` – architecture and implementation roadmap
+- `PLAN.md` – forward-looking architecture and implementation roadmap
 - `docs/architecture/current-state.md` – current implemented architecture and boundaries
 - `docs/implementation/resumable-base-baseline.md` – baseline snapshot for the resumable-base refactor
 - `docs/maintenance/resumable-base.md` – implementation notes for the resumable-base cleanup
@@ -79,3 +79,5 @@ pnpm dist           # Build distributable Electron package
 ## Status
 
 This is an active personal project focused on quality and iteration speed, with local-first workflows and pluggable AI providers.
+
+The current runtime agent is the chapter-aware conversation runner described in `docs/architecture/current-state.md`. The older LangGraph subgraph design remains a roadmap item in `PLAN.md`, not an implemented workflow.
