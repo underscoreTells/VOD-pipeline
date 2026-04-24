@@ -4,10 +4,8 @@ import { ipcMain } from 'electron';
 import { FFmpegError, getVideoMetadata, isValidVideo } from '../../../pipeline/ffmpeg.js';
 import type { AssetMetadata } from '../../../shared/types/database.js';
 import { createAsset, deleteAsset, getAsset, getAssetsByProject } from '../../database/index.js';
-import { getMainWindow } from '../../bootstrap/window.js';
 import { createLogger } from '../../logger.js';
 import { enrichProjectAsset } from '../../services/asset-availability-service.js';
-import { generateAssetProxyInBackground } from '../../services/proxy-service.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 
@@ -40,7 +38,7 @@ function determineAssetType(filePath: string): 'video' | 'audio' | 'image' {
 }
 
 export function registerAssetHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, { projectId, filePath, proxyOptions }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, { projectId, filePath }) => {
     logger.info('asset:add', projectId, filePath);
 
     try {
@@ -95,16 +93,6 @@ export function registerAssetHandlers(): void {
         duration,
         metadata,
       });
-
-      if (fileType === 'video') {
-        void generateAssetProxyInBackground({
-          assetId: asset.id,
-          sourcePath: filePath,
-          mainWindow: getMainWindow(),
-          encodingMode: proxyOptions?.encodingMode ?? 'auto',
-          quality: proxyOptions?.quality ?? 'balanced',
-        });
-      }
 
       return createSuccessResponse(asset);
     } catch (error) {

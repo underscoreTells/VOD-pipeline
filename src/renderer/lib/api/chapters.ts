@@ -4,8 +4,10 @@ import type {
   CreateChapterResult,
   DeleteChapterResult,
   GetChapterAssetsResult,
+  GetChapterReverseProxyOptions,
   GetChapterReverseProxyResult,
   GetChaptersResult,
+  LinkAssetToChapterOptions,
   UpdateChapterInput,
   UpdateChapterResult,
 } from '../../../shared/contracts/electron-api.js';
@@ -17,8 +19,10 @@ export type {
   CreateChapterResult,
   DeleteChapterResult,
   GetChapterAssetsResult,
+  GetChapterReverseProxyOptions,
   GetChapterReverseProxyResult,
   GetChaptersResult,
+  LinkAssetToChapterOptions,
   UpdateChapterInput,
   UpdateChapterResult,
 } from '../../../shared/contracts/electron-api.js';
@@ -44,9 +48,10 @@ export async function deleteChapter(chapterId: number): Promise<DeleteChapterRes
 
 export async function addAssetToChapter(
   chapterId: number,
-  assetId: number
+  assetId: number,
+  options?: LinkAssetToChapterOptions
 ): Promise<AddAssetToChapterResult> {
-  return await getElectronApi().chapters.addAsset(chapterId, assetId);
+  return await getElectronApi().chapters.addAsset(chapterId, assetId, options);
 }
 
 export async function getChapterAssets(chapterId: number): Promise<GetChapterAssetsResult> {
@@ -56,7 +61,7 @@ export async function getChapterAssets(chapterId: number): Promise<GetChapterAss
 export async function getChapterReverseProxy(
   chapterId: number,
   assetId: number,
-  options?: { ensureReady?: boolean }
+  options?: GetChapterReverseProxyOptions
 ): Promise<GetChapterReverseProxyResult> {
   return await getElectronApi().chapters.getReverseProxy(chapterId, assetId, options);
 }

@@ -172,9 +172,9 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body).toContain("Preview All");
-    expect(body).toContain("Reject All");
-    expect(body).toContain("Apply All");
+    expect(body).toContain("Preview all suggestions");
+    expect(body).toContain("Reject all suggestions");
+    expect(body).toContain("Apply all suggestions");
     expect(body).toContain("suggestions-resize-handle");
     expect(body).toContain("suggestions-header sticky top-0");
     expect(body).toContain("text-app-2xs");
@@ -207,9 +207,9 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body.match(/>Reroll</g)).toHaveLength(2);
-    expect(body.match(/>Copy</g)).toHaveLength(2);
-    expect(body.match(/>Branch</g)).toHaveLength(2);
-    expect(body.match(/>Edit</g)).toHaveLength(1);
+    expect(body.match(/aria-label="Reroll response"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Copy message"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Branch conversation"/g)).toHaveLength(2);
+    expect(body.match(/aria-label="Edit message"/g)).toHaveLength(1);
   });
 });

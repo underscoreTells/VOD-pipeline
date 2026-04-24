@@ -67,14 +67,6 @@ export const IPC_CHANNELS = {
   EXPORT_GENERATE: 'export:generate',
   EXPORT_GET_FORMATS: 'export:get-formats',
 
-  // Proxy channels (Phase 4: Visual AI)
-  PROXY_GENERATE: 'proxy:generate',
-  PROXY_GET: 'proxy:get',
-  PROXY_GET_BY_ASSET: 'proxy:get-by-asset',
-  PROXY_PROGRESS: 'proxy:progress',
-  PROXY_COMPLETE: 'proxy:complete',
-  PROXY_ERROR: 'proxy:error',
-
   // Suggestion channels (Phase 4: Visual AI)
   SUGGESTION_CREATE: 'suggestion:create',
   SUGGESTION_GET_BY_CHAPTER: 'suggestion:get-by-chapter',

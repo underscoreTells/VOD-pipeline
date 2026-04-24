@@ -61,6 +61,7 @@ export interface AgentChatParams {
   conversationId: number;
   message: string;
   provider?: string;
+  proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
   threadNamingModel?: NamingModelId;
@@ -73,6 +74,7 @@ export interface AgentRerollMessageParams {
   conversationId: number;
   messageId: number;
   provider?: string;
+  proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
   agentConfig?: ProviderConfigPayload;
@@ -85,6 +87,7 @@ export interface AgentEditMessageParams {
   messageId: number;
   message: string;
   provider?: string;
+  proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
   threadNamingModel?: NamingModelId;
@@ -310,6 +313,11 @@ export interface DeleteChapterResult {
   error?: string;
 }
 
+export interface LinkAssetToChapterOptions {
+  prewarmProxy?: boolean;
+  proxyOptions?: ProxyOptions;
+}
+
 export interface AddAssetToChapterResult {
   success: boolean;
   error?: string;
@@ -331,6 +339,11 @@ export interface GetChapterReverseProxyResult {
     error?: string;
   };
   error?: string;
+}
+
+export interface GetChapterReverseProxyOptions {
+  ensureReady?: boolean;
+  proxyOptions?: ProxyOptions;
 }
 
 export interface TimelineStateResult {
@@ -468,22 +481,21 @@ export interface ElectronAPI {
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
     add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => Promise<AddAssetResult>;
   };
-  proxy: {
-    onProgress: (callback: (data: { assetId: number; progress: number }) => void) => () => void;
-    onComplete: (callback: (data: { assetId: number; proxyPath: string }) => void) => () => void;
-    onError: (callback: (data: { assetId: number; error: string }) => void) => () => void;
-  };
   chapters: {
     create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
     getByProject: (projectId: number) => Promise<GetChaptersResult>;
     update: (id: number, updates: UpdateChapterInput) => Promise<UpdateChapterResult>;
     delete: (id: number) => Promise<DeleteChapterResult>;
-    addAsset: (chapterId: number, assetId: number) => Promise<AddAssetToChapterResult>;
+    addAsset: (
+      chapterId: number,
+      assetId: number,
+      options?: LinkAssetToChapterOptions
+    ) => Promise<AddAssetToChapterResult>;
     getAssets: (chapterId: number) => Promise<GetChapterAssetsResult>;
     getReverseProxy: (
       chapterId: number,
       assetId: number,
-      options?: { ensureReady?: boolean }
+      options?: GetChapterReverseProxyOptions
     ) => Promise<GetChapterReverseProxyResult>;
   };
   clips: {

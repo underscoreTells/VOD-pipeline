@@ -1,4 +1,5 @@
 import type {
+  ProxyOptions,
   ProviderConfigPayload,
   ProviderConfigProvider,
 } from '../../../shared/contracts/electron-api.js';
@@ -58,6 +59,15 @@ export const defaultSettings: Settings = {
   autoThreadNamingModel: DEFAULT_NAMING_MODEL,
   autoTranscribeOnImport: true,
 };
+
+export function buildProxyOptions(
+  settings: Pick<Settings, 'proxyEncodingMode' | 'proxyQuality'>
+): Required<ProxyOptions> {
+  return {
+    encodingMode: settings.proxyEncodingMode,
+    quality: settings.proxyQuality,
+  };
+}
 
 export function getProviderLabel(provider: LLMProviderType): string {
   const labels: Record<LLMProviderType, string> = {

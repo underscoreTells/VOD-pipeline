@@ -18,6 +18,7 @@ import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   ensureChapterReverseProxyQuickReady,
   getChapterReverseProxyStatus,
+  invalidateChapterProxy,
   invalidateChapterReverseProxy,
   scheduleChapterMediaPrewarm,
   scheduleChapterReverseProxyFullWarm,
@@ -56,13 +57,6 @@ export function registerChapterHandlers(): void {
         end_time: endTime,
       });
 
-      const linkedAssetIds = await getAssetsForChapter(chapter.id);
-      for (const assetId of linkedAssetIds) {
-        void scheduleChapterMediaPrewarm(chapter.id, assetId).catch((error) => {
-          console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${chapter.id} asset=${assetId}:`, error);
-        });
-      }
-
       return createSuccessResponse(chapter);
     } catch (error) {
       if (error instanceof Error && error.message.includes('time')) {
@@ -87,26 +81,7 @@ export function registerChapterHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.CHAPTER_GET_BY_PROJECT, async (_, { projectId }) => {
     logger.info('chapter:get-by-project', projectId);
     try {
-      const chapters = await getChaptersByProject(projectId);
-      for (const chapter of chapters) {
-        void (async () => {
-          try {
-            const assetIds = await getAssetsForChapter(chapter.id);
-            for (const assetId of assetIds) {
-              void scheduleChapterMediaPrewarm(chapter.id, assetId).catch((error) => {
-                console.warn(
-                  `[ChapterPrewarm] Failed to prewarm chapter=${chapter.id} asset=${assetId}:`,
-                  error
-                );
-              });
-            }
-          } catch (error) {
-            console.warn(`[ChapterPrewarm] Failed to resolve assets for chapter=${chapter.id}:`, error);
-          }
-        })();
-      }
-
-      return createSuccessResponse(chapters);
+      return createSuccessResponse(await getChaptersByProject(projectId));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
@@ -142,13 +117,15 @@ export function registerChapterHandlers(): void {
 
       if (normalizedUpdates.start_time !== undefined || normalizedUpdates.end_time !== undefined) {
         await deleteTranscriptsByChapter(id);
+        const updatedChapter = await getChapter(id);
 
         const chapterAssetIds = await getAssetsForChapter(id);
         for (const assetId of chapterAssetIds) {
-          invalidateChapterReverseProxy(id, assetId);
-          void scheduleChapterMediaPrewarm(id, assetId).catch((error) => {
-            console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${id} asset=${assetId}:`, error);
+          await invalidateChapterProxy(id, assetId, {
+            startTime: updatedChapter?.start_time,
+            endTime: updatedChapter?.end_time,
           });
+          invalidateChapterReverseProxy(id, assetId);
         }
       }
 
@@ -166,13 +143,14 @@ export function registerChapterHandlers(): void {
     logger.info('chapter:delete', id);
     try {
       const linkedAssetIds = await getAssetsForChapter(id);
+      for (const assetId of linkedAssetIds) {
+        await invalidateChapterProxy(id, assetId);
+        invalidateChapterReverseProxy(id, assetId);
+      }
+
       const success = await deleteChapter(id);
       if (!success) {
         return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
-      }
-
-      for (const assetId of linkedAssetIds) {
-        invalidateChapterReverseProxy(id, assetId);
       }
 
       return createSuccessResponse(null);
@@ -181,16 +159,35 @@ export function registerChapterHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.CHAPTER_ADD_ASSET, async (_, { chapterId, assetId }) => {
-    logger.info('chapter:add-asset', chapterId, assetId);
+  ipcMain.handle(IPC_CHANNELS.CHAPTER_ADD_ASSET, async (_, payload) => {
+    const chapterId = toNumberOrNull(payload?.chapterId);
+    const assetId = toNumberOrNull(payload?.assetId);
+    const prewarmProxy = Boolean(payload?.prewarmProxy);
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions
+        : undefined;
+
+    logger.info('chapter:add-asset', chapterId, assetId, prewarmProxy);
     try {
+      if (chapterId === null || !Number.isInteger(chapterId) || chapterId <= 0) {
+        return createErrorResponse('Invalid chapterId', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      if (assetId === null || !Number.isInteger(assetId) || assetId <= 0) {
+        return createErrorResponse('Invalid assetId', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+
       await addAssetToChapter(chapterId, assetId);
       await deleteTranscriptsByChapter(chapterId);
       await deleteDetailedTranscriptsByChapter(chapterId);
+      await invalidateChapterProxy(chapterId, assetId);
+      invalidateChapterReverseProxy(chapterId, assetId);
 
-      void scheduleChapterMediaPrewarm(chapterId, assetId).catch((error) => {
-        console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${chapterId} asset=${assetId}:`, error);
-      });
+      if (prewarmProxy) {
+        void scheduleChapterMediaPrewarm(chapterId, assetId, proxyOptions).catch((error) => {
+          console.warn(`[ChapterPrewarm] Failed to prewarm chapter=${chapterId} asset=${assetId}:`, error);
+        });
+      }
 
       return createSuccessResponse(null);
     } catch (error) {
@@ -207,6 +204,7 @@ export function registerChapterHandlers(): void {
       }
 
       invalidateChapterReverseProxy(chapterId, assetId);
+      await invalidateChapterProxy(chapterId, assetId);
       await deleteTranscriptsByChapter(chapterId);
       await deleteDetailedTranscriptsByChapter(chapterId);
       return createSuccessResponse(null);
@@ -228,6 +226,10 @@ export function registerChapterHandlers(): void {
     const chapterId = toNumberOrNull(payload?.chapterId);
     const assetId = toNumberOrNull(payload?.assetId);
     const ensureReady = Boolean(payload?.ensureReady);
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions
+        : undefined;
     if (ensureReady) {
       logger.info('chapter:reverse-proxy-get', chapterId, assetId, ensureReady);
     }
@@ -265,9 +267,9 @@ export function registerChapterHandlers(): void {
 
       if (ensureReady) {
         if (statusBefore.status === 'missing' || statusBefore.status === 'error') {
-          void ensureChapterReverseProxyQuickReady(chapter, asset)
+          void ensureChapterReverseProxyQuickReady(chapter, asset, proxyOptions)
             .finally(() => {
-              scheduleChapterReverseProxyFullWarm(chapter, asset);
+              scheduleChapterReverseProxyFullWarm(chapter, asset, proxyOptions);
             })
             .catch((error: unknown) => {
               console.warn(
@@ -276,7 +278,7 @@ export function registerChapterHandlers(): void {
               );
             });
         } else if (statusBefore.status === 'ready' && statusBefore.quality === 'quick') {
-          scheduleChapterReverseProxyFullWarm(chapter, asset);
+          scheduleChapterReverseProxyFullWarm(chapter, asset, proxyOptions);
         }
       }
 

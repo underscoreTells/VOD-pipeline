@@ -35,6 +35,7 @@
     getAssetsForChapter
   } from '../state/chapters.svelte';
   import { settingsState } from '../state/settings.svelte';
+  import { buildProxyOptions } from '../state/settings-helpers.js';
   import { timelineState, setError, clearSelection as clearTimelineSelection } from '../state/timeline.svelte';
   import { initKeyboardShortcuts } from '../state/keyboard.svelte';
   import {
@@ -236,7 +237,7 @@
         selectChapter,
         autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
         ...transcriptionDeps,
-      });
+      }, getChapterImportProxyOptions());
 
       setIsImporting(false);
     } catch (error) {
@@ -262,7 +263,8 @@
           selectChapter,
           autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
           ...transcriptionDeps,
-        }
+        },
+        getChapterImportProxyOptions()
       );
 
       showChapterDefinition = false;
@@ -284,6 +286,13 @@
   }
 
   const selectedChapter = $derived.by(() => getSelectedChapter());
+
+  function getChapterImportProxyOptions() {
+    return {
+      prewarmProxy: settingsState.settings.proxyGenerationOnImport,
+      proxyOptions: buildProxyOptions(settingsState.settings),
+    };
+  }
 
   $effect(() => {
     const chapterId = selectedChapter?.id ?? null;
@@ -411,7 +420,11 @@
             // Add as individual file chapter
             const asset = await addAssetToProject(project.id, filePath);
             if (asset) {
-              const created = await autoCreateChaptersFromFiles(project.id, [asset]);
+              const created = await autoCreateChaptersFromFiles(
+                project.id,
+                [asset],
+                getChapterImportProxyOptions()
+              );
               if (created.length > 0) {
                 selectChapter(created[0].id);
               }

@@ -32,7 +32,7 @@ import type {
   AgentChatData,
   TimelineAction,
 } from '../../../shared/types/agent-ipc.js';
-import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
+import type { ProviderConfigPayload, ProxyOptions } from '../../../shared/contracts/electron-api.js';
 import { normalizeNamingModel } from '../../../shared/llm/naming-models.js';
 import { getAgentBridge } from '../../agent-bridge.js';
 import { getBackendRuntimeStaleness } from '../../dev-runtime.js';
@@ -56,7 +56,6 @@ import {
   normalizeTimelineActions,
   parseAgentGraphResult,
   persistAgentSuggestions,
-  scheduleChapterMediaPrewarm,
   toNumberOrNull,
 } from '../handler-support.js';
 
@@ -235,6 +234,7 @@ async function runConversationTurn(
     effectiveProvider?: string;
     playheadTime?: number;
     projectId: number;
+    proxyOptions?: ProxyOptions;
     selectedClipIds: number[];
     threadId: string;
     userMessageId: number;
@@ -248,22 +248,13 @@ async function runConversationTurn(
     options.chapter.id
   );
   const initialContext = await buildAgentChatContext(options.projectId, options.chapter.id, {
-    ensureChapterProxyReady: false,
+    ensureChapterProxyReady: true,
+    proxyOptions: options.proxyOptions,
   });
   const contextWithSuggestions = {
     ...initialContext,
     suggestionSummary: summarizeSuggestions(existingSuggestions),
   };
-
-  if (chapterAssetIds.length > 0 && !initialContext.proxyPath) {
-    const primaryAssetId = chapterAssetIds[0];
-    void scheduleChapterMediaPrewarm(options.chapter.id, primaryAssetId).catch((error) => {
-      console.warn(
-        `[ChapterPrewarm] Failed scheduling from chat chapter=${options.chapter.id} asset=${primaryAssetId}:`,
-        error
-      );
-    });
-  }
 
   const guardedInitialPayload = applyNearLimitTokenGuard(
     options.conversationHistory,
@@ -520,6 +511,10 @@ export function registerAgentHandlers(): void {
       ? payload.selectedClipIds.filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value))
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
@@ -587,6 +582,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: persistedUserMessage.id,
@@ -615,6 +611,10 @@ export function registerAgentHandlers(): void {
       )
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
       : undefined;
@@ -689,6 +689,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: retainedUserMessage.id,
@@ -718,6 +719,10 @@ export function registerAgentHandlers(): void {
       )
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
@@ -818,6 +823,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: targetMessage.id,

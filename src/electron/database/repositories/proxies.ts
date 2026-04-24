@@ -236,3 +236,78 @@ export async function updateChapterProxyMetadata(
 
   return result.changes > 0;
 }
+
+export async function updateChapterProxyDefinition(
+  id: number,
+  updates: {
+    file_path?: string;
+    start_time?: number;
+    end_time?: number;
+    width?: number | null;
+    height?: number | null;
+    framerate?: number | null;
+    file_size?: number | null;
+    duration?: number | null;
+    status?: ChapterProxy['status'];
+    error_message?: string | null;
+  }
+): Promise<boolean> {
+  const database = await getDatabase();
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.file_path !== undefined) {
+    fields.push('file_path = ?');
+    values.push(updates.file_path);
+  }
+  if (updates.start_time !== undefined) {
+    fields.push('start_time = ?');
+    values.push(updates.start_time);
+  }
+  if (updates.end_time !== undefined) {
+    fields.push('end_time = ?');
+    values.push(updates.end_time);
+  }
+  if (updates.width !== undefined) {
+    fields.push('width = ?');
+    values.push(updates.width);
+  }
+  if (updates.height !== undefined) {
+    fields.push('height = ?');
+    values.push(updates.height);
+  }
+  if (updates.framerate !== undefined) {
+    fields.push('framerate = ?');
+    values.push(updates.framerate);
+  }
+  if (updates.file_size !== undefined) {
+    fields.push('file_size = ?');
+    values.push(updates.file_size);
+  }
+  if (updates.duration !== undefined) {
+    fields.push('duration = ?');
+    values.push(updates.duration);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.error_message !== undefined) {
+    fields.push('error_message = ?');
+    values.push(updates.error_message);
+  }
+
+  if (fields.length === 0) {
+    return true;
+  }
+
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(id);
+
+  const result = database.prepare(
+    `UPDATE chapter_proxies SET ${fields.join(', ')} WHERE id = ?`
+  ).run(...values);
+
+  return result.changes > 0;
+}

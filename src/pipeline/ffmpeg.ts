@@ -2,8 +2,8 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { getFFmpegPath, getFFprobePath, type FFmpegPathResult } from '../electron/ffmpegDetector.js';
-import { detectGPUEncoders, getGPUEncoder, getGPUFFmpegPath, getProxyEncoderArgs, hasGPUEncoding } from '../electron/gpuDetector.js';
+import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
+import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, type GPUEncoderBackend } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -24,6 +24,19 @@ export class FFmpegError extends Error {
     super(message);
     this.name = 'FFmpegError';
   }
+}
+
+type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
+type ProxyGenerationQuality = 'high' | 'balanced' | 'fast';
+
+interface ProxyEncodingPlan {
+  requestedMode: ProxyGenerationMode;
+  useGPU: boolean;
+  backend: GPUEncoderBackend | 'cpu';
+  ffmpegBinaryPath: string;
+  videoCodec: string;
+  videoArgs: string[];
+  fallbackReason?: string;
 }
 
 /**
@@ -509,6 +522,75 @@ export async function isValidVideo(filePath: string): Promise<boolean> {
   }
 }
 
+function buildCpuProxyEncodingPlan(
+  ffmpegBinaryPath: string,
+  requestedMode: ProxyGenerationMode,
+  quality: ProxyGenerationQuality,
+  fallbackReason?: string
+): ProxyEncodingPlan {
+  const cpuEncoder = getProxyEncoderArgs(false, quality);
+  return {
+    requestedMode,
+    useGPU: false,
+    backend: cpuEncoder.backend,
+    ffmpegBinaryPath,
+    videoCodec: cpuEncoder.videoCodec,
+    videoArgs: cpuEncoder.videoArgs,
+    fallbackReason,
+  };
+}
+
+function logProxyEncodingPlan(prefix: string, plan: ProxyEncodingPlan): void {
+  const requestedMode = `requestedMode=${plan.requestedMode}`;
+  const backend = `backend=${plan.backend}`;
+  const binary = `ffmpeg=${plan.ffmpegBinaryPath}`;
+  const codec = `codec=${plan.videoCodec}`;
+
+  if (plan.fallbackReason) {
+    console.warn(`[${prefix}] ${requestedMode} ${backend} ${codec} ${binary} fallback=${plan.fallbackReason}`);
+    return;
+  }
+
+  console.log(`[${prefix}] ${requestedMode} ${backend} ${codec} ${binary}`);
+}
+
+async function resolveProxyEncodingPlan(
+  ffmpegBinaryPath: string,
+  requestedMode: ProxyGenerationMode,
+  quality: ProxyGenerationQuality,
+  logPrefix: string
+): Promise<ProxyEncodingPlan> {
+  if (requestedMode === 'cpu') {
+    const plan = buildCpuProxyEncodingPlan(ffmpegBinaryPath, requestedMode, quality);
+    logProxyEncodingPlan(logPrefix, plan);
+    return plan;
+  }
+
+  const gpuEncoder = await detectGPUEncoders(ffmpegBinaryPath);
+  if (!gpuEncoder) {
+    const fallbackReason =
+      requestedMode === 'gpu'
+        ? 'gpu requested but no supported hardware encoder was available'
+        : 'auto mode found no supported hardware encoder';
+    const plan = buildCpuProxyEncodingPlan(ffmpegBinaryPath, requestedMode, quality, fallbackReason);
+    logProxyEncodingPlan(logPrefix, plan);
+    return plan;
+  }
+
+  const gpuFFmpegPath = getGPUFFmpegPath() ?? ffmpegBinaryPath;
+  const gpuPlan = getProxyEncoderArgs(true, quality);
+  const plan: ProxyEncodingPlan = {
+    requestedMode,
+    useGPU: true,
+    backend: gpuPlan.backend,
+    ffmpegBinaryPath: gpuFFmpegPath,
+    videoCodec: gpuPlan.videoCodec,
+    videoArgs: gpuPlan.videoArgs,
+  };
+  logProxyEncodingPlan(logPrefix, plan);
+  return plan;
+}
+
 /**
  * Generate AI analysis proxy (640px, 5fps, H.264, AAC)
  * Optimized for AI video analysis - small file size, adequate quality
@@ -518,39 +600,13 @@ export async function generateAIProxy(
   outputPath: string,
   onProgress?: (percent: number) => void,
   timeoutMs?: number,
-  encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
-  quality: 'high' | 'balanced' | 'fast' = 'balanced',
+  encodingMode: ProxyGenerationMode = 'auto',
+  quality: ProxyGenerationQuality = 'balanced',
   trimOptions?: { startTime: number; endTime: number }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
     throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
-  }
-
-  // Detect GPU encoders if auto mode
-  let useGPU = false;
-  let encodingBinaryPath = ffmpegPath.path;
-  if (encodingMode === 'gpu') {
-    // Force GPU, will fail if not available
-    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
-    useGPU = gpuEncoder !== null;
-  } else if (encodingMode === 'auto') {
-    // Auto-detect GPU
-    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
-    useGPU = gpuEncoder !== null;
-    if (useGPU) {
-      console.log(`[Proxy] Using GPU acceleration: ${gpuEncoder?.name}`);
-    } else {
-      console.log('[Proxy] GPU not available, using CPU encoding');
-    }
-  }
-
-  if (useGPU) {
-    const gpuFFmpegPath = getGPUFFmpegPath();
-    if (gpuFFmpegPath) {
-      encodingBinaryPath = gpuFFmpegPath;
-      console.log(`[Proxy] Using FFmpeg binary: ${encodingBinaryPath}`);
-    }
   }
 
   // Get source metadata first
@@ -575,75 +631,62 @@ export async function generateAIProxy(
     ? Math.max(0.01, trimRange.endTime - trimRange.startTime)
     : metadata.duration;
 
-  // Try GPU encoding first if enabled, with fallback to CPU
-  if (useGPU) {
-    try {
-      return await executeProxyGeneration(
-        ffmpegPath,
-        encodingBinaryPath,
-        inputPath,
-        outputPath,
-        { duration: targetDuration },
-        onProgress,
-        timeoutMs,
-        true, // useGPU
-        quality,
-        trimRange
-      );
-    } catch (error) {
-      console.warn('[Proxy] GPU encoding failed, falling back to CPU:', error instanceof Error ? error.message : 'Unknown error');
-      console.log('[Proxy] Retrying with CPU encoding...');
-      // Fall through to CPU encoding
+  const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'Proxy');
+  try {
+    return await executeProxyGeneration(
+      initialPlan,
+      inputPath,
+      outputPath,
+      { duration: targetDuration },
+      onProgress,
+      timeoutMs,
+      trimRange
+    );
+  } catch (error) {
+    if (!initialPlan.useGPU) {
+      throw error;
     }
-  }
 
-  // CPU encoding (either by choice or as fallback)
-  return executeProxyGeneration(
-    ffmpegPath,
-    ffmpegPath.path,
-    inputPath,
-    outputPath,
-    { duration: targetDuration },
-    onProgress,
-    timeoutMs,
-    false, // useGPU
-    quality,
-    trimRange
-  );
+    const reason = error instanceof Error ? error.message : 'unknown gpu encoding error';
+    console.warn(`[Proxy] GPU proxy generation failed; retrying on CPU. reason=${reason}`);
+    const cpuPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
+    logProxyEncodingPlan('Proxy', cpuPlan);
+    return await executeProxyGeneration(
+      cpuPlan,
+      inputPath,
+      outputPath,
+      { duration: targetDuration },
+      onProgress,
+      timeoutMs,
+      trimRange
+    );
+  }
 }
 
 /**
  * Execute proxy generation with specified encoder
  */
 async function executeProxyGeneration(
-  ffmpegPath: FFmpegPathResult,
-  ffmpegBinaryPath: string,
+  encodingPlan: ProxyEncodingPlan,
   inputPath: string,
   outputPath: string,
   metadata: { duration: number },
   onProgress?: (percent: number) => void,
   timeoutMs?: number,
-  useGPU: boolean = false,
-  quality: 'high' | 'balanced' | 'fast' = 'balanced',
   trimRange?: { startTime: number; endTime: number }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
-  // Get encoder-specific arguments
-  const { videoCodec, videoArgs } = getProxyEncoderArgs(useGPU, quality);
-  const gpuEncoder = useGPU ? getGPUEncoder() : null;
-  const useCudaDecode = gpuEncoder?.platform === 'nvidia';
+  const useCudaDecode = encodingPlan.backend === 'nvenc';
 
-  if (useGPU && useCudaDecode) {
+  if (encodingPlan.useGPU && useCudaDecode) {
     console.log('[Proxy] Enabling CUDA decode + scale for proxy generation');
   }
-
-  console.log(`[Proxy] Video codec: ${videoCodec}`);
 
   const args: string[] = [
     ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
     '-i', inputPath,
     ...(trimRange ? ['-ss', trimRange.startTime.toString(), '-to', trimRange.endTime.toString()] : []),
     ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
-    ...videoArgs,
+    ...encodingPlan.videoArgs,
     '-c:a', 'aac',
     '-b:a', '64k', // Low bitrate audio is fine for analysis
     '-movflags', '+faststart', // Web-optimized
@@ -653,7 +696,7 @@ async function executeProxyGeneration(
   console.log(`[Proxy] FFmpeg args: ${args.join(' ')}`);
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegBinaryPath, args);
+    const proc = spawn(encodingPlan.ffmpegBinaryPath, args);
     let errorOutput = '';
     let lastProgress = 0;
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -956,8 +999,8 @@ export async function generateChapterReverseProxy(
     endTime: number;
     fps?: number;
     timeoutMs?: number;
-    encodingMode?: 'cpu' | 'gpu' | 'auto';
-    quality?: 'high' | 'balanced' | 'fast';
+    encodingMode?: ProxyGenerationMode;
+    quality?: ProxyGenerationQuality;
     chunkDurationSec?: number;
     maxParallelChunks?: number;
   }
@@ -998,63 +1041,44 @@ export async function generateChapterReverseProxy(
     throw new FFmpegError('Reverse proxy chunkDurationSec must be a finite number > 0', 'INVALID_OPTIONS');
   }
 
-  let useGPU = false;
-  let encodingBinaryPath = ffmpegPath.path;
-  if (encodingMode === 'gpu' || encodingMode === 'auto') {
-    const gpuEncoder = await detectGPUEncoders(ffmpegPath.path);
-    useGPU = gpuEncoder !== null;
-    if (useGPU) {
-      const gpuFFmpegPath = getGPUFFmpegPath();
-      if (gpuFFmpegPath) {
-        encodingBinaryPath = gpuFFmpegPath;
-      }
-      console.log(`[ReverseProxy] Using GPU acceleration: ${gpuEncoder?.name}`);
-    } else if (encodingMode === 'gpu') {
-      throw new FFmpegError('GPU encoding requested but no GPU encoder is available', 'FFMPEG_ERROR');
-    } else {
-      console.log('[ReverseProxy] GPU not available, using CPU encoding');
-    }
-  }
-
-  const generateWithEncoder = async (useGpuEncoder: boolean, ffmpegBinaryPath: string): Promise<void> => {
-    const { videoCodec, videoArgs } = getProxyEncoderArgs(useGpuEncoder, quality);
+  const generateWithPlan = async (encodingPlan: ProxyEncodingPlan): Promise<void> => {
     const cpuCount = Math.max(1, os.cpus().length);
-    const defaultParallelism = useGpuEncoder
+    const defaultParallelism = encodingPlan.useGPU
       ? Math.max(1, Math.min(4, Math.floor(cpuCount / 4) || 1))
       : Math.max(1, Math.min(8, Math.floor(cpuCount / 2) || 1));
     const maxParallelChunks = Math.max(1, Math.floor(options.maxParallelChunks ?? defaultParallelism));
     console.log(
-      `[ReverseProxy] Generating reverse proxy with ${useGpuEncoder ? 'GPU' : 'CPU'} encoder ${videoCodec}, chunk=${chunkDurationSec}s, workers=${maxParallelChunks}`
+      `[ReverseProxy] Generating reverse proxy with backend=${encodingPlan.backend}, chunk=${chunkDurationSec}s, workers=${maxParallelChunks}`
     );
 
     await runChunkedChapterReverseGeneration({
-      ffmpegBinaryPath,
+      ffmpegBinaryPath: encodingPlan.ffmpegBinaryPath,
       inputPath,
       outputPath,
       startTime,
       endTime,
       fps,
       hasAudio,
-      videoArgs,
+      videoArgs: encodingPlan.videoArgs,
       chunkDurationSec,
       maxParallelChunks,
       timeoutMs,
     });
   };
 
-  if (useGPU) {
-    try {
-      await generateWithEncoder(true, encodingBinaryPath);
-    } catch (error) {
-      if (encodingMode === 'gpu') {
-        throw error;
-      }
-
-      console.warn('[ReverseProxy] GPU reverse generation failed, retrying on CPU:', error);
-      await generateWithEncoder(false, ffmpegPath.path);
+  const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'ReverseProxy');
+  try {
+    await generateWithPlan(initialPlan);
+  } catch (error) {
+    if (!initialPlan.useGPU) {
+      throw error;
     }
-  } else {
-    await generateWithEncoder(false, ffmpegPath.path);
+
+    const reason = error instanceof Error ? error.message : 'unknown gpu reverse generation error';
+    console.warn(`[ReverseProxy] GPU reverse generation failed; retrying on CPU. reason=${reason}`);
+    const cpuPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
+    logProxyEncodingPlan('ReverseProxy', cpuPlan);
+    await generateWithPlan(cpuPlan);
   }
 
   const outputMetadata = await getVideoMetadata(outputPath, 60000);
