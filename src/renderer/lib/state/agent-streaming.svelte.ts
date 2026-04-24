@@ -36,6 +36,7 @@ import {
   deriveConversationTitle,
 } from "../../../shared/utils/conversation-title.js";
 import { settingsState } from "./settings.svelte";
+import { buildProxyOptions } from "./settings-helpers.js";
 
 type StreamingMutationKind = "send" | "reroll" | "edit";
 
@@ -389,6 +390,7 @@ export async function sendChatMessage(message: string) {
       provider: agentState.selectedProvider,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
+      proxyOptions: buildProxyOptions(settingsState.settings),
       threadNamingModel: settingsState.settings.autoThreadNamingModel,
       agentConfig: buildProviderEnvFromSettings(),
     }),
@@ -456,6 +458,7 @@ export async function rerollMessage(targetMessage: ChatMessage) {
       provider: agentState.selectedProvider,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
+      proxyOptions: buildProxyOptions(settingsState.settings),
       agentConfig: buildProviderEnvFromSettings(),
     }),
   });
@@ -521,6 +524,7 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
       provider: agentState.selectedProvider,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
+      proxyOptions: buildProxyOptions(settingsState.settings),
       threadNamingModel: settingsState.settings.autoThreadNamingModel,
       agentConfig: buildProviderEnvFromSettings(),
     }),

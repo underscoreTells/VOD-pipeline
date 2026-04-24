@@ -158,6 +158,12 @@ describe("agent streaming message actions", () => {
       databaseId: 101,
       content: "Persisted assistant response",
     });
+    expect(agentApiMocks.agentChat).toHaveBeenCalledWith(expect.objectContaining({
+      proxyOptions: {
+        encodingMode: "auto",
+        quality: "balanced",
+      },
+    }));
   });
 
   it("reconciles edited history against persisted message metadata", async () => {
@@ -208,6 +214,12 @@ describe("agent streaming message actions", () => {
       databaseId: 14,
       content: "Use the ladder payoff instead.",
     });
+    expect(agentApiMocks.editAgentMessage).toHaveBeenCalledWith(expect.objectContaining({
+      proxyOptions: {
+        encodingMode: "auto",
+        quality: "balanced",
+      },
+    }));
     expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
   });
 
@@ -259,6 +271,12 @@ describe("agent streaming message actions", () => {
       databaseId: 15,
       content: "Land on the ladder payoff.",
     });
+    expect(agentApiMocks.rerollAgentMessage).toHaveBeenCalledWith(expect.objectContaining({
+      proxyOptions: {
+        encodingMode: "auto",
+        quality: "balanced",
+      },
+    }));
     expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
   });
 

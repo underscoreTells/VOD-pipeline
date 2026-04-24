@@ -221,9 +221,9 @@
                 type="checkbox" 
                 bind:checked={settingsState.settings.autoGenerateProxies}
               />
-              Auto-generate proxy videos for AI analysis
+              Auto-generate chapter-range proxies for AI analysis
             </label>
-            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Creates low-resolution proxies (640px, 5fps) when importing videos</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Creates low-resolution chapter-range analysis proxies instead of full-video proxy files</p>
           </div>
           
           <div class="checkbox-group mb-4">
@@ -233,9 +233,9 @@
                 type="checkbox" 
                 bind:checked={settingsState.settings.proxyGenerationOnImport}
               />
-              Start proxy generation immediately on import
+              Prewarm chapter proxies when linking imports
             </label>
-            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">If disabled, proxies are generated only when needed for analysis</p>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">If enabled, chapter-range proxies are prepared as chapters are linked during import. If disabled, they are generated only when chat analysis or preview requests them.</p>
           </div>
         </section>
         

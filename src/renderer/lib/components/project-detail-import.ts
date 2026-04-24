@@ -1,16 +1,25 @@
 import type { Asset } from '$shared/types/database';
+import type { LinkAssetToChapterOptions } from '../api/chapters.js';
 import { autoTranscribeChapters } from './project-detail-transcription.js';
 
 interface ImportDeps {
   addAssetToProject: (projectId: number, filePath: string) => Promise<Asset | null | undefined>;
-  autoCreateChaptersFromFiles: (projectId: number, assets: Asset[]) => Promise<Array<{ id: number }>>;
+  autoCreateChaptersFromFiles: (
+    projectId: number,
+    assets: Asset[],
+    linkOptions?: LinkAssetToChapterOptions
+  ) => Promise<Array<{ id: number }>>;
   createChapter: (
     projectId: number,
     title: string,
     startTime: number,
     endTime: number
   ) => Promise<{ id: number } | null>;
-  linkAssetToChapter: (chapterId: number, assetId: number) => Promise<boolean>;
+  linkAssetToChapter: (
+    chapterId: number,
+    assetId: number,
+    options?: LinkAssetToChapterOptions
+  ) => Promise<boolean>;
   selectChapter: (chapterId: number) => void;
   autoTranscribeOnImport: boolean;
   getTranscriptionStatus: (autoSetup?: boolean) => Promise<{
@@ -28,7 +37,8 @@ interface ImportDeps {
 export async function importProjectFiles(
   projectId: number,
   filePaths: string[],
-  deps: ImportDeps
+  deps: ImportDeps,
+  linkOptions?: LinkAssetToChapterOptions
 ): Promise<void> {
   const assets: Asset[] = [];
 
@@ -43,7 +53,7 @@ export async function importProjectFiles(
     return;
   }
 
-  const created = await deps.autoCreateChaptersFromFiles(projectId, assets);
+  const created = await deps.autoCreateChaptersFromFiles(projectId, assets, linkOptions);
   if (deps.autoTranscribeOnImport) {
     await autoTranscribeChapters(
       created.map((chapter) => chapter.id),
@@ -61,7 +71,8 @@ export async function createProjectChaptersFromDefinition(
   projectId: number,
   vodAsset: Asset,
   chapterInputs: Array<{ title: string; startTime: number; endTime: number }>,
-  deps: ImportDeps
+  deps: ImportDeps,
+  linkOptions?: LinkAssetToChapterOptions
 ): Promise<number | null> {
   let firstChapterId: number | null = null;
   const createdChapterIds: number[] = [];
@@ -82,7 +93,7 @@ export async function createProjectChaptersFromDefinition(
       firstChapterId = chapter.id;
     }
 
-    await deps.linkAssetToChapter(chapter.id, vodAsset.id);
+    await deps.linkAssetToChapter(chapter.id, vodAsset.id, linkOptions);
     createdChapterIds.push(chapter.id);
   }
 

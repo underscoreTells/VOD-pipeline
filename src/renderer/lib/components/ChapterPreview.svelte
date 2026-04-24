@@ -28,6 +28,8 @@
     hasCompleteSelection,
   } from '../state/clip-builder.svelte';
   import { createProjectClip, projectDetail } from '../state/project-detail.svelte';
+  import { settingsState } from '../state/settings.svelte';
+  import { buildProxyOptions } from '../state/settings-helpers.js';
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
@@ -289,7 +291,10 @@
     }
 
     try {
-      const result = await getChapterReverseProxy(chapter.id, asset.id, { ensureReady });
+      const result = await getChapterReverseProxy(chapter.id, asset.id, {
+        ensureReady,
+        proxyOptions: buildProxyOptions(settingsState.settings),
+      });
       if (token !== reverseProxyRequestToken) return;
 
       if (!result.success || !result.data) {

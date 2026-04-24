@@ -15,6 +15,7 @@ import {
   type DeleteChapterResult,
   type GetChapterAssetsResult,
   type GetChaptersResult,
+  type LinkAssetToChapterOptions,
   type UpdateChapterInput,
   type UpdateChapterResult,
   updateChapter as ipcUpdateChapter,
@@ -182,10 +183,11 @@ export async function deleteChapter(chapterId: number): Promise<boolean> {
  */
 export async function linkAssetToChapter(
   chapterId: number,
-  assetId: number
+  assetId: number,
+  options?: LinkAssetToChapterOptions
 ): Promise<boolean> {
   try {
-    const result: AddAssetToChapterResult = await ipcAddAssetToChapter(chapterId, assetId);
+    const result: AddAssetToChapterResult = await ipcAddAssetToChapter(chapterId, assetId, options);
 
     if (result.success) {
       const existing = chaptersState.chapterAssets.get(chapterId) ?? [];
@@ -238,7 +240,8 @@ export async function loadAssetsForChapter(chapterId: number): Promise<number[]>
  */
 export async function autoCreateChaptersFromFiles(
   projectId: number,
-  assets: Asset[]
+  assets: Asset[],
+  linkOptions?: LinkAssetToChapterOptions
 ): Promise<Chapter[]> {
   const createdChapters: Chapter[] = [];
   const existingTitles: string[] = [];
@@ -259,7 +262,7 @@ export async function autoCreateChaptersFromFiles(
 
       if (chapter) {
         // Link asset to chapter
-        await linkAssetToChapter(chapter.id, asset.id);
+        await linkAssetToChapter(chapter.id, asset.id, linkOptions);
         createdChapters.push(chapter);
       }
     } catch (error) {

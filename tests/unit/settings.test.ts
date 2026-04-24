@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProxyOptions,
   buildProviderConfig,
   defaultSettings,
   getApiKey,
@@ -72,5 +73,21 @@ describe("settings helpers", () => {
     });
     expect(getNamingModelApiKey(settings, "gemini-3-flash-preview")).toBe("AIza-test");
     expect(getNamingModelApiKey(settings, "kimi-k2.5")).toBe("sk-kimi");
+  });
+
+  it("builds proxy options directly from settings", () => {
+    expect(buildProxyOptions(defaultSettings)).toEqual({
+      encodingMode: "auto",
+      quality: "balanced",
+    });
+
+    expect(buildProxyOptions({
+      ...defaultSettings,
+      proxyEncodingMode: "gpu",
+      proxyQuality: "fast",
+    })).toEqual({
+      encodingMode: "gpu",
+      quality: "fast",
+    });
   });
 });

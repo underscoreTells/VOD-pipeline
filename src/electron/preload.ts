@@ -85,14 +85,15 @@ const electronAPI: ElectronAPI = {
     getByProject: (projectId) => ipcRenderer.invoke('chapter:get-by-project', { projectId }),
     update: (id, updates) => ipcRenderer.invoke('chapter:update', { id, updates }),
     delete: (id) => ipcRenderer.invoke('chapter:delete', { id }),
-    addAsset: (chapterId, assetId) =>
-      ipcRenderer.invoke('chapter:add-asset', { chapterId, assetId }),
+    addAsset: (chapterId, assetId, options) =>
+      ipcRenderer.invoke('chapter:add-asset', { chapterId, assetId, ...options }),
     getAssets: (chapterId) => ipcRenderer.invoke('chapter:get-assets', { chapterId }),
     getReverseProxy: (chapterId, assetId, options) =>
       ipcRenderer.invoke('chapter:reverse-proxy-get', {
         chapterId,
         assetId,
         ensureReady: options?.ensureReady === true,
+        proxyOptions: options?.proxyOptions,
       }),
   },
   clips: {
@@ -140,26 +141,6 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, data: TranscriptionProgressEvent) => callback(data);
       ipcRenderer.on('transcribe:progress', handler);
       return () => ipcRenderer.removeListener('transcribe:progress', handler);
-    },
-  },
-  proxy: {
-    onProgress: (callback) => {
-      const handler = (_event: unknown, data: { assetId: number; progress: number }) =>
-        callback(data);
-      ipcRenderer.on('proxy:progress', handler);
-      return () => ipcRenderer.removeListener('proxy:progress', handler);
-    },
-    onComplete: (callback) => {
-      const handler = (_event: unknown, data: { assetId: number; proxyPath: string }) =>
-        callback(data);
-      ipcRenderer.on('proxy:complete', handler);
-      return () => ipcRenderer.removeListener('proxy:complete', handler);
-    },
-    onError: (callback) => {
-      const handler = (_event: unknown, data: { assetId: number; error: string }) =>
-        callback(data);
-      ipcRenderer.on('proxy:error', handler);
-      return () => ipcRenderer.removeListener('proxy:error', handler);
     },
   },
   exports: {

@@ -15,11 +15,15 @@ import {
   getSuggestionsByConversation,
   getTranscriptsByChapter,
   getWaveform,
+  updateChapterProxyDefinition,
   updateChapterProxyMetadata,
   updateChapterProxyStatus,
 } from '../database/index.js';
 import type { Asset, Clip, Suggestion } from '../../shared/types/database.js';
-import type { AgentGroundingStatusData } from '../../shared/contracts/electron-api.js';
+import type {
+  AgentGroundingStatusData,
+  ProxyOptions,
+} from '../../shared/contracts/electron-api.js';
 import type {
   DetailedTranscriptWindow,
   TimelineAction,
@@ -62,6 +66,7 @@ const TOKEN_GUARD_MIN_MESSAGES_AFTER_TRIM = 6;
 const OVERVIEW_TRANSCRIPT_CHUNK_SECONDS = 15;
 const OVERVIEW_TRANSCRIPT_MAX_LINES = 320;
 const OVERVIEW_TRANSCRIPT_MAX_CHARS = 30000;
+const CHAPTER_PROXY_TIME_EPSILON = 0.01;
 
 export function toNumberOrNull(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -661,6 +666,43 @@ function getChapterProxyPath(chapterId: number, assetId: number): string {
   return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_ai_proxy.mp4`);
 }
 
+function getChapterProxyTempPath(chapterId: number, assetId: number, generationEpoch: number): string {
+  return path.join(
+    getProxyDirectoryPath(),
+    `chapter_${chapterId}_asset_${assetId}_ai_proxy.partial.${generationEpoch}.mp4`
+  );
+}
+
+function normalizeProxyOptions(proxyOptions?: ProxyOptions): Required<ProxyOptions> {
+  return {
+    encodingMode: proxyOptions?.encodingMode ?? 'auto',
+    quality: proxyOptions?.quality ?? 'balanced',
+  };
+}
+
+export function isChapterProxyReusable(
+  proxy: {
+    status: string;
+    file_path: string;
+    start_time: number;
+    end_time: number;
+  } | null | undefined,
+  chapter: { start_time: number; end_time: number }
+): boolean {
+  if (!proxy || proxy.status !== 'ready') {
+    return false;
+  }
+
+  if (!proxy.file_path || !fs.existsSync(proxy.file_path)) {
+    return false;
+  }
+
+  return (
+    Math.abs(proxy.start_time - chapter.start_time) <= CHAPTER_PROXY_TIME_EPSILON
+    && Math.abs(proxy.end_time - chapter.end_time) <= CHAPTER_PROXY_TIME_EPSILON
+  );
+}
+
 type ReverseProxyVariant = 'full' | 'quick';
 
 function getChapterReverseProxyPath(chapterId: number, assetId: number, variant: ReverseProxyVariant = 'full'): string {
@@ -671,10 +713,15 @@ function getChapterReverseProxyPath(chapterId: number, assetId: number, variant:
 function getChapterReverseProxyTempPath(
   chapterId: number,
   assetId: number,
-  variant: ReverseProxyVariant = 'full'
+  variant: ReverseProxyVariant = 'full',
+  generationEpoch?: number
 ): string {
   const suffix = variant === 'full' ? 'reverse_preview.partial.mp4' : 'reverse_preview_quick.partial.mp4';
-  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
+  const baseName = `chapter_${chapterId}_asset_${assetId}_${suffix}`;
+  if (generationEpoch === undefined) {
+    return path.join(getProxyDirectoryPath(), baseName);
+  }
+  return path.join(getProxyDirectoryPath(), `${baseName}.${generationEpoch}`);
 }
 
 function getChapterReverseProxyUrl(
@@ -700,9 +747,9 @@ type ChapterReverseProxyStatusPayload = {
   error?: string;
 };
 
-const chapterProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
-const chapterReverseProxyGenerationLocks = new Map<string, Promise<string | undefined>>();
-const chapterReverseProxyQuickGenerationLocks = new Map<string, Promise<string | undefined>>();
+const chapterProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
+const chapterReverseProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
+const chapterReverseProxyQuickGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
 const chapterReverseProxyBackgroundTimers = new Map<string, NodeJS.Timeout>();
 const chapterReverseProxyErrors = new Map<string, string>();
 const chapterReverseProxyValidationCache = new Map<string, { mtimeMs: number; size: number; valid: boolean }>();
@@ -714,6 +761,30 @@ const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmQueue: Array<() => Promise<void>> = [];
 const CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
 let activeChapterMediaPrewarmJobs = 0;
+const chapterProxyGenerationEpochs = new Map<string, number>();
+const chapterReverseProxyGenerationEpochs = new Map<string, number>();
+
+function getGenerationEpoch(epochMap: Map<string, number>, lockKey: string): number {
+  return epochMap.get(lockKey) ?? 0;
+}
+
+function bumpGenerationEpoch(epochMap: Map<string, number>, lockKey: string): number {
+  const nextEpoch = getGenerationEpoch(epochMap, lockKey) + 1;
+  epochMap.set(lockKey, nextEpoch);
+  return nextEpoch;
+}
+
+function deleteFileIfExists(filePath: string | null | undefined, label: string): void {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return;
+  }
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    console.warn(`[${label}] Failed deleting file ${filePath}:`, error);
+  }
+}
 
 function pumpChapterReverseProxyQueue() {
   while (
@@ -901,6 +972,7 @@ function clearChapterReverseProxyBackgroundTimer(lockKey: string): void {
 export function scheduleChapterReverseProxyFullWarm(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
   asset: Asset,
+  proxyOptions?: ProxyOptions,
   delayMs = 12000
 ): void {
   if (asset.file_type !== 'video') {
@@ -908,13 +980,20 @@ export function scheduleChapterReverseProxyFullWarm(
   }
 
   const lockKey = `${chapter.id}:${asset.id}`;
-  if (chapterReverseProxyGenerationLocks.has(lockKey) || chapterReverseProxyBackgroundTimers.has(lockKey)) {
+  const currentEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
+  const inFlight = chapterReverseProxyGenerationLocks.get(lockKey);
+  if (
+    (inFlight && inFlight.epoch === currentEpoch)
+    || chapterReverseProxyBackgroundTimers.has(lockKey)
+  ) {
     return;
   }
 
+  const normalizedProxyOptions = normalizeProxyOptions(proxyOptions);
+
   const timer = setTimeout(() => {
     chapterReverseProxyBackgroundTimers.delete(lockKey);
-    void ensureChapterReverseProxyFullReady(chapter, asset).catch((error) => {
+    void ensureChapterReverseProxyFullReady(chapter, asset, normalizedProxyOptions).catch((error) => {
       console.warn(
         `[ReverseProxy] Failed background full warm chapter=${chapter.id} asset=${asset.id}:`,
         error
@@ -927,6 +1006,7 @@ export function scheduleChapterReverseProxyFullWarm(
 
 export async function getChapterReverseProxyStatus(chapterId: number, assetId: number): Promise<ChapterReverseProxyStatusPayload> {
   const lockKey = `${chapterId}:${assetId}`;
+  const currentEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
 
   if (await ensureChapterReverseProxyCacheValid(chapterId, assetId, 'full')) {
     chapterReverseProxyErrors.delete(lockKey);
@@ -948,7 +1028,12 @@ export async function getChapterReverseProxyStatus(chapterId: number, assetId: n
     };
   }
 
-  if (chapterReverseProxyQuickGenerationLocks.has(lockKey) || chapterReverseProxyGenerationLocks.has(lockKey)) {
+  const quickLock = chapterReverseProxyQuickGenerationLocks.get(lockKey);
+  const fullLock = chapterReverseProxyGenerationLocks.get(lockKey);
+  if (
+    (quickLock && quickLock.epoch === currentEpoch)
+    || (fullLock && fullLock.epoch === currentEpoch)
+  ) {
     return { status: 'generating' };
   }
 
@@ -965,6 +1050,7 @@ export async function getChapterReverseProxyStatus(chapterId: number, assetId: n
 
 export function invalidateChapterReverseProxy(chapterId: number, assetId: number): void {
   const lockKey = `${chapterId}:${assetId}`;
+  bumpGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   chapterReverseProxyErrors.delete(lockKey);
   clearChapterReverseProxyBackgroundTimer(lockKey);
   invalidateChapterReverseProxyVariant(chapterId, assetId, 'full');
@@ -973,17 +1059,21 @@ export function invalidateChapterReverseProxy(chapterId: number, assetId: number
 
 export async function ensureChapterReverseProxyQuickReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
-  asset: Asset
+  asset: Asset,
+  proxyOptions?: ProxyOptions
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
   }
 
   const lockKey = `${chapter.id}:${asset.id}`;
+  const generationEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   const inFlight = chapterReverseProxyQuickGenerationLocks.get(lockKey);
-  if (inFlight) {
-    return inFlight;
+  if (inFlight && inFlight.epoch === generationEpoch) {
+    return inFlight.promise;
   }
+
+  const normalizedProxyOptions = normalizeProxyOptions(proxyOptions);
 
   const task = (async () => {
     const fullProxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'full');
@@ -993,7 +1083,7 @@ export async function ensureChapterReverseProxyQuickReady(
     }
 
     const quickProxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'quick');
-    const quickTempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'quick');
+    const quickTempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'quick', generationEpoch);
     if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'quick')) {
       chapterReverseProxyErrors.delete(lockKey);
       return quickProxyPath;
@@ -1014,11 +1104,7 @@ export async function ensureChapterReverseProxyQuickReady(
       let fps = 10;
 
       const chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-      if (
-        chapterProxy?.status === 'ready' &&
-        chapterProxy.file_path &&
-        fs.existsSync(chapterProxy.file_path)
-      ) {
+      if (isChapterProxyReusable(chapterProxy, chapter)) {
         try {
           const chapterProxyMetadata = await getVideoMetadata(chapterProxy.file_path, 5000);
           if (chapterProxyMetadata.duration > 0.1) {
@@ -1037,11 +1123,16 @@ export async function ensureChapterReverseProxyQuickReady(
         startTime: inputStartTime,
         endTime: inputEndTime,
         fps,
-        encodingMode: 'auto',
-        quality: 'fast',
+        encodingMode: normalizedProxyOptions.encodingMode,
+        quality: normalizedProxyOptions.quality,
         chunkDurationSec: 45,
         maxParallelChunks: 3,
       });
+
+      if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
+        deleteFileIfExists(quickTempPath, 'ReverseProxy');
+        return undefined;
+      }
 
       if (fs.existsSync(quickProxyPath)) {
         fs.unlinkSync(quickProxyPath);
@@ -1057,8 +1148,11 @@ export async function ensureChapterReverseProxyQuickReady(
       return quickProxyPath;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
-      chapterReverseProxyErrors.set(lockKey, message);
+      deleteFileIfExists(quickTempPath, 'ReverseProxy');
+      if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
+        invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
+        chapterReverseProxyErrors.set(lockKey, message);
+      }
       console.warn(
         `[ReverseProxy] Failed generating quick reverse chapter=${chapter.id} asset=${asset.id}:`,
         error
@@ -1067,17 +1161,21 @@ export async function ensureChapterReverseProxyQuickReady(
     }
   })();
 
-  chapterReverseProxyQuickGenerationLocks.set(lockKey, task);
+  chapterReverseProxyQuickGenerationLocks.set(lockKey, { epoch: generationEpoch, promise: task });
   try {
     return await task;
   } finally {
-    chapterReverseProxyQuickGenerationLocks.delete(lockKey);
+    const currentLock = chapterReverseProxyQuickGenerationLocks.get(lockKey);
+    if (currentLock?.promise === task) {
+      chapterReverseProxyQuickGenerationLocks.delete(lockKey);
+    }
   }
 }
 
 async function ensureChapterReverseProxyFullReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
-  asset: Asset
+  asset: Asset,
+  proxyOptions?: ProxyOptions
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
@@ -1086,14 +1184,17 @@ async function ensureChapterReverseProxyFullReady(
   const lockKey = `${chapter.id}:${asset.id}`;
   clearChapterReverseProxyBackgroundTimer(lockKey);
 
+  const generationEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   const inFlight = chapterReverseProxyGenerationLocks.get(lockKey);
-  if (inFlight) {
-    return inFlight;
+  if (inFlight && inFlight.epoch === generationEpoch) {
+    return inFlight.promise;
   }
+
+  const normalizedProxyOptions = normalizeProxyOptions(proxyOptions);
 
   const task = (async () => {
     const proxyPath = getChapterReverseProxyPath(chapter.id, asset.id, 'full');
-    const tempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'full');
+    const tempPath = getChapterReverseProxyTempPath(chapter.id, asset.id, 'full', generationEpoch);
     if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
       chapterReverseProxyErrors.delete(lockKey);
       return proxyPath;
@@ -1121,11 +1222,16 @@ async function ensureChapterReverseProxyFullReady(
           startTime: chapter.start_time,
           endTime: chapter.end_time,
           fps: 15,
-          encodingMode: 'auto',
-          quality: 'high',
+          encodingMode: normalizedProxyOptions.encodingMode,
+          quality: normalizedProxyOptions.quality,
           chunkDurationSec: 11,
           maxParallelChunks: 3,
         });
+
+        if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
+          deleteFileIfExists(tempPath, 'ReverseProxy');
+          return;
+        }
 
         if (fs.existsSync(proxyPath)) {
           fs.unlinkSync(proxyPath);
@@ -1142,8 +1248,11 @@ async function ensureChapterReverseProxyFullReady(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
-      chapterReverseProxyErrors.set(lockKey, message);
+      deleteFileIfExists(tempPath, 'ReverseProxy');
+      if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
+        invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
+        chapterReverseProxyErrors.set(lockKey, message);
+      }
       console.warn(
         `[ReverseProxy] Failed generating chapter=${chapter.id} asset=${asset.id}:`,
         error
@@ -1154,33 +1263,42 @@ async function ensureChapterReverseProxyFullReady(
     return generatedPath;
   })();
 
-  chapterReverseProxyGenerationLocks.set(lockKey, task);
+  chapterReverseProxyGenerationLocks.set(lockKey, { epoch: generationEpoch, promise: task });
   try {
     return await task;
   } finally {
-    chapterReverseProxyGenerationLocks.delete(lockKey);
+    const currentLock = chapterReverseProxyGenerationLocks.get(lockKey);
+    if (currentLock?.promise === task) {
+      chapterReverseProxyGenerationLocks.delete(lockKey);
+    }
   }
 }
 
-async function ensureChapterProxyReady(
+export async function ensureChapterProxyReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
   asset: Asset,
   encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
   quality: 'high' | 'balanced' | 'fast' = 'balanced'
 ): Promise<string | undefined> {
+  if (asset.file_type !== 'video') {
+    return undefined;
+  }
+
   const lockKey = `${chapter.id}:${asset.id}`;
+  const generationEpoch = getGenerationEpoch(chapterProxyGenerationEpochs, lockKey);
   const inFlight = chapterProxyGenerationLocks.get(lockKey);
-  if (inFlight) {
-    return inFlight;
+  if (inFlight && inFlight.epoch === generationEpoch) {
+    return inFlight.promise;
   }
 
   const task = (async () => {
     const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-    if (existing?.status === 'ready' && fs.existsSync(existing.file_path)) {
+    if (isChapterProxyReusable(existing, chapter)) {
       return existing.file_path;
     }
 
     const proxyPath = existing?.file_path || getChapterProxyPath(chapter.id, asset.id);
+    const tempPath = getChapterProxyTempPath(chapter.id, asset.id, generationEpoch);
 
     let chapterProxyId = existing?.id ?? null;
     if (chapterProxyId === null) {
@@ -1201,13 +1319,28 @@ async function ensureChapterProxyReady(
       });
       chapterProxyId = created.id;
     } else {
-      await updateChapterProxyStatus(chapterProxyId, 'generating');
+      deleteFileIfExists(existing.file_path, 'ChapterProxy');
+      await updateChapterProxyDefinition(chapterProxyId, {
+        file_path: proxyPath,
+        start_time: chapter.start_time,
+        end_time: chapter.end_time,
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        status: 'pending',
+        error_message: null,
+      });
     }
 
     try {
+      deleteFileIfExists(tempPath, 'ChapterProxy');
+      await updateChapterProxyStatus(chapterProxyId, 'generating');
+
       const metadata = await generateAIProxy(
         asset.file_path,
-        proxyPath,
+        tempPath,
         undefined,
         undefined,
         encodingMode,
@@ -1217,6 +1350,14 @@ async function ensureChapterProxyReady(
           endTime: chapter.end_time,
         }
       );
+
+      if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
+        deleteFileIfExists(tempPath, 'ChapterProxy');
+        return undefined;
+      }
+
+      deleteFileIfExists(proxyPath, 'ChapterProxy');
+      fs.renameSync(tempPath, proxyPath);
 
       await updateChapterProxyMetadata(chapterProxyId, {
         width: metadata.width,
@@ -1229,11 +1370,14 @@ async function ensureChapterProxyReady(
 
       return proxyPath;
     } catch (error) {
-      await updateChapterProxyStatus(
-        chapterProxyId,
-        'error',
-        error instanceof Error ? error.message : String(error)
-      );
+      deleteFileIfExists(tempPath, 'ChapterProxy');
+      if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) === generationEpoch) {
+        await updateChapterProxyStatus(
+          chapterProxyId,
+          'error',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       console.warn(
         `[ChapterProxy] Failed generating chapter proxy chapter=${chapter.id} asset=${asset.id}:`,
         error
@@ -1242,18 +1386,15 @@ async function ensureChapterProxyReady(
     }
   })();
 
-  chapterProxyGenerationLocks.set(lockKey, task);
+  chapterProxyGenerationLocks.set(lockKey, { epoch: generationEpoch, promise: task });
   try {
     return await task;
   } finally {
-    chapterProxyGenerationLocks.delete(lockKey);
+    const currentLock = chapterProxyGenerationLocks.get(lockKey);
+    if (currentLock?.promise === task) {
+      chapterProxyGenerationLocks.delete(lockKey);
+    }
   }
-}
-
-function isChapterProxyReady(
-  proxy: Awaited<ReturnType<typeof getChapterProxyByChapterAsset>>
-): proxy is NonNullable<typeof proxy> {
-  return Boolean(proxy?.status === 'ready' && fs.existsSync(proxy.file_path));
 }
 
 function getGroundingStatusMessage(
@@ -1326,12 +1467,12 @@ export async function getAgentGroundingStatus(
 
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
 
-    if (!isChapterProxyReady(chapterProxy) && options?.ensureReady) {
+    if (!isChapterProxyReusable(chapterProxy, chapter) && options?.ensureReady) {
       await ensureChapterProxyReady(chapter, asset);
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
     }
 
-    if (isChapterProxyReady(chapterProxy)) {
+    if (isChapterProxyReusable(chapterProxy, chapter)) {
       readyVideoAssetCount += 1;
       assets.push({
         assetId: asset.id,
@@ -1372,6 +1513,34 @@ export async function getAgentGroundingStatus(
     assets,
     message: getGroundingStatusMessage(status),
   };
+}
+
+export async function invalidateChapterProxy(
+  chapterId: number,
+  assetId: number,
+  bounds?: { startTime?: number; endTime?: number }
+): Promise<void> {
+  const lockKey = `${chapterId}:${assetId}`;
+  bumpGenerationEpoch(chapterProxyGenerationEpochs, lockKey);
+
+  const existing = await getChapterProxyByChapterAsset(chapterId, assetId);
+  if (!existing) {
+    return;
+  }
+
+  deleteFileIfExists(existing.file_path, 'ChapterProxy');
+  await updateChapterProxyDefinition(existing.id, {
+    file_path: existing.file_path || getChapterProxyPath(chapterId, assetId),
+    start_time: bounds?.startTime ?? existing.start_time,
+    end_time: bounds?.endTime ?? existing.end_time,
+    width: null,
+    height: null,
+    framerate: null,
+    file_size: null,
+    duration: null,
+    status: 'pending',
+    error_message: null,
+  });
 }
 
 async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
@@ -1415,7 +1584,11 @@ async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
   }
 }
 
-async function prewarmChapterMedia(chapterId: number, assetId: number): Promise<void> {
+async function prewarmChapterMedia(
+  chapterId: number,
+  assetId: number,
+  proxyOptions?: ProxyOptions
+): Promise<void> {
   const [chapter, asset] = await Promise.all([
     getChapter(chapterId),
     getAsset(assetId),
@@ -1435,12 +1608,20 @@ async function prewarmChapterMedia(chapterId: number, assetId: number): Promise<
     return;
   }
 
+  const normalizedProxyOptions = normalizeProxyOptions(proxyOptions);
   const jobs: Array<Promise<unknown>> = [
     ensureAssetMixWaveformReady(asset),
   ];
 
   if (asset.file_type === 'video') {
-    jobs.push(ensureChapterProxyReady(chapter, asset, 'auto', 'balanced'));
+    jobs.push(
+      ensureChapterProxyReady(
+        chapter,
+        asset,
+        normalizedProxyOptions.encodingMode,
+        normalizedProxyOptions.quality
+      )
+    );
   }
 
   const results = await Promise.allSettled(jobs);
@@ -1451,7 +1632,11 @@ async function prewarmChapterMedia(chapterId: number, assetId: number): Promise<
   }
 }
 
-export function scheduleChapterMediaPrewarm(chapterId: number, assetId: number): Promise<void> {
+export function scheduleChapterMediaPrewarm(
+  chapterId: number,
+  assetId: number,
+  proxyOptions?: ProxyOptions
+): Promise<void> {
   const lockKey = `${chapterId}:${assetId}`;
   const inFlight = chapterMediaPrewarmLocks.get(lockKey);
   if (inFlight) {
@@ -1459,7 +1644,7 @@ export function scheduleChapterMediaPrewarm(chapterId: number, assetId: number):
   }
 
   const task = enqueueChapterMediaPrewarm(async () => {
-    await prewarmChapterMedia(chapterId, assetId);
+    await prewarmChapterMedia(chapterId, assetId, proxyOptions);
   });
 
   chapterMediaPrewarmLocks.set(lockKey, task);
@@ -1482,6 +1667,7 @@ export async function buildAgentChatContext(
   options?: {
     detailedTranscripts?: DetailedTranscriptWindow[];
     ensureChapterProxyReady?: boolean;
+    proxyOptions?: ProxyOptions;
   }
 ) {
   const detailedTranscripts = options?.detailedTranscripts ?? [];
@@ -1546,12 +1732,18 @@ export async function buildAgentChatContext(
   for (const asset of chapterAssets.filter((candidate) => candidate.file_type === 'video')) {
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
 
-    if (!isChapterProxyReady(chapterProxy) && options?.ensureChapterProxyReady) {
-      await ensureChapterProxyReady(chapter, asset);
+    if (!isChapterProxyReusable(chapterProxy, chapter) && options?.ensureChapterProxyReady) {
+      const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
+      await ensureChapterProxyReady(
+        chapter,
+        asset,
+        normalizedProxyOptions.encodingMode,
+        normalizedProxyOptions.quality
+      );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
     }
 
-    if (isChapterProxyReady(chapterProxy)) {
+    if (isChapterProxyReusable(chapterProxy, chapter)) {
       videoAnalysisAssets.push({
         assetId: asset.id,
         proxyPath: chapterProxy.file_path,

@@ -48,7 +48,6 @@ const handlerSupportMocks = vi.hoisted(() => ({
   normalizeTimelineActions: vi.fn(),
   parseConversationTurnResult: vi.fn(),
   persistAgentSuggestions: vi.fn(),
-  scheduleChapterMediaPrewarm: vi.fn(async () => {}),
   toNumberOrNull: vi.fn((value: unknown) => {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim().length > 0) {
@@ -265,6 +264,10 @@ describe("agent chat handler", () => {
       },
     });
     expect(bridgeMocks.send.mock.calls[0]?.[0]?.metadata?.context).not.toHaveProperty("assets");
+    expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenCalledWith(1, 3, {
+      ensureChapterProxyReady: true,
+      proxyOptions: undefined,
+    });
     expect(result).toMatchObject({
       success: true,
       data: {
@@ -303,6 +306,93 @@ describe("agent chat handler", () => {
         readyVideoAssetCount: 1,
         assets: [{ assetId: 11, status: "ready" }],
         message: "Video grounding is ready.",
+      },
+    });
+  });
+
+  it("forwards proxy options into chapter context generation", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-1",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "fast",
+      },
+    });
+
+    expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenCalledWith(1, 3, {
+      ensureChapterProxyReady: true,
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "fast",
+      },
+    });
+  });
+
+  it("forwards proxy options during reroll and edit mutations", async () => {
+    devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
+    });
+
+    const rerollHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_REROLL_MESSAGE);
+    await rerollHandler?.({}, {
+      clientRequestId: "client-reroll",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 10,
+      proxyOptions: {
+        encodingMode: "cpu",
+        quality: "high",
+      },
+    });
+
+    expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenLastCalledWith(1, 3, {
+      ensureChapterProxyReady: true,
+      proxyOptions: {
+        encodingMode: "cpu",
+        quality: "high",
+      },
+    });
+
+    const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
+    await editHandler?.({}, {
+      clientRequestId: "client-edit",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 10,
+      message: "Tighten the payoff",
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "balanced",
+      },
+    });
+
+    expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenLastCalledWith(1, 3, {
+      ensureChapterProxyReady: true,
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "balanced",
       },
     });
   });

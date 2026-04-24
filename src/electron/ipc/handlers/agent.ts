@@ -32,7 +32,7 @@ import type {
   AgentChatData,
   TimelineAction,
 } from '../../../shared/types/agent-ipc.js';
-import type { ProviderConfigPayload } from '../../../shared/contracts/electron-api.js';
+import type { ProviderConfigPayload, ProxyOptions } from '../../../shared/contracts/electron-api.js';
 import { normalizeNamingModel } from '../../../shared/llm/naming-models.js';
 import { getAgentBridge } from '../../agent-bridge.js';
 import { getBackendRuntimeStaleness } from '../../dev-runtime.js';
@@ -258,6 +258,7 @@ async function runConversationTurn(
     effectiveProvider?: string;
     playheadTime?: number;
     projectId: number;
+    proxyOptions?: ProxyOptions;
     selectedClipIds: number[];
     threadId: string;
     userMessageId: number;
@@ -271,7 +272,8 @@ async function runConversationTurn(
     options.chapter.id
   );
   const initialContext = await buildAgentChatContext(options.projectId, options.chapter.id, {
-    ensureChapterProxyReady: false,
+    ensureChapterProxyReady: true,
+    proxyOptions: options.proxyOptions,
   });
   const contextWithSuggestions = {
     ...initialContext,
@@ -531,6 +533,10 @@ export function registerAgentHandlers(): void {
       ? payload.selectedClipIds.filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value))
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
@@ -599,6 +605,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: persistedUserMessage.id,
@@ -659,6 +666,10 @@ export function registerAgentHandlers(): void {
       )
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
       : undefined;
@@ -734,6 +745,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: retainedUserMessage.id,
@@ -763,6 +775,10 @@ export function registerAgentHandlers(): void {
       )
       : [];
     const playheadTime = toNumberOrNull(payload?.playheadTime) ?? undefined;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
     const agentConfig = payload?.agentConfig && typeof payload.agentConfig === 'object'
       ? payload.agentConfig as ProviderConfigPayload
@@ -864,6 +880,7 @@ export function registerAgentHandlers(): void {
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
+        proxyOptions,
         selectedClipIds,
         threadId,
         userMessageId: targetMessage.id,
