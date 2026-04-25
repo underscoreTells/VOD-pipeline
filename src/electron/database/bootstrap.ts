@@ -4,10 +4,15 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   applySchemaStatements,
+  assertNoAmbiguousLegacyClipsTable,
   ensureChapterProxyTable,
   ensureChatConversationTables,
+  ensureClipsTableWithoutStartTime,
   ensureDetailedTranscriptTable,
   ensureSchemaColumns,
+  repairDanglingClipReferences,
+  repairClipForeignKeyTables,
+  validateClipMigrationState,
 } from './migrations.js';
 import {
   getActiveDatabase,
@@ -74,11 +79,16 @@ export async function initializeDatabase(): Promise<Database.Database> {
     }
 
     applySchemaStatements(database, schema, 'table');
+    assertNoAmbiguousLegacyClipsTable(database);
+    ensureClipsTableWithoutStartTime(database);
+    repairClipForeignKeyTables(database);
     ensureDetailedTranscriptTable(database);
     ensureChatConversationTables(database);
     ensureChapterProxyTable(database);
     ensureSchemaColumns(database);
+    repairDanglingClipReferences(database);
     applySchemaStatements(database, schema, 'index');
+    validateClipMigrationState(database);
     console.log('Database schema initialized successfully');
 
     return database;

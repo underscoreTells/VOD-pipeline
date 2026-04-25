@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { app } from 'electron';
+import { isAudiowaveformAvailable } from '../audiowaveformDetector.js';
 import {
   createChapterProxy,
   createSuggestion,
@@ -29,6 +30,7 @@ import type {
   TimelineAction,
   TranscriptDetailRequest,
 } from '../../shared/types/agent-ipc.js';
+import { clipOverlapsChapterSourceRange } from '../../shared/utils/clip-timing.js';
 import {
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
@@ -44,7 +46,6 @@ import {
 } from '../../pipeline/ffmpeg.js';
 import {
   generateWaveformTiers,
-  generateWaveformTiersForMkvTracks,
 } from '../../pipeline/waveform.js';
 
 const PROVIDER_CONTEXT_TOKEN_LIMITS: Record<'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi', number> = {
@@ -301,7 +302,6 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         type: 'create_clip',
         assetId: typeof action.assetId === 'number' ? action.assetId : undefined,
         trackIndex: typeof action.trackIndex === 'number' ? action.trackIndex : undefined,
-        startTime: typeof action.startTime === 'number' ? action.startTime : undefined,
         inPoint: action.inPoint,
         outPoint: action.outPoint,
         role: typeof action.role === 'string' || action.role === null ? action.role as Clip['role'] : undefined,
@@ -319,16 +319,12 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
 
       const updatesRecord = updatesRaw as Record<string, unknown>;
       const updates: {
-        startTime?: number;
         inPoint?: number;
         outPoint?: number;
         role?: Clip['role'];
         description?: string | null;
         isEssential?: boolean;
       } = {};
-      if (typeof updatesRecord.startTime === 'number' && Number.isFinite(updatesRecord.startTime)) {
-        updates.startTime = updatesRecord.startTime;
-      }
       if (typeof updatesRecord.inPoint === 'number' && Number.isFinite(updatesRecord.inPoint)) {
         updates.inPoint = updatesRecord.inPoint;
       }
@@ -408,7 +404,6 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
           create: {
             assetId: action.assetId,
             trackIndex: action.trackIndex,
-            startTime: action.startTime,
             role: action.role,
             description: action.description ?? null,
             isEssential: action.isEssential,
@@ -437,7 +432,6 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
 
       const payload = {
         update: {
-          startTime: updates.startTime,
           inPoint: updates.inPoint,
           outPoint: updates.outPoint,
           role: updates.role,
@@ -801,12 +795,13 @@ function getChapterReverseProxyTempPath(
   variant: ReverseProxyVariant = 'full',
   generationEpoch?: number
 ): string {
-  const suffix = variant === 'full' ? 'reverse_preview.partial.mp4' : 'reverse_preview_quick.partial.mp4';
-  const baseName = `chapter_${chapterId}_asset_${assetId}_${suffix}`;
+  const baseName = variant === 'full'
+    ? `chapter_${chapterId}_asset_${assetId}_reverse_preview.partial`
+    : `chapter_${chapterId}_asset_${assetId}_reverse_preview_quick.partial`;
   if (generationEpoch === undefined) {
-    return path.join(getProxyDirectoryPath(), baseName);
+    return path.join(getProxyDirectoryPath(), `${baseName}.mp4`);
   }
-  return path.join(getProxyDirectoryPath(), `${baseName}.${generationEpoch}`);
+  return path.join(getProxyDirectoryPath(), `${baseName}.${generationEpoch}.mp4`);
 }
 
 function getChapterReverseProxyUrl(
@@ -832,15 +827,28 @@ type ChapterReverseProxyStatusPayload = {
   error?: string;
 };
 
+type HeavyMediaJobType = 'chapterProxy' | 'transcription' | 'reverseQuickWarm' | 'reverseFullWarm';
+type HeavyMediaJobPriority = 'background' | 'interactive';
+type ReverseProxyExecutionMode = 'background' | 'interactive';
+
+type HeavyMediaJob<T> = {
+  key: string;
+  type: HeavyMediaJobType;
+  priority: HeavyMediaJobPriority;
+  started: boolean;
+  sequence: number;
+  run: () => Promise<T>;
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
 const chapterProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
 const chapterReverseProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
 const chapterReverseProxyQuickGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
 const chapterReverseProxyBackgroundTimers = new Map<string, NodeJS.Timeout>();
 const chapterReverseProxyErrors = new Map<string, string>();
 const chapterReverseProxyValidationCache = new Map<string, { mtimeMs: number; size: number; valid: boolean }>();
-const chapterReverseProxyQueue: Array<() => Promise<void>> = [];
-const CHAPTER_REVERSE_PROXY_MAX_CONCURRENCY = 1;
-let activeChapterReverseProxyJobs = 0;
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmQueue: Array<() => Promise<void>> = [];
@@ -848,6 +856,12 @@ const CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY = Math.max(1, Math.min(3, Math.floor
 let activeChapterMediaPrewarmJobs = 0;
 const chapterProxyGenerationEpochs = new Map<string, number>();
 const chapterReverseProxyGenerationEpochs = new Map<string, number>();
+const reverseQuickExecutionModes = new Map<string, ReverseProxyExecutionMode>();
+const HEAVY_MEDIA_MAX_CONCURRENCY = 1;
+const heavyMediaQueue: Array<HeavyMediaJob<unknown>> = [];
+const heavyMediaJobs = new Map<string, HeavyMediaJob<unknown>>();
+let activeHeavyMediaJobs = 0;
+let heavyMediaJobSequence = 0;
 
 function getGenerationEpoch(epochMap: Map<string, number>, lockKey: string): number {
   return epochMap.get(lockKey) ?? 0;
@@ -871,40 +885,114 @@ function deleteFileIfExists(filePath: string | null | undefined, label: string):
   }
 }
 
-function pumpChapterReverseProxyQueue() {
-  while (
-    activeChapterReverseProxyJobs < CHAPTER_REVERSE_PROXY_MAX_CONCURRENCY &&
-    chapterReverseProxyQueue.length > 0
-  ) {
-    const nextJob = chapterReverseProxyQueue.shift();
+function getHeavyMediaPriorityRank(priority: HeavyMediaJobPriority): number {
+  return priority === 'interactive' ? 0 : 1;
+}
+
+function sortHeavyMediaQueue(): void {
+  heavyMediaQueue.sort((left, right) => {
+    const priorityDelta = getHeavyMediaPriorityRank(left.priority) - getHeavyMediaPriorityRank(right.priority);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return left.sequence - right.sequence;
+  });
+}
+
+function pumpHeavyMediaQueue(): void {
+  while (activeHeavyMediaJobs < HEAVY_MEDIA_MAX_CONCURRENCY && heavyMediaQueue.length > 0) {
+    sortHeavyMediaQueue();
+    const nextJob = heavyMediaQueue.shift();
     if (!nextJob) {
       continue;
     }
 
-    activeChapterReverseProxyJobs += 1;
-    void nextJob()
+    nextJob.started = true;
+    activeHeavyMediaJobs += 1;
+
+    void nextJob.run()
+      .then((value) => {
+        nextJob.resolve(value);
+      })
       .catch((error) => {
-        console.warn('[ReverseProxy] Job failed:', error);
+        console.warn(`[HeavyMedia] Job failed type=${nextJob.type} key=${nextJob.key}:`, error);
+        nextJob.reject(error);
       })
       .finally(() => {
-        activeChapterReverseProxyJobs = Math.max(0, activeChapterReverseProxyJobs - 1);
-        pumpChapterReverseProxyQueue();
+        activeHeavyMediaJobs = Math.max(0, activeHeavyMediaJobs - 1);
+        heavyMediaJobs.delete(nextJob.key);
+        pumpHeavyMediaQueue();
       });
   }
 }
 
-function enqueueChapterReverseProxy(job: () => Promise<void>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    chapterReverseProxyQueue.push(async () => {
-      try {
-        await job();
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
-    pumpChapterReverseProxyQueue();
+export function enqueueHeavyMediaJob<T>(
+  key: string,
+  type: HeavyMediaJobType,
+  priority: HeavyMediaJobPriority,
+  run: () => Promise<T>
+): Promise<T> {
+  const existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
+  if (existing) {
+    if (!existing.started && getHeavyMediaPriorityRank(priority) < getHeavyMediaPriorityRank(existing.priority)) {
+      existing.priority = priority;
+      sortHeavyMediaQueue();
+    }
+    return existing.promise;
+  }
+
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
+
+  const job: HeavyMediaJob<T> = {
+    key,
+    type,
+    priority,
+    started: false,
+    sequence: heavyMediaJobSequence++,
+    run,
+    promise,
+    resolve,
+    reject,
+  };
+
+  heavyMediaJobs.set(key, job as HeavyMediaJob<unknown>);
+  heavyMediaQueue.push(job as HeavyMediaJob<unknown>);
+  sortHeavyMediaQueue();
+  pumpHeavyMediaQueue();
+  return promise;
+}
+
+function promoteHeavyMediaJob(key: string): void {
+  const existing = heavyMediaJobs.get(key);
+  if (!existing || existing.started) {
+    return;
+  }
+
+  if (existing.priority !== 'interactive') {
+    existing.priority = 'interactive';
+    sortHeavyMediaQueue();
+  }
+}
+
+function getChapterProxyJobKey(chapterId: number, assetId: number): string {
+  return `chapterProxy:${chapterId}:${assetId}`;
+}
+
+function getReverseQuickJobKey(chapterId: number, assetId: number): string {
+  return `reverseQuickWarm:${chapterId}:${assetId}`;
+}
+
+function getReverseFullJobKey(chapterId: number, assetId: number): string {
+  return `reverseFullWarm:${chapterId}:${assetId}`;
+}
+
+function getTranscriptionJobKey(chapterId: number): string {
+  return `transcription:${chapterId}`;
 }
 
 function pumpChapterMediaPrewarmQueue() {
@@ -1078,7 +1166,12 @@ export function scheduleChapterReverseProxyFullWarm(
 
   const timer = setTimeout(() => {
     chapterReverseProxyBackgroundTimers.delete(lockKey);
-    void ensureChapterReverseProxyFullReady(chapter, asset, normalizedProxyOptions).catch((error) => {
+    void ensureChapterReverseProxyFullReady(
+      chapter,
+      asset,
+      normalizedProxyOptions,
+      'background'
+    ).catch((error) => {
       console.warn(
         `[ReverseProxy] Failed background full warm chapter=${chapter.id} asset=${asset.id}:`,
         error
@@ -1137,6 +1230,7 @@ export function invalidateChapterReverseProxy(chapterId: number, assetId: number
   const lockKey = `${chapterId}:${assetId}`;
   bumpGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   chapterReverseProxyErrors.delete(lockKey);
+  reverseQuickExecutionModes.delete(lockKey);
   clearChapterReverseProxyBackgroundTimer(lockKey);
   invalidateChapterReverseProxyVariant(chapterId, assetId, 'full');
   invalidateChapterReverseProxyVariant(chapterId, assetId, 'quick');
@@ -1145,13 +1239,30 @@ export function invalidateChapterReverseProxy(chapterId: number, assetId: number
 export async function ensureChapterReverseProxyQuickReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
   asset: Asset,
-  proxyOptions?: ProxyOptions
+  proxyOptions?: ProxyOptions,
+  options: {
+    priority?: HeavyMediaJobPriority;
+    executionMode?: ReverseProxyExecutionMode;
+  } = {}
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
   }
 
   const lockKey = `${chapter.id}:${asset.id}`;
+  const jobKey = getReverseQuickJobKey(chapter.id, asset.id);
+  const queuePriority = options.priority ?? 'background';
+  const requestedExecutionMode = options.executionMode ?? 'background';
+  const currentExecutionMode = reverseQuickExecutionModes.get(lockKey) ?? 'background';
+  const nextExecutionMode =
+    requestedExecutionMode === 'interactive' || currentExecutionMode === 'interactive'
+      ? 'interactive'
+      : 'background';
+  reverseQuickExecutionModes.set(lockKey, nextExecutionMode);
+  if (queuePriority === 'interactive') {
+    promoteHeavyMediaJob(jobKey);
+  }
+
   const generationEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   const inFlight = chapterReverseProxyQuickGenerationLocks.get(lockKey);
   if (inFlight && inFlight.epoch === generationEpoch) {
@@ -1175,45 +1286,49 @@ export async function ensureChapterReverseProxyQuickReady(
     }
 
     try {
-      if (fs.existsSync(quickTempPath)) {
-        try {
-          fs.unlinkSync(quickTempPath);
-        } catch {
-          // Ignore stale temp cleanup errors.
-        }
-      }
-
-      let inputPath = asset.file_path;
-      let inputStartTime = chapter.start_time;
-      let inputEndTime = chapter.end_time;
-      let fps = 10;
-
-      let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-      chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-      const reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
-      if (reusableChapterProxy) {
-        try {
-          const chapterProxyMetadata = await getVideoMetadata(reusableChapterProxy.file_path, 5000);
-          if (chapterProxyMetadata.duration > 0.1) {
-            const chapterDuration = Math.max(0.1, chapter.end_time - chapter.start_time);
-            inputPath = reusableChapterProxy.file_path;
-            inputStartTime = 0;
-            inputEndTime = Math.min(chapterProxyMetadata.duration, chapterDuration);
-            fps = Math.max(5, Math.min(10, Math.round(chapterProxyMetadata.fps) || 5));
+      await enqueueHeavyMediaJob(jobKey, 'reverseQuickWarm', queuePriority, async () => {
+        if (fs.existsSync(quickTempPath)) {
+          try {
+            fs.unlinkSync(quickTempPath);
+          } catch {
+            // Ignore stale temp cleanup errors.
           }
-        } catch {
-          // Fallback to source media if chapter proxy metadata lookup fails.
         }
-      }
 
-      await generateChapterReverseProxy(inputPath, quickTempPath, {
-        startTime: inputStartTime,
-        endTime: inputEndTime,
-        fps,
-        encodingMode: normalizedProxyOptions.encodingMode,
-        quality: normalizedProxyOptions.quality,
-        chunkDurationSec: 45,
-        maxParallelChunks: 3,
+        let inputPath = asset.file_path;
+        let inputStartTime = chapter.start_time;
+        let inputEndTime = chapter.end_time;
+        let fps = 10;
+
+        let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
+        chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
+        const reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+        if (reusableChapterProxy) {
+          try {
+            const chapterProxyMetadata = await getVideoMetadata(reusableChapterProxy.file_path, 5000);
+            if (chapterProxyMetadata.duration > 0.1) {
+              const chapterDuration = Math.max(0.1, chapter.end_time - chapter.start_time);
+              inputPath = reusableChapterProxy.file_path;
+              inputStartTime = 0;
+              inputEndTime = Math.min(chapterProxyMetadata.duration, chapterDuration);
+              fps = Math.max(5, Math.min(10, Math.round(chapterProxyMetadata.fps) || 5));
+            }
+          } catch {
+            // Fallback to source media if chapter proxy metadata lookup fails.
+          }
+        }
+
+        const executionMode = reverseQuickExecutionModes.get(lockKey) ?? requestedExecutionMode;
+        await generateChapterReverseProxy(inputPath, quickTempPath, {
+          startTime: inputStartTime,
+          endTime: inputEndTime,
+          fps,
+          encodingMode: normalizedProxyOptions.encodingMode,
+          quality: normalizedProxyOptions.quality,
+          chunkDurationSec: 45,
+          maxParallelChunks: executionMode === 'interactive' ? 2 : 1,
+          executionMode,
+        });
       });
 
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -1256,24 +1371,30 @@ export async function ensureChapterReverseProxyQuickReady(
     if (currentLock?.promise === task) {
       chapterReverseProxyQuickGenerationLocks.delete(lockKey);
     }
+    reverseQuickExecutionModes.delete(lockKey);
   }
 }
 
 async function ensureChapterReverseProxyFullReady(
   chapter: NonNullable<Awaited<ReturnType<typeof getChapter>>>,
   asset: Asset,
-  proxyOptions?: ProxyOptions
+  proxyOptions?: ProxyOptions,
+  priority: HeavyMediaJobPriority = 'background'
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
   }
 
   const lockKey = `${chapter.id}:${asset.id}`;
+  const jobKey = getReverseFullJobKey(chapter.id, asset.id);
   clearChapterReverseProxyBackgroundTimer(lockKey);
 
   const generationEpoch = getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   const inFlight = chapterReverseProxyGenerationLocks.get(lockKey);
   if (inFlight && inFlight.epoch === generationEpoch) {
+    if (priority === 'interactive') {
+      promoteHeavyMediaJob(jobKey);
+    }
     return inFlight.promise;
   }
 
@@ -1290,7 +1411,7 @@ async function ensureChapterReverseProxyFullReady(
     let generatedPath: string | undefined;
 
     try {
-      await enqueueChapterReverseProxy(async () => {
+      await enqueueHeavyMediaJob(jobKey, 'reverseFullWarm', priority, async () => {
         if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
           generatedPath = proxyPath;
           chapterReverseProxyErrors.delete(lockKey);
@@ -1312,7 +1433,8 @@ async function ensureChapterReverseProxyFullReady(
           encodingMode: normalizedProxyOptions.encodingMode,
           quality: normalizedProxyOptions.quality,
           chunkDurationSec: 11,
-          maxParallelChunks: 3,
+          maxParallelChunks: 1,
+          executionMode: 'background',
         });
 
         if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -1365,16 +1487,21 @@ export async function ensureChapterProxyReady(
   chapter: ChapterRecord,
   asset: Asset,
   encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
-  quality: 'high' | 'balanced' | 'fast' = 'balanced'
+  quality: 'high' | 'balanced' | 'fast' = 'balanced',
+  priority: HeavyMediaJobPriority = 'interactive'
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
   }
 
   const lockKey = `${chapter.id}:${asset.id}`;
+  const jobKey = getChapterProxyJobKey(chapter.id, asset.id);
   const generationEpoch = getGenerationEpoch(chapterProxyGenerationEpochs, lockKey);
   const inFlight = chapterProxyGenerationLocks.get(lockKey);
   if (inFlight && inFlight.epoch === generationEpoch) {
+    if (priority === 'interactive') {
+      promoteHeavyMediaJob(jobKey);
+    }
     return inFlight.promise;
   }
 
@@ -1433,38 +1560,45 @@ export async function ensureChapterProxyReady(
     }
 
     try {
-      deleteFileIfExists(tempPath, 'ChapterProxy');
-      await updateChapterProxyStatus(chapterProxyId, 'generating');
+      await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async () => {
+        deleteFileIfExists(tempPath, 'ChapterProxy');
+        await updateChapterProxyStatus(chapterProxyId, 'generating');
 
-      const metadata = await generateAIProxy(
-        asset.file_path,
-        tempPath,
-        undefined,
-        undefined,
-        encodingMode,
-        quality,
-        {
-          startTime: chapter.start_time,
-          endTime: chapter.end_time,
+        const metadata = await generateAIProxy(
+          asset.file_path,
+          tempPath,
+          undefined,
+          undefined,
+          encodingMode,
+          quality,
+          {
+            startTime: chapter.start_time,
+            endTime: chapter.end_time,
+          }
+        );
+
+        if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
+          deleteFileIfExists(tempPath, 'ChapterProxy');
+          return;
         }
-      );
+
+        deleteFileIfExists(proxyPath, 'ChapterProxy');
+        fs.renameSync(tempPath, proxyPath);
+
+        await updateChapterProxyMetadata(chapterProxyId, {
+          width: metadata.width,
+          height: metadata.height,
+          framerate: metadata.framerate,
+          file_size: metadata.fileSize,
+          duration: metadata.duration,
+        });
+        await updateChapterProxyStatus(chapterProxyId, 'ready');
+      });
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
         deleteFileIfExists(tempPath, 'ChapterProxy');
         return undefined;
       }
-
-      deleteFileIfExists(proxyPath, 'ChapterProxy');
-      fs.renameSync(tempPath, proxyPath);
-
-      await updateChapterProxyMetadata(chapterProxyId, {
-        width: metadata.width,
-        height: metadata.height,
-        framerate: metadata.framerate,
-        file_size: metadata.fileSize,
-        duration: metadata.duration,
-      });
-      await updateChapterProxyStatus(chapterProxyId, 'ready');
 
       return proxyPath;
     } catch (error) {
@@ -1518,6 +1652,7 @@ export async function getAgentGroundingStatus(
   chapterId: number,
   options?: {
     ensureReady?: boolean;
+    proxyOptions?: ProxyOptions;
   }
 ): Promise<AgentGroundingStatusData> {
   const chapter = await getChapter(chapterId);
@@ -1577,7 +1712,14 @@ export async function getAgentGroundingStatus(
     }
 
     if (options?.ensureReady) {
-      await ensureChapterProxyReady(chapter, asset);
+      const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
+      await ensureChapterProxyReady(
+        chapter,
+        asset,
+        normalizedProxyOptions.encodingMode,
+        normalizedProxyOptions.quality,
+        'interactive'
+      );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
       chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
       reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
@@ -1655,6 +1797,10 @@ export async function invalidateChapterProxy(
 }
 
 async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
+  if (!isAudiowaveformAvailable()) {
+    return;
+  }
+
   const lockKey = `${asset.id}:-1`;
   const inFlight = chapterWaveformPrewarmLocks.get(lockKey);
   if (inFlight) {
@@ -1668,17 +1814,6 @@ async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
 
     const existingTier1 = await getWaveform(asset.id, -1, 1);
     if (existingTier1) {
-      return;
-    }
-
-    const isMkv = path.extname(asset.file_path).toLowerCase() === '.mkv';
-    if (isMkv) {
-      await generateWaveformTiersForMkvTracks(asset.file_path, asset.id, undefined, {
-        includeTier2: false,
-        playbackActive: false,
-        trackIndices: [-1],
-        maxParallelTracks: 1,
-      });
       return;
     }
 
@@ -1720,26 +1855,24 @@ async function prewarmChapterMedia(
   }
 
   const normalizedProxyOptions = normalizeProxyOptions(proxyOptions);
-  const jobs: Array<Promise<unknown>> = [
-    ensureAssetMixWaveformReady(asset),
-  ];
-
   if (asset.file_type === 'video') {
-    jobs.push(
-      ensureChapterProxyReady(
+    try {
+      await ensureChapterProxyReady(
         chapter,
         asset,
         normalizedProxyOptions.encodingMode,
-        normalizedProxyOptions.quality
-      )
-    );
+        normalizedProxyOptions.quality,
+        'background'
+      );
+    } catch (error) {
+      console.warn(`[ChapterPrewarm] Failed chapter proxy chapter=${chapter.id} asset=${asset.id}:`, error);
+    }
   }
 
-  const results = await Promise.allSettled(jobs);
-  for (const result of results) {
-    if (result.status === 'rejected') {
-      console.warn(`[ChapterPrewarm] Failed chapter=${chapter.id} asset=${asset.id}:`, result.reason);
-    }
+  try {
+    await ensureAssetMixWaveformReady(asset);
+  } catch (error) {
+    console.warn(`[ChapterPrewarm] Failed waveform chapter=${chapter.id} asset=${asset.id}:`, error);
   }
 }
 
@@ -1764,12 +1897,12 @@ export function scheduleChapterMediaPrewarm(
   });
 }
 
-function clipOverlapsChapter(clip: Clip, chapterStart: number, chapterEnd: number): boolean {
-  const duration = clip.out_point - clip.in_point;
-  if (!Number.isFinite(duration) || duration <= 0) return false;
-  const clipStart = clip.start_time;
-  const clipEnd = clip.start_time + duration;
-  return clipEnd > chapterStart && clipStart < chapterEnd;
+export function queueChapterTranscription<T>(
+  chapterId: number,
+  priority: HeavyMediaJobPriority,
+  run: () => Promise<T>
+): Promise<T> {
+  return enqueueHeavyMediaJob(getTranscriptionJobKey(chapterId), 'transcription', priority, run);
 }
 
 export async function buildAgentChatContext(
@@ -1793,7 +1926,6 @@ export async function buildAgentChatContext(
         id: number;
         assetId: number;
         trackIndex: number;
-        startTime: number;
         inPoint: number;
         outPoint: number;
         role: string | null;
@@ -1819,12 +1951,11 @@ export async function buildAgentChatContext(
   const chapterAssets = projectAssets.filter((asset) => chapterAssetSet.has(asset.id));
   const chapterClips = projectClips
     .filter((clip) => chapterAssetSet.has(clip.asset_id))
-    .filter((clip) => clipOverlapsChapter(clip, chapter.start_time, chapter.end_time))
+    .filter((clip) => clipOverlapsChapterSourceRange(clip, chapter))
     .map((clip) => ({
       id: clip.id,
       assetId: clip.asset_id,
       trackIndex: clip.track_index,
-      startTime: clip.start_time,
       inPoint: clip.in_point,
       outPoint: clip.out_point,
       role: clip.role,
@@ -1851,7 +1982,8 @@ export async function buildAgentChatContext(
         chapter,
         asset,
         normalizedProxyOptions.encodingMode,
-        normalizedProxyOptions.quality
+        normalizedProxyOptions.quality,
+        'interactive'
       );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
       chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);

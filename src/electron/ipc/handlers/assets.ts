@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ipcMain } from 'electron';
-import { FFmpegError, getVideoMetadata, isValidVideo } from '../../../pipeline/ffmpeg.js';
+import { FFmpegError, validateVideoFile } from '../../../pipeline/ffmpeg.js';
 import type { AssetMetadata } from '../../../shared/types/database.js';
 import { createAsset, deleteAsset, getAsset, getAssetsByProject } from '../../database/index.js';
 import { createLogger } from '../../logger.js';
@@ -51,9 +51,10 @@ export function registerAssetHandlers(): void {
       let duration: number | null = null;
 
       if (fileType === 'video') {
+        let videoMetadata = null;
         try {
-          const valid = await isValidVideo(filePath);
-          if (!valid) {
+          videoMetadata = await validateVideoFile(filePath, 5000);
+          if (!videoMetadata) {
             return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
           }
         } catch (error) {
@@ -67,8 +68,7 @@ export function registerAssetHandlers(): void {
           return createErrorResponse('Failed to validate video file', IPC_ERROR_CODES.INVALID_FORMAT);
         }
 
-        try {
-          const videoMetadata = await getVideoMetadata(filePath, 60000);
+        if (videoMetadata) {
           metadata = {
             width: videoMetadata.width,
             height: videoMetadata.height,
@@ -81,8 +81,6 @@ export function registerAssetHandlers(): void {
             duration: videoMetadata.duration,
           };
           duration = videoMetadata.duration;
-        } catch (error) {
-          logger.warn('Failed to extract video metadata:', error);
         }
       }
 

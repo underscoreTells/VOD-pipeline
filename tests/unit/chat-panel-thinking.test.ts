@@ -202,6 +202,7 @@ describe("chat panel thinking disclosure", () => {
             label: "Drafting rough-cut proposals...",
             nodeName: "draftRoughCutProposals",
             passIndex: 1,
+            stepIndex: 1,
             createdAt: "2026-04-18T12:00:00.000Z",
           },
         ],
@@ -217,7 +218,43 @@ describe("chat panel thinking disclosure", () => {
     expect(body).toContain("message-live-status");
     expect(body).toContain("Thinking (1)...");
     expect(body).toContain("Drafting rough-cut proposals...");
-    expect(body).toContain("Pass 1 · draftRoughCutProposals");
+    expect(body).toContain("Step 1 · Pass 1 · draftRoughCutProposals");
+  });
+
+  it("counts unique execution steps instead of raw trace events in the disclosure summary", () => {
+    resetAgentState();
+    agentState.conversations = [createConversation()];
+    agentState.selectedConversationId = 12;
+    agentState.messages = [
+      {
+        role: "assistant",
+        content: "Final response.",
+        thinkingMarkdown: null,
+        trace: Array.from({ length: 20 }, (_, index) => {
+          const stepIndex = Math.floor(index / 5) + 1;
+          return {
+            id: `trace-${index + 1}`,
+            status: index % 5 === 0 ? "processing_chat" : "tool_completed",
+            label:
+              index % 5 === 0
+                ? `Working on turn step ${stepIndex}...`
+                : `Tool event ${index + 1}`,
+            nodeName: index % 5 === 0 ? "conversation_runner" : "draftRoughCutProposals",
+            stepIndex,
+            createdAt: `2026-04-18T12:00:${String(index).padStart(2, "0")}.000Z`,
+          };
+        }),
+        id: "assistant-steps",
+        databaseId: 102,
+        timestamp: new Date("2026-04-18T12:00:30.000Z"),
+        isStreaming: false,
+      },
+    ];
+
+    const { body } = render(ChatPanel);
+
+    expect(body).toContain("Thought for 4 steps");
+    expect(body).not.toContain("Thought for 20 steps");
   });
 
   it("omits the suggestions tray when no pending suggestions remain", () => {

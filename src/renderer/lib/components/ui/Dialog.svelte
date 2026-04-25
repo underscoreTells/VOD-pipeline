@@ -14,16 +14,18 @@
 </script>
 
 {#if open}
-  <div
-    class="fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60"
-    role="presentation"
-    tabindex="-1"
-    onclick={onClose}
-    onkeydown={(e) => e.key === 'Escape' && onClose?.()}
-  >
+  <div class="fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center">
+    <button
+      type="button"
+      class="absolute inset-0 bg-black/60"
+      aria-label="Close dialog"
+      onclick={onClose}
+    ></button>
     <div
-      class="flex max-h-[90vh] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border-default bg-surface-raised"
-      onclick={(e) => e.stopPropagation()}
+      class="relative z-10 flex max-h-[90vh] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border-default bg-surface-raised"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title ?? 'Dialog'}
     >
       {#if title}
         <div class="flex items-center justify-between border-b border-border-subtle px-5 py-4">

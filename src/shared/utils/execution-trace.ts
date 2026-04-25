@@ -7,11 +7,14 @@ const STREAM_STATUS_LABELS: Record<string, string> = {
   loading_detailed_transcript_context: "Fetching detailed transcript for a better answer...",
 };
 
+const TURN_STEP_LABEL_PATTERN = /Working on turn step (\d+)\.\.\./i;
+
 type TraceEventLike = {
   status: string;
   message?: string;
   nodeName?: string;
   passIndex?: number;
+  stepIndex?: number;
 };
 
 export function humanizeExecutionStatus(status: string): string {
@@ -33,13 +36,15 @@ export function createExecutionTraceEntry(
   const nodeName = typeof event.nodeName === "string" && event.nodeName.length > 0
     ? event.nodeName
     : undefined;
+  const stepIndex = typeof event.stepIndex === "number" ? event.stepIndex : undefined;
 
   return {
-    id: `${passIndex ?? 0}:${nodeName ?? "unknown"}:${event.status}:${label}`,
+    id: `${stepIndex ?? "na"}:${passIndex ?? "na"}:${nodeName ?? "unknown"}:${event.status}:${label}`,
     status: event.status,
     label,
     nodeName,
     passIndex,
+    stepIndex,
     createdAt,
   };
 }
@@ -64,6 +69,38 @@ export function getLatestExecutionTraceEntry(
   }
 
   return entries[entries.length - 1] ?? null;
+}
+
+export function getExecutionTraceStepIndex(
+  entry: Pick<ExecutionTraceEntry, "label" | "stepIndex">
+): number | undefined {
+  if (typeof entry.stepIndex === "number" && Number.isFinite(entry.stepIndex)) {
+    return entry.stepIndex;
+  }
+
+  const match = entry.label.match(TURN_STEP_LABEL_PATTERN);
+  if (!match) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function countExecutionTraceSteps(entries: ExecutionTraceEntry[]): number {
+  if (entries.length === 0) {
+    return 0;
+  }
+
+  const uniqueSteps = new Set<number>();
+  for (const entry of entries) {
+    const stepIndex = getExecutionTraceStepIndex(entry);
+    if (typeof stepIndex === "number") {
+      uniqueSteps.add(stepIndex);
+    }
+  }
+
+  return uniqueSteps.size > 0 ? uniqueSteps.size : 1;
 }
 
 export function parseExecutionTraceJson(value: string | null | undefined): ExecutionTraceEntry[] {
@@ -99,6 +136,7 @@ export function parseExecutionTraceJson(value: string | null | undefined): Execu
           label: record.label,
           nodeName: typeof record.nodeName === "string" ? record.nodeName : undefined,
           passIndex: typeof record.passIndex === "number" ? record.passIndex : undefined,
+          stepIndex: typeof record.stepIndex === "number" ? record.stepIndex : undefined,
           createdAt: record.createdAt,
         };
       })

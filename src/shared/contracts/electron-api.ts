@@ -28,7 +28,6 @@ export interface ProxyOptions {
 }
 
 export interface WaveformGenerateOptions {
-  includeSourceTracks?: boolean;
   playbackActive?: boolean;
 }
 
@@ -93,6 +92,7 @@ export interface AgentGroundingStatusParams {
   projectId: string;
   chapterId: string;
   ensureReady?: boolean;
+  proxyOptions?: ProxyOptions;
 }
 
 export interface AgentGroundingStatusResult {
@@ -261,7 +261,6 @@ export interface CreateClipInput {
   projectId: number;
   assetId: number;
   trackIndex: number;
-  startTime: number;
   inPoint: number;
   outPoint: number;
   role?: Clip['role'];
@@ -378,6 +377,7 @@ export interface GetChapterReverseProxyResult {
 export interface GetChapterReverseProxyOptions {
   ensureReady?: boolean;
   proxyOptions?: ProxyOptions;
+  requestMode?: 'background' | 'interactive';
 }
 
 export interface TimelineStateResult {

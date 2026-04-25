@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity';
   import { timelineState, selectClip, setPlayhead } from '../state/timeline.svelte';
   import { executeDeleteClip } from '../state/project-detail.svelte';
   import { collapseBeat } from '../state/layout.svelte';
@@ -7,6 +8,7 @@
   import { ROLE_CONFIG, ROLE_KEYS, Star, ChevronRight, ChevronDown } from '../constants';
   import type { ClipRole, RoleConfig } from '../constants';
   import { cn } from '../utils/cn';
+  import { compareClipsBySourceTime } from '../../../shared/utils/clip-timing.js';
   
   interface Props {
     class?: string;
@@ -23,12 +25,7 @@
   }: Props = $props();
 
   const sortedClips = $derived.by(() => {
-    return [...clips].sort((a, b) => {
-      if (Math.abs(a.start_time - b.start_time) > 0.0001) {
-        return a.start_time - b.start_time;
-      }
-      return a.id - b.id;
-    });
+    return [...clips].sort(compareClipsBySourceTime);
   });
 
   const clipSections = $derived.by(() => {
@@ -63,7 +60,7 @@
   // Handle clip click
   function handleClipClick(clip: Clip) {
     selectClip(clip.id, false);
-    setPlayhead(clip.start_time);
+    setPlayhead(clip.in_point);
   }
 
   let contextMenu = $state({
@@ -72,7 +69,7 @@
     y: 0,
     clip: null as Clip | null,
   });
-  let collapsedSectionKeys = $state<Set<string>>(new Set());
+  const collapsedSectionKeys = new SvelteSet<string>();
 
   const hasAnyCollapsedSections = $derived.by(() => clipSections.some((section) => collapsedSectionKeys.has(section.key)));
 
@@ -81,29 +78,31 @@
   }
 
   function toggleSection(sectionKey: string) {
-    const next = new Set(collapsedSectionKeys);
-    if (next.has(sectionKey)) {
-      next.delete(sectionKey);
+    if (collapsedSectionKeys.has(sectionKey)) {
+      collapsedSectionKeys.delete(sectionKey);
     } else {
-      next.add(sectionKey);
+      collapsedSectionKeys.add(sectionKey);
     }
-    collapsedSectionKeys = next;
   }
 
   function collapseAllSections() {
-    collapsedSectionKeys = new Set(clipSections.map((section) => section.key));
+    collapsedSectionKeys.clear();
+    for (const section of clipSections) {
+      collapsedSectionKeys.add(section.key);
+    }
   }
 
   function expandAllSections() {
-    collapsedSectionKeys = new Set();
+    collapsedSectionKeys.clear();
   }
 
   $effect(() => {
     const keys = clipSections.map((section) => section.key);
     const valid = new Set(keys);
-    const next = new Set(Array.from(collapsedSectionKeys).filter((key) => valid.has(key)));
-    if (next.size !== collapsedSectionKeys.size) {
-      collapsedSectionKeys = next;
+    for (const key of Array.from(collapsedSectionKeys)) {
+      if (!valid.has(key)) {
+        collapsedSectionKeys.delete(key);
+      }
     }
   });
 
@@ -232,11 +231,8 @@
         {#if !isSectionCollapsed(section.key)}
           <div class="ml-1.5 flex flex-col border-l border-border-subtle pl-3.5">
             {#each roleClips as clip (clip.id)}
-              {@const clipDuration = Math.max(0, clip.out_point - clip.in_point)}
-              {@const localStart = toChapterLocal(clip.start_time)}
-              {@const localEnd = chapterDuration !== null
-                ? Math.min(localStart + clipDuration, Math.max(0, chapterDuration))
-                : localStart + clipDuration}
+              {@const localStart = toChapterLocal(clip.in_point)}
+              {@const localEnd = toChapterLocal(clip.out_point)}
               {@const isSelected = timelineState.selectedClipIds.has(clip.id)}
               <div 
                 class="mb-px cursor-pointer rounded-r-[4px] border-l-2 border-l-transparent px-2 py-1.5 transition-all hover:bg-surface-hover"

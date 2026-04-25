@@ -73,6 +73,7 @@ export async function autoTranscribeChapters(
   options?: {
     skipIfExists?: boolean;
     awaitCompletion?: boolean;
+    background?: boolean;
   }
 ): Promise<void> {
   if (chapterIds.length === 0) {
@@ -84,7 +85,10 @@ export async function autoTranscribeChapters(
     return;
   }
 
-  const startOptions = options?.skipIfExists ? { skipIfExists: true } : undefined;
+  const startOptions = {
+    ...(options?.skipIfExists ? { skipIfExists: true } : {}),
+    ...(options?.background ? { background: true } : {}),
+  };
   if (options?.awaitCompletion) {
     for (const chapterId of chapterIds) {
       await runChapterTranscription(chapterId, deps, startOptions);
@@ -104,5 +108,6 @@ export async function transcribeMissingChaptersOnReopen(
   await autoTranscribeChapters(chapterIds, deps, {
     skipIfExists: true,
     awaitCompletion: true,
+    background: true,
   });
 }

@@ -21,6 +21,7 @@ describe("agent stream event enrichment", () => {
       status: "processing_chat",
       progress: 25,
       nodeName: "conversation_runner",
+      stepIndex: 3,
       message: "Thinking...",
     };
 
@@ -30,6 +31,7 @@ describe("agent stream event enrichment", () => {
       status: "processing_chat",
       progress: 25,
       nodeName: "conversation_runner",
+      stepIndex: 3,
       message: "Thinking...",
     });
   });
@@ -57,6 +59,7 @@ describe("agent stream event enrichment", () => {
       toolCallId: "tool-1",
       toolName: "draftRoughCutProposals",
       state: "completed",
+      stepIndex: 4,
       message: "saved",
       output: '{"acceptedCount":1}',
     };
@@ -67,6 +70,7 @@ describe("agent stream event enrichment", () => {
       toolCallId: "tool-1",
       toolName: "draftRoughCutProposals",
       state: "completed",
+      stepIndex: 4,
       message: "saved",
       output: '{"acceptedCount":1}',
       input: undefined,

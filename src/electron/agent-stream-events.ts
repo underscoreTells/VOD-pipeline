@@ -19,6 +19,7 @@ export function enrichAgentStreamEvent(
       status: message.status,
       progress: message.progress,
       nodeName: message.nodeName,
+      stepIndex: message.stepIndex,
       message: message.message,
     };
   }
@@ -39,6 +40,7 @@ export function enrichAgentStreamEvent(
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       state: message.state,
+      stepIndex: message.stepIndex,
       message: message.message,
       input: message.input,
       output: message.output,

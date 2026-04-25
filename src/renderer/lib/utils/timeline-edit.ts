@@ -1,3 +1,5 @@
+import { splitClipAtSourceTime } from '../../../shared/utils/clip-timing.js';
+
 export interface TimelineInterval {
   start: number;
   end: number;
@@ -9,8 +11,8 @@ export interface ClipRange {
 }
 
 export interface SplitClipPoints {
+  leftInPoint: number;
   leftOutPoint: number;
-  rightStartTime: number;
   rightInPoint: number;
   rightOutPoint: number;
 }
@@ -68,43 +70,18 @@ export function buildDefaultClipRangeAtCursor(
 }
 
 export function splitClipAtTimelineTime(params: {
-  clipStartTime: number;
   inPoint: number;
   outPoint: number;
   splitTime: number;
   minDuration?: number;
 }): SplitClipPoints | null {
-  const {
-    clipStartTime,
-    inPoint,
-    outPoint,
-    splitTime,
-    minDuration = 0.05,
-  } = params;
-
-  if (!Number.isFinite(clipStartTime) || !Number.isFinite(inPoint) || !Number.isFinite(outPoint) || !Number.isFinite(splitTime)) {
-    return null;
-  }
-
-  const clipDuration = outPoint - inPoint;
-  if (clipDuration <= 0) return null;
-
-  const clipEndTime = clipStartTime + clipDuration;
-  if (splitTime <= clipStartTime + minDuration) return null;
-  if (splitTime >= clipEndTime - minDuration) return null;
-
-  const splitOffset = splitTime - clipStartTime;
-  const leftOutPoint = inPoint + splitOffset;
-  const rightInPoint = leftOutPoint;
-  const rightOutPoint = outPoint;
-
-  if (leftOutPoint - inPoint < minDuration) return null;
-  if (rightOutPoint - rightInPoint < minDuration) return null;
+  const split = splitClipAtSourceTime(params);
+  if (!split) return null;
 
   return {
-    leftOutPoint,
-    rightStartTime: splitTime,
-    rightInPoint,
-    rightOutPoint,
+    leftInPoint: split.leftInPoint,
+    leftOutPoint: split.leftOutPoint,
+    rightInPoint: split.rightInPoint,
+    rightOutPoint: split.rightOutPoint,
   };
 }

@@ -36,7 +36,7 @@ export function appendAssistantTextDeltaToDraft(
 export function appendTraceEventToDraft(
   messages: ChatMessage[],
   clientRequestId: string,
-  event: Pick<AgentStreamStatusEvent, "status" | "message" | "nodeName" | "passIndex">
+  event: Pick<AgentStreamStatusEvent, "status" | "message" | "nodeName" | "passIndex" | "stepIndex">
 ): ChatMessage[] {
   return updateDraftMessage(messages, clientRequestId, (message) => ({
     ...message,

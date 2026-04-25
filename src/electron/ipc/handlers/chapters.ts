@@ -226,6 +226,7 @@ export function registerChapterHandlers(): void {
     const chapterId = toNumberOrNull(payload?.chapterId);
     const assetId = toNumberOrNull(payload?.assetId);
     const ensureReady = Boolean(payload?.ensureReady);
+    const requestMode = payload?.requestMode === 'interactive' ? 'interactive' : 'background';
     const proxyOptions =
       payload?.proxyOptions && typeof payload.proxyOptions === 'object'
         ? payload.proxyOptions
@@ -266,8 +267,15 @@ export function registerChapterHandlers(): void {
       const statusBefore = await getChapterReverseProxyStatus(chapterId, assetId);
 
       if (ensureReady) {
-        if (statusBefore.status === 'missing' || statusBefore.status === 'error') {
-          void ensureChapterReverseProxyQuickReady(chapter, asset, proxyOptions)
+        if (
+          statusBefore.status === 'missing'
+          || statusBefore.status === 'error'
+          || statusBefore.status === 'generating'
+        ) {
+          void ensureChapterReverseProxyQuickReady(chapter, asset, proxyOptions, {
+            priority: requestMode,
+            executionMode: requestMode,
+          })
             .finally(() => {
               scheduleChapterReverseProxyFullWarm(chapter, asset, proxyOptions);
             })

@@ -34,6 +34,10 @@
     canSubmitComposerMessage,
     shouldInterceptComposerEnter,
   } from './chat-panel-composer.js';
+  import {
+    countExecutionTraceSteps,
+    getExecutionTraceStepIndex,
+  } from "../../../shared/utils/execution-trace.js";
   import { cn } from "../utils/cn";
 
   interface Props {
@@ -410,8 +414,16 @@
     return formatDuration(suggestion.in_point, suggestion.out_point);
   }
 
-  function formatTraceMeta(message: { nodeName?: string; passIndex?: number }) {
+  function getTraceStepCount(message: { trace: Array<{ label: string; stepIndex?: number }> }) {
+    return countExecutionTraceSteps(message.trace);
+  }
+
+  function formatTraceMeta(message: { label: string; nodeName?: string; passIndex?: number; stepIndex?: number }) {
     const parts: string[] = [];
+    const stepIndex = getExecutionTraceStepIndex(message);
+    if (typeof stepIndex === "number") {
+      parts.push(`Step ${stepIndex}`);
+    }
     if (typeof message.passIndex === "number") {
       parts.push(`Pass ${message.passIndex}`);
     }
@@ -427,7 +439,7 @@
 
   function getVisibleStreamingStatusMeta(message: {
     isStreaming?: boolean;
-    trace: Array<{ nodeName?: string; passIndex?: number }>;
+    trace: Array<{ label: string; nodeName?: string; passIndex?: number; stepIndex?: number }>;
   }) {
     if (!message.isStreaming || message.trace.length === 0) {
       return null;
@@ -703,9 +715,10 @@
                 <summary class="ui-summary-reset flex list-none items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
                   <span class="thinking-chevron inline-flex items-center text-text-disabled transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-open/thinking:rotate-90"><Icon icon={ChevronRight} size={12} /></span>
                   {#if msg.isStreaming}
-                    Thinking{msg.trace.length > 0 ? ` (${msg.trace.length})` : ''}...
+                    Thinking{msg.trace.length > 0 ? ` (${getTraceStepCount(msg)})` : ''}...
                   {:else}
-                    Thought for {msg.trace.length} step{msg.trace.length !== 1 ? 's' : ''}
+                    {@const traceStepCount = getTraceStepCount(msg)}
+                    Thought for {traceStepCount} step{traceStepCount !== 1 ? 's' : ''}
                   {/if}
                 </summary>
                 <div class="thinking-body ml-4 pt-2">

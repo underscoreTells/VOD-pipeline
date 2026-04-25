@@ -1,10 +1,8 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { ipcMain } from 'electron';
 import { getAsset, getWaveform, saveWaveform } from '../../database/index.js';
 import {
   generateWaveformTiers,
-  generateWaveformTiersForMkvTracks,
   WaveformError,
 } from '../../../pipeline/waveform.js';
 import { createLogger } from '../../logger.js';
@@ -23,10 +21,9 @@ export function registerWaveformHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, {
     assetId,
     trackIndex,
-    includeSourceTracks,
     playbackActive,
   }) => {
-    logger.info('waveform:generate', assetId, trackIndex, { includeSourceTracks, playbackActive });
+    logger.info('waveform:generate', assetId, trackIndex, { playbackActive });
     try {
       if (!assetId) {
         return createErrorResponse('Asset ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
@@ -42,39 +39,6 @@ export function registerWaveformHandlers(): void {
       }
 
       const requestedTrackIndex = typeof trackIndex === 'number' ? trackIndex : 0;
-      const includeAllSourceTracks = Boolean(includeSourceTracks);
-      const isMkvMixRequest =
-        requestedTrackIndex === -1 &&
-        path.extname(asset.file_path).toLowerCase() === '.mkv';
-
-      if (isMkvMixRequest) {
-        const mkvResults = await generateWaveformTiersForMkvTracks(
-          asset.file_path,
-          assetId,
-          (progress) => {
-            event.sender.send(IPC_CHANNELS.WAVEFORM_PROGRESS, {
-              assetId,
-              trackIndex: progress.trackIndex ?? requestedTrackIndex,
-              progress,
-            });
-          },
-          {
-            includeTier2: false,
-            playbackActive: Boolean(playbackActive),
-            trackIndices: includeAllSourceTracks ? undefined : [requestedTrackIndex],
-          }
-        );
-
-        if (mkvResults && mkvResults.length > 0) {
-          const requestedResult = mkvResults.find((result) => result.trackIndex === requestedTrackIndex) ?? {
-            assetId,
-            trackIndex: requestedTrackIndex,
-            tiers: [],
-          };
-          return createSuccessResponse(requestedResult);
-        }
-      }
-
       const result = await generateWaveformTiers(
         asset.file_path,
         assetId,

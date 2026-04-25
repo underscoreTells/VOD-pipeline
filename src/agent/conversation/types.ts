@@ -32,7 +32,6 @@ export interface ConversationClipContext {
   id: number;
   assetId: number;
   trackIndex: number;
-  startTime: number;
   inPoint: number;
   outPoint: number;
   role: string | null;
@@ -67,12 +66,14 @@ export interface ConversationWriter {
     message?: string;
     progress?: number;
     nodeName?: string;
+    stepIndex?: number;
   }): void;
   writeAssistantTextDelta(delta: string): void;
   writeToolState(event: {
     toolCallId: string;
     toolName: string;
     state: "pending" | "running" | "completed" | "error";
+    stepIndex?: number;
     message?: string;
     input?: Record<string, unknown>;
     output?: string;

@@ -82,6 +82,7 @@ function ensureStreamingSubscriptions(): void {
             message: event.message ?? event.error ?? `${event.toolName} ${event.state}`,
             nodeName: event.toolName,
             passIndex: event.passIndex,
+            stepIndex: event.stepIndex,
           }
         );
         return;

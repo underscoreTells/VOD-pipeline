@@ -33,6 +33,7 @@
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
+  import { getClipVisibleRangeInChapter } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
     getReversePreviewFps,
@@ -93,12 +94,12 @@
     const ranges: Array<{ start: number; end: number }> = [];
     for (const clip of clips) {
       if (clip.asset_id !== asset.id) continue;
-      const duration = clip.out_point - clip.in_point;
-      if (!Number.isFinite(duration) || duration <= 0) continue;
-      const start = clampToChapter(chapter, clip.start_time);
-      const end = clampToChapter(chapter, clip.start_time + duration);
-      if (end <= start) continue;
-      ranges.push({ start, end });
+      const range = getClipVisibleRangeInChapter(clip, chapter);
+      if (!range) continue;
+      ranges.push({
+        start: clampToChapter(chapter, range.start),
+        end: clampToChapter(chapter, range.end),
+      });
     }
 
     ranges.sort((a, b) => a.start - b.start);
@@ -270,11 +271,14 @@
     if (!reverseEnsureRequested || reversePollTimerId !== null) return;
     reversePollTimerId = window.setTimeout(() => {
       reversePollTimerId = null;
-      void refreshReverseProxy(false);
+      void refreshReverseProxy(false, 'background');
     }, 5000);
   }
 
-  async function refreshReverseProxy(ensureReady: boolean): Promise<void> {
+  async function refreshReverseProxy(
+    ensureReady: boolean,
+    requestMode: 'background' | 'interactive' = 'background'
+  ): Promise<void> {
     if (!chapter || !asset || asset.file_type !== 'video' || asset.availability?.exists === false) {
       reverseProxyStatus = 'missing';
       reverseProxyUrl = null;
@@ -294,6 +298,7 @@
       const result = await getChapterReverseProxy(chapter.id, asset.id, {
         ensureReady,
         proxyOptions: buildProxyOptions(settingsState.settings),
+        requestMode,
       });
       if (token !== reverseProxyRequestToken) return;
 
@@ -434,7 +439,7 @@
     if (timelineState.shuttleDirection === -1) {
       if (reverseProxyStatus !== 'ready' || !reverseProxyUrl) {
         if (!reverseEnsureRequested) {
-          void refreshReverseProxy(true);
+          void refreshReverseProxy(true, 'interactive');
         }
 
         reverseStatusMessage = reverseProxyStatus === 'error'
@@ -453,7 +458,7 @@
       if (!reverseProxyIsFinal && reverseProxyQuality === 'quick') {
         reverseStatusMessage = 'Using quick reverse cache while high quality finishes...';
         if (!reverseEnsureRequested) {
-          void refreshReverseProxy(true);
+          void refreshReverseProxy(true, 'interactive');
         }
       } else {
         reverseStatusMessage = null;
@@ -669,7 +674,7 @@
     }
 
     if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
-      void refreshReverseProxy(true);
+      void refreshReverseProxy(true, 'background');
     }
   });
 
@@ -727,7 +732,6 @@
         projectDetail.projectId,
         asset.id,
         0,
-        inPoint,
         inPoint,
         outPoint,
         undefined,

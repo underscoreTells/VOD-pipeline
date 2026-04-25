@@ -23,6 +23,11 @@ import {
   setOutPoint as setClipOutPoint,
   clearSelection as clearClipSelection,
 } from './clip-builder.svelte';
+import {
+  clipOverlapsChapterSourceRange,
+  compareClipsBySourceTime,
+  splitClipAtSourceTime,
+} from '../../../shared/utils/clip-timing.js';
 
 type ShortcutHandler = () => void | Promise<unknown>;
 
@@ -124,27 +129,17 @@ function nudgePlayhead(frames: number) {
 function getChapterScopedClips(): Clip[] {
   const selectedChapter = getSelectedChapter();
   if (!selectedChapter) {
-    return [...timelineState.clips].sort((a, b) =>
-      Math.abs(a.start_time - b.start_time) > 0.0001 ? a.start_time - b.start_time : a.id - b.id
-    );
+    return [...timelineState.clips].sort(compareClipsBySourceTime);
   }
 
   const chapterAssetIds = new Set(getAssetsForChapter(selectedChapter.id));
-  const chapterStart = selectedChapter.start_time;
-  const chapterEnd = selectedChapter.end_time;
 
   return timelineState.clips
     .filter((clip) => {
       if (chapterAssetIds.size > 0 && !chapterAssetIds.has(clip.asset_id)) return false;
-      const duration = clip.out_point - clip.in_point;
-      if (!Number.isFinite(duration) || duration <= 0) return false;
-      const clipStart = clip.start_time;
-      const clipEnd = clip.start_time + duration;
-      return clipEnd > chapterStart && clipStart < chapterEnd;
+      return clipOverlapsChapterSourceRange(clip, selectedChapter);
     })
-    .sort((a, b) =>
-      Math.abs(a.start_time - b.start_time) > 0.0001 ? a.start_time - b.start_time : a.id - b.id
-    );
+    .sort(compareClipsBySourceTime);
 }
 
 function jumpToAdjacentClip(direction: 'previous' | 'next'): boolean {
@@ -155,15 +150,15 @@ function jumpToAdjacentClip(direction: 'previous' | 'next'): boolean {
   const epsilon = 0.01;
 
   if (direction === 'next') {
-    const nextClip = clips.find((clip) => clip.start_time > playhead + epsilon);
+    const nextClip = clips.find((clip) => clip.in_point > playhead + epsilon);
     if (!nextClip) return false;
-    setPlayhead(nextClip.start_time);
+    setPlayhead(nextClip.in_point);
     return true;
   }
 
   for (let i = clips.length - 1; i >= 0; i -= 1) {
-    if (clips[i].start_time < playhead - epsilon) {
-      setPlayhead(clips[i].start_time);
+    if (clips[i].in_point < playhead - epsilon) {
+      setPlayhead(clips[i].in_point);
       return true;
     }
   }
@@ -183,15 +178,13 @@ function handleArrowNavigation(direction: 'previous' | 'next', fallbackFrames: n
 }
 
 function clipContainsSplitPoint(clip: Clip, splitTime: number): boolean {
-  const duration = clip.out_point - clip.in_point;
-  if (!Number.isFinite(duration) || duration <= 0) return false;
-  const clipStart = clip.start_time;
-  const clipEnd = clip.start_time + duration;
-  const MIN_SEGMENT_DURATION = 0.05;
-  const splitEpsilon = 0.0001;
   return (
-    splitTime > clipStart + MIN_SEGMENT_DURATION - splitEpsilon &&
-    splitTime < clipEnd - MIN_SEGMENT_DURATION + splitEpsilon
+    splitClipAtSourceTime({
+      inPoint: clip.in_point,
+      outPoint: clip.out_point,
+      splitTime,
+      minDuration: 0.05,
+    }) !== null
   );
 }
 

@@ -12,6 +12,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     svelte({
+      configFile: resolve(__dirname, 'svelte.config.js'),
       dynamicCompileOptions: ({ filename }) => {
         if (legacySvelteMarkdownPattern.test(filename) || legacyLucidePattern.test(filename)) {
           return { runes: false };

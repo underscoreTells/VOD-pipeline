@@ -4,7 +4,7 @@
   import { getSelectedClips, getClipById } from '../state/timeline.svelte';
   import { chaptersState } from '../state/chapters.svelte';
   import { formatTimecode } from '../state/keyboard.svelte';
-  import { executeResizeClip, executeUpdateClipTiming, projectDetail } from '../state/project-detail.svelte';
+  import { executeResizeClip, projectDetail } from '../state/project-detail.svelte';
   import { toChapterLocalTime } from '../utils/chapter-time';
   import { buildPlayableAssetUrl } from '../utils/media';
   import { clampPreviewFps, snapToPreviewSample } from '../utils/previewSampling';
@@ -100,7 +100,7 @@
 
   function queueNudge(
     clipId: number,
-    computeNext: (clip: Clip) => { startTime?: number; inPoint: number; outPoint: number }
+    computeNext: (clip: Clip) => { inPoint: number; outPoint: number }
   ) {
     nudgeQueue = nudgeQueue
       .then(async () => {
@@ -108,26 +108,11 @@
         if (!clip) return;
 
         const next = computeNext(clip);
-        const nextStartTime = next.startTime ?? clip.start_time;
         const nextInPoint = next.inPoint;
         const nextOutPoint = next.outPoint;
-        const startChanged = Math.abs(nextStartTime - clip.start_time) > NUDGE_EPSILON;
         const inChanged = Math.abs(nextInPoint - clip.in_point) > NUDGE_EPSILON;
         const outChanged = Math.abs(nextOutPoint - clip.out_point) > NUDGE_EPSILON;
-        if (!startChanged && !inChanged && !outChanged) return;
-
-        if (startChanged) {
-          await executeUpdateClipTiming(
-            clip.id,
-            clip.start_time,
-            clip.in_point,
-            clip.out_point,
-            nextStartTime,
-            nextInPoint,
-            nextOutPoint
-          );
-          return;
-        }
+        if (!inChanged && !outChanged) return;
 
         await executeResizeClip(
           clip.id,
@@ -239,19 +224,17 @@
 
   const timelineCurrentTime = $derived.by(() => {
     if (!selectedClip) return 0;
-    const timelineTime = selectedClip.start_time + clipLocalTime;
-    return toChapterLocalTime(selectedChapter, timelineTime);
+    return toChapterLocalTime(selectedChapter, currentTime);
   });
 
   const timelineInTime = $derived.by(() => {
     if (!selectedClip) return 0;
-    return toChapterLocalTime(selectedChapter, selectedClip.start_time);
+    return toChapterLocalTime(selectedChapter, selectedClip.in_point);
   });
 
   const timelineOutTime = $derived.by(() => {
     if (!selectedClip) return 0;
-    const timelineOut = selectedClip.start_time + clipDuration;
-    return toChapterLocalTime(selectedChapter, timelineOut);
+    return toChapterLocalTime(selectedChapter, selectedClip.out_point);
   });
   
   // Handle nudge buttons
@@ -261,15 +244,10 @@
     const frameDuration = 1 / NUDGE_FPS;
 
     queueNudge(clipId, (clip) => {
-      const minIn = 0;
+      const minIn = selectedChapter ? selectedChapter.start_time : 0;
       const maxIn = Math.max(minIn, clip.out_point - MIN_CLIP_DURATION);
-      const proposedIn = clamp(clip.in_point + (delta * frameDuration), minIn, maxIn);
-      const requestedDelta = proposedIn - clip.in_point;
-      const boundedDelta = Math.max(-clip.start_time, requestedDelta);
-      const inPoint = clip.in_point + boundedDelta;
-      const startTime = clip.start_time + boundedDelta;
+      const inPoint = clamp(clip.in_point + (delta * frameDuration), minIn, maxIn);
       return {
-        startTime,
         inPoint,
         outPoint: clip.out_point,
       };
@@ -284,9 +262,11 @@
     queueNudge(clipId, (clip) => {
       const minOut = clip.in_point + MIN_CLIP_DURATION;
       const assetDuration = getAssetDuration(clip.asset_id);
-      const maxOut = assetDuration !== null
-        ? Math.max(minOut, assetDuration)
-        : Number.POSITIVE_INFINITY;
+      const chapterEnd = selectedChapter?.end_time ?? Number.POSITIVE_INFINITY;
+      const maxOut = Math.max(
+        minOut,
+        Math.min(assetDuration ?? Number.POSITIVE_INFINITY, chapterEnd)
+      );
       const outPoint = clamp(clip.out_point + (delta * frameDuration), minOut, maxOut);
       return {
         inPoint: clip.in_point,

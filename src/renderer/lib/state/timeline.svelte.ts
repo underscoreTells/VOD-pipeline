@@ -1,4 +1,9 @@
 import type { Clip, TimelineState } from '../../../shared/types/database';
+import { getClipDuration } from '../../../shared/utils/clip-timing';
+
+interface TimelineNotice {
+  message: string;
+}
 
 interface TimelineStateStore {
   projectId: number | null;
@@ -13,6 +18,7 @@ interface TimelineStateStore {
   shuttleSpeed: number;
   excludeCutContent: boolean;
   isLoading: boolean;
+  notice: TimelineNotice | null;
   error: string | null;
 }
 
@@ -24,6 +30,7 @@ export interface TimelineTransportSnapshot {
 
 const MIN_ALLOWED_ZOOM = 0.05;
 const MAX_ALLOWED_ZOOM = 1000;
+let noticeHideTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
 // Timeline state using Svelte 5 runes
 export const timelineState = $state<TimelineStateStore>({
@@ -39,6 +46,7 @@ export const timelineState = $state<TimelineStateStore>({
   shuttleSpeed: 1,
   excludeCutContent: false,
   isLoading: false,
+  notice: null as TimelineNotice | null,
   error: null as string | null,
 });
 
@@ -60,7 +68,7 @@ export function getSelectedClips(): Clip[] {
 
 export function getTotalDuration(): number {
   if (timelineState.clips.length === 0) return 0;
-  return Math.max(...timelineState.clips.map(c => c.start_time + (c.out_point - c.in_point)));
+  return timelineState.clips.reduce((total, clip) => total + getClipDuration(clip), 0);
 }
 
 export function getClipsByTrack(): Map<number, Clip[]> {
@@ -268,11 +276,40 @@ export function setLoading(loading: boolean) {
   timelineState.isLoading = loading;
 }
 
+function clearTimelineNoticeTimer(): void {
+  if (noticeHideTimer !== null) {
+    globalThis.clearTimeout(noticeHideTimer);
+    noticeHideTimer = null;
+  }
+}
+
+export function showTimelineNotice(
+  message: string,
+  options: { autoHideMs?: number } = {}
+) {
+  const autoHideMs = options.autoHideMs ?? 4000;
+  clearTimelineNoticeTimer();
+  timelineState.notice = { message };
+
+  if (autoHideMs > 0) {
+    noticeHideTimer = globalThis.setTimeout(() => {
+      timelineState.notice = null;
+      noticeHideTimer = null;
+    }, autoHideMs);
+  }
+}
+
+export function clearTimelineNotice() {
+  clearTimelineNoticeTimer();
+  timelineState.notice = null;
+}
+
 export function setError(error: string | null) {
   timelineState.error = error;
 }
 
 export function clearTimeline() {
+  clearTimelineNotice();
   timelineState.projectId = null;
   timelineState.clips = [];
   timelineState.minZoomLevel = 10;
@@ -285,6 +322,7 @@ export function clearTimeline() {
   timelineState.shuttleSpeed = 1;
   timelineState.excludeCutContent = false;
   timelineState.isLoading = false;
+  timelineState.notice = null;
   timelineState.error = null;
 }
 

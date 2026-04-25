@@ -19,7 +19,7 @@ import type {
   ConversationWriter,
 } from "./types.js";
 
-const MAX_LOOP_STEPS = 8;
+const MAX_LOOP_STEPS = 24;
 const MAX_TOOL_CALLS_PER_STEP = 4;
 const MAX_STRUCTURED_REPAIRS = 1;
 const MAX_REPEATED_TOOL_CALLS = 2;
@@ -45,6 +45,7 @@ interface ConversationRunnerDependencies extends ConversationToolDependencies {
       suggestionDrafts: ConversationRunResult["suggestionDrafts"];
       timelineActions: ConversationRunResult["timelineActions"];
       transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
+      loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
       hasSuccessfulVideoEvidence: boolean;
       videoEvidenceAssetIds: Set<number>;
       finalOutcome?: ConversationRunResult["outcome"];
@@ -62,7 +63,27 @@ export async function runConversationTurn(
   } = {},
   dependencies: ConversationRunnerDependencies = {}
 ): Promise<ConversationRunResult> {
-  const writer = options.writer;
+  const baseWriter = options.writer;
+  let currentStepIndex: number | undefined;
+  const writer: ConversationWriter | undefined = baseWriter
+    ? {
+        writeStatus(event) {
+          baseWriter.writeStatus({
+            ...event,
+            stepIndex: event.stepIndex ?? currentStepIndex,
+          });
+        },
+        writeAssistantTextDelta(delta) {
+          baseWriter.writeAssistantTextDelta(delta);
+        },
+        writeToolState(event) {
+          baseWriter.writeToolState({
+            ...event,
+            stepIndex: event.stepIndex ?? currentStepIndex,
+          });
+        },
+      }
+    : undefined;
 
   writer?.writeStatus({
     status: "processing_chat",
@@ -75,6 +96,7 @@ export async function runConversationTurn(
     suggestionDrafts: NonNullable<ConversationRunResult["suggestionDrafts"]>;
     timelineActions: NonNullable<ConversationRunResult["timelineActions"]>;
     transcriptDetailRequests: NonNullable<ConversationRunResult["transcriptDetailRequests"]>;
+    loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
     hasSuccessfulVideoEvidence: boolean;
     videoEvidenceAssetIds: Set<number>;
     finalOutcome?: ConversationRunResult["outcome"];
@@ -83,6 +105,7 @@ export async function runConversationTurn(
     suggestionDrafts: [],
     timelineActions: [],
     transcriptDetailRequests: [],
+    loadedDetailedTranscripts: [],
     hasSuccessfulVideoEvidence: false,
     videoEvidenceAssetIds: new Set<number>(),
   };
@@ -101,7 +124,14 @@ export async function runConversationTurn(
   let finalizeRepairCount = 0;
   let protocolFailureCount = 0;
 
-  for (let step = 1; step <= MAX_LOOP_STEPS; step += 1) {
+  for (let step = 1; ; step += 1) {
+    if (step > MAX_LOOP_STEPS) {
+      return createControlledFailure(
+        "I couldn't complete this turn within the internal tool-step limit. Please retry with a narrower request."
+      );
+    }
+
+    currentStepIndex = step;
     assertNotAborted(options.signal);
 
     writer?.writeStatus({
@@ -109,6 +139,7 @@ export async function runConversationTurn(
       message: `Working on turn step ${step}...`,
       progress: Math.min(95, step * 10),
       nodeName: "conversation_runner",
+      stepIndex: step,
     });
 
     const response = await invokeConversationModelStep({
@@ -154,6 +185,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "error",
           error: repeatError,
+          stepIndex: step,
         });
 
         workingMessages.push(
@@ -178,6 +210,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "error",
           error,
+          stepIndex: step,
         });
         workingMessages.push(
           new ToolMessage({
@@ -200,6 +233,7 @@ export async function runConversationTurn(
         toolName: toolCall.name,
         state: "pending",
         input: toolCall.args,
+        stepIndex: step,
       });
 
       let content: string;
@@ -209,6 +243,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "running",
           input: toolCall.args,
+          stepIndex: step,
         });
         content = await selectedTool.execute(toolCall.args);
         writer?.writeToolState({
@@ -216,6 +251,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "completed",
           output: content,
+          stepIndex: step,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -225,6 +261,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "error",
           error: errorMessage,
+          stepIndex: step,
         });
 
         if (isToolSchemaFailure(error)) {
@@ -244,10 +281,6 @@ export async function runConversationTurn(
       workingMessages.push(new ToolMessage({ content, tool_call_id: toolCall.id }));
     }
   }
-
-  return createControlledFailure(
-    "I couldn't finish the tool loop for this turn. Please retry with a more specific request."
-  );
 }
 
 function stableJson(value: unknown): string {

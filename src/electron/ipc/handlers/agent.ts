@@ -330,6 +330,7 @@ async function runConversationTurn(
             streamMessage.error ??
             `${streamMessage.toolName} ${streamMessage.state}`,
           nodeName: streamMessage.toolName,
+          stepIndex: streamMessage.stepIndex,
         });
         return;
       }
@@ -339,6 +340,7 @@ async function runConversationTurn(
           status: streamMessage.status,
           message: streamMessage.message,
           nodeName: streamMessage.nodeName,
+          stepIndex: streamMessage.stepIndex,
         });
       }
     },
@@ -395,7 +397,7 @@ function summarizeSuggestions(suggestions: Suggestion[]): string {
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'
         ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`
-        : 'create proposal';
+        : 'keep window';
       return `- ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
         2
       )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();
@@ -625,6 +627,10 @@ export function registerAgentHandlers(): void {
     const projectId = toNumberOrNull(payload?.projectId);
     const chapterId = toNumberOrNull(payload?.chapterId);
     const ensureReady = payload?.ensureReady === true;
+    const proxyOptions =
+      payload?.proxyOptions && typeof payload.proxyOptions === 'object'
+        ? payload.proxyOptions as ProxyOptions
+        : undefined;
 
     logger.info('agent:grounding-status', projectId, chapterId, ensureReady);
 
@@ -642,6 +648,7 @@ export function registerAgentHandlers(): void {
 
       const groundingStatus = await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
         ensureReady,
+        proxyOptions,
       });
 
       logger.info(
@@ -1035,20 +1042,17 @@ export function registerAgentHandlers(): void {
           if (action.type === 'create_clip') {
             const chapterLocalInPoint = action.inPoint;
             const chapterLocalOutPoint = action.outPoint;
-            const chapterLocalStartTime = action.startTime ?? chapterLocalInPoint;
 
-            ensureChapterLocalTime(chapterLocalStartTime, 'startTime');
             ensureChapterLocalTime(chapterLocalInPoint, 'inPoint');
             ensureChapterLocalTime(chapterLocalOutPoint, 'outPoint');
 
-            const startTime = toGlobalTime(chapterLocalStartTime);
             const inPoint = toGlobalTime(chapterLocalInPoint);
             const outPoint = toGlobalTime(chapterLocalOutPoint);
 
             if (outPoint <= inPoint) {
               throw new Error('Out point must be greater than in point');
             }
-            if (startTime < 0 || inPoint < 0) {
+            if (inPoint < 0) {
               throw new Error('Times must be non-negative');
             }
 
@@ -1074,7 +1078,6 @@ export function registerAgentHandlers(): void {
               project_id: projectId,
               asset_id: assetId,
               track_index: action.trackIndex ?? 0,
-              start_time: startTime,
               in_point: inPoint,
               out_point: outPoint,
               role: action.role ?? null,
@@ -1098,10 +1101,6 @@ export function registerAgentHandlers(): void {
           }
 
           const updates: Partial<Clip> = {};
-          if (action.updates.startTime !== undefined) {
-            ensureChapterLocalTime(action.updates.startTime, 'startTime');
-            updates.start_time = toGlobalTime(action.updates.startTime);
-          }
           if (action.updates.inPoint !== undefined) {
             ensureChapterLocalTime(action.updates.inPoint, 'inPoint');
             updates.in_point = toGlobalTime(action.updates.inPoint);
@@ -1125,7 +1124,7 @@ export function registerAgentHandlers(): void {
           if (effectiveOut <= effectiveIn) {
             throw new Error('Out point must be greater than in point');
           }
-          if ((updates.start_time ?? existingClip.start_time) < 0 || effectiveIn < 0) {
+          if (effectiveIn < 0) {
             throw new Error('Times must be non-negative');
           }
 

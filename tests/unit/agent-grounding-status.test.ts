@@ -348,6 +348,79 @@ describe("agent grounding status", () => {
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(15, "ready");
   });
 
+  it("passes renderer-selected proxy options through grounding-driven proxy generation", async () => {
+    const proxyPath = path.join(tempDir, "proxy-options.mp4");
+
+    databaseMocks.getChapterProxyByChapterAsset
+      .mockResolvedValueOnce({
+        id: 17,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "ready",
+        start_time: 10,
+        end_time: 40,
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        error_message: null,
+      })
+      .mockResolvedValueOnce({
+        id: 17,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "ready",
+        start_time: 10,
+        end_time: 40,
+        width: null,
+        height: null,
+        framerate: null,
+        file_size: null,
+        duration: null,
+        error_message: null,
+      })
+      .mockResolvedValueOnce({
+        id: 17,
+        chapter_id: 7,
+        asset_id: 11,
+        file_path: proxyPath,
+        status: "ready",
+        start_time: 10,
+        end_time: 40,
+        width: 640,
+        height: 360,
+        framerate: 5,
+        file_size: 5,
+        duration: 30,
+        error_message: null,
+      });
+
+    const { getAgentGroundingStatus } = await import("../../src/electron/ipc/handler-support.js");
+    await getAgentGroundingStatus(1, 7, {
+      ensureReady: true,
+      proxyOptions: {
+        encodingMode: "gpu",
+        quality: "fast",
+      },
+    });
+
+    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledWith(
+      sourcePath,
+      expect.stringContaining("chapter_7_asset_11_ai_proxy.partial.0.mp4"),
+      undefined,
+      undefined,
+      "gpu",
+      "fast",
+      {
+        startTime: 10,
+        endTime: 40,
+      }
+    );
+  });
+
   it("returns missing_video_asset when the chapter has no linked video assets", async () => {
     databaseMocks.getAssetsByProject.mockResolvedValue([
       {

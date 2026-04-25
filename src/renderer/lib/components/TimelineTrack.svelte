@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import WaveSurfer from 'wavesurfer.js';
   import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
   import type { Clip } from '../../../shared/types/database';
@@ -8,8 +9,8 @@
   import {
     createProjectClip,
     executeDeleteClip,
-    executeMoveClip,
     executeResizeClip,
+    executeSlideClipWindow,
     executeSplitClip,
     executeUpdateClipTiming,
     projectDetail,
@@ -22,7 +23,9 @@
   } from '../utils/clip-collision';
   import { buildClipTimes, normalizeSelection } from '../utils/clip-selection';
   import { buildDefaultClipRangeAtCursor, splitClipAtTimelineTime } from '../utils/timeline-edit';
+  import { resolveTimelineWaveformLoadPayload } from '../utils/timeline-waveform.js';
   import { ROLE_CONFIG } from '../constants';
+  import { compareClipsBySourceTime } from '../../../shared/utils/clip-timing.js';
   
   interface Props {
     audioUrl: string;
@@ -58,12 +61,13 @@
   let isDestroyed = false;
   let loadedAssetId: number | null = null;
   let hasLoadedPeaks = false;
+  let isBlankWaveformFallback = $state(false);
   let waveformDuration = $state<number | null>(null);
   let loadToken = 0;
   let unsubscribeWaveformProgress: (() => void) | null = null;
   let scrollContainer: HTMLElement | null = null;
   let cleanupRenderListener: (() => void) | null = null;
-  const clipRegions = new Map<number, any>();
+  const clipRegions = new SvelteMap<number, any>();
   let contextMenu = $state({
     open: false,
     x: 0,
@@ -86,6 +90,14 @@
   
   const DEFAULT_COLOR = ROLE_CONFIG.unassigned.subtleCssVar;
   const SELECTION_COLOR = 'var(--accent-primary-subtle)';
+  const REAL_WAVEFORM_COLORS = {
+    waveColor: '#4a5568',
+    progressColor: '#3182ce',
+  };
+  const BLANK_WAVEFORM_COLORS = {
+    waveColor: 'transparent',
+    progressColor: 'transparent',
+  };
   
   // Get clips for this track
   const trackClips = $derived.by(() => {
@@ -95,9 +107,11 @@
       ? source.filter((clip) => clip.asset_id === assetId)
       : source;
     if (clipTrackIndex < 0) {
-      return assetScopedClips;
+      return [...assetScopedClips].sort(compareClipsBySourceTime);
     }
-    return assetScopedClips.filter((clip) => clip.track_index === clipTrackIndex);
+    return assetScopedClips
+      .filter((clip) => clip.track_index === clipTrackIndex)
+      .sort(compareClipsBySourceTime);
   });
 
   const assetDuration = $derived.by(() => {
@@ -166,7 +180,6 @@
   let dragLastLocalStart = 0;
   let dragLastLocalEnd = 0;
   let dragResizeEdge: 'start' | 'end' | null = null;
-  let dragOriginalStart = 0;
   let dragOriginalIn = 0;
   let dragOriginalOut = 0;
   let dragDidMove = false;
@@ -176,17 +189,14 @@
   let previousSelect = '';
   let loadedChapterKey: string | null = null;
   
-  function buildWaveSurferPeaks(peaks: Array<{ min: number; max: number }>): Float32Array {
-    const values = new Float32Array(peaks.length);
-    for (let i = 0; i < peaks.length; i += 1) {
-      const peak = peaks[i];
-      values[i] = Math.max(Math.abs(peak.min), Math.abs(peak.max));
-    }
-    return values;
-  }
-
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function applyWaveformAppearance(blankFallback: boolean) {
+    if (!waveSurfer) return;
+    isBlankWaveformFallback = blankFallback;
+    waveSurfer.setOptions(blankFallback ? BLANK_WAVEFORM_COLORS : REAL_WAVEFORM_COLORS);
   }
 
   function getPixelsPerSecond(): number {
@@ -374,7 +384,6 @@
 
   function canSplitClipAtGlobalTime(clip: Clip, splitTime: number): boolean {
     const split = splitClipAtTimelineTime({
-      clipStartTime: clip.start_time,
       inPoint: clip.in_point,
       outPoint: clip.out_point,
       splitTime,
@@ -439,10 +448,9 @@
 
     const intervals = trackClips
       .map((clip) => {
-        const duration = clip.out_point - clip.in_point;
-        if (!Number.isFinite(duration) || duration <= 0) return null;
-        const start = clip.start_time - chapterRange.start;
-        const end = start + duration;
+        const start = clip.in_point - chapterRange.start;
+        const end = clip.out_point - chapterRange.start;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
         return { start, end };
       })
       .filter((interval): interval is { start: number; end: number } => interval !== null);
@@ -458,7 +466,6 @@
 
     if (!range) return;
 
-    const globalStart = chapterRange.start + range.start;
     const globalIn = chapterRange.start + range.start;
     const globalOut = chapterRange.start + range.end;
 
@@ -466,7 +473,6 @@
       projectDetail.projectId,
       assetId,
       createTrackIndex,
-      globalStart,
       globalIn,
       globalOut,
       undefined,
@@ -582,10 +588,9 @@
     return trackClips
       .filter((clip) => clip.id !== excludeClipId)
       .map((clip) => {
-        const duration = clip.out_point - clip.in_point;
-        if (!Number.isFinite(duration) || duration <= 0) return null;
-        const start = clip.start_time - chapterRange.start;
-        const end = start + duration;
+        const start = clip.in_point - chapterRange.start;
+        const end = clip.out_point - chapterRange.start;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
         return { start, end };
       })
       .filter((interval): interval is ClipCollisionInterval => interval !== null);
@@ -630,11 +635,10 @@
     dragClipId = clipId;
     dragResizeEdge = edge;
     dragClipDuration = duration;
-    dragClipLocalStart = clip.start_time - chapterRange.start;
-    dragClipLocalEnd = dragClipLocalStart + duration;
+    dragClipLocalStart = clip.in_point - chapterRange.start;
+    dragClipLocalEnd = clip.out_point - chapterRange.start;
     dragLastLocalStart = dragClipLocalStart;
     dragLastLocalEnd = dragClipLocalEnd;
-    dragOriginalStart = clip.start_time;
     dragOriginalIn = clip.in_point;
     dragOriginalOut = clip.out_point;
     dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
@@ -675,12 +679,11 @@
       selectClip(dragClickClipId, false);
       dragClipId = dragClickClipId;
       dragClipDuration = duration;
-      dragClipLocalStart = clip.start_time - chapterRange.start;
-      dragClipLocalEnd = dragClipLocalStart + duration;
+      dragClipLocalStart = clip.in_point - chapterRange.start;
+      dragClipLocalEnd = clip.out_point - chapterRange.start;
       dragClipOffset = clamp(pointerTime - dragClipLocalStart, 0, duration);
       dragLastLocalStart = dragClipLocalStart;
       dragLastLocalEnd = dragClipLocalEnd;
-      dragOriginalStart = clip.start_time;
       dragOriginalIn = clip.in_point;
       dragOriginalOut = clip.out_point;
       dragClickTime = null;
@@ -783,9 +786,19 @@
 
     if (dragMode === 'move' && chapterRange && dragClipId !== null) {
       const newStart = chapterRange.start + dragLastLocalStart;
+      const newEnd = chapterRange.start + dragLastLocalEnd;
       const EPSILON = 0.01;
-      if (Math.abs(newStart - dragOriginalStart) > EPSILON) {
-        void executeMoveClip(dragClipId, dragOriginalStart, newStart);
+      if (
+        Math.abs(newStart - dragOriginalIn) > EPSILON ||
+        Math.abs(newEnd - dragOriginalOut) > EPSILON
+      ) {
+        void executeSlideClipWindow(
+          dragClipId,
+          dragOriginalIn,
+          dragOriginalOut,
+          newStart,
+          newEnd
+        );
       }
     }
 
@@ -795,18 +808,15 @@
       const newEnd = chapterRange.start + dragLastLocalEnd;
 
       if (dragResizeEdge === 'start') {
-        const startDelta = newStart - dragOriginalStart;
-        const newInPoint = dragOriginalIn + startDelta;
-        const startChanged = Math.abs(newStart - dragOriginalStart) > EPSILON;
+        const newInPoint = newStart;
+        const startChanged = Math.abs(newInPoint - dragOriginalIn) > EPSILON;
         const inChanged = Math.abs(newInPoint - dragOriginalIn) > EPSILON;
 
         if (startChanged || inChanged) {
           void executeUpdateClipTiming(
             dragClipId,
-            dragOriginalStart,
             dragOriginalIn,
             dragOriginalOut,
-            newStart,
             newInPoint,
             dragOriginalOut
           );
@@ -926,34 +936,6 @@
     return null;
   }
 
-  function sliceWaveformData(
-    waveformData: { peaks: Array<{ min: number; max: number }>; duration: number },
-    rangeStart: number,
-    rangeEnd: number,
-    assetDurationSeconds: number | null
-  ) {
-    const totalDuration = waveformData.duration;
-    if (!Number.isFinite(totalDuration) || totalDuration <= 0) return null;
-
-    const effectiveAssetDuration = assetDurationSeconds && assetDurationSeconds > 0
-      ? assetDurationSeconds
-      : totalDuration;
-    const safeStart = clamp(rangeStart, 0, effectiveAssetDuration);
-    const safeEnd = clamp(rangeEnd, safeStart + 0.01, effectiveAssetDuration);
-    const durationRatio = totalDuration / effectiveAssetDuration;
-    const start = clamp(safeStart * durationRatio, 0, totalDuration);
-    const end = clamp(safeEnd * durationRatio, start + 0.01, totalDuration);
-    const peaksPerSecond = waveformData.peaks.length / totalDuration;
-    const startIndex = Math.floor(start * peaksPerSecond);
-    const endIndex = Math.ceil(end * peaksPerSecond);
-    const slicedPeaks = waveformData.peaks.slice(startIndex, Math.max(startIndex + 1, endIndex));
-
-    return {
-      peaks: slicedPeaks,
-      duration: end - start,
-    };
-  }
-
   async function loadWaveformForAsset(options: { force?: boolean } = {}) {
     if (!waveSurfer) return;
     if (!audioUrl) return;
@@ -964,14 +946,7 @@
     const waveformData = await loadWaveformCache();
 
     if (isDestroyed || token !== loadToken) return;
-
-    if (!waveformData) {
-      waveformDuration = null;
-      hasLoadedPeaks = false;
-      return;
-    }
-
-    waveformDuration = waveformData.duration;
+    waveformDuration = waveformData?.duration ?? null;
 
     const chapterKey = `${assetId}:${waveformTrackIndex}:${chapterRange.start}-${chapterRange.end}:${assetDuration ?? 'na'}:${waveformDuration ?? 'na'}`;
     const shouldReload =
@@ -982,26 +957,24 @@
 
     if (!shouldReload) return;
 
-    const sliced = sliceWaveformData(
+    const payload = resolveTimelineWaveformLoadPayload({
       waveformData,
-      chapterRange.start,
-      chapterRange.end,
-      assetDuration
-    );
-    if (!sliced) {
+      chapterRange,
+      assetDuration,
+    });
+    if (!payload) {
+      isBlankWaveformFallback = false;
       hasLoadedPeaks = false;
       return;
     }
 
-    const loadPeaks = [buildWaveSurferPeaks(sliced.peaks)];
-    const loadDuration = Math.max(0.01, chapterRange.duration);
-
     try {
       isReady = false;
-      await waveSurfer.load(audioUrl, loadPeaks, loadDuration);
+      applyWaveformAppearance(!payload.hasRealWaveform);
+      await waveSurfer.load(audioUrl, payload.peaks, payload.duration);
       loadedAssetId = assetId;
       loadedChapterKey = chapterKey;
-      hasLoadedPeaks = Boolean(waveformData);
+      hasLoadedPeaks = payload.hasRealWaveform;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[TimelineTrack] Failed to load waveform for asset ${assetId}: ${message}`, error);
@@ -1016,8 +989,7 @@
     const selection = normalizeSelection(start, end, MIN_SELECTION_SECONDS);
     if (!selection) return;
 
-    const { startTime, inPoint, outPoint } = buildClipTimes(selection);
-    const globalStart = chapterRange.start + startTime;
+    const { inPoint, outPoint } = buildClipTimes(selection);
     const globalIn = chapterRange.start + inPoint;
     const globalOut = chapterRange.start + outPoint;
 
@@ -1025,7 +997,6 @@
       projectDetail.projectId,
       assetId,
       createTrackIndex,
-      globalStart,
       globalIn,
       globalOut,
       undefined,
@@ -1049,8 +1020,8 @@
       waveSurfer = WaveSurfer.create({
         container,
         backend: 'MediaElement',
-        waveColor: '#4a5568',
-        progressColor: '#3182ce',
+        waveColor: REAL_WAVEFORM_COLORS.waveColor,
+        progressColor: REAL_WAVEFORM_COLORS.progressColor,
         cursorColor: '#e53e3e',
         height,
         normalize: true,
@@ -1195,10 +1166,9 @@
     const chapterStart = chapterRange.start;
 
     for (const clip of trackClips) {
-      const duration = clip.out_point - clip.in_point;
       const color = clip.role ? ROLE_COLORS[clip.role] : DEFAULT_COLOR;
-      const localStart = clip.start_time - chapterStart;
-      const localEnd = localStart + duration;
+      const localStart = clip.in_point - chapterStart;
+      const localEnd = clip.out_point - chapterStart;
 
       const normalized = normalizeRenderableLocalRange(localStart, localEnd);
       if (!normalized) {
@@ -1237,6 +1207,13 @@
     void _range;
     renderRegions();
   });
+
+  $effect(() => {
+    const selectedIds = timelineState.selectedClipIds;
+    for (const [clipId, region] of clipRegions.entries()) {
+      region.element?.classList.toggle('selected', selectedIds.has(clipId));
+    }
+  });
   
   // Sync scroll position with other tracks
   $effect(() => {
@@ -1261,6 +1238,7 @@
   <div
     class="waveform-container relative min-h-[100px] w-full cursor-pointer"
     class:bg-surface-page={missing}
+    class:timeline-track-blank={isBlankWaveformFallback}
     class:cursor-default={!editable}
     class:cursor-grabbing={isPanning}
     class:cursor-crosshair={isSelecting}

@@ -24,7 +24,6 @@ interface ClipRow {
   project_id: number;
   asset_id: number;
   track_index: number;
-  start_time: number;
   in_point: number;
   out_point: number;
   role: string | null;
@@ -54,9 +53,6 @@ export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
     throw new Error(`Asset not found: ${clip.asset_id}`);
   }
 
-  if (clip.start_time < 0) {
-    throw new Error('Start time must be >= 0');
-  }
   if (clip.in_point < 0) {
     throw new Error('In point must be >= 0');
   }
@@ -75,14 +71,13 @@ export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
   let result;
   if (clip.id !== undefined) {
     result = database.prepare(
-      `INSERT INTO clips (id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO clips (id, project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       clip.id,
       clip.project_id,
       clip.asset_id,
       clip.track_index,
-      clip.start_time,
       clip.in_point,
       clip.out_point,
       clip.role,
@@ -92,13 +87,12 @@ export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
     );
   } else {
     result = database.prepare(
-      `INSERT INTO clips (project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       clip.project_id,
       clip.asset_id,
       clip.track_index,
-      clip.start_time,
       clip.in_point,
       clip.out_point,
       clip.role,
@@ -113,7 +107,6 @@ export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
     project_id: clip.project_id,
     asset_id: clip.asset_id,
     track_index: clip.track_index,
-    start_time: clip.start_time,
     in_point: clip.in_point,
     out_point: clip.out_point,
     role: clip.role,
@@ -126,7 +119,7 @@ export async function createClip(clip: CreateClipHistoryInput): Promise<Clip> {
 export async function getClip(id: number): Promise<Clip | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at FROM clips WHERE id = ?'
+    'SELECT id, project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at FROM clips WHERE id = ?'
   ).get(id) as ClipRow | undefined;
 
   return result ? mapClipRow(result) : null;
@@ -135,10 +128,10 @@ export async function getClip(id: number): Promise<Clip | null> {
 export async function getClipsByProject(projectId: number): Promise<Clip[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    `SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at
+    `SELECT id, project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at
      FROM clips
      WHERE project_id = ?
-     ORDER BY track_index ASC, start_time ASC`
+     ORDER BY track_index ASC, in_point ASC, asset_id ASC, id ASC`
   ).all(projectId) as ClipRow[];
 
   return results.map(mapClipRow);
@@ -147,10 +140,10 @@ export async function getClipsByProject(projectId: number): Promise<Clip[]> {
 export async function getClipsByAsset(assetId: number): Promise<Clip[]> {
   const database = await getDatabase();
   const results = database.prepare(
-    `SELECT id, project_id, asset_id, track_index, start_time, in_point, out_point, role, description, is_essential, created_at
+    `SELECT id, project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at
      FROM clips
      WHERE asset_id = ?
-     ORDER BY start_time ASC`
+     ORDER BY in_point ASC, id ASC`
   ).all(assetId) as ClipRow[];
 
   return results.map(mapClipRow);
@@ -176,10 +169,6 @@ export async function updateClip(id: number, updates: UpdateClipInput): Promise<
 
   const newInPoint = updates.in_point ?? current.in_point;
   const newOutPoint = updates.out_point ?? current.out_point;
-  const newStartTime = updates.start_time ?? current.start_time;
-  if (newStartTime < 0) {
-    throw new Error('Start time must be >= 0');
-  }
   if (newInPoint < 0) {
     throw new Error('In point must be >= 0');
   }
@@ -197,10 +186,6 @@ export async function updateClip(id: number, updates: UpdateClipInput): Promise<
   if (updates.track_index !== undefined) {
     fields.push('track_index = ?');
     values.push(updates.track_index);
-  }
-  if (updates.start_time !== undefined) {
-    fields.push('start_time = ?');
-    values.push(updates.start_time);
   }
   if (updates.in_point !== undefined) {
     fields.push('in_point = ?');
@@ -276,12 +261,8 @@ export async function batchUpdateClips(
         throw new Error(`Invalid role: ${clipUpdates.role}. Must be one of: ${VALID_CLIP_ROLES.join(', ')}`);
       }
 
-      const newStartTime = clipUpdates.start_time ?? current.start_time;
       const newInPoint = clipUpdates.in_point ?? current.in_point;
       const newOutPoint = clipUpdates.out_point ?? current.out_point;
-      if (newStartTime < 0) {
-        throw new Error('Start time must be >= 0');
-      }
       if (newInPoint < 0) {
         throw new Error('In point must be >= 0');
       }
@@ -298,10 +279,6 @@ export async function batchUpdateClips(
       if (clipUpdates.track_index !== undefined) {
         fields.push('track_index = ?');
         values.push(clipUpdates.track_index);
-      }
-      if (clipUpdates.start_time !== undefined) {
-        fields.push('start_time = ?');
-        values.push(clipUpdates.start_time);
       }
       if (clipUpdates.in_point !== undefined) {
         fields.push('in_point = ?');

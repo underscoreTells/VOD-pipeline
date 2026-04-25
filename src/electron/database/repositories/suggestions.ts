@@ -13,7 +13,6 @@ import {
   createClip,
   deleteClip,
   getClip,
-  getClipsByProject,
   updateClip,
 } from './clips.js';
 
@@ -34,13 +33,11 @@ interface SuggestionActionPayload {
   create?: {
     assetId?: number;
     trackIndex?: number;
-    startTime?: number;
     role?: Clip['role'];
     description?: string | null;
     isEssential?: boolean;
   };
   update?: {
-    startTime?: number;
     inPoint?: number;
     outPoint?: number;
     role?: Clip['role'];
@@ -52,7 +49,6 @@ interface SuggestionActionPayload {
 interface SuggestionPreviewSnapshot {
   clip: {
     id: number;
-    start_time: number;
     in_point: number;
     out_point: number;
     role: Clip['role'];
@@ -128,7 +124,6 @@ function serializeSuggestionPreviewSnapshot(clip: Clip): string {
   return JSON.stringify({
     clip: {
       id: clip.id,
-      start_time: clip.start_time,
       in_point: clip.in_point,
       out_point: clip.out_point,
       role: clip.role,
@@ -188,10 +183,6 @@ async function applyUpdateSuggestionToClip(
   const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
   const updates: UpdateClipInput = {};
 
-  if (typeof updatePayload.startTime === 'number' && Number.isFinite(updatePayload.startTime)) {
-    const localStart = clampToRange(updatePayload.startTime, 0, chapterDuration);
-    updates.start_time = chapter.start_time + localStart;
-  }
   if (typeof updatePayload.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
     const localIn = clampToRange(updatePayload.inPoint, 0, chapterDuration);
     updates.in_point = chapter.start_time + localIn;
@@ -246,7 +237,6 @@ async function restoreClipFromSuggestionSnapshot(
   }
 
   const restored = await updateClip(targetClip.id, {
-    start_time: snapshot.clip.start_time,
     in_point: snapshot.clip.in_point,
     out_point: snapshot.clip.out_point,
     role: snapshot.clip.role,
@@ -330,39 +320,12 @@ async function createSuggestionTimelineClip(
   }
 
   const normalizedWindow = normalizeSuggestionClipWindow(suggestion, chapter);
-  let startTime = normalizedWindow.inPoint;
-  if (typeof createPayload?.startTime === 'number' && Number.isFinite(createPayload.startTime)) {
-    const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-    const localStart = clampToRange(createPayload.startTime, 0, chapterDuration);
-    startTime = chapter.start_time + localStart;
-  }
-
-  let inPoint = normalizedWindow.inPoint;
+  const inPoint = normalizedWindow.inPoint;
   const outPoint = normalizedWindow.outPoint;
   const trackIndex =
     typeof createPayload?.trackIndex === 'number' && Number.isFinite(createPayload.trackIndex)
       ? createPayload.trackIndex
       : 0;
-
-  const existingClips = await getClipsByProject(chapter.project_id);
-  const trackClips = existingClips.filter((clip) => clip.track_index === trackIndex);
-  const proposedEndTime = startTime + (outPoint - inPoint);
-  const overlappingClips = trackClips.filter((clip) => {
-    const clipStart = clip.start_time;
-    const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
-    return startTime < clipEnd && proposedEndTime > clipStart;
-  });
-
-  if (overlappingClips.length > 0) {
-    const rightmostClip = overlappingClips.reduce((latest, clip) => {
-      const clipEnd = clip.start_time + (clip.out_point - clip.in_point);
-      const latestEnd = latest.start_time + (latest.out_point - latest.in_point);
-      return clipEnd > latestEnd ? clip : latest;
-    });
-
-    const rightmostEnd = rightmostClip.start_time + (rightmostClip.out_point - rightmostClip.in_point);
-    startTime = rightmostEnd;
-  }
 
   if (inPoint >= outPoint) {
     database.prepare(
@@ -379,7 +342,6 @@ async function createSuggestionTimelineClip(
     project_id: chapter.project_id,
     asset_id: assetId,
     track_index: trackIndex,
-    start_time: startTime,
     in_point: inPoint,
     out_point: outPoint,
     role: createPayload?.role ?? null,

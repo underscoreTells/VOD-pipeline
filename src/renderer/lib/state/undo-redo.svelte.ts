@@ -1,9 +1,9 @@
 import {
-  batchUpdateClips as ipcBatchUpdateClips,
   createClip as ipcCreateClip,
   deleteClip as ipcDeleteClip,
   updateClip as ipcUpdateClip,
 } from '../api/clips.js';
+import { splitClipAtSourceTime } from '../../../shared/utils/clip-timing.js';
 import {
   timelineState,
   createClip as createTimelineClip,
@@ -18,7 +18,6 @@ export interface Command {
   undo(): void | Promise<void>;
 }
 
-// Undo/Redo state
 const MAX_HISTORY = 50;
 
 const undoRedoState = $state({
@@ -37,7 +36,6 @@ function enqueueHistoryOperation<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-// Derived state
 export function canUndo(): boolean {
   return undoRedoState.undoStack.length > 0;
 }
@@ -56,20 +54,16 @@ export function getNextRedoDescription(): string | null {
   return nextCommand?.description ?? null;
 }
 
-// Execute a command and add to undo stack
 export function executeCommand(command: Command): Promise<boolean> {
   return enqueueHistoryOperation(async () => {
     try {
       await command.execute();
 
       undoRedoState.undoStack.push(command);
-
-      // Limit undo stack size
       if (undoRedoState.undoStack.length > MAX_HISTORY) {
         undoRedoState.undoStack.shift();
       }
 
-      // Clear redo stack on new action
       undoRedoState.redoStack = [];
       return true;
     } catch (error) {
@@ -79,7 +73,6 @@ export function executeCommand(command: Command): Promise<boolean> {
   });
 }
 
-// Undo last command
 export function undo(): Promise<boolean> {
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.undoStack.length === 0) return false;
@@ -90,7 +83,6 @@ export function undo(): Promise<boolean> {
       undoRedoState.redoStack.push(command);
       return true;
     } catch (error) {
-      // Restore command to undo stack on failure
       undoRedoState.undoStack.push(command);
       console.error('Undo failed:', error);
       return false;
@@ -98,7 +90,6 @@ export function undo(): Promise<boolean> {
   });
 }
 
-// Redo last undone command
 export function redo(): Promise<boolean> {
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.redoStack.length === 0) return false;
@@ -109,7 +100,6 @@ export function redo(): Promise<boolean> {
       undoRedoState.undoStack.push(command);
       return true;
     } catch (error) {
-      // Restore command to redo stack on failure
       undoRedoState.redoStack.push(command);
       console.error('Redo failed:', error);
       return false;
@@ -117,7 +107,6 @@ export function redo(): Promise<boolean> {
   });
 }
 
-// Clear all history
 export function clearHistory() {
   undoRedoState.undoStack = [];
   undoRedoState.redoStack = [];
@@ -129,7 +118,6 @@ function cloneClipForHistory(clip: Clip): Clip {
     project_id: clip.project_id,
     asset_id: clip.asset_id,
     track_index: clip.track_index,
-    start_time: clip.start_time,
     in_point: clip.in_point,
     out_point: clip.out_point,
     role: clip.role,
@@ -212,7 +200,6 @@ async function persistClipRestore(clip: Clip): Promise<void> {
     projectId: clip.project_id,
     assetId: clip.asset_id,
     trackIndex: clip.track_index,
-    startTime: clip.start_time,
     inPoint: clip.in_point,
     outPoint: clip.out_point,
     role: clip.role ?? undefined,
@@ -226,29 +213,6 @@ async function persistClipRestore(clip: Clip): Promise<void> {
 
   if (result.data.id !== clip.id) {
     throw new Error(`Clip restore returned unexpected id ${result.data.id} (expected ${clip.id})`);
-  }
-}
-
-// =============================================================================
-// Command Implementations
-// =============================================================================
-
-export class MoveClipCommand implements Command {
-  constructor(
-    public description: string,
-    private clipId: number,
-    private oldStartTime: number,
-    private newStartTime: number
-  ) {}
-
-  async execute() {
-    await persistClipUpdate(this.clipId, { start_time: this.newStartTime });
-    updateTimelineClip(this.clipId, { start_time: this.newStartTime });
-  }
-
-  async undo() {
-    await persistClipUpdate(this.clipId, { start_time: this.oldStartTime });
-    updateTimelineClip(this.clipId, { start_time: this.oldStartTime });
   }
 }
 
@@ -289,22 +253,18 @@ export class UpdateClipTimingCommand implements Command {
   constructor(
     public description: string,
     private clipId: number,
-    private oldStartTime: number,
     private oldInPoint: number,
     private oldOutPoint: number,
-    private newStartTime: number,
     private newInPoint: number,
     private newOutPoint: number
   ) {}
 
   async execute() {
     await persistClipUpdate(this.clipId, {
-      start_time: this.newStartTime,
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
     updateTimelineClip(this.clipId, {
-      start_time: this.newStartTime,
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
@@ -312,12 +272,10 @@ export class UpdateClipTimingCommand implements Command {
 
   async undo() {
     await persistClipUpdate(this.clipId, {
-      start_time: this.oldStartTime,
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
     updateTimelineClip(this.clipId, {
-      start_time: this.oldStartTime,
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
@@ -359,8 +317,7 @@ export class DeleteClipCommand implements Command {
     public description: string,
     private clipId: number
   ) {
-    // Store clip data at creation (deep clone for safety)
-    const index = timelineState.clips.findIndex(c => c.id === this.clipId);
+    const index = timelineState.clips.findIndex((clip) => clip.id === this.clipId);
     if (index !== -1) {
       this.clipData = {
         id: this.clipId,
@@ -407,15 +364,24 @@ export class DeleteClipCommand implements Command {
 
 export class SplitClipCommand implements Command {
   private rightClipSnapshot: Clip | null = null;
-  private readonly splitOutPoint: number;
+  private readonly splitWindow: NonNullable<ReturnType<typeof splitClipAtSourceTime>>;
 
   constructor(
     public description: string,
     private originalClip: Clip,
     private splitTime: number
   ) {
-    const splitOffset = this.splitTime - this.originalClip.start_time;
-    this.splitOutPoint = this.originalClip.in_point + splitOffset;
+    const splitWindow = splitClipAtSourceTime({
+      inPoint: this.originalClip.in_point,
+      outPoint: this.originalClip.out_point,
+      splitTime: this.splitTime,
+    });
+
+    if (!splitWindow) {
+      throw new Error(`Split time ${this.splitTime} is outside clip ${this.originalClip.id}`);
+    }
+
+    this.splitWindow = splitWindow;
   }
 
   private removeRightClipFromTimeline() {
@@ -438,10 +404,10 @@ export class SplitClipCommand implements Command {
 
   async execute() {
     await persistClipUpdate(this.originalClip.id, {
-      out_point: this.splitOutPoint,
+      out_point: this.splitWindow.leftOutPoint,
     });
     updateTimelineClip(this.originalClip.id, {
-      out_point: this.splitOutPoint,
+      out_point: this.splitWindow.leftOutPoint,
     });
 
     try {
@@ -455,9 +421,8 @@ export class SplitClipCommand implements Command {
         projectId: this.originalClip.project_id,
         assetId: this.originalClip.asset_id,
         trackIndex: this.originalClip.track_index,
-        startTime: this.splitTime,
-        inPoint: this.splitOutPoint,
-        outPoint: this.originalClip.out_point,
+        inPoint: this.splitWindow.rightInPoint,
+        outPoint: this.splitWindow.rightOutPoint,
         role: this.originalClip.role ?? undefined,
         description: this.originalClip.description ?? undefined,
         isEssential: this.originalClip.is_essential,
@@ -491,48 +456,5 @@ export class SplitClipCommand implements Command {
     if (!this.rightClipSnapshot) return;
     await persistClipDelete(this.rightClipSnapshot.id);
     this.removeRightClipFromTimeline();
-  }
-}
-
-export class MultiMoveCommand implements Command {
-  constructor(
-    public description: string,
-    private moves: Array<{
-      clipId: number;
-      oldStartTime: number;
-      newStartTime: number;
-    }>
-  ) {}
-
-  async execute() {
-    const updates = this.moves.map((move) => ({
-      id: move.clipId,
-      start_time: move.newStartTime,
-    }));
-
-    const result = await ipcBatchUpdateClips(updates);
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to batch move clips');
-    }
-
-    for (const move of this.moves) {
-      updateTimelineClip(move.clipId, { start_time: move.newStartTime });
-    }
-  }
-
-  async undo() {
-    const updates = this.moves.map((move) => ({
-      id: move.clipId,
-      start_time: move.oldStartTime,
-    }));
-
-    const result = await ipcBatchUpdateClips(updates);
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to batch undo clip move');
-    }
-
-    for (const move of this.moves) {
-      updateTimelineClip(move.clipId, { start_time: move.oldStartTime });
-    }
   }
 }

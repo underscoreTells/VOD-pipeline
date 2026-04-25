@@ -94,6 +94,7 @@ const electronAPI: ElectronAPI = {
         assetId,
         ensureReady: options?.ensureReady === true,
         proxyOptions: options?.proxyOptions,
+        requestMode: options?.requestMode,
       }),
   },
   clips: {
@@ -105,7 +106,6 @@ const electronAPI: ElectronAPI = {
         projectId: input.projectId,
         assetId: input.assetId,
         trackIndex: input.trackIndex,
-        startTime: input.startTime,
         inPoint: input.inPoint,
         outPoint: input.outPoint,
         role: input.role,
