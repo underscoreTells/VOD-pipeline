@@ -19,6 +19,7 @@ import type {
   ConversationWriter,
 } from "./types.js";
 
+const MAX_LOOP_STEPS = 24;
 const MAX_TOOL_CALLS_PER_STEP = 4;
 const MAX_STRUCTURED_REPAIRS = 1;
 const MAX_REPEATED_TOOL_CALLS = 2;
@@ -124,6 +125,12 @@ export async function runConversationTurn(
   let protocolFailureCount = 0;
 
   for (let step = 1; ; step += 1) {
+    if (step > MAX_LOOP_STEPS) {
+      return createControlledFailure(
+        "I couldn't complete this turn within the internal tool-step limit. Please retry with a narrower request."
+      );
+    }
+
     currentStepIndex = step;
     assertNotAborted(options.signal);
 

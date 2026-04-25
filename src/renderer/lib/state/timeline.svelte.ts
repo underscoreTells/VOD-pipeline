@@ -1,4 +1,5 @@
 import type { Clip, TimelineState } from '../../../shared/types/database';
+import { getClipDuration } from '../../../shared/utils/clip-timing';
 
 interface TimelineNotice {
   message: string;
@@ -67,7 +68,7 @@ export function getSelectedClips(): Clip[] {
 
 export function getTotalDuration(): number {
   if (timelineState.clips.length === 0) return 0;
-  return Math.max(...timelineState.clips.map((clip) => clip.out_point));
+  return timelineState.clips.reduce((total, clip) => total + getClipDuration(clip), 0);
 }
 
 export function getClipsByTrack(): Map<number, Clip[]> {

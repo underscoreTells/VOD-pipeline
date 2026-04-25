@@ -60,14 +60,17 @@ describe('export service ordering', () => {
     expect(ordered.map((item) => item.clip.id)).toEqual([30, 29, 32, 31, 40]);
   });
 
-  it('fails export ordering when a clip maps to zero chapters', () => {
-    expect(() =>
-      deriveOrderedExportClips({
-        chapters: [createChapter({ id: 1, start_time: 0, end_time: 50 })],
-        clips: [createClip({ id: 99, asset_id: 7, in_point: 80, out_point: 90 })],
-        chapterAssetIds: new Map([[1, new Set([1])]]),
-      })
-    ).toThrow(/does not map to any chapter/i);
+  it('skips clips that no longer map to any chapter during export ordering', () => {
+    const ordered = deriveOrderedExportClips({
+      chapters: [createChapter({ id: 1, start_time: 0, end_time: 50 })],
+      clips: [
+        createClip({ id: 10, asset_id: 1, in_point: 10, out_point: 20 }),
+        createClip({ id: 99, asset_id: 7, in_point: 80, out_point: 90 }),
+      ],
+      chapterAssetIds: new Map([[1, new Set([1])]]),
+    });
+
+    expect(ordered.map((item) => item.clip.id)).toEqual([10]);
   });
 
   it('fails export ordering when a clip maps to multiple chapters', () => {

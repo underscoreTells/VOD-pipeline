@@ -14,6 +14,9 @@ import {
   getClipsByProject,
   getProject,
 } from '../database/index.js';
+import { createLogger } from '../logger.js';
+
+const logger = createLogger('ExportService');
 
 export interface OrderedExportClip {
   chapter: Chapter;
@@ -21,13 +24,19 @@ export interface OrderedExportClip {
   sequenceIndex: number;
 }
 
-export function deriveOrderedExportClips(params: {
+interface OrderedExportClipCollection {
+  orderedClips: OrderedExportClip[];
+  skippedClipIds: number[];
+}
+
+function collectOrderedExportClips(params: {
   chapters: Chapter[];
   clips: Clip[];
   chapterAssetIds: Map<number, Set<number>>;
-}): OrderedExportClip[] {
+}): OrderedExportClipCollection {
   const { chapters, clips, chapterAssetIds } = params;
   const clipsByChapterId = new Map<number, Clip[]>();
+  const skippedClipIds: number[] = [];
 
   for (const clip of clips) {
     const matchingChapters = chapters.filter((chapter) => {
@@ -40,9 +49,8 @@ export function deriveOrderedExportClips(params: {
     });
 
     if (matchingChapters.length === 0) {
-      throw new Error(
-        `Export failed: clip ${clip.id} does not map to any chapter via linked asset membership and source overlap.`
-      );
+      skippedClipIds.push(clip.id);
+      continue;
     }
 
     if (matchingChapters.length > 1) {
@@ -58,13 +66,13 @@ export function deriveOrderedExportClips(params: {
   }
 
   const orderedChapters = [...chapters].sort(compareChaptersForExport);
-  const ordered: OrderedExportClip[] = [];
+  const orderedClips: OrderedExportClip[] = [];
   let sequenceIndex = 0;
 
   for (const chapter of orderedChapters) {
     const chapterClips = [...(clipsByChapterId.get(chapter.id) ?? [])].sort(compareClipsForExport);
     for (const clip of chapterClips) {
-      ordered.push({
+      orderedClips.push({
         chapter,
         clip,
         sequenceIndex,
@@ -73,7 +81,18 @@ export function deriveOrderedExportClips(params: {
     }
   }
 
-  return ordered;
+  return {
+    orderedClips,
+    skippedClipIds,
+  };
+}
+
+export function deriveOrderedExportClips(params: {
+  chapters: Chapter[];
+  clips: Clip[];
+  chapterAssetIds: Map<number, Set<number>>;
+}): OrderedExportClip[] {
+  return collectOrderedExportClips(params).orderedClips;
 }
 
 export async function exportProjectToFile(input: {
@@ -102,11 +121,23 @@ export async function exportProjectToFile(input: {
     chapterAssetIds.set(chapter.id, new Set(await getAssetsForChapter(chapter.id)));
   }
 
-  const orderedExportClips = deriveOrderedExportClips({
+  const { orderedClips: orderedExportClips, skippedClipIds } = collectOrderedExportClips({
     chapters,
     clips,
     chapterAssetIds,
   });
+
+  if (skippedClipIds.length > 0) {
+    logger.warn(
+      `Skipping ${skippedClipIds.length} unmapped clip(s) during export because they no longer map to a chapter.`,
+      { projectId, clipIds: skippedClipIds }
+    );
+  }
+
+  if (orderedExportClips.length === 0) {
+    throw new Error('No exportable clips in project to export');
+  }
+
   const orderedClips = orderedExportClips.map((item) => item.clip);
 
   const uniqueAssetIds = [...new Set(orderedClips.map((clip) => clip.asset_id))];

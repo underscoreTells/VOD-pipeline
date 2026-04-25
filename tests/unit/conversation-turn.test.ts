@@ -1266,4 +1266,56 @@ describe("conversation turn runner", () => {
     expect(result.assistantResponse).toContain("several evidence passes");
     expect(transcriptCalls).toHaveLength(9);
   });
+
+  it("fails closed after a generous number of distinct tool steps without finalizing", async () => {
+    const transcriptCalls: TranscriptDetailRequest[] = [];
+    const scriptedResponses = Array.from({ length: 30 }, (_, index) =>
+      new AIMessage({
+        content: "",
+        tool_calls: [
+          {
+            id: `call_transcript_limit_${index + 1}`,
+            type: "tool_call",
+            name: "loadDetailedTranscriptWindows",
+            args: {
+              requests: [
+                {
+                  windowStart: index * 3,
+                  windowEnd: index * 3 + 2,
+                  reason: `Limit request ${index + 1}`,
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+
+    const result = await runConversationTurn(
+      createInput({
+        messages: [new HumanMessage("Keep iterating until you are completely certain.")],
+      }),
+      {},
+      createDependencies(scriptedResponses, {
+        loadDetailedTranscriptWindows: async (requests) => {
+          transcriptCalls.push(...requests);
+          return [
+            {
+              assetId: 2,
+              windowStart: requests[0]?.windowStart ?? 0,
+              windowEnd: requests[0]?.windowEnd ?? 1,
+              reason: requests[0]?.reason,
+              text: "Detailed transcript window",
+              segments: [{ id: 1, start: 0, end: 1, text: "line" }],
+            },
+          ];
+        },
+      })
+    );
+
+    expect(result.outcome).toBe("clarification");
+    expect(result.assistantResponse).toContain("internal tool-step limit");
+    expect(transcriptCalls.length).toBeGreaterThan(8);
+    expect(transcriptCalls.length).toBeLessThan(scriptedResponses.length);
+  });
 });
