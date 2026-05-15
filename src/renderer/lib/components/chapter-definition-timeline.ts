@@ -86,6 +86,38 @@ export function createDraftChapterRange(params: {
   };
 }
 
+export function findDanglingInPointToLeft(params: {
+  inPoint: number | null;
+  cursorTime: number;
+  minimumDuration?: number;
+}): number | null {
+  const minimumDuration = params.minimumDuration ?? MIN_DRAFT_CHAPTER_DURATION_SECONDS;
+  if (params.inPoint === null || !Number.isFinite(params.inPoint)) {
+    return null;
+  }
+  if (!Number.isFinite(params.cursorTime)) {
+    return null;
+  }
+
+  return params.inPoint + minimumDuration <= params.cursorTime ? params.inPoint : null;
+}
+
+export function createDraftChapterRangeFromPoints(params: {
+  id: number;
+  inPoint: number;
+  outPoint: number;
+  timelineDuration: number;
+  minimumDuration?: number;
+}): DraftChapterRange | null {
+  return createDraftChapterRange({
+    id: params.id,
+    startTime: params.inPoint,
+    endTime: params.outPoint,
+    timelineDuration: params.timelineDuration,
+    minimumDuration: params.minimumDuration,
+  });
+}
+
 export function insertDraftChapterRange(
   ranges: DraftChapterRange[],
   nextRange: DraftChapterRange

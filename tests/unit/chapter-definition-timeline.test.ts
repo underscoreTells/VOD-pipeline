@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createDraftChapterRange,
+  createDraftChapterRangeFromPoints,
+  findDanglingInPointToLeft,
   insertDraftChapterRange,
   MIN_DRAFT_CHAPTER_DURATION_SECONDS,
   moveDraftChapterRange,
@@ -36,6 +38,48 @@ describe('chapter definition timeline helpers', () => {
         timelineDuration: 100,
       })
     ).toBeNull();
+  });
+
+  it('does not find a dangling in-point when none is pending', () => {
+    expect(findDanglingInPointToLeft({ inPoint: null, cursorTime: 20 })).toBeNull();
+  });
+
+  it('does not find a dangling in-point when it is to the right of the cursor', () => {
+    expect(findDanglingInPointToLeft({ inPoint: 30, cursorTime: 20 })).toBeNull();
+  });
+
+  it('does not find a dangling in-point when it is too close to the cursor', () => {
+    expect(
+      findDanglingInPointToLeft({
+        inPoint: 10,
+        cursorTime: 10 + MIN_DRAFT_CHAPTER_DURATION_SECONDS - 0.01,
+      })
+    ).toBeNull();
+  });
+
+  it('finds a dangling in-point when it is far enough to the left of the cursor', () => {
+    expect(
+      findDanglingInPointToLeft({
+        inPoint: 10,
+        cursorTime: 10 + MIN_DRAFT_CHAPTER_DURATION_SECONDS,
+      })
+    ).toBe(10);
+  });
+
+  it('creates a normalized range from explicit in and out points', () => {
+    expect(
+      createDraftChapterRangeFromPoints({
+        id: 2,
+        inPoint: 40,
+        outPoint: 20,
+        timelineDuration: 100,
+      })
+    ).toEqual({
+      id: 2,
+      title: 'Chapter',
+      startTime: 20,
+      endTime: 40,
+    });
   });
 
   it('rejects overlapping inserted ranges', () => {

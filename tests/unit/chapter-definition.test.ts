@@ -25,6 +25,8 @@ describe('ChapterDefinition', () => {
 
     expect(body).toContain('Master VOD timeline');
     expect(body).toContain('Build every chapter on one master VOD timeline');
+    expect(body).toContain('right-click to insert in/out points');
+    expect(body).toContain('Right-click a block to delete it');
     expect(body).toContain('Preview chapter');
     expect(body).toContain('Create 0 chapters');
     expect(body).not.toContain('Mark Start');

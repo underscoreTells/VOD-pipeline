@@ -7,6 +7,8 @@
   import Icon from './ui/Icon.svelte';
   import {
     createDraftChapterRange,
+    createDraftChapterRangeFromPoints,
+    findDanglingInPointToLeft,
     getDraftChapterDuration,
     getDraftChapterRangeById,
     insertDraftChapterRange,
@@ -20,10 +22,20 @@
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
   type TimelineDragMode = 'create' | 'move' | 'resize-start' | 'resize-end';
+  type ChapterDefinitionContextMenuMode = 'insert-in' | 'insert-out' | 'delete-chapter';
 
   interface DraftSelectionPreview {
     startTime: number;
     endTime: number;
+  }
+
+  interface ChapterDefinitionContextMenuState {
+    open: boolean;
+    x: number;
+    y: number;
+    mode: ChapterDefinitionContextMenuMode;
+    cursorTime: number | null;
+    chapterId: number | null;
   }
 
   interface Props {
@@ -50,7 +62,16 @@
   let selectedDraftChapterId = $state<number | null>(null);
   let previewChapterId = $state<number | null>(null);
   let draftSelectionPreview = $state<DraftSelectionPreview | null>(null);
+  let pendingInPoint = $state<number | null>(null);
   let nextDraftChapterId = $state(1);
+  let contextMenu = $state<ChapterDefinitionContextMenuState>({
+    open: false,
+    x: 0,
+    y: 0,
+    mode: 'insert-in',
+    cursorTime: null,
+    chapterId: null,
+  });
 
   let activeTimelinePointerId = $state<number | null>(null);
   let activeTimelineMode = $state<TimelineDragMode | null>(null);
@@ -159,6 +180,47 @@
     return ratio * duration;
   }
 
+  function eventPathContainsChapterBlock(event: Event): boolean {
+    return event.composedPath().some((node) => (
+      node instanceof HTMLElement && node.classList.contains('chapter-block')
+    ));
+  }
+
+  function closeContextMenu() {
+    contextMenu.open = false;
+    contextMenu.cursorTime = null;
+    contextMenu.chapterId = null;
+  }
+
+  function openContextMenu(
+    event: MouseEvent,
+    options: {
+      mode: ChapterDefinitionContextMenuMode;
+      cursorTime: number | null;
+      chapterId: number | null;
+    }
+  ) {
+    const padding = 8;
+    const menuWidth = 180;
+    const menuHeight = 44;
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth - padding) {
+      x = Math.max(padding, window.innerWidth - menuWidth - padding);
+    }
+    if (y + menuHeight > window.innerHeight - padding) {
+      y = Math.max(padding, window.innerHeight - menuHeight - padding);
+    }
+
+    contextMenu.open = true;
+    contextMenu.x = x;
+    contextMenu.y = y;
+    contextMenu.mode = options.mode;
+    contextMenu.cursorTime = options.cursorTime;
+    contextMenu.chapterId = options.chapterId;
+  }
+
   function clearTimelinePointerDrag() {
     clearTimelineDragListeners?.();
     clearTimelineDragListeners = null;
@@ -222,6 +284,8 @@
 
     event.preventDefault();
     clearPreviewSession();
+    closeContextMenu();
+    pendingInPoint = null;
     selectedDraftChapterId = null;
     dragAnchorTime = anchorTime;
     draftSelectionPreview = { startTime: anchorTime, endTime: anchorTime };
@@ -260,6 +324,107 @@
     selectDraftChapter(chapterId);
     dragRangeId = chapterId;
     beginTimelinePointerDrag(event, edge === 'start' ? 'resize-start' : 'resize-end');
+  }
+
+  function handleTimelineContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (assetUnavailable || duration <= 0) {
+      closeContextMenu();
+      return;
+    }
+    if (eventPathContainsChapterBlock(event)) {
+      return;
+    }
+
+    const cursorTime = getTimelineTimeForClientX(event.clientX);
+    if (cursorTime === null) {
+      closeContextMenu();
+      return;
+    }
+
+    const leftInPoint = findDanglingInPointToLeft({
+      inPoint: pendingInPoint,
+      cursorTime,
+    });
+
+    openContextMenu(event, {
+      mode: leftInPoint === null ? 'insert-in' : 'insert-out',
+      cursorTime,
+      chapterId: null,
+    });
+  }
+
+  function handleDraftChapterContextMenu(event: MouseEvent, chapterId: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (assetUnavailable || duration <= 0) {
+      closeContextMenu();
+      return;
+    }
+
+    clearPreviewSession();
+    selectDraftChapter(chapterId, { seekToStart: false });
+    openContextMenu(event, {
+      mode: 'delete-chapter',
+      cursorTime: null,
+      chapterId,
+    });
+  }
+
+  function handleContextInsertInPoint() {
+    if (contextMenu.cursorTime === null) return;
+    const cursorTime = contextMenu.cursorTime;
+
+    pendingInPoint = cursorTime;
+    selectedDraftChapterId = null;
+    clearPreviewSession();
+    closeContextMenu();
+    updatePlayhead(cursorTime);
+  }
+
+  function handleContextInsertOutPoint() {
+    if (pendingInPoint === null || contextMenu.cursorTime === null) return;
+
+    const createdRange = createDraftChapterRangeFromPoints({
+      id: nextDraftChapterId,
+      inPoint: pendingInPoint,
+      outPoint: contextMenu.cursorTime,
+      timelineDuration: duration,
+    });
+
+    if (createdRange) {
+      const nextRanges = insertDraftChapterRange(draftChapters, createdRange);
+      if (nextRanges) {
+        draftChapters = nextRanges;
+        nextDraftChapterId += 1;
+        pendingInPoint = null;
+        selectDraftChapter(createdRange.id);
+      }
+    }
+
+    closeContextMenu();
+  }
+
+  function deleteDraftChapterById(chapterId: number) {
+    const chapter = getDraftChapterRangeById(draftChapters, chapterId);
+    if (!chapter) return;
+
+    if (previewChapterId === chapterId) {
+      clearPreviewSession();
+    }
+
+    draftChapters = removeDraftChapterRange(draftChapters, chapterId);
+    if (selectedDraftChapterId === chapterId) {
+      selectedDraftChapterId = null;
+    }
+  }
+
+  function handleContextDeleteChapter() {
+    if (contextMenu.chapterId === null) return;
+    const chapterId = contextMenu.chapterId;
+    closeContextMenu();
+    deleteDraftChapterById(chapterId);
   }
 
   function handleTimelinePointerMove(event: PointerEvent) {
@@ -399,12 +564,7 @@
   function handleDeleteSelectedChapter() {
     if (!selectedDraftChapter) return;
 
-    if (previewChapterId === selectedDraftChapter.id) {
-      clearPreviewSession();
-    }
-
-    draftChapters = removeDraftChapterRange(draftChapters, selectedDraftChapter.id);
-    selectedDraftChapterId = null;
+    deleteDraftChapterById(selectedDraftChapter.id);
   }
 
   function handleCreateAll() {
@@ -465,6 +625,30 @@
     if (!selectedDraftChapterId) return;
     if (getDraftChapterRangeById(draftChapters, selectedDraftChapterId)) return;
     selectedDraftChapterId = null;
+  });
+
+  $effect(() => {
+    if (!contextMenu.open) return;
+
+    const handleWindowClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.chapter-definition-context-menu')) return;
+      closeContextMenu();
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+
+    window.addEventListener('click', handleWindowClick);
+    window.addEventListener('contextmenu', handleWindowClick);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('click', handleWindowClick);
+      window.removeEventListener('contextmenu', handleWindowClick);
+      window.removeEventListener('keydown', handleEscape);
+    };
   });
 
   onDestroy(() => {
@@ -534,7 +718,7 @@
         <div class="flex flex-col gap-1">
           <h3 class="m-0 text-app-md font-semibold text-text-primary">Master VOD timeline</h3>
           <p class="m-0 text-app-sm text-text-secondary">
-            Drag on empty space to create chapters. Drag a block to move it. Drag its edges to resize it.
+            Drag empty space to create chapters, or right-click to insert in/out points. Right-click a block to delete it.
           </p>
         </div>
         <div class="rounded-full border border-border-default bg-surface-raised px-3 py-1 font-mono text-app-xs text-text-secondary">
@@ -562,10 +746,11 @@
         role="group"
         aria-label="Master timeline chapter editor"
         onpointerdown={handleTimelinePointerDown}
+        oncontextmenu={handleTimelineContextMenu}
       >
         <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_55%)]"></div>
 
-        {#each [25, 50, 75] as laneMarker}
+        {#each [25, 50, 75] as laneMarker (laneMarker)}
           <div
             class="pointer-events-none absolute inset-y-0 border-l border-dashed border-border-subtle"
             style={`left: ${laneMarker}%;`}
@@ -586,6 +771,18 @@
           ></div>
         {/if}
 
+        {#if pendingInPoint !== null}
+          <div
+            class="pointer-events-none absolute top-0 bottom-0 z-[25] w-px -translate-x-1/2 bg-accent-warning"
+            style={`left: ${percentForTime(pendingInPoint)}%;`}
+          >
+            <div class="absolute left-1/2 top-2 h-2.5 w-2.5 -translate-x-1/2 rounded-full border border-surface-base bg-accent-warning"></div>
+            <span class="absolute left-1/2 top-5 -translate-x-1/2 rounded-sm bg-surface-page px-1.5 py-0.5 font-mono text-[10px] leading-none text-text-primary">
+              In
+            </span>
+          </div>
+        {/if}
+
         {#each draftChapters as chapter (chapter.id)}
           <div
             class="chapter-block absolute top-3 bottom-3 z-15 overflow-hidden rounded-lg border transition-[transform,box-shadow,border-color,background-color] duration-150"
@@ -599,6 +796,7 @@
             tabindex="0"
             aria-label={`${chapter.title} ${formatTime(chapter.startTime)} to ${formatTime(chapter.endTime)}`}
             onpointerdown={(event) => handleDraftChapterPointerDown(event, chapter.id)}
+            oncontextmenu={(event) => handleDraftChapterContextMenu(event, chapter.id)}
             onkeydown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
@@ -692,4 +890,46 @@
       </button>
     </div>
   </div>
+
+  {#if contextMenu.open}
+    <div
+      class="chapter-definition-context-menu fixed z-[var(--z-context-menu)] min-w-[180px] rounded-[4px] border border-border-default bg-surface-raised p-1"
+      style={`top: ${contextMenu.y}px; left: ${contextMenu.x}px;`}
+      role="menu"
+      tabindex="-1"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => {
+        if (event.key === 'Escape') {
+          closeContextMenu();
+        }
+      }}
+      oncontextmenu={(event) => event.preventDefault()}
+    >
+      {#if contextMenu.mode === 'insert-in'}
+        <button
+          class="w-full rounded-[4px] bg-transparent px-3 py-2 text-left text-app-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          role="menuitem"
+          onclick={handleContextInsertInPoint}
+        >
+          Insert in-point
+        </button>
+      {:else if contextMenu.mode === 'insert-out'}
+        <button
+          class="w-full rounded-[4px] bg-transparent px-3 py-2 text-left text-app-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          role="menuitem"
+          onclick={handleContextInsertOutPoint}
+        >
+          Insert out-point
+        </button>
+      {:else}
+        <button
+          class="w-full rounded-[4px] bg-transparent px-3 py-2 text-left text-app-sm text-accent-destructive transition-colors hover:bg-surface-hover hover:text-text-primary"
+          role="menuitem"
+          onclick={handleContextDeleteChapter}
+        >
+          Delete chapter
+        </button>
+      {/if}
+    </div>
+  {/if}
 </div>
