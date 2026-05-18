@@ -94,6 +94,6 @@ pnpm dist           # Build distributable Electron package
 
 Personal software, built almost entirely with AI assistance.
 
-It works where it counts and falls apart where it doesn't. The codebase is a mix of solid architectural decisions, half-finished refactors, and prompt engineering that happened to land. Expect rough edges, brittle assumptions, and the occasional moment of genuine surprise when something actually works.
+It works where it counts and falls apart where it doesn't. The codebase is a mix of questionable architectural decisions, half-finished refactors, and hammering the agent until it produced something that behaved somewhat like what I had in mind. Expect rough edges, brittle assumptions, and the occasional moment of genuine surprise when something actually works.
 
 The roadmap lives in `PLAN.md`; the reality lives in the code. They're not the same thing.
