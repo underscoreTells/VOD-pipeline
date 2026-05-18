@@ -92,8 +92,8 @@ pnpm dist           # Build distributable Electron package
 
 ## Status
 
-This is a personal project and the codebase is still pretty loose.
+Personal software, built almost entirely with AI assistance.
 
-The current app works in spots, but a lot of it is still held together by AI-generated code, half-finished refactors, and whatever seemed like a good idea at the time. Expect weird edges, brittle assumptions, and the occasional "why does this even work" moment.
+It works where it counts and falls apart where it doesn't. The codebase is a mix of solid architectural decisions, half-finished refactors, and prompt engineering that happened to land. Expect rough edges, brittle assumptions, and the occasional moment of genuine surprise when something actually works.
 
-The live agent runtime is the chapter-aware conversation loop in `docs/architecture/current-state.md`. It does single-turn tool calls, transcript/video evidence gathering, and streamed responses. `PLAN.md` is mostly the "maybe someday" document, not a description of what is actually running right now.
+The roadmap lives in `PLAN.md`; the reality lives in the code. They're not the same thing.
