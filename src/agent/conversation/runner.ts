@@ -24,6 +24,7 @@ const MAX_LOOP_STEPS = 24;
 const MAX_TOOL_CALLS_PER_STEP = 4;
 const MAX_STRUCTURED_REPAIRS = 1;
 const MAX_REPEATED_TOOL_CALLS = 2;
+const FINALIZE_TOOL_NAME = "finalizeConversationTurn";
 
 interface ConversationRunnerDependencies extends ConversationToolDependencies {
   createModel?: (
@@ -114,6 +115,9 @@ export async function runConversationTurn(
   const toolCallCounts = new Map<string, number>();
   let finalizeRepairCount = 0;
   let protocolFailureCount = 0;
+  // Reply text already streamed to the renderer from finalize tool-call
+  // argument deltas. Used to avoid re-streaming the same text on finalize.
+  let streamedResponseText = "";
 
   for (let step = 1; ; step += 1) {
     if (step > MAX_LOOP_STEPS) {
@@ -138,6 +142,12 @@ export async function runConversationTurn(
       messages: workingMessages,
       tools: boundTools.bindPayload,
       signal: options.signal,
+      provider: resolvedProvider,
+      streamedToolName: FINALIZE_TOOL_NAME,
+      onStreamedResponseDelta: (delta) => {
+        streamedResponseText += delta;
+        writer?.writeAssistantTextDelta(delta);
+      },
     });
 
     if (response.toolCalls.length === 0) {
@@ -265,8 +275,8 @@ export async function runConversationTurn(
         }
       }
 
-      if (toolCall.name === "finalizeConversationTurn" && accumulator.finalOutcome) {
-        return finalizeConversationResult(writer, accumulator);
+      if (toolCall.name === FINALIZE_TOOL_NAME && accumulator.finalOutcome) {
+        return finalizeConversationResult(writer, accumulator, streamedResponseText);
       }
 
       workingMessages.push(new ToolMessage({ content, tool_call_id: toolCall.id }));
@@ -311,7 +321,8 @@ function finalizeConversationResult(
     transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
     finalOutcome?: ConversationRunResult["outcome"];
     finalAssistantResponse?: string;
-  }
+  },
+  streamedResponseText = ""
 ): ConversationRunResult {
   const assistantResponse =
     typeof accumulator.finalAssistantResponse === "string"
@@ -329,7 +340,7 @@ function finalizeConversationResult(
     progress: 100,
     nodeName: "conversation_runner",
   });
-  streamAssistantText(writer, assistantResponse);
+  streamRemainingAssistantText(writer, assistantResponse, streamedResponseText);
 
   return {
     assistantResponse,
@@ -348,6 +359,32 @@ function finalizeConversationResult(
         ? accumulator.transcriptDetailRequests
         : undefined,
   };
+}
+
+/**
+ * Streams whatever part of the final reply has not already reached the
+ * renderer via live tool-argument deltas. When streamed text diverges from
+ * the canonical reply (e.g. a failed finalize attempt was re-tried), we
+ * stream nothing extra — turn_complete replaces the draft with the
+ * canonical text anyway.
+ */
+function streamRemainingAssistantText(
+  writer: ConversationWriter | undefined,
+  assistantResponse: string,
+  streamedResponseText: string
+): void {
+  const streamed = streamedResponseText.trim();
+  if (!streamed) {
+    streamAssistantText(writer, assistantResponse);
+    return;
+  }
+
+  if (assistantResponse.startsWith(streamed)) {
+    const remainder = assistantResponse.slice(streamed.length);
+    if (remainder.trim()) {
+      streamAssistantText(writer, remainder);
+    }
+  }
 }
 
 function assertNotAborted(signal?: AbortSignal): void {

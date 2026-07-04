@@ -317,10 +317,14 @@ async function main() {
         await processMessage(message, outputWriter, controller);
       } catch (error) {
         console.error(`[Agent] Error processing request ${requestId}:`, error);
+        const errorMessage =
+          error instanceof Error
+            ? `${error.message}${error.stack ? `\n${error.stack}` : ""}`
+            : String(error);
         outputWriter.write({
           type: "error",
           requestId,
-          error: String(error),
+          error: errorMessage,
           code: "PROCESSING_ERROR",
         });
       } finally {
