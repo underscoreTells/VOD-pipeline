@@ -117,7 +117,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
     return "kimi";
   }
 
-  _combineLLMOutput(): never {
+  override _combineLLMOutput(): never {
     return undefined as never;
   }
 
@@ -325,7 +325,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
     }
   }
 
-  bindTools(tools: BindToolsInput[], kwargs?: Partial<KimiCallOptions>) {
+  override bindTools(tools: BindToolsInput[], kwargs?: Partial<KimiCallOptions>) {
     return this.withConfig({
       tools: tools.map((tool) =>
         isKimiToolDefinition(tool)

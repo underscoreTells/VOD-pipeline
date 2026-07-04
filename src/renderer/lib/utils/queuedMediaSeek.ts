@@ -43,7 +43,6 @@ export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
   let lastIssuedPreviewTarget: number | null = null;
   let previewFrameId: number | null = null;
   let seekInFlight = false;
-  let commitPending = false;
 
   function normalizePreviewTarget(time: number): number {
     const normalizedTime = options.normalizeTime(time);
@@ -96,12 +95,10 @@ export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
     video.currentTime = target;
     lastIssuedPreviewTarget = target;
     seekInFlight = true;
-    commitPending = false;
   }
 
   return {
     preview(time: number): void {
-      commitPending = false;
       latestPreviewTarget = normalizePreviewTarget(time);
       schedulePreviewFlush();
     },
@@ -114,7 +111,6 @@ export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
       if (!video) {
         lastIssuedPreviewTarget = null;
         seekInFlight = false;
-        commitPending = false;
         return;
       }
 
@@ -122,11 +118,9 @@ export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
       video.currentTime = nextTime;
       lastIssuedPreviewTarget = nextTime;
       seekInFlight = true;
-      commitPending = true;
     },
 
     handleSeeked(): void {
-      commitPending = false;
       seekInFlight = false;
 
       if (
@@ -145,7 +139,6 @@ export function createQueuedMediaSeek(options: QueuedMediaSeekOptions) {
       latestPreviewTarget = null;
       lastIssuedPreviewTarget = null;
       seekInFlight = false;
-      commitPending = false;
     },
   };
 }

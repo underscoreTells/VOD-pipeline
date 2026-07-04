@@ -15,7 +15,6 @@ import {
 } from '../electron/pythonDetector.js';
 import type {
   TranscriptionResult,
-  TranscriptionSegment,
   TranscriptionOptions,
   TranscriptionProgress,
   TranscriptionProgressCallback,

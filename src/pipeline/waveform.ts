@@ -8,7 +8,6 @@ import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
 import { saveWaveform } from '../electron/database/index.js';
 import type {
   WaveformPeak,
-  WaveformProgress,
   WaveformProgressCallback,
   WaveformGenerationResult,
 } from '../shared/types/pipeline.js';
@@ -679,7 +678,7 @@ function convertJsonToPeaks(
  */
 export async function generateTier3OnDemand(
   audioPath: string,
-  trackIndex: number = 0,
+  _trackIndex: number = 0,
   startTime: number = 0,
   duration: number = 60
 ): Promise<WaveformPeak[]> {

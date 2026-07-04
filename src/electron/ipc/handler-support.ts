@@ -36,7 +36,6 @@ import {
   sanitizeThinkingMarkdown,
 } from '../../shared/utils/assistant-content.js';
 import {
-  generateDetailedTranscriptsForRequests,
   normalizeTranscriptDetailRequests,
 } from '../../shared/utils/detailed-transcript-tools.js';
 import {

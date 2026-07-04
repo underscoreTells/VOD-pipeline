@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import type { ExportFormat } from '../../../pipeline/export/index.js';
 import { createLogger } from '../../logger.js';
 import { exportProjectToFile, getExportFormats } from '../../services/export-service.js';

@@ -8,7 +8,6 @@ import {
   createClip,
   createSuggestion,
   getSuggestionsByConversation,
-  getSuggestionsByChapter,
   rejectSuggestion,
   setDatabaseForTesting,
 } from "../../src/electron/database/index.js";
