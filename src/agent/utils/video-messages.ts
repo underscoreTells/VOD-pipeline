@@ -1,5 +1,6 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { readFileAsBase64 } from "../providers/kimi.js";
+import type { LLMProviderType } from "../../shared/llm/provider-registry.js";
 
 /**
  * Video Message Formatter
@@ -12,7 +13,7 @@ import { readFileAsBase64 } from "../providers/kimi.js";
  *   Video is encoded as base64 and sent as a data URL (data:video/mp4;base64,...).
  */
 
-export type VideoProvider = "gemini" | "kimi";
+export type VideoProvider = Extract<LLMProviderType, "gemini" | "kimi">;
 
 export interface VideoMessageOptions {
   provider: VideoProvider;

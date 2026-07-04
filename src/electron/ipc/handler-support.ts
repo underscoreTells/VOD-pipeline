@@ -53,14 +53,11 @@ import {
 import {
   generateWaveformTiers,
 } from '../../pipeline/waveform.js';
-
-const PROVIDER_CONTEXT_TOKEN_LIMITS: Record<'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi', number> = {
-  gemini: 1_000_000,
-  openai: 128_000,
-  anthropic: 200_000,
-  openrouter: 200_000,
-  kimi: 128_000,
-};
+import {
+  getProviderContextTokenLimit,
+  normalizeProvider,
+  type LLMProviderType,
+} from '../../shared/llm/provider-registry.js';
 
 const TOKEN_GUARD_SOFT_RATIO = 0.92;
 const TOKEN_GUARD_HARD_RATIO = 0.97;
@@ -123,22 +120,16 @@ function estimateContextTokens(contextPayload: unknown): number {
 
 export function normalizeConversationProvider(
   provider: unknown
-): 'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi' | null {
-  return provider === 'gemini' ||
-    provider === 'openai' ||
-    provider === 'anthropic' ||
-    provider === 'openrouter' ||
-    provider === 'kimi'
-    ? provider
-    : null;
+): LLMProviderType | null {
+  return normalizeProvider(provider);
 }
 
 function getProviderContextLimit(provider: unknown): number {
   const normalizedProvider = normalizeConversationProvider(provider);
   if (!normalizedProvider) {
-    return PROVIDER_CONTEXT_TOKEN_LIMITS.gemini;
+    return getProviderContextTokenLimit('gemini');
   }
-  return PROVIDER_CONTEXT_TOKEN_LIMITS[normalizedProvider];
+  return getProviderContextTokenLimit(normalizedProvider);
 }
 
 function normalizeMessagePayload(
@@ -492,7 +483,7 @@ export function parseConversationTurnResult(
   };
 }
 
-function normalizeSuggestionProvider(provider: unknown): 'gemini' | 'kimi' | null {
+function normalizeSuggestionProvider(provider: unknown): Extract<LLMProviderType, 'gemini' | 'kimi'> | null {
   return provider === 'gemini' || provider === 'kimi' ? provider : null;
 }
 

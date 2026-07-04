@@ -1,4 +1,6 @@
-export type NamingModelProvider = 'openai' | 'gemini' | 'kimi';
+import type { LLMProviderType } from './provider-registry.js';
+
+export type NamingModelProvider = Extract<LLMProviderType, 'openai' | 'gemini' | 'kimi'>;
 
 export type NamingModelId = 'gpt-5-nano' | 'gemini-3-flash-preview' | 'kimi-k2.5';
 

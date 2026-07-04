@@ -3,6 +3,7 @@ import { getAgentBridge } from '../agent-bridge.js';
 import { createLogger } from '../logger.js';
 import { IPC_CHANNELS } from '../ipc/channels.js';
 import type { AgentStreamEvent } from '../../shared/types/agent-ipc.js';
+import { PROVIDER_IDS, PROVIDER_METADATA } from '../../shared/llm/provider-registry.js';
 
 const logger = createLogger('AgentRuntime');
 
@@ -48,11 +49,5 @@ export async function stopAgentRuntime(): Promise<void> {
 }
 
 function hasAgentKeys(): boolean {
-  return Boolean(
-    process.env.GEMINI_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.OPENROUTER_API_KEY ||
-    process.env.KIMI_API_KEY
-  );
+  return PROVIDER_IDS.some((id) => Boolean(process.env[PROVIDER_METADATA[id].envVar]));
 }

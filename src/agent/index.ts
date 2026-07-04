@@ -5,7 +5,7 @@ import type {
   AgentInputMessage,
   DetailedTranscriptWindow,
 } from "../shared/types/agent-ipc.js";
-import type { LLMProviderType } from "./providers/index.js";
+import { normalizeProvider, PROVIDER_IDS } from "../shared/llm/provider-registry.js";
 import { runConversationTurn } from "./conversation/runner.js";
 import {
   normalizeConversationMessages,
@@ -29,26 +29,13 @@ function asNumberArray(value: unknown): number[] {
   return value.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
 }
 
-function normalizeProvider(value: unknown): LLMProviderType | undefined {
-  if (
-    value === "openai" ||
-    value === "gemini" ||
-    value === "anthropic" ||
-    value === "openrouter" ||
-    value === "kimi"
-  ) {
-    return value;
-  }
-  return undefined;
-}
-
 function normalizeAgentConfig(value: unknown): Partial<AgentConfig> | null {
   if (!isRecord(value)) return null;
 
   const providersRaw = isRecord(value.providers) ? value.providers : {};
   const providers: NonNullable<Partial<AgentConfig>["providers"]> = {};
 
-  for (const provider of ["gemini", "openai", "anthropic", "openrouter", "kimi"] as const) {
+  for (const provider of PROVIDER_IDS) {
     const apiKey = providersRaw[provider];
     if (typeof apiKey === "string" && apiKey.trim().length > 0) {
       providers[provider] = apiKey.trim();
@@ -254,7 +241,7 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
 
   return {
     messages: normalizeConversationMessages(message.messages || []),
-    selectedProvider: normalizeProvider(metadata.provider),
+    selectedProvider: normalizeProvider(metadata.provider) ?? undefined,
     selectedClipIds: asNumberArray(metadata.selectedClipIds),
     playheadTime:
       typeof metadata.playheadTime === "number" && Number.isFinite(metadata.playheadTime)

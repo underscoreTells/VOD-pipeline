@@ -11,11 +11,12 @@ import type {
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
 import type { NamingModelId } from '../llm/naming-models.js';
+import type { LLMProviderType } from '../llm/provider-registry.js';
 import type { ProjectAsset } from './ipc.js';
 
 export type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
 export type ProxyQuality = 'high' | 'balanced' | 'fast';
-export type ProviderConfigProvider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'kimi';
+export type ProviderConfigProvider = LLMProviderType;
 
 export interface ProviderConfigPayload {
   defaultProvider?: ProviderConfigProvider;

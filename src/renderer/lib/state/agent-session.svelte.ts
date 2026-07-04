@@ -31,8 +31,9 @@ import {
   listAgentConversations,
 } from "../api/agent.js";
 import { settingsState } from "./settings.svelte";
+import type { LLMProviderType } from "../../../shared/llm/provider-registry.js";
 
-export type LLMProviderType = "gemini" | "openai" | "anthropic" | "openrouter" | "kimi";
+export type { LLMProviderType };
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";

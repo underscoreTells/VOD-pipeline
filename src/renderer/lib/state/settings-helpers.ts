@@ -9,12 +9,19 @@ import {
   normalizeNamingModel,
   type NamingModelId,
 } from '../../../shared/llm/naming-models.js';
+import {
+  PROVIDER_IDS,
+  VIDEO_CAPABLE_PROVIDERS,
+  getProviderLabel as getRegistryProviderLabel,
+  providerSupportsVideo,
+  validateProviderApiKey,
+} from '../../../shared/llm/provider-registry.js';
 import type {
   LLMProviderType,
   Settings,
 } from './settings.svelte.js';
 
-const PROVIDER_KEY_MAP: Record<LLMProviderType, keyof Settings> = {
+export const PROVIDER_KEY_MAP: Record<LLMProviderType, keyof Settings> = {
   gemini: 'geminiApiKey',
   openai: 'openaiApiKey',
   anthropic: 'anthropicApiKey',
@@ -22,23 +29,9 @@ const PROVIDER_KEY_MAP: Record<LLMProviderType, keyof Settings> = {
   openrouter: 'openrouterApiKey',
 };
 
-const VALID_PREFIXES: Record<LLMProviderType, string[]> = {
-  gemini: ['AIza'],
-  openai: ['sk-'],
-  anthropic: ['sk-ant-'],
-  kimi: ['sk-'],
-  openrouter: ['sk-or-'],
-};
+export const providerOrder: LLMProviderType[] = PROVIDER_IDS;
 
-export const providerOrder: LLMProviderType[] = [
-  'gemini',
-  'openai',
-  'anthropic',
-  'kimi',
-  'openrouter',
-];
-
-export const videoProviderOrder: LLMProviderType[] = ['gemini', 'kimi'];
+export const videoProviderOrder: LLMProviderType[] = VIDEO_CAPABLE_PROVIDERS;
 
 export const defaultSettings: Settings = {
   geminiApiKey: '',
@@ -70,19 +63,11 @@ export function buildProxyOptions(
 }
 
 export function getProviderLabel(provider: LLMProviderType): string {
-  const labels: Record<LLMProviderType, string> = {
-    gemini: 'Google Gemini',
-    openai: 'OpenAI',
-    anthropic: 'Anthropic Claude',
-    kimi: 'Kimi K2.5 (Moonshot AI)',
-    openrouter: 'OpenRouter',
-  };
-
-  return labels[provider];
+  return getRegistryProviderLabel(provider);
 }
 
 export function supportsVideo(provider: LLMProviderType): boolean {
-  return provider === 'gemini' || provider === 'kimi';
+  return providerSupportsVideo(provider);
 }
 
 export function getApiKey(settings: Settings, provider: LLMProviderType): string {
@@ -140,9 +125,5 @@ export function getNamingModelApiKey(
 }
 
 export function validateApiKey(provider: LLMProviderType, key: string): boolean {
-  if (!key) {
-    return false;
-  }
-
-  return VALID_PREFIXES[provider].some((prefix) => key.startsWith(prefix));
+  return validateProviderApiKey(provider, key);
 }

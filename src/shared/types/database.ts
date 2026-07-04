@@ -3,6 +3,8 @@
  * Mirrors the SQLite schema
  */
 
+import type { LLMProviderType } from '../llm/provider-registry.js';
+
 export interface Project {
   id: number;
   name: string;
@@ -98,7 +100,7 @@ export interface ChatConversation {
   project_id: number;
   chapter_id: number;
   title: string;
-  provider: 'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi' | null;
+  provider: LLMProviderType | null;
   thread_id: string;
   created_at: string;
   updated_at: string;
@@ -233,7 +235,7 @@ export interface Suggestion {
   out_point: number;
   description: string | null;
   reasoning: string | null;
-  provider: 'gemini' | 'kimi' | null;
+  provider: LLMProviderType | null;
   action_type: 'create_clip' | 'update_clip';
   target_clip_id: number | null;
   action_payload_json: string | null;
