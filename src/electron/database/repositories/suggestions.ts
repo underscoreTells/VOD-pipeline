@@ -482,23 +482,6 @@ export async function getSuggestionsByConversation(
   return results.map(normalizeSuggestionRecord);
 }
 
-export async function getSuggestionsByProvider(
-  chapterId: number,
-  provider: 'gemini' | 'kimi'
-): Promise<Suggestion[]> {
-  const database = await getDatabase();
-  const results = database.prepare(
-    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
-            action_type, target_clip_id, action_payload_json, preview_snapshot_json,
-            status, display_order, created_at, applied_at, clip_id
-     FROM suggestions
-     WHERE chapter_id = ? AND provider = ?
-     ORDER BY display_order ASC`
-  ).all(chapterId, provider) as Suggestion[];
-
-  return results.map(normalizeSuggestionRecord);
-}
-
 export async function previewSuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
   const database = await getDatabase();
 

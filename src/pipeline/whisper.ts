@@ -497,22 +497,6 @@ export async function transcribe(
 }
 
 /**
- * Transcribe with automatic language detection
- */
-export async function transcribeAutoDetect(
-  audioPath: string,
-  onProgress?: TranscriptionProgressCallback
-): Promise<TranscriptionResult> {
-  return transcribe(
-    {
-      audioPath,
-      model: 'base',
-    },
-    onProgress
-  );
-}
-
-/**
  * Find the transcribe.py script
  */
 async function findTranscribeScript(): Promise<string | null> {
@@ -537,16 +521,6 @@ async function findTranscribeScript(): Promise<string | null> {
   }
 
   return null;
-}
-
-/**
- * Check if transcription is available (Python + faster-whisper)
- */
-export async function isTranscriptionAvailable(): Promise<boolean> {
-  const pythonRuntime = await resolvePythonRuntime();
-  if (!pythonRuntime) return false;
-
-  return hasFasterWhisper(pythonRuntime.path);
 }
 
 /**

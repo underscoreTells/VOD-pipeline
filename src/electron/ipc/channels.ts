@@ -104,18 +104,3 @@ export const IPC_ERROR_CODES = {
 } as const;
 
 export type IPCErrorCode = typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES];
-
-// IPC Response types
-export interface IPCSuccessResponse<T = unknown> {
-  success: true;
-  data: T;
-}
-
-export interface IPCErrorResponse {
-  success: false;
-  error: string;
-  code: IPCErrorCode;
-  details?: unknown;
-}
-
-export type IPCResponse<T = unknown> = IPCSuccessResponse<T> | IPCErrorResponse;

@@ -417,31 +417,6 @@ export async function readFileAsBase64(filePath: string): Promise<string> {
   }
 }
 
-/**
- * Create a video message part for Kimi
- */
-export function createKimiVideoPart(base64Video: string, mimeType: string = "video/mp4"): KimiContentPart {
-  return {
-    type: "video_url",
-    video_url: {
-      url: `data:${mimeType};base64,${base64Video}`,
-    },
-  };
-}
-
-/**
- * Create an image message part for Kimi
- */
-export function createKimiImagePart(base64Image: string, mimeType: string = "image/jpeg", detail?: "low" | "high" | "auto"): KimiContentPart {
-  return {
-    type: "image_url",
-    image_url: {
-      url: `data:${mimeType};base64,${base64Image}`,
-      detail,
-    },
-  };
-}
-
 function isKimiToolDefinition(value: unknown): value is KimiToolDefinition {
   if (!value || typeof value !== "object") {
     return false;

@@ -8,12 +8,10 @@ export interface IPCSuccess<T> {
 export interface IPCFailure {
   success: false;
   error: string;
-  code?: RendererErrorCode;
+  code?: string;
 }
 
 export type IPCResult<T> = IPCSuccess<T> | IPCFailure;
-
-export type RendererErrorCode = string;
 
 export interface DependencyStatus {
   name: string;

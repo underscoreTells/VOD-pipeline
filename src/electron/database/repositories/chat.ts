@@ -161,17 +161,6 @@ export async function getChatMessagesByConversation(
   ).all(conversationId) as ChatConversationMessage[];
 }
 
-export async function getChatMessage(id: number): Promise<ChatConversationMessage | null> {
-  const database = await getDatabase();
-  const result = database.prepare(
-    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
-     FROM chat_messages
-     WHERE id = ?`
-  ).get(id) as ChatConversationMessage | undefined;
-
-  return result || null;
-}
-
 export async function getChatMessageByConversation(
   conversationId: number,
   messageId: number

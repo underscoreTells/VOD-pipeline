@@ -7,10 +7,7 @@ import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, type GPUEncod
 import type {
   VideoMetadata,
   AudioTrackMetadata,
-  ScaleOptions,
-  FramerateOptions,
   ProxyOptions,
-  CutOptions,
   AudioExtractOptions,
   FFprobeOutput,
 } from '../shared/types/pipeline.js';
@@ -152,14 +149,6 @@ export async function getVideoMetadata(
 }
 
 /**
- * Get video duration in seconds
- */
-export async function getDuration(filePath: string): Promise<number> {
-  const metadata = await getVideoMetadata(filePath);
-  return metadata.duration;
-}
-
-/**
  * Extract audio from video to WAV file
  */
 export async function extractAudio(
@@ -227,119 +216,6 @@ export async function extractAudio(
 }
 
 /**
- * Cut video segment
- */
-export async function cutVideo(
-  inputPath: string,
-  outputPath: string,
-  options: CutOptions
-): Promise<void> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
-  }
-
-  const args: string[] = [
-    '-ss', options.startTime.toString(),
-    '-to', options.endTime.toString(),
-    '-i', inputPath,
-  ];
-
-  if (options.reencode) {
-    // Re-encode for precise cuts
-    args.push('-c:v', 'libx264', '-c:a', 'aac');
-  } else {
-    // Copy codec for fast cuts (may have keyframe issues)
-    args.push('-c', 'copy');
-  }
-
-  args.push('-y', outputPath);
-
-  return runFFmpeg(ffmpegPath.path, args);
-}
-
-/**
- * Scale video while maintaining aspect ratio
- */
-export async function scaleVideo(
-  inputPath: string,
-  outputPath: string,
-  options: ScaleOptions
-): Promise<void> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
-  }
-
-  let scaleFilter: string;
-
-  if (options.maintainAspectRatio !== false) {
-    // Maintain aspect ratio, scale to fit within dimensions
-    if (options.width && options.height) {
-      scaleFilter = `scale=${options.width}:${options.height}:force_original_aspect_ratio=decrease,pad=${options.width}:${options.height}:round((ow-iw)/2):round((oh-ih)/2)`;
-    } else if (options.width) {
-      scaleFilter = `scale=${options.width}:-2`;
-    } else if (options.height) {
-      scaleFilter = `scale=-2:${options.height}`;
-    } else {
-      throw new FFmpegError('Either width or height must be specified', 'INVALID_OPTIONS');
-    }
-  } else {
-    // Stretch to exact dimensions
-    if (options.width && options.height) {
-      scaleFilter = `scale=${options.width}:${options.height}`;
-    } else {
-      throw new FFmpegError('Both width and height required when not maintaining aspect ratio', 'INVALID_OPTIONS');
-    }
-  }
-
-  const args: string[] = [
-    '-i', inputPath,
-    '-vf', scaleFilter,
-    '-c:v', 'libx264',
-    '-c:a', 'copy',
-    '-y', outputPath,
-  ];
-
-  return runFFmpeg(ffmpegPath.path, args);
-}
-
-/**
- * Change video framerate
- */
-export async function setFramerate(
-  inputPath: string,
-  outputPath: string,
-  options: FramerateOptions
-): Promise<void> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
-  }
-
-  const args: string[] = ['-i', inputPath];
-
-  if (options.method === 'interpolate') {
-    // Use motion interpolation for smoother results
-    args.push(
-      '-vf', `minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=${options.fps}'`,
-      '-r', options.fps.toString()
-    );
-  } else {
-    // Simple frame drop/duplicate
-    args.push('-r', options.fps.toString());
-  }
-
-  args.push(
-    '-c:v', 'libx264',
-    '-c:a', 'copy',
-    '-y', outputPath
-  );
-
-  return runFFmpeg(ffmpegPath.path, args);
-}
-
-/**
  * Generate proxy video with combined scale + framerate + codec settings
  */
 export async function generateProxy(
@@ -384,33 +260,6 @@ export async function generateProxy(
   args.push('-y', outputPath);
 
   return runFFmpeg(ffmpegPath.path, args);
-}
-
-/**
- * Generate multiple resolution proxies
- */
-export async function generateMultiResolutionProxies(
-  inputPath: string,
-  outputDir: string,
-  resolutions: Array<{ width: number; suffix: string }>
-): Promise<string[]> {
-  const outputs: string[] = [];
-
-  for (const { width, suffix } of resolutions) {
-    const baseName = path.basename(inputPath, path.extname(inputPath));
-    const outputPath = path.join(outputDir, `${baseName}_${suffix}.mp4`);
-
-    await generateProxy(inputPath, outputPath, {
-      width,
-      fps: 24,
-      videoCodec: 'libx264',
-      videoBitrate: '1M',
-    });
-
-    outputs.push(outputPath);
-  }
-
-  return outputs;
 }
 
 /**
@@ -802,24 +651,6 @@ async function executeProxyGeneration(
       }
     });
   });
-}
-
-/**
- * Generate proxy with progress streaming and timeout
- * Wrapper around generateAIProxy that sets default timeout
- */
-export async function generateAIProxyWithProgress(
-  inputPath: string,
-  outputPath: string,
-  options: {
-    onProgress?: (percent: number) => void;
-    timeoutMs?: number;
-  } = {}
-): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
-  const timeoutMs = options.timeoutMs || 30 * 60 * 1000; // 30 minutes default
-  
-  // Delegate to generateAIProxy with timeout built-in
-  return generateAIProxy(inputPath, outputPath, options.onProgress, timeoutMs);
 }
 
 /**
