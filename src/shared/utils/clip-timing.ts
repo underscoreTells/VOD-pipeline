@@ -18,6 +18,10 @@ export interface SplitClipSourceWindow {
   rightOutPoint: number;
 }
 
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function getClipDuration(clip: ClipWindow): number {
   return Math.max(0, clip.out_point - clip.in_point);
 }

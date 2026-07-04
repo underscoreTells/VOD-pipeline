@@ -1,10 +1,11 @@
-import { AIMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { buildConversationMessages } from "./context-builder.js";
 import {
   createConversationModel,
   invokeConversationModelStep,
   resolveConversationProvider,
   streamAssistantText,
+  type ToolCapableModel,
 } from "./provider-adapter.js";
 import {
   createConversationTools,
@@ -23,16 +24,6 @@ const MAX_LOOP_STEPS = 24;
 const MAX_TOOL_CALLS_PER_STEP = 4;
 const MAX_STRUCTURED_REPAIRS = 1;
 const MAX_REPEATED_TOOL_CALLS = 2;
-
-interface ToolCapableModel {
-  invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AIMessage>;
-  bindTools?(
-    tools: unknown[],
-    kwargs?: Record<string, unknown>
-  ): {
-    invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AIMessage>;
-  };
-}
 
 interface ConversationRunnerDependencies extends ConversationToolDependencies {
   createModel?: (

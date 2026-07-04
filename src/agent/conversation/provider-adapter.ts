@@ -4,7 +4,7 @@ import { createLLM } from "../providers/index.js";
 import type { LLMProviderType } from "../providers/index.js";
 import type { ConversationWriter } from "./types.js";
 
-interface ToolCapableModel {
+export interface ToolCapableModel {
   invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AIMessage>;
   bindTools?(
     tools: unknown[],
@@ -111,7 +111,7 @@ function splitTextForStreaming(text: string): string[] {
   return chunks.map((chunk) => chunk);
 }
 
-function getMessageText(content: unknown): string {
+export function getMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }

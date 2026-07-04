@@ -14,6 +14,7 @@ import { createLogger } from '../../logger.js';
 import { suggestChapterClipName } from '../../services/naming-service.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import { toNumberOrNull } from '../handler-support.js';
 import { normalizeNamingModel } from '../../../shared/llm/naming-models.js';
 
 const logger = createLogger('ClipHandlers');
@@ -28,19 +29,6 @@ export const CLIP_HANDLER_CHANNELS = [
   IPC_CHANNELS.CLIP_BATCH_UPDATE,
   IPC_CHANNELS.CLIP_SUGGEST_NAME,
 ];
-
-function toNumberOrNull(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
 
 export function registerClipHandlers(): void {
   ipcMain.handle(

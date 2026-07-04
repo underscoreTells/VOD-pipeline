@@ -25,6 +25,7 @@ import {
 } from "../tools/define-tool.js";
 import { isExecutableToolValidationError } from "../tools/binding.js";
 import { canonicalSchema as s } from "../tools/schema.js";
+import { getMessageText } from "./provider-adapter.js";
 
 const MAX_VIDEO_OBSERVATIONS = 12;
 const MAX_PROPOSAL_DRAFTS = 16;
@@ -851,30 +852,6 @@ function normalizeDetailedTranscriptRequestsForInput(
     chapterDuration,
     input.context.chapterAssetIds
   );
-}
-
-function getMessageText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (!Array.isArray(content)) {
-    return JSON.stringify(content ?? "");
-  }
-
-  return content
-    .map((part) => {
-      if (typeof part === "string") {
-        return part;
-      }
-
-      if (part && typeof part === "object" && "text" in part) {
-        return String((part as { text?: unknown }).text ?? "");
-      }
-
-      return "";
-    })
-    .join("");
 }
 
 function extractJsonObject(content: string): string | null {

@@ -1,7 +1,5 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import * as path from 'node:path';
-import { app } from 'electron';
 import { isAudiowaveformAvailable } from '../audiowaveformDetector.js';
 import {
   createChapterProxy,
@@ -20,6 +18,15 @@ import {
   updateChapterProxyMetadata,
   updateChapterProxyStatus,
 } from '../database/index.js';
+import {
+  ensureProxyDirectory,
+  getChapterProxyPath,
+  getChapterProxyTempPath,
+  getChapterReverseProxyPath,
+  getChapterReverseProxyTempPath,
+  getChapterReverseProxyUrl,
+  type ReverseProxyVariant,
+} from '../paths.js';
 import type { Asset, ChapterProxy, Clip, Suggestion } from '../../shared/types/database.js';
 import type {
   AgentGroundingStatusData,
@@ -30,7 +37,7 @@ import type {
   TimelineAction,
   TranscriptDetailRequest,
 } from '../../shared/types/agent-ipc.js';
-import { clipOverlapsChapterSourceRange } from '../../shared/utils/clip-timing.js';
+import { clipOverlapsChapterSourceRange, clamp } from '../../shared/utils/clip-timing.js';
 import {
   sanitizeAssistantContent,
   sanitizeThinkingMarkdown,
@@ -77,10 +84,6 @@ export function toNumberOrNull(value: unknown): number | null {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
-}
-
-export function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function normalizeTranscriptionModel(value: unknown): 'tiny' | 'base' | 'small' | 'medium' {
@@ -648,26 +651,6 @@ function formatOverviewTranscript(
   return lines.join('\n').slice(0, OVERVIEW_TRANSCRIPT_MAX_CHARS);
 }
 
-function getProxyDirectoryPath(): string {
-  const userDataPath = app.getPath('userData');
-  const proxiesDir = path.join(userDataPath, 'proxies');
-  if (!fs.existsSync(proxiesDir)) {
-    fs.mkdirSync(proxiesDir, { recursive: true });
-  }
-  return proxiesDir;
-}
-
-function getChapterProxyPath(chapterId: number, assetId: number): string {
-  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_ai_proxy.mp4`);
-}
-
-function getChapterProxyTempPath(chapterId: number, assetId: number, generationEpoch: number): string {
-  return path.join(
-    getProxyDirectoryPath(),
-    `chapter_${chapterId}_asset_${assetId}_ai_proxy.partial.${generationEpoch}.mp4`
-  );
-}
-
 function normalizeProxyOptions(proxyOptions?: ProxyOptions): Required<ProxyOptions> {
   return {
     encodingMode: proxyOptions?.encodingMode ?? 'auto',
@@ -779,39 +762,6 @@ async function recoverChapterProxyIfCurrent(
   await updateChapterProxyStatus(proxy.id, 'ready');
 
   return await getChapterProxyByChapterAsset(chapter.id, proxy.asset_id);
-}
-
-type ReverseProxyVariant = 'full' | 'quick';
-
-function getChapterReverseProxyPath(chapterId: number, assetId: number, variant: ReverseProxyVariant = 'full'): string {
-  const suffix = variant === 'full' ? 'reverse_preview.mp4' : 'reverse_preview_quick.mp4';
-  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
-}
-
-function getChapterReverseProxyTempPath(
-  chapterId: number,
-  assetId: number,
-  variant: ReverseProxyVariant = 'full',
-  generationEpoch?: number
-): string {
-  const baseName = variant === 'full'
-    ? `chapter_${chapterId}_asset_${assetId}_reverse_preview.partial`
-    : `chapter_${chapterId}_asset_${assetId}_reverse_preview_quick.partial`;
-  if (generationEpoch === undefined) {
-    return path.join(getProxyDirectoryPath(), `${baseName}.mp4`);
-  }
-  return path.join(getProxyDirectoryPath(), `${baseName}.${generationEpoch}.mp4`);
-}
-
-function getChapterReverseProxyUrl(
-  chapterId: number,
-  assetId: number,
-  variant: ReverseProxyVariant = 'full'
-): string {
-  if (variant === 'quick') {
-    return `vod://reverse/${chapterId}/${assetId}/quick`;
-  }
-  return `vod://reverse/${chapterId}/${assetId}`;
 }
 
 function getReverseValidationCacheKey(chapterId: number, assetId: number, variant: ReverseProxyVariant): string {
@@ -1318,6 +1268,7 @@ export async function ensureChapterReverseProxyQuickReady(
         }
 
         const executionMode = reverseQuickExecutionModes.get(lockKey) ?? requestedExecutionMode;
+        ensureProxyDirectory();
         await generateChapterReverseProxy(inputPath, quickTempPath, {
           startTime: inputStartTime,
           endTime: inputEndTime,
@@ -1425,6 +1376,7 @@ async function ensureChapterReverseProxyFullReady(
           }
         }
 
+        ensureProxyDirectory();
         await generateChapterReverseProxy(asset.file_path, tempPath, {
           startTime: chapter.start_time,
           endTime: chapter.end_time,
@@ -1562,6 +1514,7 @@ export async function ensureChapterProxyReady(
       await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async () => {
         deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
+        ensureProxyDirectory();
 
         const metadata = await generateAIProxy(
           asset.file_path,

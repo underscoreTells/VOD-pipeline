@@ -16,11 +16,11 @@ import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
-  clamp,
   normalizeComputeType,
   normalizeTranscriptionModel,
   queueChapterTranscription,
 } from '../handler-support.js';
+import { clamp } from '../../../shared/utils/clip-timing.js';
 
 const logger = createLogger('TranscriptionHandlers');
 

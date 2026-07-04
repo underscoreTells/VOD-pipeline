@@ -1,10 +1,11 @@
-import { app, protocol } from 'electron';
+import { protocol } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { getAsset } from './database/index.js';
 import { createLogger } from './logger.js';
 import { getAssetAvailability } from './services/asset-availability-service.js';
+import { getChapterReverseProxyPath } from './paths.js';
 
 const MEDIA_SCHEME = 'vod';
 const logger = createLogger('MediaProtocol');
@@ -58,20 +59,6 @@ function parseReverseProxyIds(
   } catch {
     return null;
   }
-}
-
-function getProxyDirectoryPath(): string {
-  const userDataPath = app.getPath('userData');
-  const proxiesDir = path.join(userDataPath, 'proxies');
-  if (!fs.existsSync(proxiesDir)) {
-    fs.mkdirSync(proxiesDir, { recursive: true });
-  }
-  return proxiesDir;
-}
-
-function getChapterReverseProxyPath(chapterId: number, assetId: number, variant: 'full' | 'quick' = 'full'): string {
-  const suffix = variant === 'quick' ? 'reverse_preview_quick.mp4' : 'reverse_preview.mp4';
-  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
 }
 
 function streamFileWithRange(

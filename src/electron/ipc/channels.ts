@@ -37,6 +37,7 @@ export const IPC_CHANNELS = {
   AGENT_EDIT_MESSAGE: 'agent:edit-message',
   AGENT_BRANCH_MESSAGE: 'agent:branch-message',
   AGENT_STREAM: 'agent:stream',
+  AGENT_ERROR: 'agent:error',
   AGENT_APPLY_ACTIONS: 'agent:apply-actions',
   AGENT_CONVERSATION_CREATE: 'agent:conversation-create',
   AGENT_CONVERSATION_LIST: 'agent:conversation-list',
@@ -80,6 +81,9 @@ export const IPC_CHANNELS = {
   // Settings channels (API key encryption)
   SETTINGS_ENCRYPT: 'settings:encrypt',
   SETTINGS_DECRYPT: 'settings:decrypt',
+
+  // Dialog channels
+  DIALOG_SHOW_SAVE_DIALOG: 'dialog:showSaveDialog',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];
