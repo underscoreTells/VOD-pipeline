@@ -19,20 +19,16 @@ export function setIpcConfig(config: Partial<AgentConfig> | null): void {
 export async function loadConfig(): Promise<AgentConfig> {
   try {
     if (ipcConfig) {
+      // Align with the .env path: temperature defaults to 0.7 and openrouterBaseURL falls back to env.
       const config: AgentConfig = {
         defaultProvider: ipcConfig.defaultProvider || "gemini",
         providers: ipcConfig.providers || {},
+        temperature: ipcConfig.temperature ?? 0.7,
+        maxTokens: ipcConfig.maxTokens,
+        openrouterBaseURL:
+          ipcConfig.openrouterBaseURL ??
+          process.env[PROVIDER_METADATA.openrouter.baseURLEnvVar ?? ""],
       };
-
-      if (ipcConfig.temperature !== undefined) {
-        config.temperature = ipcConfig.temperature;
-      }
-      if (ipcConfig.maxTokens !== undefined) {
-        config.maxTokens = ipcConfig.maxTokens;
-      }
-      if (ipcConfig.openrouterBaseURL !== undefined) {
-        config.openrouterBaseURL = ipcConfig.openrouterBaseURL;
-      }
 
       if (Object.keys(config.providers).length === 0) {
         throw new Error("No API keys found. Please set at least one provider key.");

@@ -1,6 +1,6 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
-import { createConversationTools } from "../../../src/agent/conversation/tools.js";
+import { createConversationTools } from "../../../src/agent/conversation/tools/index.js";
 import type { ConversationTurnInput } from "../../../src/agent/conversation/types.js";
 import { bindAgentToolsForProvider } from "../../../src/agent/tools/binding.js";
 import { defineAgentTool } from "../../../src/agent/tools/define-tool.js";

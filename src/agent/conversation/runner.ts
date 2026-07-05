@@ -11,7 +11,7 @@ import {
   createConversationTools,
   isToolSchemaFailure,
   type ConversationToolDependencies,
-} from "./tools.js";
+} from "./tools/index.js";
 import type { AgentToolDefinition } from "../tools/define-tool.js";
 import { bindAgentToolsForProvider } from "../tools/binding.js";
 import type {
@@ -19,11 +19,13 @@ import type {
   ConversationTurnInput,
   ConversationWriter,
 } from "./types.js";
+import {
+  MAX_LOOP_STEPS,
+  MAX_TOOL_CALLS_PER_STEP,
+  MAX_STRUCTURED_REPAIRS,
+  MAX_REPEATED_TOOL_CALLS,
+} from "../constants.js";
 
-const MAX_LOOP_STEPS = 24;
-const MAX_TOOL_CALLS_PER_STEP = 4;
-const MAX_STRUCTURED_REPAIRS = 1;
-const MAX_REPEATED_TOOL_CALLS = 2;
 const FINALIZE_TOOL_NAME = "finalizeConversationTurn";
 
 interface ConversationRunnerDependencies extends ConversationToolDependencies {
@@ -247,6 +249,7 @@ export async function runConversationTurn(
           stepIndex: step,
         });
         content = await selectedTool.execute(toolCall.args);
+        assertNotAborted(options.signal);
         writer?.writeToolState({
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -255,6 +258,7 @@ export async function runConversationTurn(
           stepIndex: step,
         });
       } catch (error) {
+        assertNotAborted(options.signal);
         const errorMessage = error instanceof Error ? error.message : String(error);
         content = JSON.stringify({ error: errorMessage });
         writer?.writeToolState({

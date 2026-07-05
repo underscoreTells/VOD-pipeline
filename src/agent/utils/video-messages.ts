@@ -1,6 +1,11 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { readFileAsBase64 } from "../providers/kimi.js";
 import type { LLMProviderType } from "../../shared/llm/provider-registry.js";
+import {
+  GEMINI_MAX_VIDEO_SIZE,
+  KIMI_MAX_VIDEO_SIZE,
+  TRANSCRIPT_CONTEXT_MAX_CHARS,
+} from "../constants.js";
 
 /**
  * Video Message Formatter
@@ -22,8 +27,6 @@ export interface VideoMessageOptions {
   transcriptContext?: string;
   mimeType?: string;
 }
-
-const TRANSCRIPT_CONTEXT_MAX_CHARS = 24000;
 
 function buildTranscriptContextBlock(transcriptContext?: string): string | null {
   if (typeof transcriptContext !== 'string') {
@@ -68,12 +71,6 @@ export async function createVideoMessage(
     throw error;
   }
 }
-
-/**
- * Maximum base64-encoded video file size for Gemini API (100MB)
- * Base64 encoding increases size by ~33%, so we check the estimated encoded size
- */
-const GEMINI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 
 /**
  * Create message for Gemini using a LangChain-supported file content block.
@@ -147,12 +144,6 @@ async function createGeminiVideoMessage(
     content: contentBlocks,
   });
 }
-
-/**
- * Maximum base64-encoded video file size for Kimi API (100MB)
- * Base64 encoding increases size by ~33%, so we check the estimated encoded size
- */
-const KIMI_MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100MB
 
 /**
  * Create message for Kimi (base64 encoded video)
