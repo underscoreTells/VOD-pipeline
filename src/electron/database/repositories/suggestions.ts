@@ -6,7 +6,7 @@ import type {
   UpdateClipInput,
   UpdateSuggestionInput,
 } from '../../../shared/types/database.js';
-import { getDatabase } from '../client.js';
+import { getDatabase, withTransaction } from '../client.js';
 import { getAsset } from './assets.js';
 import { getAssetsForChapter, getChapter } from './chapters.js';
 import {
@@ -64,6 +64,17 @@ interface NormalizedSuggestionClipWindow {
 
 function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Thrown inside a suggestion transaction to roll back all writes while
+ * still returning a structured failure result to the caller.
+ */
+class SuggestionRollback extends Error {
+  constructor(public readonly result: ApplySuggestionResult) {
+    super(result.error ?? 'Suggestion operation failed');
+    this.name = 'SuggestionRollback';
+  }
 }
 
 function normalizeSuggestionRecord(row: Suggestion): Suggestion {
@@ -483,143 +494,109 @@ export async function getSuggestionsByConversation(
 }
 
 export async function previewSuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
-  const database = await getDatabase();
-
   try {
-    const suggestion = await getSuggestion(id);
-    if (!suggestion) {
-      return { success: false, error: 'Suggestion not found' };
-    }
-    if (suggestion.status !== 'pending') {
-      return { success: false, error: 'Suggestion is not pending' };
-    }
-
-    if (isUpdateSuggestion(suggestion)) {
-      const chapter = await getChapter(suggestion.chapter_id);
-      if (!chapter) {
-        return { success: false, error: 'Chapter not found for this suggestion' };
-      }
-
-      const targetClipId = suggestion.target_clip_id;
-      if (!targetClipId) {
-        return { success: false, error: 'Update suggestion has no target clip' };
-      }
-
-      const targetClip = await getClip(targetClipId);
-      if (!targetClip) {
-        return { success: false, error: `Target clip ${targetClipId} not found` };
-      }
-
-      if (suggestion.preview_snapshot_json) {
-        return { success: true, clip: targetClip };
-      }
-
-      const snapshotJson = serializeSuggestionPreviewSnapshot(targetClip);
-      const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
-      if (!applyResult.success || !applyResult.clip) {
-        return applyResult;
-      }
-
-      const updateResult = database.prepare(
-        'UPDATE suggestions SET clip_id = ?, preview_snapshot_json = ?, applied_at = NULL WHERE id = ?'
-      ).run(targetClip.id, snapshotJson, id);
-
-      if (updateResult.changes === 0) {
-        await restoreClipFromSuggestionSnapshot({
-          ...suggestion,
-          clip_id: targetClip.id,
-          preview_snapshot_json: snapshotJson,
-        });
-        return { success: false, error: 'Failed to save update suggestion preview state' };
-      }
-
-      return applyResult;
-    }
-
-    if (suggestion.clip_id) {
-      const existingClip = await getClip(suggestion.clip_id);
-      if (existingClip) {
-        return { success: true, clip: existingClip };
-      }
-
-      database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
-    }
-
-    const chapter = await getChapter(suggestion.chapter_id);
-    if (!chapter) {
-      return { success: false, error: 'Chapter not found for this suggestion' };
-    }
-
-    const createResult = await createSuggestionTimelineClip(suggestion, chapter);
-    if (!createResult.success || !createResult.clip) {
-      return createResult;
-    }
-
-    const updateResult = database.prepare(
-      'UPDATE suggestions SET clip_id = ?, applied_at = NULL WHERE id = ?'
-    ).run(createResult.clip.id, id);
-
-    if (updateResult.changes === 0) {
-      await deleteClip(createResult.clip.id);
-      return { success: false, error: 'Failed to save suggestion preview clip' };
-    }
-
-    return createResult;
+    return await withTransaction(() => previewSuggestionWithClipTx(id));
   } catch (error) {
+    if (error instanceof SuggestionRollback) {
+      return error.result;
+    }
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[previewSuggestionWithClip] Error previewing suggestion ${id}:`, error);
     return { success: false, error: errorMessage };
   }
 }
 
+async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+
+  const suggestion = await getSuggestion(id);
+  if (!suggestion) {
+    return { success: false, error: 'Suggestion not found' };
+  }
+  if (suggestion.status !== 'pending') {
+    return { success: false, error: 'Suggestion is not pending' };
+  }
+
+  if (isUpdateSuggestion(suggestion)) {
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) {
+      return { success: false, error: 'Chapter not found for this suggestion' };
+    }
+
+    const targetClipId = suggestion.target_clip_id;
+    if (!targetClipId) {
+      return { success: false, error: 'Update suggestion has no target clip' };
+    }
+
+    const targetClip = await getClip(targetClipId);
+    if (!targetClip) {
+      return { success: false, error: `Target clip ${targetClipId} not found` };
+    }
+
+    if (suggestion.preview_snapshot_json) {
+      return { success: true, clip: targetClip };
+    }
+
+    const snapshotJson = serializeSuggestionPreviewSnapshot(targetClip);
+    const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
+    if (!applyResult.success || !applyResult.clip) {
+      return applyResult;
+    }
+
+    const updateResult = database.prepare(
+      'UPDATE suggestions SET clip_id = ?, preview_snapshot_json = ?, applied_at = NULL WHERE id = ?'
+    ).run(targetClip.id, snapshotJson, id);
+
+    if (updateResult.changes === 0) {
+      // Roll back the clip update applied above.
+      throw new SuggestionRollback({
+        success: false,
+        error: 'Failed to save update suggestion preview state',
+      });
+    }
+
+    return applyResult;
+  }
+
+  if (suggestion.clip_id) {
+    const existingClip = await getClip(suggestion.clip_id);
+    if (existingClip) {
+      return { success: true, clip: existingClip };
+    }
+
+    database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
+  }
+
+  const chapter = await getChapter(suggestion.chapter_id);
+  if (!chapter) {
+    return { success: false, error: 'Chapter not found for this suggestion' };
+  }
+
+  const createResult = await createSuggestionTimelineClip(suggestion, chapter);
+  if (!createResult.success || !createResult.clip) {
+    return createResult;
+  }
+
+  const updateResult = database.prepare(
+    'UPDATE suggestions SET clip_id = ?, applied_at = NULL WHERE id = ?'
+  ).run(createResult.clip.id, id);
+
+  if (updateResult.changes === 0) {
+    // Roll back the preview clip created above.
+    throw new SuggestionRollback({
+      success: false,
+      error: 'Failed to save suggestion preview clip',
+    });
+  }
+
+  return createResult;
+}
+
 export async function cancelSuggestionPreview(
   id: number
 ): Promise<CancelSuggestionPreviewResult> {
-  const database = await getDatabase();
-
   try {
-    const suggestion = await getSuggestion(id);
-    if (!suggestion) {
-      return { success: false, error: 'Suggestion not found' };
-    }
-    if (suggestion.status !== 'pending') {
-      return { success: false, error: 'Suggestion is not pending' };
-    }
-
-    if (isUpdateSuggestion(suggestion)) {
-      const restoreResult = await restoreClipFromSuggestionSnapshot(suggestion);
-      if (!restoreResult.success) {
-        return {
-          success: false,
-          error: restoreResult.error || 'Failed to restore update preview state',
-        };
-      }
-
-      database.prepare(
-        'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
-      ).run(id);
-
-      return {
-        success: true,
-        removedClipId: undefined,
-        clip: restoreResult.clip,
-      };
-    }
-
-    const previewClipId = suggestion.clip_id ?? undefined;
-    if (previewClipId) {
-      await deleteClip(previewClipId);
-    }
-
-    database.prepare(
-      'UPDATE suggestions SET clip_id = NULL, applied_at = NULL WHERE id = ?'
-    ).run(id);
-
-    return {
-      success: true,
-      removedClipId: previewClipId,
-      clip: undefined,
-    };
+    return await withTransaction(() => cancelSuggestionPreviewTx(id));
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[cancelSuggestionPreview] Error cancelling preview for suggestion ${id}:`, error);
@@ -627,89 +604,153 @@ export async function cancelSuggestionPreview(
   }
 }
 
-export async function applySuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
+async function cancelSuggestionPreviewTx(
+  id: number
+): Promise<CancelSuggestionPreviewResult> {
   const database = await getDatabase();
 
+  const suggestion = await getSuggestion(id);
+  if (!suggestion) {
+    return { success: false, error: 'Suggestion not found' };
+  }
+  if (suggestion.status !== 'pending') {
+    return { success: false, error: 'Suggestion is not pending' };
+  }
+
+  if (isUpdateSuggestion(suggestion)) {
+    const restoreResult = await restoreClipFromSuggestionSnapshot(suggestion);
+    if (!restoreResult.success) {
+      return {
+        success: false,
+        error: restoreResult.error || 'Failed to restore update preview state',
+      };
+    }
+
+    database.prepare(
+      'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
+    ).run(id);
+
+    return {
+      success: true,
+      removedClipId: undefined,
+      clip: restoreResult.clip,
+    };
+  }
+
+  const previewClipId = suggestion.clip_id ?? undefined;
+  if (previewClipId) {
+    await deleteClip(previewClipId);
+  }
+
+  database.prepare(
+    'UPDATE suggestions SET clip_id = NULL, applied_at = NULL WHERE id = ?'
+  ).run(id);
+
+  return {
+    success: true,
+    removedClipId: previewClipId,
+    clip: undefined,
+  };
+}
+
+export async function applySuggestionWithClip(id: number): Promise<ApplySuggestionResult> {
   try {
-    const suggestion = await getSuggestion(id);
-    if (!suggestion) {
-      return { success: false, error: 'Suggestion not found' };
-    }
-    if (suggestion.status === 'applied') {
-      return { success: false, error: 'Suggestion has already been applied' };
-    }
-    if (suggestion.status !== 'pending') {
-      return { success: false, error: 'Suggestion is not pending' };
-    }
-
-    const chapter = await getChapter(suggestion.chapter_id);
-    if (!chapter) {
-      return { success: false, error: 'Chapter not found for this suggestion' };
-    }
-
-    if (isUpdateSuggestion(suggestion)) {
-      const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
-      if (!targetClipId) {
-        return { success: false, error: 'Update suggestion has no target clip' };
-      }
-
-      const targetClip = await getClip(targetClipId);
-      if (!targetClip) {
-        return { success: false, error: `Target clip ${targetClipId} not found` };
-      }
-
-      let updatedClip = targetClip;
-      if (!suggestion.preview_snapshot_json) {
-        const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
-        if (!applyResult.success || !applyResult.clip) {
-          return applyResult;
-        }
-        updatedClip = applyResult.clip;
-      }
-
-      const updateResult = database.prepare(
-        "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
-      ).run(new Date().toISOString(), updatedClip.id, id);
-
-      if (updateResult.changes === 0) {
-        return { success: false, error: 'Failed to update suggestion status' };
-      }
-
-      return { success: true, clip: updatedClip };
-    }
-
-    let clip: Clip | undefined;
-    if (suggestion.clip_id) {
-      const existingPreviewClip = await getClip(suggestion.clip_id);
-      if (existingPreviewClip) {
-        clip = existingPreviewClip;
-      } else {
-        database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
-      }
-    }
-
-    if (!clip) {
-      const createResult = await createSuggestionTimelineClip(suggestion, chapter);
-      if (!createResult.success || !createResult.clip) {
-        return createResult;
-      }
-      clip = createResult.clip;
-    }
-
-    const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(new Date().toISOString(), clip.id, id);
-
-    if (updateResult.changes === 0) {
-      return { success: false, error: 'Failed to update suggestion status' };
-    }
-
-    return { success: true, clip };
+    return await withTransaction(() => applySuggestionWithClipTx(id));
   } catch (error) {
+    if (error instanceof SuggestionRollback) {
+      return error.result;
+    }
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[applySuggestionWithClip] Error applying suggestion ${id}:`, error);
     return { success: false, error: errorMessage };
   }
+}
+
+async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+
+  const suggestion = await getSuggestion(id);
+  if (!suggestion) {
+    return { success: false, error: 'Suggestion not found' };
+  }
+  if (suggestion.status === 'applied') {
+    return { success: false, error: 'Suggestion has already been applied' };
+  }
+  if (suggestion.status !== 'pending') {
+    return { success: false, error: 'Suggestion is not pending' };
+  }
+
+  const chapter = await getChapter(suggestion.chapter_id);
+  if (!chapter) {
+    return { success: false, error: 'Chapter not found for this suggestion' };
+  }
+
+  if (isUpdateSuggestion(suggestion)) {
+    const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+    if (!targetClipId) {
+      return { success: false, error: 'Update suggestion has no target clip' };
+    }
+
+    const targetClip = await getClip(targetClipId);
+    if (!targetClip) {
+      return { success: false, error: `Target clip ${targetClipId} not found` };
+    }
+
+    let updatedClip = targetClip;
+    if (!suggestion.preview_snapshot_json) {
+      const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
+      if (!applyResult.success || !applyResult.clip) {
+        return applyResult;
+      }
+      updatedClip = applyResult.clip;
+    }
+
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
+    ).run(new Date().toISOString(), updatedClip.id, id);
+
+    if (updateResult.changes === 0) {
+      // Roll back the clip update applied above.
+      throw new SuggestionRollback({
+        success: false,
+        error: 'Failed to update suggestion status',
+      });
+    }
+
+    return { success: true, clip: updatedClip };
+  }
+
+  let clip: Clip | undefined;
+  if (suggestion.clip_id) {
+    const existingPreviewClip = await getClip(suggestion.clip_id);
+    if (existingPreviewClip) {
+      clip = existingPreviewClip;
+    } else {
+      database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(id);
+    }
+  }
+
+  if (!clip) {
+    const createResult = await createSuggestionTimelineClip(suggestion, chapter);
+    if (!createResult.success || !createResult.clip) {
+      return createResult;
+    }
+    clip = createResult.clip;
+  }
+
+  const updateResult = database.prepare(
+    "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
+  ).run(new Date().toISOString(), clip.id, id);
+
+  if (updateResult.changes === 0) {
+    // Roll back the clip created above.
+    throw new SuggestionRollback({
+      success: false,
+      error: 'Failed to update suggestion status',
+    });
+  }
+
+  return { success: true, clip };
 }
 
 export async function rejectSuggestion(id: number): Promise<boolean> {
