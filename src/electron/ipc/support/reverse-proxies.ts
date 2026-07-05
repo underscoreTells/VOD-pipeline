@@ -48,6 +48,15 @@ const chapterReverseProxyValidationCache = new Map<string, { mtimeMs: number; si
 const chapterReverseProxyGenerationEpochs = new Map<string, number>();
 const reverseQuickExecutionModes = new Map<string, ReverseProxyExecutionMode>();
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getReverseValidationCacheKey(chapterId: number, assetId: number, variant: ReverseProxyVariant): string {
   return `${chapterId}:${assetId}:${variant}`;
 }
@@ -67,14 +76,10 @@ async function isChapterReverseProxyPlayable(
 ): Promise<boolean> {
   const cacheKey = getReverseValidationCacheKey(chapterId, assetId, variant);
   const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
-  if (!fs.existsSync(proxyPath)) {
-    chapterReverseProxyValidationCache.delete(cacheKey);
-    return false;
-  }
 
   let stats: fs.Stats;
   try {
-    stats = fs.statSync(proxyPath);
+    stats = await fs.promises.stat(proxyPath);
   } catch {
     chapterReverseProxyValidationCache.delete(cacheKey);
     return false;
@@ -101,20 +106,20 @@ async function isChapterReverseProxyPlayable(
   return valid;
 }
 
-function invalidateChapterReverseProxyVariant(
+async function invalidateChapterReverseProxyVariant(
   chapterId: number,
   assetId: number,
   variant: ReverseProxyVariant
-): void {
+): Promise<void> {
   const cacheKey = getReverseValidationCacheKey(chapterId, assetId, variant);
   const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
   const tempPath = getChapterReverseProxyTempPath(chapterId, assetId, variant);
   const legacyTempPath = `${proxyPath}.partial`;
   chapterReverseProxyValidationCache.delete(cacheKey);
 
-  if (fs.existsSync(proxyPath)) {
+  if (await pathExists(proxyPath)) {
     try {
-      fs.unlinkSync(proxyPath);
+      await fs.promises.unlink(proxyPath);
     } catch (error) {
       console.warn(
         `[ReverseProxy] Failed deleting ${variant} cache chapter=${chapterId} asset=${assetId}:`,
@@ -123,17 +128,17 @@ function invalidateChapterReverseProxyVariant(
     }
   }
 
-  if (fs.existsSync(tempPath)) {
+  if (await pathExists(tempPath)) {
     try {
-      fs.unlinkSync(tempPath);
+      await fs.promises.unlink(tempPath);
     } catch {
       // Ignore stale partial cleanup errors.
     }
   }
 
-  if (variant === 'full' && fs.existsSync(legacyTempPath)) {
+  if (variant === 'full' && await pathExists(legacyTempPath)) {
     try {
-      fs.unlinkSync(legacyTempPath);
+      await fs.promises.unlink(legacyTempPath);
     } catch {
       // Ignore stale legacy partial cleanup errors.
     }
@@ -146,7 +151,7 @@ async function ensureChapterReverseProxyCacheValid(
   variant: ReverseProxyVariant = 'full'
 ): Promise<boolean> {
   const proxyPath = getChapterReverseProxyPath(chapterId, assetId, variant);
-  if (!fs.existsSync(proxyPath)) {
+  if (!(await pathExists(proxyPath))) {
     return false;
   }
 
@@ -158,7 +163,7 @@ async function ensureChapterReverseProxyCacheValid(
   console.warn(
     `[ReverseProxy] Invalid cached ${variant} reverse preview detected, rebuilding chapter=${chapterId} asset=${assetId}`
   );
-  invalidateChapterReverseProxyVariant(chapterId, assetId, variant);
+  await invalidateChapterReverseProxyVariant(chapterId, assetId, variant);
   return false;
 }
 
@@ -255,14 +260,14 @@ export async function getChapterReverseProxyStatus(chapterId: number, assetId: n
   return { status: 'missing' };
 }
 
-export function invalidateChapterReverseProxy(chapterId: number, assetId: number): void {
+export async function invalidateChapterReverseProxy(chapterId: number, assetId: number): Promise<void> {
   const lockKey = `${chapterId}:${assetId}`;
   bumpGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey);
   chapterReverseProxyErrors.delete(lockKey);
   reverseQuickExecutionModes.delete(lockKey);
   clearChapterReverseProxyBackgroundTimer(lockKey);
-  invalidateChapterReverseProxyVariant(chapterId, assetId, 'full');
-  invalidateChapterReverseProxyVariant(chapterId, assetId, 'quick');
+  await invalidateChapterReverseProxyVariant(chapterId, assetId, 'full');
+  await invalidateChapterReverseProxyVariant(chapterId, assetId, 'quick');
 }
 
 export async function ensureChapterReverseProxyQuickReady(
@@ -316,9 +321,9 @@ export async function ensureChapterReverseProxyQuickReady(
 
     try {
       await enqueueHeavyMediaJob(jobKey, 'reverseQuickWarm', queuePriority, async () => {
-        if (fs.existsSync(quickTempPath)) {
+        if (await pathExists(quickTempPath)) {
           try {
-            fs.unlinkSync(quickTempPath);
+            await fs.promises.unlink(quickTempPath);
           } catch {
             // Ignore stale temp cleanup errors.
           }
@@ -331,7 +336,7 @@ export async function ensureChapterReverseProxyQuickReady(
 
         let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
         chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-        const reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+        const reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
         if (reusableChapterProxy) {
           try {
             const chapterProxyMetadata = await getVideoMetadata(reusableChapterProxy.file_path, 5000);
@@ -348,7 +353,7 @@ export async function ensureChapterReverseProxyQuickReady(
         }
 
         const executionMode = reverseQuickExecutionModes.get(lockKey) ?? requestedExecutionMode;
-        ensureProxyDirectory();
+        await ensureProxyDirectory();
         await generateChapterReverseProxy(inputPath, quickTempPath, {
           startTime: inputStartTime,
           endTime: inputEndTime,
@@ -362,15 +367,15 @@ export async function ensureChapterReverseProxyQuickReady(
       });
 
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
-        deleteFileIfExists(quickTempPath, 'ReverseProxy');
+        await deleteFileIfExists(quickTempPath, 'ReverseProxy');
         return undefined;
       }
 
-      if (fs.existsSync(quickProxyPath)) {
-        fs.unlinkSync(quickProxyPath);
+      if (await pathExists(quickProxyPath)) {
+        await fs.promises.unlink(quickProxyPath);
       }
 
-      fs.renameSync(quickTempPath, quickProxyPath);
+      await fs.promises.rename(quickTempPath, quickProxyPath);
 
       if (!(await isChapterReverseProxyPlayable(chapter.id, asset.id, 'quick'))) {
         throw new Error('Generated quick reverse preview is not playable');
@@ -380,9 +385,9 @@ export async function ensureChapterReverseProxyQuickReady(
       return quickProxyPath;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      deleteFileIfExists(quickTempPath, 'ReverseProxy');
+      await deleteFileIfExists(quickTempPath, 'ReverseProxy');
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
-        invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
+        await invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
         chapterReverseProxyErrors.set(lockKey, message);
       }
       console.warn(
@@ -448,15 +453,15 @@ async function ensureChapterReverseProxyFullReady(
           return;
         }
 
-        if (fs.existsSync(tempPath)) {
+        if (await pathExists(tempPath)) {
           try {
-            fs.unlinkSync(tempPath);
+            await fs.promises.unlink(tempPath);
           } catch {
             // Ignore stale temp cleanup errors.
           }
         }
 
-        ensureProxyDirectory();
+        await ensureProxyDirectory();
         await generateChapterReverseProxy(asset.file_path, tempPath, {
           startTime: chapter.start_time,
           endTime: chapter.end_time,
@@ -469,15 +474,15 @@ async function ensureChapterReverseProxyFullReady(
         });
 
         if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
-          deleteFileIfExists(tempPath, 'ReverseProxy');
+          await deleteFileIfExists(tempPath, 'ReverseProxy');
           return;
         }
 
-        if (fs.existsSync(proxyPath)) {
-          fs.unlinkSync(proxyPath);
+        if (await pathExists(proxyPath)) {
+          await fs.promises.unlink(proxyPath);
         }
 
-        fs.renameSync(tempPath, proxyPath);
+        await fs.promises.rename(tempPath, proxyPath);
 
         if (!(await isChapterReverseProxyPlayable(chapter.id, asset.id, 'full'))) {
           throw new Error('Generated reverse preview is not playable');
@@ -488,9 +493,9 @@ async function ensureChapterReverseProxyFullReady(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      deleteFileIfExists(tempPath, 'ReverseProxy');
+      await deleteFileIfExists(tempPath, 'ReverseProxy');
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
-        invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
+        await invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
         chapterReverseProxyErrors.set(lockKey, message);
       }
       console.warn(

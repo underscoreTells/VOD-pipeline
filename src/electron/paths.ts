@@ -8,11 +8,9 @@ export function getProxyDirectoryPath(): string {
   return path.join(app.getPath('userData'), 'proxies');
 }
 
-export function ensureProxyDirectory(): string {
+export async function ensureProxyDirectory(): Promise<string> {
   const proxiesDir = getProxyDirectoryPath();
-  if (!fs.existsSync(proxiesDir)) {
-    fs.mkdirSync(proxiesDir, { recursive: true });
-  }
+  await fs.promises.mkdir(proxiesDir, { recursive: true });
   return proxiesDir;
 }
 

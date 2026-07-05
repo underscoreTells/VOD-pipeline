@@ -163,7 +163,7 @@ export function registerChapterHandlers(): void {
             startTime: updatedChapter?.start_time,
             endTime: updatedChapter?.end_time,
           });
-          invalidateChapterReverseProxy(parsed.data.id as number, assetId);
+          await invalidateChapterReverseProxy(parsed.data.id as number, assetId);
         }
       }
 
@@ -189,7 +189,7 @@ export function registerChapterHandlers(): void {
       const linkedAssetIds = await getAssetsForChapter(chapterId);
       for (const assetId of linkedAssetIds) {
         await invalidateChapterProxy(chapterId, assetId);
-        invalidateChapterReverseProxy(chapterId, assetId);
+        await invalidateChapterReverseProxy(chapterId, assetId);
       }
 
       const success = await deleteChapter(chapterId);
@@ -224,7 +224,7 @@ export function registerChapterHandlers(): void {
       await deleteTranscriptsByChapter(chapterId);
       await deleteDetailedTranscriptsByChapter(chapterId);
       await invalidateChapterProxy(chapterId, assetId);
-      invalidateChapterReverseProxy(chapterId, assetId);
+      await invalidateChapterReverseProxy(chapterId, assetId);
 
       if (prewarmProxy) {
         void scheduleChapterMediaPrewarm(chapterId, assetId, proxyOptions).catch((error) => {
@@ -248,7 +248,7 @@ export function registerChapterHandlers(): void {
         return createErrorResponse('Link not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
-      invalidateChapterReverseProxy(chapterId, assetId);
+      await invalidateChapterReverseProxy(chapterId, assetId);
       await invalidateChapterProxy(chapterId, assetId);
       await deleteTranscriptsByChapter(chapterId);
       await deleteDetailedTranscriptsByChapter(chapterId);

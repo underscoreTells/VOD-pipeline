@@ -131,7 +131,7 @@ export function registerAssetHandlers(): void {
       }
       const asset = await getAsset(parsed.data.id as number);
       return asset
-        ? createSuccessResponse(enrichProjectAsset(asset))
+        ? createSuccessResponse(await enrichProjectAsset(asset))
         : createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
@@ -147,7 +147,7 @@ export function registerAssetHandlers(): void {
         return createErrorResponse('Invalid asset payload', IPC_ERROR_CODES.DATABASE_ERROR);
       }
       const assets = await getAssetsByProject(parsed.data.projectId as number);
-      return createSuccessResponse(assets.map(enrichProjectAsset));
+      return createSuccessResponse(await Promise.all(assets.map(enrichProjectAsset)));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }

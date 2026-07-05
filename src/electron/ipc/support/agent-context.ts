@@ -79,7 +79,7 @@ export async function getAgentGroundingStatus(
   for (const asset of chapterVideoAssets) {
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
     chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-    let reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+    let reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
 
     if (reusableChapterProxy) {
       readyVideoAssetCount += 1;
@@ -111,7 +111,7 @@ export async function getAgentGroundingStatus(
       );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
       chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-      reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+      reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
     }
 
     if (reusableChapterProxy) {
@@ -226,7 +226,7 @@ export async function buildAgentChatContext(
   for (const asset of chapterAssets.filter((candidate) => candidate.file_type === 'video')) {
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
     chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-    let reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+    let reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
 
     if (!reusableChapterProxy && options?.ensureChapterProxyReady) {
       const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
@@ -239,7 +239,7 @@ export async function buildAgentChatContext(
       );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
       chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-      reusableChapterProxy = getReusableChapterProxy(chapterProxy, chapter);
+      reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
     }
 
     if (reusableChapterProxy) {

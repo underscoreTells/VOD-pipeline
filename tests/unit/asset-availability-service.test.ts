@@ -22,12 +22,12 @@ function createTempDirectory(): string {
 }
 
 describe('asset availability service', () => {
-  it('returns available metadata for an existing file', () => {
+  it('returns available metadata for an existing file', async () => {
     const directory = createTempDirectory();
     const filePath = path.join(directory, 'clip.mp4');
     fs.writeFileSync(filePath, 'video');
 
-    const availability = getAssetAvailability(filePath);
+    const availability = await getAssetAvailability(filePath);
 
     expect(availability.exists).toBe(true);
     expect(availability.issue).toBeNull();
@@ -35,28 +35,28 @@ describe('asset availability service', () => {
     expect(availability.nearestExistingAncestor).toBeNull();
   });
 
-  it('marks a missing file under an existing parent as missing_file', () => {
+  it('marks a missing file under an existing parent as missing_file', async () => {
     const directory = createTempDirectory();
     const filePath = path.join(directory, 'missing.mp4');
 
-    const availability = getAssetAvailability(filePath);
+    const availability = await getAssetAvailability(filePath);
 
     expect(availability.exists).toBe(false);
     expect(availability.issue).toBe('missing_file');
     expect(availability.nearestExistingAncestor).toBe(directory);
   });
 
-  it('marks a missing file under a missing parent chain as missing_parent', () => {
+  it('marks a missing file under a missing parent chain as missing_parent', async () => {
     const directory = createTempDirectory();
     const existingParent = path.join(directory, 'mounted');
     fs.mkdirSync(existingParent);
     const filePath = path.join(existingParent, 'offline', 'nested', 'missing.mp4');
 
-    const availability = getAssetAvailability(filePath);
+    const availability = await getAssetAvailability(filePath);
 
     expect(availability.exists).toBe(false);
     expect(availability.issue).toBe('missing_parent');
     expect(availability.nearestExistingAncestor).toBe(existingParent);
-    expect(findNearestExistingAncestor(filePath)).toBe(existingParent);
+    expect(await findNearestExistingAncestor(filePath)).toBe(existingParent);
   });
 });

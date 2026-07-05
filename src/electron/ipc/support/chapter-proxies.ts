@@ -39,21 +39,30 @@ const CHAPTER_PROXY_TIME_EPSILON = 0.01;
 type ChapterRecord = NonNullable<Awaited<ReturnType<typeof getChapter>>>;
 type ChapterProxyRecord = NonNullable<Awaited<ReturnType<typeof getChapterProxyByChapterAsset>>>;
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const chapterProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterProxyGenerationEpochs = new Map<string, number>();
 
-export function isChapterProxyArtifactCurrent(
+export async function isChapterProxyArtifactCurrent(
   proxy: Pick<ChapterProxy, 'file_path' | 'start_time' | 'end_time'> | null | undefined,
   chapter: Pick<ChapterRecord, 'start_time' | 'end_time'>
-): boolean {
+): Promise<boolean> {
   if (!proxy?.file_path) {
     return false;
   }
 
   try {
-    const stats = fs.statSync(proxy.file_path);
+    const stats = await fs.promises.stat(proxy.file_path);
     if (!stats.isFile() || stats.size <= 0) {
       return false;
     }
@@ -67,7 +76,7 @@ export function isChapterProxyArtifactCurrent(
   );
 }
 
-export function isChapterProxyReusable(
+export async function isChapterProxyReusable(
   proxy: {
     status: string;
     file_path: string;
@@ -75,7 +84,7 @@ export function isChapterProxyReusable(
     end_time: number;
   } | null | undefined,
   chapter: { start_time: number; end_time: number }
-): boolean {
+): Promise<boolean> {
   if (!proxy || proxy.status !== 'ready') {
     return false;
   }
@@ -83,15 +92,15 @@ export function isChapterProxyReusable(
   return isChapterProxyArtifactCurrent(proxy, chapter);
 }
 
-export function getReusableChapterProxy(
+export async function getReusableChapterProxy(
   proxy: ChapterProxyRecord | null | undefined,
   chapter: Pick<ChapterRecord, 'start_time' | 'end_time'>
-): ChapterProxyRecord | null {
+): Promise<ChapterProxyRecord | null> {
   if (!proxy) {
     return null;
   }
 
-  return isChapterProxyReusable(proxy, chapter) ? proxy : null;
+  return (await isChapterProxyReusable(proxy, chapter)) ? proxy : null;
 }
 
 export async function recoverChapterProxyIfCurrent(
@@ -105,7 +114,7 @@ export async function recoverChapterProxyIfCurrent(
   const metadataUpdates: Parameters<typeof updateChapterProxyMetadata>[1] = {};
 
   try {
-    const stats = fs.statSync(proxy.file_path);
+    const stats = await fs.promises.stat(proxy.file_path);
     if (proxy.file_size === null) {
       metadataUpdates.file_size = stats.size;
     }
@@ -150,13 +159,19 @@ export async function recoverChapterProxyIfCurrent(
   return await getChapterProxyByChapterAsset(chapter.id, proxy.asset_id);
 }
 
-export function deleteFileIfExists(filePath: string | null | undefined, label: string): void {
-  if (!filePath || !fs.existsSync(filePath)) {
+export async function deleteFileIfExists(filePath: string | null | undefined, label: string): Promise<void> {
+  if (!filePath) {
     return;
   }
 
   try {
-    fs.unlinkSync(filePath);
+    await fs.promises.access(filePath);
+  } catch {
+    return;
+  }
+
+  try {
+    await fs.promises.unlink(filePath);
   } catch (error) {
     console.warn(`[${label}] Failed deleting file ${filePath}:`, error);
   }
@@ -190,13 +205,13 @@ export async function ensureChapterProxyReady(
 
   const task = (async () => {
     const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-    const reusableExisting = getReusableChapterProxy(existing, chapter);
+    const reusableExisting = await getReusableChapterProxy(existing, chapter);
     if (reusableExisting) {
       return reusableExisting.file_path;
     }
 
     const recovered = await recoverChapterProxyIfCurrent(existing, chapter);
-    const reusableRecovered = getReusableChapterProxy(recovered, chapter);
+    const reusableRecovered = await getReusableChapterProxy(recovered, chapter);
     if (reusableRecovered) {
       return reusableRecovered.file_path;
     }
@@ -227,7 +242,7 @@ export async function ensureChapterProxyReady(
         throw new Error(`Expected existing chapter proxy for chapter=${chapter.id} asset=${asset.id}`);
       }
 
-      deleteFileIfExists(existing.file_path, 'ChapterProxy');
+      await deleteFileIfExists(existing.file_path, 'ChapterProxy');
       await updateChapterProxyDefinition(chapterProxyId, {
         file_path: proxyPath,
         start_time: chapter.start_time,
@@ -244,9 +259,9 @@ export async function ensureChapterProxyReady(
 
     try {
       await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async () => {
-        deleteFileIfExists(tempPath, 'ChapterProxy');
+        await deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
-        ensureProxyDirectory();
+        await ensureProxyDirectory();
 
         const metadata = await generateAIProxy(
           asset.file_path,
@@ -262,12 +277,12 @@ export async function ensureChapterProxyReady(
         );
 
         if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
-          deleteFileIfExists(tempPath, 'ChapterProxy');
+          await deleteFileIfExists(tempPath, 'ChapterProxy');
           return;
         }
 
-        deleteFileIfExists(proxyPath, 'ChapterProxy');
-        fs.renameSync(tempPath, proxyPath);
+        await deleteFileIfExists(proxyPath, 'ChapterProxy');
+        await fs.promises.rename(tempPath, proxyPath);
 
         await updateChapterProxyMetadata(chapterProxyId, {
           width: metadata.width,
@@ -280,13 +295,13 @@ export async function ensureChapterProxyReady(
       });
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
-        deleteFileIfExists(tempPath, 'ChapterProxy');
+        await deleteFileIfExists(tempPath, 'ChapterProxy');
         return undefined;
       }
 
       return proxyPath;
     } catch (error) {
-      deleteFileIfExists(tempPath, 'ChapterProxy');
+      await deleteFileIfExists(tempPath, 'ChapterProxy');
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) === generationEpoch) {
         await updateChapterProxyStatus(
           chapterProxyId,
@@ -326,7 +341,7 @@ export async function invalidateChapterProxy(
     return;
   }
 
-  deleteFileIfExists(existing.file_path, 'ChapterProxy');
+  await deleteFileIfExists(existing.file_path, 'ChapterProxy');
   await updateChapterProxyDefinition(existing.id, {
     file_path: existing.file_path || getChapterProxyPath(chapterId, assetId),
     start_time: bounds?.startTime ?? existing.start_time,
@@ -353,7 +368,7 @@ async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
   }
 
   const task = (async () => {
-    if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+    if (!asset.file_path || !(await pathExists(asset.file_path))) {
       return;
     }
 
@@ -389,7 +404,7 @@ async function prewarmChapterMedia(
     return;
   }
 
-  if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+  if (!asset.file_path || !(await pathExists(asset.file_path))) {
     console.warn(`[ChapterPrewarm] Asset file missing for chapter=${chapterId} asset=${assetId}`);
     return;
   }
