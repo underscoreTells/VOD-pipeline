@@ -38,6 +38,8 @@ export class AgentBridge extends EventEmitter {
   private readyPromise: Promise<void> | null = null;
   private restartAttempts: number = 0;
   private maxRestartAttempts: number = 3;
+  private restartTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
   private emitBridgeError(error: Error): void {
     if (this.listenerCount("error") > 0) {
@@ -82,6 +84,7 @@ export class AgentBridge extends EventEmitter {
 
     console.log("[AgentBridge] Starting agent worker process...");
 
+    this.stopped = false;
     const launchSpec = this.getWorkerLaunchSpec();
 
     this.process = spawn(launchSpec.command, launchSpec.args, {
@@ -106,13 +109,17 @@ export class AgentBridge extends EventEmitter {
 
       this.emit("exit", code, signal);
 
-      if (code !== 0 && this.restartAttempts < this.maxRestartAttempts) {
+      if (code !== 0 && !this.stopped && this.restartAttempts < this.maxRestartAttempts) {
         this.restartAttempts++;
         const backoffMs = Math.pow(2, this.restartAttempts) * 1000;
         console.log(
           `[AgentBridge] Restarting in ${backoffMs}ms (attempt ${this.restartAttempts}/${this.maxRestartAttempts})`
         );
-        setTimeout(() => {
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
+          if (this.stopped) {
+            return;
+          }
           this.start().catch((error) => {
             console.error("[AgentBridge] Restart failed:", error);
             this.emitBridgeError(error);
@@ -306,6 +313,12 @@ export class AgentBridge extends EventEmitter {
 
   async stop(): Promise<void> {
     console.log("[AgentBridge] Stopping agent...");
+
+    this.stopped = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
 
     const processRef = this.process;
     this.stdinWriter?.end();
