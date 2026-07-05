@@ -18,10 +18,13 @@ import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   normalizeComputeType,
   normalizeTranscriptionModel,
+  buildTranscriptionJobKey,
+  cancelHeavyMediaJob,
   queueChapterTranscription,
 } from '../handler-support.js';
 import { clamp } from '../../../shared/utils/clip-timing.js';
 import {
+  transcribeCancelSchema,
   transcribeChapterSchema,
   transcriptionStatusSchema,
 } from '../schemas.js';
@@ -41,6 +44,7 @@ class TranscriptionHandlerError extends Error {
 export const TRANSCRIPTION_HANDLER_CHANNELS = [
   IPC_CHANNELS.TRANSCRIPTION_STATUS,
   IPC_CHANNELS.TRANSCRIBE_CHAPTER,
+  IPC_CHANNELS.TRANSCRIBE_CANCEL,
 ];
 
 export function registerTranscriptionHandlers(): void {
@@ -83,7 +87,7 @@ export function registerTranscriptionHandlers(): void {
         },
       });
 
-      const result = await queueChapterTranscription(chapterId, priority, async () => {
+      const result = await queueChapterTranscription(chapterId, priority, async (signal) => {
         const chapter = await getChapter(chapterId);
         if (!chapter) {
           throw new TranscriptionHandlerError('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -157,6 +161,7 @@ export function registerTranscriptionHandlers(): void {
             channels: 1,
             startTime: chapterStart,
             endTime: chapterEnd,
+            signal,
           });
         } catch (error) {
           if (error instanceof FFmpegError) {
@@ -183,7 +188,8 @@ export function registerTranscriptionHandlers(): void {
               chapterId,
               progress,
             });
-          }
+          },
+          signal
         );
 
         const transcriptInputs = transcriptionResult.segments
@@ -258,6 +264,22 @@ export function registerTranscriptionHandlers(): void {
       }
 
       return createErrorResponse(error, IPC_ERROR_CODES.TRANSCRIPTION_FAILED);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TRANSCRIBE_CANCEL, async (_, payload) => {
+    logger.info('transcribe:cancel', payload?.chapterId);
+    try {
+      const parsed = transcribeCancelSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid transcription cancel payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const chapterId = parsed.data.chapterId as number;
+      const jobKey = buildTranscriptionJobKey(chapterId);
+      const cancelled = cancelHeavyMediaJob(jobKey);
+      return createSuccessResponse({ cancelled });
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

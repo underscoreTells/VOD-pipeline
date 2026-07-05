@@ -469,6 +469,14 @@ export interface TranscriptionProgressEvent {
   progress: TranscriptionProgress;
 }
 
+export interface CancelJobResult {
+  success: boolean;
+  data?: {
+    cancelled: boolean;
+  };
+  error?: string;
+}
+
 export interface SettingsEncryptResult {
   success: boolean;
   data?: string;
@@ -533,6 +541,7 @@ export interface ElectronAPI {
       assetId: number,
       options?: GetChapterReverseProxyOptions
     ) => Promise<GetChapterReverseProxyResult>;
+    cancelProxy: (chapterId: number, assetId: number) => Promise<CancelJobResult>;
   };
   clips: {
     getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -565,6 +574,7 @@ export interface ElectronAPI {
       chapterId: number,
       options?: Record<string, unknown>
     ) => Promise<TranscriptionResult>;
+    cancel: (chapterId: number) => Promise<CancelJobResult>;
     onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
   };
   exports: {

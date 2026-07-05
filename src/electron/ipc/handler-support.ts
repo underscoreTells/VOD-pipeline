@@ -18,6 +18,7 @@ export {
   ensureChapterProxyReady,
   invalidateChapterProxy,
   scheduleChapterMediaPrewarm,
+  buildChapterProxyJobKey,
 } from './support/chapter-proxies.js';
 
 export {
@@ -29,7 +30,10 @@ export {
 
 export {
   enqueueHeavyMediaJob,
+  cancelHeavyMediaJob,
   queueChapterTranscription,
+  buildTranscriptionJobKey,
+  isCancellationError,
 } from './support/heavy-media-queue.js';
 
 export {

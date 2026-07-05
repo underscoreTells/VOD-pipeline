@@ -80,6 +80,11 @@ export const chapterReverseProxyGetSchema = z.object({
   assetId: z.coerce.number().int().positive(),
 });
 
+export const chapterProxyCancelSchema = z.object({
+  chapterId: z.coerce.number().int().positive(),
+  assetId: z.coerce.number().int().positive(),
+});
+
 // ===========================================================================
 // Clips
 // ===========================================================================
@@ -215,4 +220,8 @@ export const transcriptionStatusSchema = z.object({
 export const transcribeChapterSchema = z.object({
   chapterId: optionalNumber,
   options: z.unknown().optional(),
+});
+
+export const transcribeCancelSchema = z.object({
+  chapterId: z.coerce.number().int().positive(),
 });

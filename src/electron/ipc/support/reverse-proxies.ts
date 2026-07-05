@@ -20,6 +20,7 @@ import {
   bumpGenerationEpoch,
   enqueueHeavyMediaJob,
   getGenerationEpoch,
+  isCancellationError,
   promoteHeavyMediaJob,
   type HeavyMediaJobPriority,
 } from './heavy-media-queue.js';
@@ -320,7 +321,7 @@ export async function ensureChapterReverseProxyQuickReady(
     }
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'reverseQuickWarm', queuePriority, async () => {
+      await enqueueHeavyMediaJob(jobKey, 'reverseQuickWarm', queuePriority, async (signal) => {
         if (await pathExists(quickTempPath)) {
           try {
             await fs.promises.unlink(quickTempPath);
@@ -363,6 +364,7 @@ export async function ensureChapterReverseProxyQuickReady(
           chunkDurationSec: 45,
           maxParallelChunks: executionMode === 'interactive' ? 2 : 1,
           executionMode,
+          signal,
         });
       });
 
@@ -384,8 +386,19 @@ export async function ensureChapterReverseProxyQuickReady(
       chapterReverseProxyErrors.delete(lockKey);
       return quickProxyPath;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       await deleteFileIfExists(quickTempPath, 'ReverseProxy');
+      if (isCancellationError(error)) {
+        // Cancellation is not a permanent failure: do not record an error or
+        // invalidate any existing playable proxy. The temp file is cleaned up
+        // above and the status naturally falls back to 'missing' (or 'ready'
+        // if a previously generated proxy still validates).
+        console.warn(
+          `[ReverseProxy] Cancelled quick reverse chapter=${chapter.id} asset=${asset.id}:`,
+          error
+        );
+        return undefined;
+      }
+      const message = error instanceof Error ? error.message : String(error);
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
         await invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'quick');
         chapterReverseProxyErrors.set(lockKey, message);
@@ -446,7 +459,7 @@ async function ensureChapterReverseProxyFullReady(
     let generatedPath: string | undefined;
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'reverseFullWarm', priority, async () => {
+      await enqueueHeavyMediaJob(jobKey, 'reverseFullWarm', priority, async (signal) => {
         if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
           generatedPath = proxyPath;
           chapterReverseProxyErrors.delete(lockKey);
@@ -471,6 +484,7 @@ async function ensureChapterReverseProxyFullReady(
           chunkDurationSec: 11,
           maxParallelChunks: 1,
           executionMode: 'background',
+          signal,
         });
 
         if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -492,8 +506,19 @@ async function ensureChapterReverseProxyFullReady(
         chapterReverseProxyErrors.delete(lockKey);
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       await deleteFileIfExists(tempPath, 'ReverseProxy');
+      if (isCancellationError(error)) {
+        // Cancellation is not a permanent failure: do not record an error or
+        // invalidate any existing playable proxy. The temp file is cleaned up
+        // above and the status naturally falls back to 'missing' (or 'ready'
+        // if a previously generated proxy still validates).
+        console.warn(
+          `[ReverseProxy] Cancelled full reverse chapter=${chapter.id} asset=${asset.id}:`,
+          error
+        );
+        return undefined;
+      }
+      const message = error instanceof Error ? error.message : String(error);
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) === generationEpoch) {
         await invalidateChapterReverseProxyVariant(chapter.id, asset.id, 'full');
         chapterReverseProxyErrors.set(lockKey, message);

@@ -30,6 +30,7 @@ import {
   enqueueChapterMediaPrewarm,
   enqueueHeavyMediaJob,
   getGenerationEpoch,
+  isCancellationError,
   promoteHeavyMediaJob,
   type HeavyMediaJobPriority,
 } from './heavy-media-queue.js';
@@ -181,6 +182,10 @@ function getChapterProxyJobKey(chapterId: number, assetId: number): string {
   return `chapterProxy:${chapterId}:${assetId}`;
 }
 
+export function buildChapterProxyJobKey(chapterId: number, assetId: number): string {
+  return getChapterProxyJobKey(chapterId, assetId);
+}
+
 export async function ensureChapterProxyReady(
   chapter: ChapterRecord,
   asset: Asset,
@@ -258,7 +263,7 @@ export async function ensureChapterProxyReady(
     }
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async () => {
+      await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async (signal) => {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
         await ensureProxyDirectory();
@@ -273,7 +278,8 @@ export async function ensureChapterProxyReady(
           {
             startTime: chapter.start_time,
             endTime: chapter.end_time,
-          }
+          },
+          signal
         );
 
         if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -303,11 +309,17 @@ export async function ensureChapterProxyReady(
     } catch (error) {
       await deleteFileIfExists(tempPath, 'ChapterProxy');
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) === generationEpoch) {
-        await updateChapterProxyStatus(
-          chapterProxyId,
-          'error',
-          error instanceof Error ? error.message : String(error)
-        );
+        if (isCancellationError(error)) {
+          // Cancellation is not a permanent failure: reset to the "not generated
+          // yet" state so a future request can re-enqueue cleanly.
+          await updateChapterProxyStatus(chapterProxyId, 'pending', undefined);
+        } else {
+          await updateChapterProxyStatus(
+            chapterProxyId,
+            'error',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
       }
       console.warn(
         `[ChapterProxy] Failed generating chapter proxy chapter=${chapter.id} asset=${asset.id}:`,

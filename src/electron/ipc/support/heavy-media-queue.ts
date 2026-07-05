@@ -9,11 +9,23 @@ type HeavyMediaJob<T> = {
   priority: HeavyMediaJobPriority;
   started: boolean;
   sequence: number;
-  run: () => Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (reason?: unknown) => void;
+  controller: AbortController;
 };
+
+export class HeavyMediaCancellationError extends Error {
+  constructor(message = 'Heavy media job cancelled') {
+    super(message);
+    this.name = 'HeavyMediaCancellationError';
+  }
+}
+
+export function isCancellationError(error: unknown): boolean {
+  return error instanceof Error && /cancelled/i.test(error.message);
+}
 
 const chapterMediaPrewarmQueue: Array<() => Promise<void>> = [];
 const CHAPTER_MEDIA_PREWARM_MAX_CONCURRENCY = Math.max(1, Math.min(3, Math.floor(os.cpus().length / 2)));
@@ -59,7 +71,7 @@ function pumpHeavyMediaQueue(): void {
     nextJob.started = true;
     activeHeavyMediaJobs += 1;
 
-    void nextJob.run()
+    void nextJob.run(nextJob.controller.signal)
       .then((value) => {
         nextJob.resolve(value);
       })
@@ -79,7 +91,7 @@ export function enqueueHeavyMediaJob<T>(
   key: string,
   type: HeavyMediaJobType,
   priority: HeavyMediaJobPriority,
-  run: () => Promise<T>
+  run: (signal: AbortSignal) => Promise<T>
 ): Promise<T> {
   const existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
   if (existing) {
@@ -107,6 +119,7 @@ export function enqueueHeavyMediaJob<T>(
     promise,
     resolve,
     reject,
+    controller: new AbortController(),
   };
 
   heavyMediaJobs.set(key, job as HeavyMediaJob<unknown>);
@@ -128,8 +141,42 @@ export function promoteHeavyMediaJob(key: string): void {
   }
 }
 
+/**
+ * Cancel a heavy media job by key.
+ *
+ * - If the job is queued but not started, it is removed from the queue and its
+ *   promise rejects with a {@link HeavyMediaCancellationError}.
+ * - If the job is running, its AbortController is aborted; the underlying
+ *   pipeline work is expected to observe the signal, kill its child process,
+ *   and reject with a cancellation error.
+ * - Returns false when no job is registered for the key.
+ */
+export function cancelHeavyMediaJob(key: string): boolean {
+  const job = heavyMediaJobs.get(key);
+  if (!job) {
+    return false;
+  }
+
+  if (!job.started) {
+    const queueIndex = heavyMediaQueue.indexOf(job);
+    if (queueIndex !== -1) {
+      heavyMediaQueue.splice(queueIndex, 1);
+    }
+    heavyMediaJobs.delete(job.key);
+    job.reject(new HeavyMediaCancellationError());
+    return true;
+  }
+
+  job.controller.abort();
+  return true;
+}
+
 function getTranscriptionJobKey(chapterId: number): string {
   return `transcription:${chapterId}`;
+}
+
+export function buildTranscriptionJobKey(chapterId: number): string {
+  return getTranscriptionJobKey(chapterId);
 }
 
 function pumpChapterMediaPrewarmQueue() {
@@ -171,7 +218,7 @@ export function enqueueChapterMediaPrewarm(job: () => Promise<void>): Promise<vo
 export function queueChapterTranscription<T>(
   chapterId: number,
   priority: HeavyMediaJobPriority,
-  run: () => Promise<T>
+  run: (signal: AbortSignal) => Promise<T>
 ): Promise<T> {
   return enqueueHeavyMediaJob(getTranscriptionJobKey(chapterId), 'transcription', priority, run);
 }

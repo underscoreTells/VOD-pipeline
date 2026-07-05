@@ -139,6 +139,7 @@ export interface AudioExtractOptions {
   channels?: number;
   startTime?: number;
   endTime?: number;
+  signal?: AbortSignal;
 }
 
 export interface FFprobeStream {

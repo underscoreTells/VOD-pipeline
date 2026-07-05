@@ -24,9 +24,11 @@ export const IPC_CHANNELS = {
   CHAPTER_REMOVE_ASSET: 'chapter:remove-asset',
   CHAPTER_GET_ASSETS: 'chapter:get-assets',
   CHAPTER_REVERSE_PROXY_GET: 'chapter:reverse-proxy-get',
+  CHAPTER_PROXY_CANCEL: 'chapter:proxy-cancel',
 
   // Transcription channels
   TRANSCRIBE_CHAPTER: 'transcribe:chapter',
+  TRANSCRIBE_CANCEL: 'transcribe:cancel',
   TRANSCRIBE_PROGRESS: 'transcribe:progress',
   TRANSCRIPTION_STATUS: 'transcription:status',
 

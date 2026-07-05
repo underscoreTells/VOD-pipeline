@@ -17,6 +17,8 @@ import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
+  buildChapterProxyJobKey,
+  cancelHeavyMediaJob,
   ensureChapterReverseProxyQuickReady,
   getChapterReverseProxyStatus,
   invalidateChapterProxy,
@@ -29,6 +31,7 @@ import {
   chapterCreateSchema,
   chapterGetByProjectSchema,
   chapterIdSchema,
+  chapterProxyCancelSchema,
   chapterReverseProxyGetSchema,
   chapterUpdateSchema,
 } from '../schemas.js';
@@ -45,6 +48,7 @@ export const CHAPTER_HANDLER_CHANNELS = [
   IPC_CHANNELS.CHAPTER_REMOVE_ASSET,
   IPC_CHANNELS.CHAPTER_GET_ASSETS,
   IPC_CHANNELS.CHAPTER_REVERSE_PROXY_GET,
+  IPC_CHANNELS.CHAPTER_PROXY_CANCEL,
 ];
 
 function chapterAssetLinkError(error: z.ZodError): string {
@@ -341,6 +345,22 @@ export function registerChapterHandlers(): void {
       }
 
       return createSuccessResponse(status);
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHAPTER_PROXY_CANCEL, async (_, payload) => {
+    logger.info('chapter:proxy-cancel', payload?.chapterId, payload?.assetId);
+    try {
+      const parsed = chapterProxyCancelSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid chapter proxy cancel payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const { chapterId, assetId } = parsed.data;
+      const jobKey = buildChapterProxyJobKey(chapterId as number, assetId as number);
+      const cancelled = cancelHeavyMediaJob(jobKey);
+      return createSuccessResponse({ cancelled });
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
