@@ -11,11 +11,12 @@ import type {
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
 import type { NamingModelId } from '../llm/naming-models.js';
+import type { LLMProviderType } from '../llm/provider-registry.js';
 import type { ProjectAsset } from './ipc.js';
 
 export type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
 export type ProxyQuality = 'high' | 'balanced' | 'fast';
-export type ProviderConfigProvider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'kimi';
+export type ProviderConfigProvider = LLMProviderType;
 
 export interface ProviderConfigPayload {
   defaultProvider?: ProviderConfigProvider;
@@ -468,6 +469,14 @@ export interface TranscriptionProgressEvent {
   progress: TranscriptionProgress;
 }
 
+export interface CancelJobResult {
+  success: boolean;
+  data?: {
+    cancelled: boolean;
+  };
+  error?: string;
+}
+
 export interface SettingsEncryptResult {
   success: boolean;
   data?: string;
@@ -532,6 +541,7 @@ export interface ElectronAPI {
       assetId: number,
       options?: GetChapterReverseProxyOptions
     ) => Promise<GetChapterReverseProxyResult>;
+    cancelProxy: (chapterId: number, assetId: number) => Promise<CancelJobResult>;
   };
   clips: {
     getByProject: (projectId: number) => Promise<GetClipsResult>;
@@ -564,6 +574,7 @@ export interface ElectronAPI {
       chapterId: number,
       options?: Record<string, unknown>
     ) => Promise<TranscriptionResult>;
+    cancel: (chapterId: number) => Promise<CancelJobResult>;
     onProgress: (callback: (data: TranscriptionProgressEvent) => void) => () => void;
   };
   exports: {

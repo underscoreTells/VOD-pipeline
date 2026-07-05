@@ -8,6 +8,11 @@ import {
 import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import {
+  waveformGenerateSchema,
+  waveformGenerateTierSchema,
+  waveformGetSchema,
+} from '../schemas.js';
 
 const logger = createLogger('WaveformHandlers');
 
@@ -18,13 +23,16 @@ export const WAVEFORM_HANDLER_CHANNELS = [
 ];
 
 export function registerWaveformHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, {
-    assetId,
-    trackIndex,
-    playbackActive,
-  }) => {
-    logger.info('waveform:generate', assetId, trackIndex, { playbackActive });
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, payload) => {
+    const playbackActive = payload?.playbackActive;
+    logger.info('waveform:generate', payload?.assetId, payload?.trackIndex, { playbackActive });
     try {
+      const parsed = waveformGenerateSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid waveform payload', IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+      }
+      const { assetId, trackIndex } = parsed.data;
+
       if (!assetId) {
         return createErrorResponse('Asset ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
@@ -68,22 +76,34 @@ export function registerWaveformHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GET, async (_, { assetId, trackIndex, tierLevel }) => {
-    logger.info('waveform:get', assetId, trackIndex, tierLevel);
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GET, async (_, payload) => {
+    logger.info('waveform:get', payload?.assetId, payload?.trackIndex, payload?.tierLevel);
     try {
+      const parsed = waveformGetSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid waveform payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const { assetId, trackIndex, tierLevel } = parsed.data;
+
       if (!assetId || tierLevel === undefined) {
         return createErrorResponse('Asset ID and tier level are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
-      return createSuccessResponse(await getWaveform(assetId, trackIndex ?? 0, tierLevel));
+      return createSuccessResponse(await getWaveform(assetId, trackIndex ?? 0, tierLevel as 1 | 2 | 3));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE_TIER, async (event, { assetId, trackIndex, tierLevel }) => {
-    logger.info('waveform:generate-tier', assetId, trackIndex, tierLevel);
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE_TIER, async (event, payload) => {
+    logger.info('waveform:generate-tier', payload?.assetId, payload?.trackIndex, payload?.tierLevel);
     try {
+      const parsed = waveformGenerateTierSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid waveform payload', IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+      }
+      const { assetId, trackIndex, tierLevel } = parsed.data;
+
       if (!assetId || !tierLevel) {
         return createErrorResponse('Asset ID and tier level are required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
@@ -122,7 +142,7 @@ export function registerWaveformHandlers(): void {
 
       const tier = result.tiers.find((item) => item.level === tierLevel);
       if (tier) {
-        await saveWaveform(assetId, trackIndex ?? 0, tierLevel, tier.peaks, tier.sampleRate, tier.duration);
+        await saveWaveform(assetId, trackIndex ?? 0, tierLevel as 1 | 2 | 3, tier.peaks, tier.sampleRate, tier.duration);
       }
 
       return createSuccessResponse({ assetId, tierLevel, generated: Boolean(tier) });

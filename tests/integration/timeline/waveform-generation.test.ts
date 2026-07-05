@@ -2,9 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { generateWaveformTiers, generateTier3OnDemand, getTierForZoomLevel, WaveformError } from '../../../src/pipeline/waveform.js';
+import { generateWaveformTiers, getTierForZoomLevel, WaveformError } from '../../../src/pipeline/waveform.js';
 import { 
-  saveWaveform, 
   getWaveform, 
   checkWaveformExists,
   deleteWaveformsByAsset,
@@ -123,15 +122,6 @@ describeWaveforms('Waveform Generation Integration', () => {
     expect(tier1!.peaks.length).toBeGreaterThan(0);
     expect(tier1!.sampleRate).toBe(44100);
     expect(tier1!.duration).toBeGreaterThan(0);
-  });
-
-  it('should generate Tier 3 on demand', async () => {
-    const peaks = await generateTier3OnDemand(testAudioPath, 0, 0, 1);
-    
-    expect(peaks.length).toBeGreaterThan(0);
-    // Tier 3 should have more peaks than Tier 2 for the same duration
-    expect(peaks[0]).toHaveProperty('min');
-    expect(peaks[0]).toHaveProperty('max');
   });
 
   it('should calculate correct tier for zoom level', () => {

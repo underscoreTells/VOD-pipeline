@@ -87,10 +87,3 @@ export async function updateTimelineState(
 
   return result.changes > 0;
 }
-
-export async function deleteTimelineState(projectId: number): Promise<boolean> {
-  const database = await getDatabase();
-  const result = database.prepare('DELETE FROM timeline_state WHERE project_id = ?').run(projectId);
-
-  return result.changes > 0;
-}

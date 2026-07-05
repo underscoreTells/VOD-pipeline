@@ -117,7 +117,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
     return "kimi";
   }
 
-  _combineLLMOutput(): never {
+  override _combineLLMOutput(): never {
     return undefined as never;
   }
 
@@ -325,7 +325,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
     }
   }
 
-  bindTools(tools: BindToolsInput[], kwargs?: Partial<KimiCallOptions>) {
+  override bindTools(tools: BindToolsInput[], kwargs?: Partial<KimiCallOptions>) {
     return this.withConfig({
       tools: tools.map((tool) =>
         isKimiToolDefinition(tool)
@@ -415,31 +415,6 @@ export async function readFileAsBase64(filePath: string): Promise<string> {
     console.error(`[readFileAsBase64] Failed for filePath=${filePath}:`, error);
     throw error;
   }
-}
-
-/**
- * Create a video message part for Kimi
- */
-export function createKimiVideoPart(base64Video: string, mimeType: string = "video/mp4"): KimiContentPart {
-  return {
-    type: "video_url",
-    video_url: {
-      url: `data:${mimeType};base64,${base64Video}`,
-    },
-  };
-}
-
-/**
- * Create an image message part for Kimi
- */
-export function createKimiImagePart(base64Image: string, mimeType: string = "image/jpeg", detail?: "low" | "high" | "auto"): KimiContentPart {
-  return {
-    type: "image_url",
-    image_url: {
-      url: `data:${mimeType};base64,${base64Image}`,
-      detail,
-    },
-  };
 }
 
 function isKimiToolDefinition(value: unknown): value is KimiToolDefinition {

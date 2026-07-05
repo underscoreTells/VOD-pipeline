@@ -1,9 +1,10 @@
-import { dialog, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import type { ExportFormat } from '../../../pipeline/export/index.js';
 import { createLogger } from '../../logger.js';
 import { exportProjectToFile, getExportFormats } from '../../services/export-service.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import { exportGenerateSchema } from '../schemas.js';
 
 const logger = createLogger('ExportHandlers');
 
@@ -15,14 +16,26 @@ export const EXPORT_HANDLER_CHANNELS = [
 export function registerExportHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.EXPORT_GENERATE,
-    async (_, { projectId, format, options, filePath }: { projectId: number; format: ExportFormat; options?: { frameRate?: number; includeAudio?: boolean }; filePath: string }) => {
+    async (_, payload) => {
+      const projectId = payload?.projectId;
+      const format = payload?.format;
+      const filePath = payload?.filePath;
       logger.info('export:generate', projectId, format, filePath);
       try {
-        if (!projectId || !format || !filePath) {
+        const parsed = exportGenerateSchema.safeParse(payload);
+        if (!parsed.success) {
+          return createErrorResponse('Invalid export payload', IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
+        }
+        if (!parsed.data.projectId || !parsed.data.format || !parsed.data.filePath) {
           return createErrorResponse('Project ID, format, and file path are required', IPC_ERROR_CODES.VALIDATION_ERROR);
         }
 
-        return createSuccessResponse(await exportProjectToFile({ projectId, format, options, filePath }));
+        return createSuccessResponse(await exportProjectToFile({
+          projectId: parsed.data.projectId,
+          format: parsed.data.format as ExportFormat,
+          options: parsed.data.options as { frameRate?: number; includeAudio?: boolean } | undefined,
+          filePath: parsed.data.filePath,
+        }));
       } catch (error) {
         return createErrorResponse(error, IPC_ERROR_CODES.EXPORT_GENERATION_FAILED);
       }

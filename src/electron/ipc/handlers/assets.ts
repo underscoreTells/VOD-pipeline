@@ -8,6 +8,11 @@ import { createLogger } from '../../logger.js';
 import { enrichProjectAsset } from '../../services/asset-availability-service.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import {
+  assetAddSchema,
+  assetGetByProjectSchema,
+  assetIdSchema,
+} from '../schemas.js';
 
 const logger = createLogger('AssetHandlers');
 
@@ -38,22 +43,28 @@ function determineAssetType(filePath: string): 'video' | 'audio' | 'image' {
 }
 
 export function registerAssetHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, { projectId, filePath }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_ADD, async (_, payload) => {
+    const projectId = payload?.projectId;
+    const filePath = payload?.filePath;
     logger.info('asset:add', projectId, filePath);
 
     try {
-      if (!fs.existsSync(filePath)) {
+      const parsed = assetAddSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid asset payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      if (!fs.existsSync(parsed.data.filePath as string)) {
         return createErrorResponse('File not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
       }
 
-      const fileType = determineAssetType(filePath);
+      const fileType = determineAssetType(parsed.data.filePath as string);
       let metadata: AssetMetadata = {};
       let duration: number | null = null;
 
       if (fileType === 'video') {
         let videoMetadata = null;
         try {
-          videoMetadata = await validateVideoFile(filePath, 5000);
+          videoMetadata = await validateVideoFile(parsed.data.filePath as string, 5000);
           if (!videoMetadata) {
             return createErrorResponse('Invalid or unsupported video format', IPC_ERROR_CODES.INVALID_FORMAT);
           }
@@ -85,8 +96,8 @@ export function registerAssetHandlers(): void {
       }
 
       const asset = await createAsset({
-        project_id: projectId,
-        file_path: filePath,
+        project_id: parsed.data.projectId as number,
+        file_path: parsed.data.filePath as string,
         file_type: fileType,
         duration,
         metadata,
@@ -110,32 +121,47 @@ export function registerAssetHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ASSET_GET, async (_, { id }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_GET, async (_, payload) => {
+    const id = payload?.id;
     logger.info('asset:get', id);
     try {
-      const asset = await getAsset(id);
+      const parsed = assetIdSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid asset payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const asset = await getAsset(parsed.data.id as number);
       return asset
-        ? createSuccessResponse(enrichProjectAsset(asset))
+        ? createSuccessResponse(await enrichProjectAsset(asset))
         : createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ASSET_GET_BY_PROJECT, async (_, { projectId }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_GET_BY_PROJECT, async (_, payload) => {
+    const projectId = payload?.projectId;
     logger.info('asset:get-by-project', projectId);
     try {
-      const assets = await getAssetsByProject(projectId);
-      return createSuccessResponse(assets.map(enrichProjectAsset));
+      const parsed = assetGetByProjectSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid asset payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const assets = await getAssetsByProject(parsed.data.projectId as number);
+      return createSuccessResponse(await Promise.all(assets.map(enrichProjectAsset)));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ASSET_DELETE, async (_, { id }) => {
+  ipcMain.handle(IPC_CHANNELS.ASSET_DELETE, async (_, payload) => {
+    const id = payload?.id;
     logger.info('asset:delete', id);
     try {
-      const deleted = await deleteAsset(id);
+      const parsed = assetIdSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid asset payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const deleted = await deleteAsset(parsed.data.id as number);
       return deleted
         ? createSuccessResponse(null)
         : createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);

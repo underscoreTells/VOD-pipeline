@@ -417,7 +417,8 @@ describe("agent grounding status", () => {
       {
         startTime: 10,
         endTime: 40,
-      }
+      },
+      expect.any(AbortSignal)
     );
   });
 

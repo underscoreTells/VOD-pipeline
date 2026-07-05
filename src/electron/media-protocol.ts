@@ -1,10 +1,11 @@
-import { app, protocol } from 'electron';
+import { protocol } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { getAsset } from './database/index.js';
 import { createLogger } from './logger.js';
 import { getAssetAvailability } from './services/asset-availability-service.js';
+import { getChapterReverseProxyPath } from './paths.js';
 
 const MEDIA_SCHEME = 'vod';
 const logger = createLogger('MediaProtocol');
@@ -60,27 +61,22 @@ function parseReverseProxyIds(
   }
 }
 
-function getProxyDirectoryPath(): string {
-  const userDataPath = app.getPath('userData');
-  const proxiesDir = path.join(userDataPath, 'proxies');
-  if (!fs.existsSync(proxiesDir)) {
-    fs.mkdirSync(proxiesDir, { recursive: true });
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
   }
-  return proxiesDir;
 }
 
-function getChapterReverseProxyPath(chapterId: number, assetId: number, variant: 'full' | 'quick' = 'full'): string {
-  const suffix = variant === 'quick' ? 'reverse_preview_quick.mp4' : 'reverse_preview.mp4';
-  return path.join(getProxyDirectoryPath(), `chapter_${chapterId}_asset_${assetId}_${suffix}`);
-}
-
-function streamFileWithRange(
+async function streamFileWithRange(
   request: Electron.ProtocolRequest,
   callback: (response: any) => void,
   filePath: string
-) {
-  const stat = fs.statSync(filePath);
-  const fileSize = stat.size;
+): Promise<void> {
+  const stats = await fs.promises.stat(filePath);
+  const fileSize = stats.size;
   const rangeHeader = request.headers?.range ?? request.headers?.Range ?? request.headers?.['Range'];
   const mimeType = getMimeType(filePath);
 
@@ -173,12 +169,12 @@ export function registerMediaProtocol() {
           reverseIds.assetId,
           reverseIds.variant
         );
-        if (!fs.existsSync(reverseProxyPath)) {
+        if (!(await pathExists(reverseProxyPath))) {
           respondWithError(404, 'Reverse proxy file not found');
           return;
         }
 
-        streamFileWithRange(request, callback, reverseProxyPath);
+        await streamFileWithRange(request, callback, reverseProxyPath);
         return;
       }
 
@@ -194,8 +190,8 @@ export function registerMediaProtocol() {
         return;
       }
 
-      if (!fs.existsSync(asset.file_path)) {
-        const availability = getAssetAvailability(asset.file_path);
+      if (!(await pathExists(asset.file_path))) {
+        const availability = await getAssetAvailability(asset.file_path);
         logger.warn('Asset file not found', {
           assetId,
           savedPath: asset.file_path,
@@ -205,7 +201,7 @@ export function registerMediaProtocol() {
         return;
       }
 
-      streamFileWithRange(request, callback, asset.file_path);
+      await streamFileWithRange(request, callback, asset.file_path);
     })().catch((error) => {
       console.error('[Media Protocol] Failed to stream asset:', error);
       respondWithError(500, 'Failed to load asset');

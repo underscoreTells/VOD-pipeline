@@ -39,7 +39,7 @@ const FFmpegConfig = {
             try {
               const json = JSON.parse(data);
               resolve(json.url);
-            } catch (e) {
+            } catch (_e) {
               reject(new Error('Failed to parse FFmpeg release info'));
             }
           });
@@ -272,7 +272,7 @@ async function installFFmpeg() {
     if (PLATFORM === 'darwin') {
       try {
         execSync(`xattr -dr com.apple.quarantine "${binaryPath}"`, { stdio: 'ignore' });
-      } catch (err) {
+      } catch (_err) {
         console.warn('Could not remove quarantine attribute (may not be needed)');
       }
     }

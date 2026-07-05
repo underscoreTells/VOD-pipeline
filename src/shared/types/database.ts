@@ -3,6 +3,8 @@
  * Mirrors the SQLite schema
  */
 
+import type { LLMProviderType } from '../llm/provider-registry.js';
+
 export interface Project {
   id: number;
   name: string;
@@ -93,36 +95,12 @@ export interface DetailedTranscript {
   created_at: string;
 }
 
-export interface Beat {
-  id: number;
-  chapter_id: number;
-  start_time: number;
-  end_time: number;
-  role: 'setup' | 'escalation' | 'twist' | 'payoff' | 'transition';
-  why_essential: string | null;
-  visual_dependency: 'none' | 'important' | 'critical' | null;
-  is_essential: boolean;
-  display_order: number;      // Original AI-suggested order
-  user_modified: boolean;     // Has user edited this beat?
-  discard: boolean;           // Marked for deletion
-  sort_order: number | null;  // User-defined sort priority
-  clip_id: number | null;     // Linked clip on timeline
-}
-
-export interface Conversation {
-  id: number;
-  project_id: number;
-  role: 'user' | 'assistant' | 'system';
-  message: string;
-  created_at: string;
-}
-
 export interface ChatConversation {
   id: number;
   project_id: number;
   chapter_id: number;
   title: string;
-  provider: 'gemini' | 'openai' | 'anthropic' | 'openrouter' | 'kimi' | null;
+  provider: LLMProviderType | null;
   thread_id: string;
   created_at: string;
   updated_at: string;
@@ -154,8 +132,6 @@ export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
 export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order'> & { display_order?: number };
 export type CreateTranscriptInput = Omit<Transcript, 'id'>;
 export type CreateDetailedTranscriptInput = Omit<DetailedTranscript, 'id' | 'created_at'>;
-export type CreateBeatInput = Omit<Beat, 'id'>;
-export type CreateConversationInput = Omit<Conversation, 'id' | 'created_at'>;
 export type CreateChatConversationInput = Omit<ChatConversation, 'id' | 'thread_id' | 'created_at' | 'updated_at'> & {
   thread_id?: string;
 };
@@ -259,7 +235,7 @@ export interface Suggestion {
   out_point: number;
   description: string | null;
   reasoning: string | null;
-  provider: 'gemini' | 'kimi' | null;
+  provider: LLMProviderType | null;
   action_type: 'create_clip' | 'update_clip';
   target_clip_id: number | null;
   action_payload_json: string | null;

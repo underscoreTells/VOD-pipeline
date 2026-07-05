@@ -1,17 +1,23 @@
-import type { BaseMessage, AIMessage } from "@langchain/core/messages";
+import type { BaseMessage, AIMessage, AIMessageChunk } from "@langchain/core/messages";
 import { loadConfig, getProviderLLMConfig } from "../config.js";
 import { createLLM } from "../providers/index.js";
-import type { LLMProviderType } from "../providers/index.js";
+import {
+  getProviderMetadata,
+  type LLMProviderType,
+} from "../../shared/llm/provider-registry.js";
 import type { ConversationWriter } from "./types.js";
+import { IncrementalJsonStringExtractor, withLLMRetry } from "./streaming.js";
 
-interface ToolCapableModel {
+interface ToolInvoker {
   invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AIMessage>;
-  bindTools?(
-    tools: unknown[],
-    kwargs?: Record<string, unknown>
-  ): {
-    invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AIMessage>;
-  };
+  stream?(
+    messages: BaseMessage[],
+    options?: Record<string, unknown>
+  ): Promise<AsyncIterable<AIMessageChunk>>;
+}
+
+export interface ToolCapableModel extends ToolInvoker {
+  bindTools?(tools: unknown[], kwargs?: Record<string, unknown>): ToolInvoker;
 }
 
 export interface AssistantToolCall {
@@ -45,27 +51,106 @@ export async function resolveConversationProvider(
   return getProviderLLMConfig(agentConfig, provider).provider;
 }
 
+export interface InvokeConversationModelStepOptions {
+  model: ToolCapableModel;
+  messages: BaseMessage[];
+  tools: unknown[];
+  signal?: AbortSignal;
+  /** Provider id; enables native token streaming when supported. */
+  provider?: LLMProviderType;
+  /** Tool whose string argument carries the user-facing reply. */
+  streamedToolName?: string;
+  /** Argument key on the streamed tool that holds the reply text. */
+  streamedToolArgKey?: string;
+  /** Receives decoded reply text deltas as the model generates them. */
+  onStreamedResponseDelta?: (delta: string) => void;
+}
+
 export async function invokeConversationModelStep({
   model,
   messages,
   tools,
   signal,
-}: {
-  model: ToolCapableModel;
-  messages: BaseMessage[];
-  tools: unknown[];
-  signal?: AbortSignal;
-}): Promise<AssistantStepResult> {
+  provider,
+  streamedToolName,
+  streamedToolArgKey = "assistantResponse",
+  onStreamedResponseDelta,
+}: InvokeConversationModelStepOptions): Promise<AssistantStepResult> {
   if (tools.length > 0 && typeof model.bindTools !== "function") {
     throw new Error("Selected provider does not support tool calling for conversation turns");
   }
 
-  const invoker =
+  const invoker: ToolInvoker =
     tools.length > 0 && typeof model.bindTools === "function"
       ? model.bindTools(tools)
       : model;
 
-  const response = await invoker.invoke(messages, signal ? ({ signal } as Record<string, unknown>) : undefined);
+  const invokeOptions = signal ? ({ signal } as Record<string, unknown>) : undefined;
+  const useStreaming =
+    provider !== undefined &&
+    getProviderMetadata(provider).nativeStreaming &&
+    typeof invoker.stream === "function";
+
+  let deltasEmitted = false;
+
+  const runOnce = async (): Promise<AIMessage> => {
+    if (!useStreaming || typeof invoker.stream !== "function") {
+      return invoker.invoke(messages, invokeOptions);
+    }
+
+    const extractor =
+      streamedToolName && onStreamedResponseDelta
+        ? new IncrementalJsonStringExtractor(streamedToolArgKey)
+        : undefined;
+    let streamedToolIndex: number | undefined;
+    let aggregate: AIMessageChunk | undefined;
+
+    const stream = await invoker.stream(messages, invokeOptions);
+    for await (const chunk of stream) {
+      if (signal?.aborted) {
+        throw new Error("Conversation turn aborted");
+      }
+      aggregate = aggregate ? aggregate.concat(chunk) : chunk;
+
+      if (!extractor || extractor.isDone) {
+        continue;
+      }
+      for (const toolChunk of chunk.tool_call_chunks ?? []) {
+        if (
+          streamedToolIndex === undefined &&
+          typeof toolChunk.name === "string" &&
+          toolChunk.name === streamedToolName
+        ) {
+          streamedToolIndex = toolChunk.index ?? 0;
+        }
+        if (
+          streamedToolIndex !== undefined &&
+          (toolChunk.index ?? 0) === streamedToolIndex &&
+          typeof toolChunk.args === "string" &&
+          toolChunk.args.length > 0
+        ) {
+          const delta = extractor.push(toolChunk.args);
+          if (delta) {
+            deltasEmitted = true;
+            onStreamedResponseDelta?.(delta);
+          }
+        }
+      }
+    }
+
+    if (!aggregate) {
+      throw new Error("Model stream produced no output");
+    }
+    return aggregate;
+  };
+
+  const response = await withLLMRetry(runOnce, {
+    signal,
+    // Never retry once reply text reached the user; the renderer draft
+    // would show duplicated text until turn_complete corrects it.
+    canRetry: () => !deltasEmitted,
+  });
+
   const toolCalls = Array.isArray(response.tool_calls)
     ? response.tool_calls.map((toolCall, index) => ({
         id:
@@ -111,7 +196,7 @@ function splitTextForStreaming(text: string): string[] {
   return chunks.map((chunk) => chunk);
 }
 
-function getMessageText(content: unknown): string {
+export function getMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }

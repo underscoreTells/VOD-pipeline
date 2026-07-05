@@ -24,9 +24,11 @@ export const IPC_CHANNELS = {
   CHAPTER_REMOVE_ASSET: 'chapter:remove-asset',
   CHAPTER_GET_ASSETS: 'chapter:get-assets',
   CHAPTER_REVERSE_PROXY_GET: 'chapter:reverse-proxy-get',
+  CHAPTER_PROXY_CANCEL: 'chapter:proxy-cancel',
 
   // Transcription channels
   TRANSCRIBE_CHAPTER: 'transcribe:chapter',
+  TRANSCRIBE_CANCEL: 'transcribe:cancel',
   TRANSCRIBE_PROGRESS: 'transcribe:progress',
   TRANSCRIPTION_STATUS: 'transcription:status',
 
@@ -37,6 +39,7 @@ export const IPC_CHANNELS = {
   AGENT_EDIT_MESSAGE: 'agent:edit-message',
   AGENT_BRANCH_MESSAGE: 'agent:branch-message',
   AGENT_STREAM: 'agent:stream',
+  AGENT_ERROR: 'agent:error',
   AGENT_APPLY_ACTIONS: 'agent:apply-actions',
   AGENT_CONVERSATION_CREATE: 'agent:conversation-create',
   AGENT_CONVERSATION_LIST: 'agent:conversation-list',
@@ -80,6 +83,9 @@ export const IPC_CHANNELS = {
   // Settings channels (API key encryption)
   SETTINGS_ENCRYPT: 'settings:encrypt',
   SETTINGS_DECRYPT: 'settings:decrypt',
+
+  // Dialog channels
+  DIALOG_SHOW_SAVE_DIALOG: 'dialog:showSaveDialog',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];
@@ -104,18 +110,3 @@ export const IPC_ERROR_CODES = {
 } as const;
 
 export type IPCErrorCode = typeof IPC_ERROR_CODES[keyof typeof IPC_ERROR_CODES];
-
-// IPC Response types
-export interface IPCSuccessResponse<T = unknown> {
-  success: true;
-  data: T;
-}
-
-export interface IPCErrorResponse {
-  success: false;
-  error: string;
-  code: IPCErrorCode;
-  details?: unknown;
-}
-
-export type IPCResponse<T = unknown> = IPCSuccessResponse<T> | IPCErrorResponse;

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DetailedTranscriptWindow, TranscriptDetailRequest } from "../types/agent-ipc.js";
 import type { Asset, DetailedTranscript } from "../types/database.js";
+import { clamp } from "./clip-timing.js";
 import {
   getAsset,
   getDetailedTranscriptWindow,
@@ -16,10 +17,6 @@ const MAX_DETAILED_TRANSCRIPT_WINDOW_SECONDS = 90;
 const DETAILED_TRANSCRIPT_MODEL = "small";
 const DETAILED_TRANSCRIPT_COMPUTE_TYPE: "int8" | "float16" = "int8";
 const DETAILED_TRANSCRIPT_WORD_TIMESTAMPS = true;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
 function roundSeconds(value: number): number {
   return Math.round(value * 100) / 100;

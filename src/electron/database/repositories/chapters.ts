@@ -3,7 +3,6 @@ import type {
   CreateChapterInput,
 } from '../../../shared/types/database.js';
 import { getDatabase } from '../client.js';
-import { getChapterProxyByChapterAsset } from './proxies.js';
 
 export { getChapterProxyByChapterAsset } from './proxies.js';
 

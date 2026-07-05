@@ -12,7 +12,9 @@ import {
   ensureSchemaColumns,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
+  setSchemaVersion,
   validateClipMigrationState,
+  CURRENT_SCHEMA_VERSION,
 } from './migrations.js';
 import {
   getActiveDatabase,
@@ -89,6 +91,10 @@ export async function initializeDatabase(): Promise<Database.Database> {
     repairDanglingClipReferences(database);
     applySchemaStatements(database, schema, 'index');
     validateClipMigrationState(database);
+    // Record the schema revision this build expects; the imperative
+    // ensure* helpers above are idempotent, so the version is primarily a
+    // marker for future migration tooling and diagnostics.
+    await setSchemaVersion(CURRENT_SCHEMA_VERSION, database);
     console.log('Database schema initialized successfully');
 
     return database;

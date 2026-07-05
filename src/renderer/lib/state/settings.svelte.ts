@@ -3,6 +3,11 @@ import {
   normalizeNamingModel,
   type NamingModelId,
 } from '../../../shared/llm/naming-models.js';
+import {
+  getProviderMetadata,
+  validateProviderApiKey,
+  type LLMProviderType,
+} from '../../../shared/llm/provider-registry.js';
 import { decryptSettings, encryptSettings } from '../api/settings.js';
 import {
   buildProviderConfig,
@@ -12,8 +17,8 @@ import {
   getConfiguredVideoProviders as getConfiguredVideoProvidersFromSettings,
   getProviderLabel as getSettingsProviderLabel,
   isProviderConfigured as isProviderConfiguredInSettings,
+  PROVIDER_KEY_MAP,
   supportsVideo as providerSupportsVideo,
-  validateApiKey,
 } from './settings-helpers.js';
 
 /**
@@ -21,7 +26,7 @@ import {
  * Handles AI provider API keys and application preferences
  */
 
-export type LLMProviderType = "openai" | "gemini" | "anthropic" | "openrouter" | "kimi";
+export type { LLMProviderType };
 
 export interface Settings {
   // API Keys (encrypted before storage)
@@ -222,25 +227,9 @@ export async function updateSetting<K extends keyof Settings>(
  * Update API key for a provider
  */
 export async function updateApiKey(provider: LLMProviderType, apiKey: string): Promise<void> {
-  // Use switch statement for type-safe assignment
-  switch (provider) {
-    case "gemini":
-      settingsState.settings.geminiApiKey = apiKey;
-      break;
-    case "openai":
-      settingsState.settings.openaiApiKey = apiKey;
-      break;
-    case "anthropic":
-      settingsState.settings.anthropicApiKey = apiKey;
-      break;
-    case "kimi":
-      settingsState.settings.kimiApiKey = apiKey;
-      break;
-    case "openrouter":
-      settingsState.settings.openrouterApiKey = apiKey;
-      break;
-  }
-  
+  const key = PROVIDER_KEY_MAP[provider];
+  (settingsState.settings as unknown as Record<string, string>)[key] = apiKey;
+
   // Update provider status
   const status = settingsState.providerStatuses.get(provider) || {
     provider,
@@ -314,16 +303,10 @@ export async function testProvider(provider: LLMProviderType): Promise<boolean> 
 
   // Mock validation - in production, make actual API call
   // For now, just check if key looks valid (starts with expected prefix)
-  const isValidFormat = validateApiKey(provider, apiKey);
+  const isValidFormat = validateProviderApiKey(provider, apiKey);
 
   if (!isValidFormat) {
-    const prefixes = {
-      gemini: ["AIza"],
-      openai: ["sk-"],
-      anthropic: ["sk-ant-"],
-      kimi: ["sk-"],
-      openrouter: ["sk-or-"],
-    }[provider];
+    const prefixes = getProviderMetadata(provider).apiKeyPrefixes;
     status.error = `Invalid API key format. Should start with: ${prefixes.join(" or ")}`;
     settingsState.providerStatuses.set(provider, status);
     return false;

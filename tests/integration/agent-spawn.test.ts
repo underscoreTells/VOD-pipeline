@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawn, ChildProcess } from "child_process";
 import path from "path";
-import { JSONStdinWriter, JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
+import { JSONStdoutReader } from "../../src/agent/ipc/json-message-transport.js";
 import type { AgentOutputMessage } from "../../src/shared/types/agent-ipc.js";
 import { combinePrerequisites, requireBuiltAgent, requireSupportedNode } from "../helpers/prerequisites.js";
 
@@ -13,7 +13,6 @@ const describeAgentSpawn = agentSpawnPrerequisite.ok ? describe : describe.skip;
 
 describeAgentSpawn("Agent Spawn Integration", () => {
   let agentProcess: ChildProcess | null = null;
-  let stdinWriter: JSONStdinWriter | null = null;
   let stdoutReader: JSONStdoutReader | null = null;
   let messages: AgentOutputMessage[] = [];
 
@@ -26,7 +25,6 @@ describeAgentSpawn("Agent Spawn Integration", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    stdinWriter = new JSONStdinWriter(agentProcess.stdin!);
     stdoutReader = new JSONStdoutReader(agentProcess.stdout!);
 
     stdoutReader.on("message", (msg: AgentOutputMessage) => {
@@ -46,7 +44,6 @@ describeAgentSpawn("Agent Spawn Integration", () => {
       agentProcess = null;
     }
 
-    stdinWriter = null;
     stdoutReader = null;
     messages = [];
   });

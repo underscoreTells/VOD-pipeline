@@ -70,11 +70,12 @@ Three-process design:
 
 2. **Agent System** (`src/agent/`)
   - Current runtime: tool-driven conversation runner
-  - Pluggable LLM provider architecture (Gemini, OpenAI, Anthropic)
-  - Dynamic system prompt plus tool-specific evidence prompts
+  - Central provider registry: `src/shared/llm/provider-registry.ts` (metadata, renderer-safe) + `src/agent/providers/registry.ts` (model factories/tool strategies). Adding a provider = one entry in each + a Settings key mapping.
+  - Providers: Gemini, OpenAI, Anthropic, OpenRouter, Kimi (Moonshot)
+  - Dynamic system prompt plus tool-specific evidence prompts (`src/agent/conversation/tools/`)
   - LangGraph orchestrator/subgraph design is roadmap-only, not wired into the current worker
   - Context management (transcripts, chat logs, proposal summaries)
-  - Streaming via custom writer + tool-state messages
+  - True token streaming of the final reply (incremental tool-argument decoding in `src/agent/conversation/streaming.ts`) with transient-error retry; tool-state messages stream via a custom writer
 
 3. **Svelte 5 UI** (`src/renderer/`)
    - Chat interface (agent interaction)

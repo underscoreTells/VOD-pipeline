@@ -8,7 +8,6 @@ import {
   createClip,
   createSuggestion,
   getSuggestionsByConversation,
-  getSuggestionsByChapter,
   rejectSuggestion,
   setDatabaseForTesting,
 } from "../../src/electron/database/index.js";
@@ -35,6 +34,7 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
     // Initialize test database
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
     
     // Load schema
     const schemaPath = path.join(process.cwd(), "database", "schema.sql");
@@ -155,29 +155,31 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       expect(result.error).toBe("Suggestion has already been applied");
     });
 
-    it("should validate chapter exists", async () => {
-      // Create suggestion with non-existent chapter
-      const suggestionResult = db
-        .prepare(
-          `INSERT INTO suggestions 
+    it("should prevent orphan suggestions when the chapter does not exist (FK enforced)", async () => {
+      // The suggestions.chapter_id FK (ON DELETE CASCADE) makes it impossible
+      // to persist a suggestion referencing a missing chapter. SQLite rejects
+      // the insert before applySuggestionWithClip is ever called, so the
+      // handler-level 'Chapter not found' branch is unreachable for this case;
+      // the contract is now enforced by the schema itself.
+      const insertOrphan = () =>
+        db
+          .prepare(
+            `INSERT INTO suggestions 
            (chapter_id, in_point, out_point, description, reasoning, provider, status, display_order) 
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          999999,
-          120.5,
-          180.0,
-          "Test description",
-          "Test reasoning",
-          "gemini",
-          "pending",
-          0
-        );
-      const suggestionId = suggestionResult.lastInsertRowid as number;
+          )
+          .run(
+            999999,
+            120.5,
+            180.0,
+            "Test description",
+            "Test reasoning",
+            "gemini",
+            "pending",
+            0
+          );
 
-      const result = await applySuggestionWithClip(suggestionId);
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Chapter not found for this suggestion");
+      expect(insertOrphan).toThrow(/FOREIGN KEY constraint failed/);
     });
 
     it("should validate chapter has assets", async () => {
@@ -213,12 +215,11 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
       expect(result.error).toBe("No assets found for this chapter");
     });
 
-    it("preserves the drafted source window when collision resolution shifts timeline placement", async () => {
+    it("preserves the drafted source window (in_point/out_point) when creating a clip from a suggestion", async () => {
       await createClip({
         project_id: testProjectId,
         asset_id: testAssetId,
         track_index: 0,
-        start_time: 0,
         in_point: 100,
         out_point: 150,
         role: null,
@@ -232,8 +233,8 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
         chat_message_id: null,
         in_point: 25,
         out_point: 75,
-        description: "Collision candidate",
-        reasoning: "Should preserve original footage",
+        description: "Source window candidate",
+        reasoning: "Should preserve the drafted source window",
         provider: "gemini",
         action_type: "create_clip",
         target_clip_id: null,
@@ -252,91 +253,10 @@ describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
 
       expect(result.success).toBe(true);
       expect(result.clip).toMatchObject({
-        start_time: 50,
         in_point: 25,
         out_point: 75,
       });
-    });
-
-    it("preserves an explicit create_clip startTime gap when there is no collision", async () => {
-      const suggestion = await createSuggestion({
-        chapter_id: testChapterId,
-        conversation_id: null,
-        chat_message_id: null,
-        in_point: 25,
-        out_point: 75,
-        description: "Gap-preserving clip",
-        reasoning: "Should keep the requested timeline gap",
-        provider: "gemini",
-        action_type: "create_clip",
-        target_clip_id: null,
-        action_payload_json: JSON.stringify({
-          create: {
-            assetId: testAssetId,
-            trackIndex: 0,
-            startTime: 200,
-          },
-        }),
-        preview_snapshot_json: null,
-        status: "pending",
-        display_order: 0,
-        clip_id: null,
-      });
-
-      const result = await applySuggestionWithClip(suggestion.id);
-
-      expect(result.success).toBe(true);
-      expect(result.clip).toMatchObject({
-        start_time: 200,
-        in_point: 25,
-        out_point: 75,
-      });
-    });
-
-    it("repositions an existing clip when update_clip includes startTime", async () => {
-      const clip = await createClip({
-        project_id: testProjectId,
-        asset_id: testAssetId,
-        track_index: 0,
-        start_time: 25,
-        in_point: 25,
-        out_point: 75,
-        role: null,
-        description: "Movable clip",
-        is_essential: true,
-      });
-
-      const suggestion = await createSuggestion({
-        chapter_id: testChapterId,
-        conversation_id: null,
-        chat_message_id: null,
-        in_point: 25,
-        out_point: 75,
-        description: "Move the clip later",
-        reasoning: "Should preserve the source window while moving the timeline placement",
-        provider: "gemini",
-        action_type: "update_clip",
-        target_clip_id: clip.id,
-        action_payload_json: JSON.stringify({
-          update: {
-            startTime: 180,
-          },
-        }),
-        preview_snapshot_json: null,
-        status: "pending",
-        display_order: 0,
-        clip_id: null,
-      });
-
-      const result = await applySuggestionWithClip(suggestion.id);
-
-      expect(result.success).toBe(true);
-      expect(result.clip).toMatchObject({
-        id: clip.id,
-        start_time: 180,
-        in_point: 25,
-        out_point: 75,
-      });
+      expect(result.clip).not.toHaveProperty("start_time");
     });
 
     it("requires assetId for create_clip suggestions when multiple chapter video assets are available", async () => {

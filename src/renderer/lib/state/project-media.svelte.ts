@@ -8,7 +8,7 @@ import {
   type GetClipsResult,
 } from '../api/clips.js';
 import { loadTimelineState as ipcLoadTimelineState, saveTimelineState as ipcSaveTimelineState, type TimelineStateResult } from '../api/timeline.js';
-import type { Asset, Clip, TimelineState } from '../../../shared/types/database';
+import type { Asset, Clip } from '../../../shared/types/database';
 import type { AssetAvailability, ProjectAsset } from '../../../shared/contracts/ipc.js';
 import { timelineState, loadTimeline, setClips, createClip, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
 import {

@@ -15,7 +15,6 @@ import {
 } from '../electron/pythonDetector.js';
 import type {
   TranscriptionResult,
-  TranscriptionSegment,
   TranscriptionOptions,
   TranscriptionProgress,
   TranscriptionProgressCallback,
@@ -87,6 +86,7 @@ interface WhisperProcessRunOptions {
   onProgress?: TranscriptionProgressCallback;
   device: WhisperDevice;
   computeTypeOverride?: TranscriptionOptions['computeType'];
+  signal?: AbortSignal;
 }
 
 function mapWhisperOutput(output: WhisperOutput): TranscriptionResult {
@@ -204,10 +204,15 @@ async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<Tra
     onProgress,
     device,
     computeTypeOverride,
+    signal,
   } = options;
 
   const args = buildWhisperArgs(scriptPath, transcriptionOptions, device, computeTypeOverride);
   const effectiveComputeType = computeTypeOverride || transcriptionOptions.computeType || 'int8';
+
+  if (signal?.aborted) {
+    throw new WhisperError('Transcription cancelled before start', 'cancelled', { reason: 'aborted' });
+  }
 
   return new Promise((resolve, reject) => {
     console.log(
@@ -217,6 +222,31 @@ async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<Tra
     const proc = spawn(pythonExecutable, args);
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const cleanup = () => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        // Process may have already exited.
+      }
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(new WhisperError('Transcription cancelled', 'cancelled', { reason: 'aborted' }));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -243,6 +273,11 @@ async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<Tra
     });
 
     proc.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
       reject(new WhisperError(
         `Failed to run transcription: ${error.message}`,
         'PROCESS_ERROR',
@@ -251,7 +286,12 @@ async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<Tra
     });
 
     proc.on('close', (code) => {
+      if (settled) {
+        return;
+      }
       if (code !== 0) {
+        settled = true;
+        cleanup();
         reject(new WhisperError(
           `Transcription failed with code ${code}: ${stderr}`,
           'TRANSCRIPTION_FAILED',
@@ -268,8 +308,12 @@ async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<Tra
 
       try {
         const output: WhisperOutput = JSON.parse(stdout);
+        settled = true;
+        cleanup();
         resolve(mapWhisperOutput(output));
       } catch (error) {
+        settled = true;
+        cleanup();
         reject(new WhisperError(
           'Failed to parse transcription output',
           'PARSE_ERROR',
@@ -421,8 +465,13 @@ export async function getWhisperRuntimeStatus(
  */
 export async function transcribe(
   options: TranscriptionOptions,
-  onProgress?: TranscriptionProgressCallback
+  onProgress?: TranscriptionProgressCallback,
+  signal?: AbortSignal
 ): Promise<TranscriptionResult> {
+  if (signal?.aborted) {
+    throw new WhisperError('Transcription cancelled before start', 'cancelled', { reason: 'aborted' });
+  }
+
   const pythonRuntime = await resolvePythonRuntime();
   if (!pythonRuntime) {
     throw new WhisperError('Python not found', 'PYTHON_NOT_FOUND');
@@ -477,6 +526,7 @@ export async function transcribe(
       transcriptionOptions: options,
       onProgress,
       device: 'auto',
+      signal,
     });
   } catch (error) {
     if (!shouldRetryOnCpu(error)) {
@@ -493,24 +543,9 @@ export async function transcribe(
       onProgress,
       device: 'cpu',
       computeTypeOverride: 'int8',
+      signal,
     });
   }
-}
-
-/**
- * Transcribe with automatic language detection
- */
-export async function transcribeAutoDetect(
-  audioPath: string,
-  onProgress?: TranscriptionProgressCallback
-): Promise<TranscriptionResult> {
-  return transcribe(
-    {
-      audioPath,
-      model: 'base',
-    },
-    onProgress
-  );
 }
 
 /**
@@ -538,16 +573,6 @@ async function findTranscribeScript(): Promise<string | null> {
   }
 
   return null;
-}
-
-/**
- * Check if transcription is available (Python + faster-whisper)
- */
-export async function isTranscriptionAvailable(): Promise<boolean> {
-  const pythonRuntime = await resolvePythonRuntime();
-  if (!pythonRuntime) return false;
-
-  return hasFasterWhisper(pythonRuntime.path);
 }
 
 /**

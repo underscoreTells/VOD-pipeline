@@ -3,6 +3,12 @@ import { createProject, deleteProject, getProject, listProjects, updateProject }
 import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
+import {
+  projectCreateSchema,
+  projectDeleteSchema,
+  projectGetSchema,
+  projectUpdateSchema,
+} from '../schemas.js';
 
 const logger = createLogger('ProjectHandlers');
 
@@ -15,10 +21,15 @@ export const PROJECT_HANDLER_CHANNELS = [
 ];
 
 export function registerProjectHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.PROJECT_CREATE, async (_, { name }) => {
+  ipcMain.handle(IPC_CHANNELS.PROJECT_CREATE, async (_, payload) => {
+    const parsed = projectCreateSchema.safeParse(payload);
+    const name = parsed.success ? parsed.data.name : payload?.name;
     logger.info('project:create', name);
     try {
-      return createSuccessResponse(await createProject(name));
+      if (!parsed.success) {
+        return createErrorResponse('Invalid project payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      return createSuccessResponse(await createProject(parsed.data.name as string));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
@@ -33,10 +44,15 @@ export function registerProjectHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROJECT_GET, async (_, { id }) => {
+  ipcMain.handle(IPC_CHANNELS.PROJECT_GET, async (_, payload) => {
+    const id = payload?.id;
     logger.info('project:get', id);
     try {
-      const project = await getProject(id);
+      const parsed = projectGetSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid project payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const project = await getProject(parsed.data.id as number);
       return project
         ? createSuccessResponse(project)
         : createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -45,10 +61,15 @@ export function registerProjectHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROJECT_UPDATE, async (_, { id, name }) => {
+  ipcMain.handle(IPC_CHANNELS.PROJECT_UPDATE, async (_, payload) => {
+    const id = payload?.id;
     logger.info('project:update', id);
     try {
-      const updated = await updateProject(id, name);
+      const parsed = projectUpdateSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid project payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const updated = await updateProject(parsed.data.id as number, parsed.data.name as string);
       return updated
         ? createSuccessResponse(null)
         : createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -57,10 +78,15 @@ export function registerProjectHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROJECT_DELETE, async (_, { id }) => {
+  ipcMain.handle(IPC_CHANNELS.PROJECT_DELETE, async (_, payload) => {
+    const id = payload?.id;
     logger.info('project:delete', id);
     try {
-      const deleted = await deleteProject(id);
+      const parsed = projectDeleteSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid project payload', IPC_ERROR_CODES.DATABASE_ERROR);
+      }
+      const deleted = await deleteProject(parsed.data.id as number);
       return deleted
         ? createSuccessResponse(null)
         : createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);

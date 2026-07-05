@@ -1,4 +1,3 @@
-import { BaseMessage } from "@langchain/core/messages";
 import type { Clip, Suggestion } from "./database.js";
 import type { TranscriptionSegment } from "./pipeline.js";
 

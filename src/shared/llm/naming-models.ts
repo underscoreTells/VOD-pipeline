@@ -1,4 +1,6 @@
-export type NamingModelProvider = 'openai' | 'gemini' | 'kimi';
+import type { LLMProviderType } from './provider-registry.js';
+
+export type NamingModelProvider = Extract<LLMProviderType, 'openai' | 'gemini' | 'kimi'>;
 
 export type NamingModelId = 'gpt-5-nano' | 'gemini-3-flash-preview' | 'kimi-k2.5';
 
@@ -70,8 +72,4 @@ export function normalizeNamingModel(
 
 export function getNamingModelProvider(model: NamingModelId): NamingModelProvider {
   return NAMING_MODEL_PROVIDER_MAP[model];
-}
-
-export function getNamingModelOption(model: NamingModelId): NamingModelOption {
-  return NAMING_MODEL_OPTIONS.find((option) => option.id === model) ?? NAMING_MODEL_OPTIONS[0];
 }

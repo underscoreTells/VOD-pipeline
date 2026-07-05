@@ -176,6 +176,12 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
   }
 }
 
+/**
+ * Schema revision expected by this build. Bump when schema.sql or the
+ * imperative ensure* migrations change shape.
+ */
+export const CURRENT_SCHEMA_VERSION = 1;
+
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
   const version = activeDatabase.pragma('user_version', { simple: true });

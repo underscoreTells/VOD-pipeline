@@ -16,11 +16,18 @@ import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
-  clamp,
   normalizeComputeType,
   normalizeTranscriptionModel,
+  buildTranscriptionJobKey,
+  cancelHeavyMediaJob,
   queueChapterTranscription,
 } from '../handler-support.js';
+import { clamp } from '../../../shared/utils/clip-timing.js';
+import {
+  transcribeCancelSchema,
+  transcribeChapterSchema,
+  transcriptionStatusSchema,
+} from '../schemas.js';
 
 const logger = createLogger('TranscriptionHandlers');
 
@@ -37,24 +44,33 @@ class TranscriptionHandlerError extends Error {
 export const TRANSCRIPTION_HANDLER_CHANNELS = [
   IPC_CHANNELS.TRANSCRIPTION_STATUS,
   IPC_CHANNELS.TRANSCRIBE_CHAPTER,
+  IPC_CHANNELS.TRANSCRIBE_CANCEL,
 ];
 
 export function registerTranscriptionHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.TRANSCRIPTION_STATUS, async (_, payload) => {
     logger.info('transcription:status');
     try {
-      const autoSetup = Boolean(payload?.autoSetup);
+      const parsed = transcriptionStatusSchema.safeParse(payload);
+      const autoSetup = Boolean((parsed.success ? parsed.data : payload)?.autoSetup);
       return createSuccessResponse(await getWhisperRuntimeStatus({ autoSetup }));
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.TRANSCRIBE_CHAPTER, async (event, { chapterId, options = {} }) => {
-    logger.info('transcribe:chapter', chapterId);
+  ipcMain.handle(IPC_CHANNELS.TRANSCRIBE_CHAPTER, async (event, payload) => {
+    logger.info('transcribe:chapter', payload?.chapterId);
     let tempAudioPath: string | null = null;
 
     try {
+      const parsed = transcribeChapterSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid transcription payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const chapterId = parsed.data.chapterId as number;
+      const options = (parsed.data.options === undefined ? {} : parsed.data.options) as Record<string, unknown>;
+
       const existingChapter = await getChapter(chapterId);
       if (!existingChapter) {
         return createErrorResponse('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -71,7 +87,7 @@ export function registerTranscriptionHandlers(): void {
         },
       });
 
-      const result = await queueChapterTranscription(chapterId, priority, async () => {
+      const result = await queueChapterTranscription(chapterId, priority, async (signal) => {
         const chapter = await getChapter(chapterId);
         if (!chapter) {
           throw new TranscriptionHandlerError('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -145,6 +161,7 @@ export function registerTranscriptionHandlers(): void {
             channels: 1,
             startTime: chapterStart,
             endTime: chapterEnd,
+            signal,
           });
         } catch (error) {
           if (error instanceof FFmpegError) {
@@ -161,9 +178,9 @@ export function registerTranscriptionHandlers(): void {
         const transcriptionResult = await transcribe(
           {
             audioPath: tempAudioPath,
-            model: normalizeTranscriptionModel(options.model),
-            language: typeof options.language === 'string' ? options.language : undefined,
-            computeType: normalizeComputeType(options.computeType),
+            model: normalizeTranscriptionModel(options?.model),
+            language: typeof options?.language === 'string' ? options.language : undefined,
+            computeType: normalizeComputeType(options?.computeType),
             wordTimestamps: false,
           },
           (progress) => {
@@ -171,7 +188,8 @@ export function registerTranscriptionHandlers(): void {
               chapterId,
               progress,
             });
-          }
+          },
+          signal
         );
 
         const transcriptInputs = transcriptionResult.segments
@@ -246,6 +264,22 @@ export function registerTranscriptionHandlers(): void {
       }
 
       return createErrorResponse(error, IPC_ERROR_CODES.TRANSCRIPTION_FAILED);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TRANSCRIBE_CANCEL, async (_, payload) => {
+    logger.info('transcribe:cancel', payload?.chapterId);
+    try {
+      const parsed = transcribeCancelSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid transcription cancel payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const chapterId = parsed.data.chapterId as number;
+      const jobKey = buildTranscriptionJobKey(chapterId);
+      const cancelled = cancelHeavyMediaJob(jobKey);
+      return createSuccessResponse({ cancelled });
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

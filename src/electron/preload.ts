@@ -96,6 +96,8 @@ const electronAPI: ElectronAPI = {
         proxyOptions: options?.proxyOptions,
         requestMode: options?.requestMode,
       }),
+    cancelProxy: (chapterId, assetId) =>
+      ipcRenderer.invoke('chapter:proxy-cancel', { chapterId, assetId }),
   },
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),
@@ -137,6 +139,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('transcription:status', { autoSetup: options?.autoSetup === true }),
     transcribe: (chapterId, options) =>
       ipcRenderer.invoke('transcribe:chapter', { chapterId, options }),
+    cancel: (chapterId) => ipcRenderer.invoke('transcribe:cancel', { chapterId }),
     onProgress: (callback) => {
       const handler = (_event: unknown, data: TranscriptionProgressEvent) => callback(data);
       ipcRenderer.on('transcribe:progress', handler);

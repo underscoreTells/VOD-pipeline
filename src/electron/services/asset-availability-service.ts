@@ -3,11 +3,20 @@ import path from 'node:path';
 import type { Asset } from '../../shared/types/database.js';
 import type { AssetAvailability, ProjectAsset } from '../../shared/contracts/ipc.js';
 
-export function findNearestExistingAncestor(filePath: string): string | null {
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function findNearestExistingAncestor(filePath: string): Promise<string | null> {
   let currentPath = path.resolve(filePath);
 
   while (true) {
-    if (fs.existsSync(currentPath)) {
+    if (await pathExists(currentPath)) {
       return currentPath;
     }
 
@@ -20,8 +29,8 @@ export function findNearestExistingAncestor(filePath: string): string | null {
   }
 }
 
-export function getAssetAvailability(filePath: string): AssetAvailability {
-  const exists = fs.existsSync(filePath);
+export async function getAssetAvailability(filePath: string): Promise<AssetAvailability> {
+  const exists = await pathExists(filePath);
   const checkedAt = new Date().toISOString();
 
   if (exists) {
@@ -34,7 +43,7 @@ export function getAssetAvailability(filePath: string): AssetAvailability {
     };
   }
 
-  const nearestExistingAncestor = findNearestExistingAncestor(filePath);
+  const nearestExistingAncestor = await findNearestExistingAncestor(filePath);
   const immediateParent = path.dirname(path.resolve(filePath));
   const issue = nearestExistingAncestor === immediateParent ? 'missing_file' : 'missing_parent';
 
@@ -47,9 +56,9 @@ export function getAssetAvailability(filePath: string): AssetAvailability {
   };
 }
 
-export function enrichProjectAsset(asset: Asset): ProjectAsset {
+export async function enrichProjectAsset(asset: Asset): Promise<ProjectAsset> {
   return {
     ...asset,
-    availability: getAssetAvailability(asset.file_path),
+    availability: await getAssetAvailability(asset.file_path),
   };
 }
