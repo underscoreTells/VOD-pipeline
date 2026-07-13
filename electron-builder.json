@@ -2,7 +2,7 @@
   "appId": "com.vod-pipeline.app",
   "productName": "VOD Pipeline",
   "directories": {
-    "output": "dist"
+    "output": "release"
   },
   "files": [
     "dist/**",
@@ -11,7 +11,7 @@
   ],
   "asar": true,
   "asarUnpack": [
-    "binaries/**/*"
+    "node_modules/better-sqlite3/**/*"
   ],
   "extraResources": [
     {
@@ -20,7 +20,6 @@
       "filter": ["**/*"]
     }
   ],
-  "afterPack": "./scripts/after-pack.js",
   "win": {
     "target": ["nsis"],
     "icon": "assets/icon.ico"

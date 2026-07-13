@@ -411,7 +411,7 @@ describe("agent grounding status", () => {
       sourcePath,
       expect.stringContaining("chapter_7_asset_11_ai_proxy.partial.0.mp4"),
       undefined,
-      undefined,
+      30 * 60 * 1000,
       "gpu",
       "fast",
       {

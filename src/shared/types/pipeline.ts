@@ -2,10 +2,6 @@
  * Pipeline types for video processing
  */
 
-import type { FFmpegPathResult } from '../../electron/ffmpegDetector.js';
-
-export { FFmpegPathResult };
-
 export interface VideoMetadata {
   duration: number;
   width: number;
@@ -63,75 +59,6 @@ export interface TranscriptionProgress {
 }
 
 export type TranscriptionProgressCallback = (progress: TranscriptionProgress) => void;
-
-export interface ScaleOptions {
-  width?: number;
-  height?: number;
-  maintainAspectRatio?: boolean;
-}
-
-export interface FramerateOptions {
-  fps: number;
-  method?: 'drop' | 'interpolate';
-}
-
-export interface ProxyOptions {
-  width: number;
-  fps: number;
-  videoCodec: string;
-  videoBitrate?: string;
-  audioCodec?: string;
-}
-
-export interface ProxyPreset {
-  name: string;
-  options: ProxyOptions;
-}
-
-export const PROXY_PRESETS: Record<string, ProxyPreset> = {
-  AI_ANALYSIS: {
-    name: 'AI Analysis',
-    options: {
-      width: 640,
-      fps: 5,
-      videoCodec: 'libx264',
-      videoBitrate: '500k',
-    },
-  },
-  ROUGH_CUT: {
-    name: 'Rough Cut',
-    options: {
-      width: 720,
-      fps: 15,
-      videoCodec: 'libx264',
-      videoBitrate: '1M',
-    },
-  },
-  EDITABLE: {
-    name: 'Editable',
-    options: {
-      width: 1280,
-      fps: 24,
-      videoCodec: 'libx264',
-      videoBitrate: '2M',
-    },
-  },
-  REVIEW: {
-    name: 'Review',
-    options: {
-      width: 1920,
-      fps: 30,
-      videoCodec: 'prores',
-      videoBitrate: '10M',
-    },
-  },
-};
-
-export interface CutOptions {
-  startTime: number;
-  endTime: number;
-  reencode?: boolean;
-}
 
 export interface AudioExtractOptions {
   trackIndex?: number;

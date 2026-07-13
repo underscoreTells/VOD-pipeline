@@ -191,7 +191,8 @@ export async function ensureChapterProxyReady(
   asset: Asset,
   encodingMode: 'cpu' | 'gpu' | 'auto' = 'auto',
   quality: 'high' | 'balanced' | 'fast' = 'balanced',
-  priority: HeavyMediaJobPriority = 'interactive'
+  priority: HeavyMediaJobPriority = 'interactive',
+  onProgress?: (percent: number) => void
 ): Promise<string | undefined> {
   if (asset.file_type !== 'video') {
     return undefined;
@@ -271,8 +272,8 @@ export async function ensureChapterProxyReady(
         const metadata = await generateAIProxy(
           asset.file_path,
           tempPath,
-          undefined,
-          undefined,
+          onProgress,
+          30 * 60 * 1000,
           encodingMode,
           quality,
           {

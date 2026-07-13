@@ -1,6 +1,7 @@
 <script lang="ts">
   import { projects, getSelectedProject, loadProjects, createProject, deleteProject, selectProject } from './lib/state/project.svelte';
   import { openSettings, loadSettings } from './lib/state/settings.svelte';
+  import { initProxyProgressSubscription } from './lib/state/agent-session.svelte';
   import { themeState, toggleTheme } from './lib/state/theme.svelte';
   import ProjectDetail from './lib/components/ProjectDetail.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
@@ -28,6 +29,7 @@
   $effect(() => {
     loadProjects();
     loadSettings();
+    initProxyProgressSubscription();
   });
 
   function handleCreateProject() {

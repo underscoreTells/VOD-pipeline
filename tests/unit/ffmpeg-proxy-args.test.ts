@@ -17,6 +17,20 @@ const gpuDetectorMocks = vi.hoisted(() => ({
   detectGPUEncoders: vi.fn(),
   getGPUFFmpegPath: vi.fn(() => "/mock/ffmpeg"),
   getProxyEncoderArgs: vi.fn(),
+  getHwaccelDecodeArgs: vi.fn((backend: string): string[] => {
+    switch (backend) {
+      case "nvenc":
+        return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"];
+      case "qsv":
+        return ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"];
+      case "amf":
+        return ["-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11"];
+      case "videotoolbox":
+        return ["-hwaccel", "videotoolbox"];
+      default:
+        return [];
+    }
+  }),
 }));
 
 const spawnMock = vi.hoisted(() => vi.fn((command: string, args: string[]) => {
@@ -99,6 +113,7 @@ describe("ffmpeg proxy argument generation", () => {
     gpuDetectorMocks.getGPUFFmpegPath.mockReset();
     gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/mock/ffmpeg");
     gpuDetectorMocks.getProxyEncoderArgs.mockReset();
+    gpuDetectorMocks.getHwaccelDecodeArgs.mockClear();
     gpuDetectorMocks.getProxyEncoderArgs.mockImplementation((useGPU: boolean) => {
       if (useGPU) {
         return {
@@ -179,6 +194,74 @@ describe("ffmpeg proxy argument generation", () => {
     expect(ffmpegArgs).toContain("-t");
     expect(ffmpegArgs!.indexOf("-ss")).toBeLessThan(ffmpegArgs!.indexOf("-i"));
     expect(ffmpegArgs![ffmpegArgs!.indexOf("-t") + 1]).toBe("12");
+  });
+
+  it("emits QSV decode hwaccel flags and scale_qsv filter for GPU chapter proxies", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "qsv",
+      encoder: "h264_qsv",
+      name: "Intel Quick Sync",
+      priority: 1,
+      source: "/mock/ffmpeg",
+    });
+    gpuDetectorMocks.getProxyEncoderArgs.mockImplementation(() => ({
+      backend: "qsv",
+      videoCodec: "h264_qsv",
+      videoArgs: ["-c:v", "h264_qsv", "-preset", "fast", "-global_quality", "28"],
+    }));
+
+    const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+
+    await generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "gpu",
+      "balanced",
+      { startTime: 5, endTime: 17 }
+    );
+
+    const ffmpegArgs = spawnState.calls.find((call) => call.command === "/mock/ffmpeg")?.args;
+    expect(ffmpegArgs).toBeDefined();
+
+    expect(ffmpegArgs!.slice(0, 4)).toEqual(["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]);
+    expect(ffmpegArgs).toContain("scale_qsv=640:-2");
+    expect(ffmpegArgs).toContain("-r");
+    expect(ffmpegArgs![ffmpegArgs!.indexOf("-r") + 1]).toBe("5");
+  });
+
+  it("emits AMF decode hwaccel flags and scale_amf filter for GPU chapter proxies", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "amf",
+      encoder: "h264_amf",
+      name: "AMD AMF",
+      priority: 1,
+      source: "/mock/ffmpeg",
+    });
+    gpuDetectorMocks.getProxyEncoderArgs.mockImplementation(() => ({
+      backend: "amf",
+      videoCodec: "h264_amf",
+      videoArgs: ["-c:v", "h264_amf", "-quality", "balanced", "-qp_p", "28", "-qp_i", "28"],
+    }));
+
+    const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+
+    await generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "gpu",
+      "balanced",
+      { startTime: 0, endTime: 10 }
+    );
+
+    const ffmpegArgs = spawnState.calls.find((call) => call.command === "/mock/ffmpeg")?.args;
+    expect(ffmpegArgs).toBeDefined();
+
+    expect(ffmpegArgs!.slice(0, 4)).toEqual(["-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11"]);
+    expect(ffmpegArgs).toContain("scale_amf=640:-2");
   });
 
   it("writes reverse chunks without faststart and concatenates to explicit mp4 output", async () => {

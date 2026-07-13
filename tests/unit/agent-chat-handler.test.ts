@@ -351,10 +351,10 @@ describe("agent chat handler", () => {
       ensureReady: true,
     });
 
-    expect(handlerSupportMocks.getAgentGroundingStatus).toHaveBeenCalledWith(1, 3, {
+    expect(handlerSupportMocks.getAgentGroundingStatus).toHaveBeenCalledWith(1, 3, expect.objectContaining({
       ensureReady: true,
       proxyOptions: undefined,
-    });
+    }));
     expect(result).toEqual({
       success: true,
       data: {

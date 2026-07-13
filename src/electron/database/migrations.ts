@@ -546,6 +546,18 @@ export function ensureChapterProxyTable(database: Database.Database): void {
   `);
 }
 
+/**
+ * Drop the legacy full-asset `proxies` table.
+ *
+ * The table was defined in `schema.sql` for a never-wired full-asset AI proxy
+ * flow; only `chapter_proxies` is used at runtime. Existing databases created
+ * before this refactor still carry the orphaned table, so this idempotent drop
+ * cleans it up. SQLite drops associated indexes automatically.
+ */
+export function dropProxiesTable(database: Database.Database): void {
+  database.exec(`DROP TABLE IF EXISTS proxies;`);
+}
+
 export function ensureColumn(
   database: Database.Database,
   table: string,

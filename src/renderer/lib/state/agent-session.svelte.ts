@@ -30,6 +30,7 @@ import {
   getSuggestions,
   listAgentConversations,
 } from "../api/agent.js";
+import { onProxyProgress } from "../api/proxies.js";
 import { settingsState } from "./settings.svelte";
 import type { LLMProviderType } from "../../../shared/llm/provider-registry.js";
 
@@ -72,6 +73,7 @@ export interface AgentState {
   groundingRequiredVideoAssetCount: number;
   groundingReadyVideoAssetCount: number;
   groundingErrorDetail: string | null;
+  proxyProgressPercent: number | null;
   error: string | null;
 }
 
@@ -92,12 +94,35 @@ export const agentState = $state<AgentState>({
   groundingRequiredVideoAssetCount: 0,
   groundingReadyVideoAssetCount: 0,
   groundingErrorDetail: null,
+  proxyProgressPercent: null,
   error: null,
 });
 
 let chapterLoadToken = 0;
 let groundingLoadToken = 0;
 let groundingPollTimeout: ReturnType<typeof setTimeout> | null = null;
+let proxyProgressUnsubscribe: (() => void) | null = null;
+
+/**
+ * Subscribe to proxy generation progress events from the main process.
+ * Updates `agentState.proxyProgressPercent` so the chat UI can render a real
+ * progress bar instead of the previous indeterminate "preparing" text. Only
+ * progress for the currently-loaded chapter is applied; events for other
+ * chapters are ignored.
+ *
+ * Called once on app init; returns a no-op if already subscribed.
+ */
+export function initProxyProgressSubscription(): void {
+  if (proxyProgressUnsubscribe) {
+    return;
+  }
+  proxyProgressUnsubscribe = onProxyProgress((data) => {
+    if (agentState.currentChapterId !== String(data.chapterId)) {
+      return;
+    }
+    agentState.proxyProgressPercent = data.percent;
+  });
+}
 
 function setStreamingBlockedError() {
   agentState.error = "Wait for the current response to finish before changing chat context.";
@@ -201,6 +226,9 @@ function applyGroundingStatus(data: AgentGroundingStatusData): void {
   agentState.groundingReadyVideoAssetCount = data.readyVideoAssetCount;
   agentState.groundingErrorDetail =
     data.assets.find((asset) => asset.status === "error" && asset.error)?.error ?? null;
+  if (data.status !== "generating") {
+    agentState.proxyProgressPercent = data.status === "ready" ? 100 : null;
+  }
 }
 
 async function refreshGroundingStatus(options: {

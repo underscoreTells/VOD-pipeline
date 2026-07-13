@@ -1,6 +1,7 @@
 import { detectAudiowaveform } from '../audiowaveformDetector.js';
 import { detectFFmpeg } from '../ffmpegDetector.js';
 import { detectPython } from '../pythonDetector.js';
+import { detectGPUEncoders } from '../gpuDetector.js';
 import { createLogger } from '../logger.js';
 import { getWhisperRuntimeStatus } from '../../pipeline/whisper.js';
 
@@ -21,6 +22,25 @@ async function initializeFFmpeg(): Promise<void> {
       logger.info(`FFmpeg found: ${result.path}`);
       logger.info(`FFmpeg version: ${result.version}`);
       logger.info(`FFmpeg source: ${result.source}`);
+
+      // Probe GPU encoders in the background so the cache is warm before the
+      // first proxy job and the Settings UI can surface a real status instead
+      // of a silent fallback. Fire-and-forget: detection is cached on success
+      // and re-run lazily if the user opens Settings before this resolves.
+      void detectGPUEncoders(result.path)
+        .then((encoder) => {
+          if (encoder) {
+            logger.info(
+              `GPU encoder detected: ${encoder.name} (${encoder.encoder}) via ${encoder.source}`
+            );
+          } else {
+            logger.info('No GPU encoder detected; proxies will use CPU fallback.');
+          }
+        })
+        .catch((error) => {
+          logger.warn('GPU encoder detection failed:', error);
+        });
+
       return;
     }
 

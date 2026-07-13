@@ -37,6 +37,21 @@ export function createMainWindow(): BrowserWindow {
     logger.error(`Failed to load preload ${failingPreloadPath}:`, error);
   });
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    void mainWindow?.webContents
+      .executeJavaScript('Boolean(window.electronAPI)')
+      .then((isAvailable: boolean) => {
+        if (isAvailable) {
+          logger.info('Renderer Electron API is available.');
+        } else {
+          logger.error('Renderer Electron API is unavailable after page load.');
+        }
+      })
+      .catch((error: unknown) => {
+        logger.error('Failed to verify renderer Electron API availability:', error);
+      });
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     const externalUrl = getExternalHttpUrl(url);
     if (externalUrl) {

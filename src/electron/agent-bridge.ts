@@ -198,7 +198,7 @@ export class AgentBridge extends EventEmitter {
 
   private getAgentPath(): string {
     if (app.isPackaged) {
-      return path.join(process.resourcesPath, "agent", "index.js");
+      return path.join(app.getAppPath(), "dist", "src", "agent", "index.js");
     } else {
       // ES module compatible __dirname replacement
       const __filename = fileURLToPath(import.meta.url);

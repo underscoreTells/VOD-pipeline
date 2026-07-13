@@ -3,11 +3,10 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
-import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, type GPUEncoderBackend } from '../electron/gpuDetector.js';
+import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, getHwaccelDecodeArgs, type GPUEncoderBackend } from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
-  ProxyOptions,
   AudioExtractOptions,
   FFprobeOutput,
 } from '../shared/types/pipeline.js';
@@ -216,82 +215,51 @@ export async function extractAudio(
 }
 
 /**
- * Generate proxy video with combined scale + framerate + codec settings
+ * Shared spawn + AbortController + timeout + stderr capture + exit-code
+ * handling for FFmpeg child processes. Used by both the simple `runFFmpeg`
+ * wrapper (audio extraction, reverse chunks) and the AI proxy generation path,
+ * so progress parsing and cancellation behaviour don't diverge.
  */
-export async function generateProxy(
-  inputPath: string,
-  outputPath: string,
-  options: ProxyOptions
-): Promise<void> {
-  const ffmpegPath = getFFmpegPath();
-  if (!ffmpegPath) {
-    throw new FFmpegError('FFmpeg not found', 'FFMPEG_NOT_FOUND');
-  }
-
-  const args: string[] = ['-i', inputPath];
-
-  // Build video filter
-  const filters: string[] = [];
-
-  // Scale
-  filters.push(`scale=${options.width}:-2`);
-
-  // Framerate
-  filters.push(`fps=${options.fps}`);
-
-  if (filters.length > 0) {
-    args.push('-vf', filters.join(','));
-  }
-
-  // Video codec
-  args.push('-c:v', options.videoCodec);
-
-  if (options.videoBitrate) {
-    args.push('-b:v', options.videoBitrate);
-  }
-
-  // Audio
-  if (options.audioCodec) {
-    args.push('-c:a', options.audioCodec);
-  } else {
-    args.push('-an'); // No audio by default for proxies
-  }
-
-  args.push('-y', outputPath);
-
-  return runFFmpeg(ffmpegPath.path, args);
+interface SpawnFFmpegOptions {
+  executablePath: string;
+  args: string[];
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  logTag: string;
+  logCommand?: boolean;
+  onProgress?: (percent: number) => void;
+  progressDuration?: number;
 }
 
-/**
- * Run FFmpeg command and handle errors
- */
-function runFFmpeg(
-  executablePath: string,
-  args: string[],
-  timeoutMs: number = 30 * 60 * 1000,
-  options?: { logCommand?: boolean; signal?: AbortSignal }
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (options?.logCommand !== false) {
-      console.log(`[FFmpeg] Running: ${executablePath} ${args.join(' ')}`);
-    }
+function spawnFFmpeg(options: SpawnFFmpegOptions): Promise<{ stderr: string }> {
+  const { executablePath, args, signal, timeoutMs, logTag, onProgress, progressDuration } = options;
+  const logCommand = options.logCommand !== false;
 
-    const signal = options?.signal;
+  if (logCommand) {
+    console.log(`[${logTag}] Running: ${executablePath} ${args.join(' ')}`);
+  }
+
+  return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new FFmpegError('FFmpeg operation cancelled before start', 'cancelled', { reason: 'aborted' }));
+      reject(new FFmpegError(`${logTag} operation cancelled before start`, 'cancelled', { reason: 'aborted' }));
       return;
     }
 
     const proc = spawn(executablePath, args);
     let errorOutput = '';
-    let timeoutId: NodeJS.Timeout | null = null;
+    let lastProgress = 0;
+    let timeoutTimer: NodeJS.Timeout | null = null;
     let settled = false;
 
-    const cleanup = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
+    const clearTimer = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
       }
+    };
+
+    const cleanup = () => {
+      clearTimer();
       if (signal) {
         signal.removeEventListener('abort', onAbort);
       }
@@ -308,34 +276,51 @@ function runFFmpeg(
       }
       settled = true;
       cleanup();
-      reject(new FFmpegError('FFmpeg operation cancelled', 'cancelled', { reason: 'aborted' }));
+      reject(new FFmpegError(`${logTag} cancelled`, 'cancelled', { reason: 'aborted' }));
     };
 
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
-    // Set timeout
-    timeoutId = setTimeout(() => {
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        // Process may have already exited.
-      }
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new FFmpegError(
-        `FFmpeg operation timed out after ${timeoutMs}ms`,
-        'TIMEOUT',
-        { timeout: timeoutMs }
-      ));
-    }, timeoutMs);
+    if (timeoutMs && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        try {
+          proc.kill('SIGTERM');
+        } catch {
+          // Process may have already exited.
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(new FFmpegError(
+          `${logTag} timed out after ${timeoutMs}ms`,
+          'TIMEOUT',
+          { timeout: timeoutMs }
+        ));
+      }, timeoutMs);
+    }
 
     proc.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      const output = data.toString();
+      errorOutput += output;
+
+      if (onProgress && progressDuration && progressDuration > 0) {
+        const timeMatch = output.match(/time=(\d+):(\d+):(\d+\.\d+)/);
+        if (timeMatch) {
+          const hours = parseInt(timeMatch[1], 10);
+          const minutes = parseInt(timeMatch[2], 10);
+          const seconds = parseFloat(timeMatch[3]);
+          const currentTime = hours * 3600 + minutes * 60 + seconds;
+          const progress = Math.min(100, Math.round((currentTime / progressDuration) * 100));
+          if (progress > lastProgress) {
+            lastProgress = progress;
+            onProgress(progress);
+          }
+        }
+      }
     });
 
     proc.on('error', (error) => {
@@ -345,21 +330,38 @@ function runFFmpeg(
       settled = true;
       cleanup();
       reject(new FFmpegError(
-        `Failed to run FFmpeg: ${error.message}`,
+        `Failed to run ${logTag}: ${error.message}`,
         'FFMPEG_ERROR',
         error
       ));
     });
 
-    proc.on('exit', (code) => {
+    proc.on('close', (code) => {
       if (settled) {
         return;
       }
+      clearTimer();
+
       if (code !== 0) {
+        if (code === null || code === 143) {
+          settled = true;
+          if (signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+          reject(new FFmpegError(
+            `${logTag} was terminated`,
+            'TIMEOUT',
+            { code }
+          ));
+          return;
+        }
+
         settled = true;
-        cleanup();
+        if (signal) {
+          signal.removeEventListener('abort', onAbort);
+        }
         reject(new FFmpegError(
-          `FFmpeg failed with code ${code}`,
+          `${logTag} failed with code ${code}`,
           'FFMPEG_ERROR',
           { code, error: errorOutput }
         ));
@@ -367,10 +369,32 @@ function runFFmpeg(
       }
 
       settled = true;
-      cleanup();
-      resolve();
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      resolve({ stderr: errorOutput });
     });
   });
+}
+
+/**
+ * Run FFmpeg command and handle errors. Thin wrapper around `spawnFFmpeg`
+ * for callers that don't need progress reporting.
+ */
+function runFFmpeg(
+  executablePath: string,
+  args: string[],
+  timeoutMs: number = 30 * 60 * 1000,
+  options?: { logCommand?: boolean; signal?: AbortSignal }
+): Promise<void> {
+  return spawnFFmpeg({
+    executablePath,
+    args,
+    timeoutMs,
+    signal: options?.signal,
+    logTag: 'FFmpeg',
+    logCommand: options?.logCommand,
+  }).then(() => undefined);
 }
 
 /**
@@ -460,6 +484,29 @@ function logProxyEncodingPlan(prefix: string, plan: ProxyEncodingPlan): void {
   }
 
   console.log(`[${prefix}] ${requestedMode} ${backend} ${codec} ${binary}`);
+}
+
+/**
+ * Build the proxy scale + framerate filter args for a given backend.
+ *
+ * AI proxies target 640px wide @ 5fps. GPU backends use their hardware scaler
+ * (`scale_cuda`, `scale_qsv`, `scale_amf`, `scale_vt`) so frames stay on the
+ * GPU between decode and encode. CPU fallback uses the software `scale` +
+ * `fps` filters.
+ */
+function getProxyScaleFilterArgs(backend: GPUEncoderBackend | 'cpu'): string[] {
+  switch (backend) {
+    case 'nvenc':
+      return ['-vf', 'scale_cuda=640:-2', '-r', '5'];
+    case 'qsv':
+      return ['-vf', 'scale_qsv=640:-2', '-r', '5'];
+    case 'amf':
+      return ['-vf', 'scale_amf=640:-2', '-r', '5'];
+    case 'videotoolbox':
+      return ['-vf', 'scale_vt=640:-2', '-r', '5'];
+    default:
+      return ['-vf', 'scale=640:-2,fps=5'];
+  }
 }
 
 async function resolveProxyEncodingPlan(
@@ -592,20 +639,25 @@ async function executeProxyGeneration(
   trimRange?: { startTime: number; endTime: number },
   signal?: AbortSignal
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
-  const useCudaDecode = encodingPlan.backend === 'nvenc';
+  const hwaccelInputArgs = getHwaccelDecodeArgs(encodingPlan.backend);
+  const isGpuDecode = hwaccelInputArgs.length > 0;
 
-  if (encodingPlan.useGPU && useCudaDecode) {
-    console.log('[Proxy] Enabling CUDA decode + scale for proxy generation');
+  if (encodingPlan.useGPU && isGpuDecode) {
+    console.log(`[Proxy] Enabling ${encodingPlan.backend} decode hwaccel for proxy generation`);
+  } else if (encodingPlan.useGPU) {
+    console.log(`[Proxy] GPU encode on ${encodingPlan.backend} without decode hwaccel (CPU decode)`);
   }
 
+  const scaleFilterArgs = getProxyScaleFilterArgs(encodingPlan.backend);
+
   const args: string[] = [
-    ...(useCudaDecode ? ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] : []),
+    ...hwaccelInputArgs,
     ...(trimRange ? [
       '-ss', trimRange.startTime.toString(),
       '-t', (trimRange.endTime - trimRange.startTime).toString(),
     ] : []),
     '-i', inputPath,
-    ...(useCudaDecode ? ['-vf', 'scale_cuda=640:-2', '-r', '5'] : ['-vf', 'scale=640:-2,fps=5']),
+    ...scaleFilterArgs,
     ...encodingPlan.videoArgs,
     '-c:a', 'aac',
     '-b:a', '64k', // Low bitrate audio is fine for analysis
@@ -613,176 +665,27 @@ async function executeProxyGeneration(
     '-y', outputPath,
   ];
 
-  console.log(`[Proxy] FFmpeg args: ${args.join(' ')}`);
-
-  if (signal?.aborted) {
-    throw new FFmpegError('AI proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
-  }
-
-  return new Promise((resolve, reject) => {
-    const proc = spawn(encodingPlan.ffmpegBinaryPath, args);
-    let errorOutput = '';
-    let lastProgress = 0;
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    let settled = false;
-
-    // Clear timeout helper
-    const clearTimer = () => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = null;
-      }
-    };
-
-    const cleanup = () => {
-      clearTimer();
-      if (signal) {
-        signal.removeEventListener('abort', onAbort);
-      }
-    };
-
-    const onAbort = () => {
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        // Process may have already exited.
-      }
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new FFmpegError('AI proxy generation cancelled', 'cancelled', { reason: 'aborted' }));
-    };
-
-    if (signal) {
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    // Set up timeout if specified
-    if (timeoutMs && timeoutMs > 0) {
-      timeoutTimer = setTimeout(() => {
-        try {
-          proc.kill('SIGTERM');
-        } catch {
-          // Process may have already exited.
-        }
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        reject(new FFmpegError(
-          `AI proxy generation timed out after ${timeoutMs}ms`,
-          'TIMEOUT',
-          { timeout: timeoutMs }
-        ));
-      }, timeoutMs);
-    }
-
-    proc.stderr.on('data', (data) => {
-      const output = data.toString();
-      errorOutput += output;
-
-      // Parse progress from FFmpeg output
-      const timeMatch = output.match(/time=(\d+):(\d+):(\d+\.\d+)/);
-      if (timeMatch && metadata.duration > 0) {
-        const hours = parseInt(timeMatch[1], 10);
-        const minutes = parseInt(timeMatch[2], 10);
-        const seconds = parseFloat(timeMatch[3]);
-        const currentTime = hours * 3600 + minutes * 60 + seconds;
-        const progress = Math.min(100, Math.round((currentTime / metadata.duration) * 100));
-        
-        if (progress > lastProgress) {
-          lastProgress = progress;
-          onProgress?.(progress);
-        }
-      }
-    });
-
-    proc.on('error', (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new FFmpegError(
-        `Failed to generate AI proxy: ${error.message}`,
-        'FFMPEG_ERROR',
-        error
-      ));
-    });
-
-    proc.on('close', async (code) => {
-      if (settled) {
-        return;
-      }
-
-      // Clear timeout timer
-      clearTimer();
-
-      if (code !== 0) {
-        // Check if this was a timeout kill (SIGTERM)
-        if (code === null || code === 143) {
-          settled = true;
-          if (signal) {
-            signal.removeEventListener('abort', onAbort);
-          }
-          reject(new FFmpegError(
-            `AI proxy generation was terminated`,
-            'TIMEOUT',
-            { code }
-          ));
-          return;
-        }
-        
-        settled = true;
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        reject(new FFmpegError(
-          `AI proxy generation failed with code ${code}`,
-          'FFMPEG_ERROR',
-          { code, error: errorOutput }
-        ));
-        return;
-      }
-
-      try {
-        // Get proxy metadata
-        const proxyMetadata = await getVideoMetadata(outputPath);
-        const stats = fs.statSync(outputPath);
-
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        resolve({
-          width: proxyMetadata.width,
-          height: proxyMetadata.height,
-          framerate: Math.round(proxyMetadata.fps),
-          fileSize: stats.size,
-          duration: proxyMetadata.duration,
-        });
-      } catch (error) {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        reject(new FFmpegError(
-          'Failed to read generated proxy metadata',
-          'METADATA_ERROR',
-          error
-        ));
-      }
-    });
+  await spawnFFmpeg({
+    executablePath: encodingPlan.ffmpegBinaryPath,
+    args,
+    signal,
+    timeoutMs,
+    logTag: 'Proxy',
+    logCommand: true,
+    onProgress,
+    progressDuration: metadata.duration,
   });
+
+  // Read proxy metadata after a successful encode.
+  const proxyMetadata = await getVideoMetadata(outputPath);
+  const stats = fs.statSync(outputPath);
+  return {
+    width: proxyMetadata.width,
+    height: proxyMetadata.height,
+    framerate: Math.round(proxyMetadata.fps),
+    fileSize: stats.size,
+    duration: proxyMetadata.duration,
+  };
 }
 
 /**
@@ -844,6 +747,7 @@ async function runChunkedChapterReverseGeneration(params: {
   fps: number;
   hasAudio: boolean;
   videoArgs: string[];
+  hwaccelInputArgs: string[];
   chunkDurationSec: number;
   maxParallelChunks: number;
   timeoutMs: number;
@@ -858,6 +762,7 @@ async function runChunkedChapterReverseGeneration(params: {
     fps,
     hasAudio,
     videoArgs,
+    hwaccelInputArgs,
     chunkDurationSec,
     maxParallelChunks,
     timeoutMs,
@@ -894,6 +799,7 @@ async function runChunkedChapterReverseGeneration(params: {
       chunkPaths[index] = chunkPath;
 
       const args: string[] = [
+        ...hwaccelInputArgs,
         '-ss', chunk.startTime.toString(),
         '-t', chunk.duration.toString(),
         '-i', inputPath,
@@ -1064,6 +970,7 @@ export async function generateChapterReverseProxy(
       fps,
       hasAudio,
       videoArgs: encodingPlan.videoArgs,
+      hwaccelInputArgs: getHwaccelDecodeArgs(encodingPlan.backend),
       chunkDurationSec,
       maxParallelChunks,
       timeoutMs,

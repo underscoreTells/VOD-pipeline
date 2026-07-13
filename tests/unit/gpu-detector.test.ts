@@ -6,8 +6,15 @@ vi.mock("child_process", () => ({
   spawn: spawnMock,
 }));
 
-function createSpawnResult(code: number, stderr = "") {
+function createSpawnResult(code: number, stderr = "", stdout = "") {
   return {
+    stdout: {
+      on: (event: string, callback: (data: Buffer) => void) => {
+        if (event === "data" && stdout) {
+          setTimeout(() => callback(Buffer.from(stdout)), 0);
+        }
+      },
+    },
     stderr: {
       on: (event: string, callback: (data: Buffer) => void) => {
         if (event === "data" && stderr) {
@@ -52,8 +59,12 @@ describe("gpu detector", () => {
     ]);
   });
 
-  it("uses the bundled ffmpeg path before falling back to system ffmpeg", async () => {
+  it("prefers system ffmpeg for GPU encoder probing, falling back to bundled", async () => {
     spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      // -hwaccels probes always return empty (no hwaccel methods reported)
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "");
+      }
       const encoder = args[args.indexOf("-c:v") + 1];
       if (executablePath === "/bundled/ffmpeg" && encoder === "h264_nvenc") {
         return createSpawnResult(0);
@@ -64,6 +75,8 @@ describe("gpu detector", () => {
     const { detectGPUEncoders } = await import("../../src/electron/gpuDetector.js");
     const encoder = await detectGPUEncoders("/bundled/ffmpeg", true);
 
+    // System ffmpeg is probed first; it lacks NVENC, so detection falls back
+    // to the bundled binary which succeeds.
     expect(encoder).toMatchObject({
       backend: "nvenc",
       encoder: "h264_nvenc",
@@ -76,8 +89,11 @@ describe("gpu detector", () => {
     );
   });
 
-  it("falls back to system ffmpeg when the bundled binary lacks a supported encoder", async () => {
+  it("selects a GPU encoder from system ffmpeg when bundled lacks one", async () => {
     spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "");
+      }
       const encoder = args[args.indexOf("-c:v") + 1];
       if (executablePath === "ffmpeg" && encoder === "h264_qsv") {
         return createSpawnResult(0);
@@ -178,5 +194,54 @@ describe("gpu detector", () => {
 
     expect(args).toMatchObject(expected);
     expect(args.videoArgs).toEqual(expect.arrayContaining(requiredArgs));
+  });
+
+  it("probes and parses ffmpeg -hwaccels output", async () => {
+    spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "Hardware acceleration methods:\ncuda\nvaapi\n");
+      }
+      const encoder = args[args.indexOf("-c:v") + 1];
+      if (executablePath === "ffmpeg" && encoder === "h264_nvenc") {
+        return createSpawnResult(0);
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+
+    const { detectGPUEncoders, getGPUStatus } = await import("../../src/electron/gpuDetector.js");
+    await detectGPUEncoders("/bundled/ffmpeg", true);
+
+    const status = getGPUStatus();
+    expect(status.hwaccels).toEqual(["cuda", "vaapi"]);
+    expect(status.detected).toBe(true);
+    expect(status.backend).toBe("nvenc");
+  });
+
+  it("reports CPU fallback status with a reason when no encoder is found", async () => {
+    spawnMock.mockImplementation((_executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "");
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+
+    const { detectGPUEncoders, getGPUStatus } = await import("../../src/electron/gpuDetector.js");
+    await detectGPUEncoders("/bundled/ffmpeg", true);
+
+    const status = getGPUStatus();
+    expect(status.detected).toBe(false);
+    expect(status.backend).toBe("cpu");
+    expect(status.fallbackReason).toBeTruthy();
+  });
+
+  it.each([
+    { backend: "nvenc" as const, expected: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] },
+    { backend: "qsv" as const, expected: ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"] },
+    { backend: "amf" as const, expected: ["-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11"] },
+    { backend: "videotoolbox" as const, expected: ["-hwaccel", "videotoolbox"] },
+    { backend: "cpu" as const, expected: [] },
+  ])("builds hwaccel decode args for $backend", async ({ backend, expected }) => {
+    const { getHwaccelDecodeArgs } = await import("../../src/electron/gpuDetector.js");
+    expect(getHwaccelDecodeArgs(backend)).toEqual(expected);
   });
 });

@@ -26,6 +26,10 @@ export const IPC_CHANNELS = {
   CHAPTER_REVERSE_PROXY_GET: 'chapter:reverse-proxy-get',
   CHAPTER_PROXY_CANCEL: 'chapter:proxy-cancel',
 
+  // Proxy generation channels
+  PROXY_PROGRESS: 'proxy:progress',
+  GPU_STATUS: 'gpu:status',
+
   // Transcription channels
   TRANSCRIBE_CHAPTER: 'transcribe:chapter',
   TRANSCRIBE_CANCEL: 'transcribe:cancel',

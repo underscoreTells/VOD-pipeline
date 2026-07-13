@@ -184,23 +184,6 @@ export type UpdateTimelineStateInput = Partial<Omit<TimelineState, 'project_id'>
 // PROXY TYPES (Phase 4: Visual AI)
 // ============================================================================
 
-export interface Proxy {
-  id: number;
-  asset_id: number;
-  file_path: string;
-  preset: 'ai_analysis';
-  width: number | null;
-  height: number | null;
-  framerate: number | null;
-  file_size: number | null;
-  duration: number | null;
-  status: 'pending' | 'generating' | 'ready' | 'error';
-  error_message: string | null;
-  created_at: string;
-}
-
-export type CreateProxyInput = Omit<Proxy, 'id' | 'created_at'>;
-
 export interface ChapterProxy {
   id: number;
   chapter_id: number;

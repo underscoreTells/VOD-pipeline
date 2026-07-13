@@ -13,6 +13,7 @@ import {
   setDatabaseForTesting,
   validateClipMigrationState,
 } from '../../src/electron/database/index.js';
+import { dropProxiesTable, ensureChapterProxyTable } from '../../src/electron/database/migrations.js';
 
 const canUseNativeSqlite = (() => {
   try {
@@ -648,6 +649,49 @@ describeNative('database clip migration repair', () => {
         clip_id: null,
       });
       expect(() => validateClipMigrationState(database)).not.toThrow();
+    } finally {
+      closeSqliteDatabase(database);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dropProxiesTable removes the legacy proxies table and leaves chapter_proxies intact", () => {
+    const tempDir = createTempDir("drop-proxies-table-");
+    const dbPath = path.join(tempDir, "test.db");
+    const database = new Database(dbPath);
+
+    try {
+      database.exec(`
+        CREATE TABLE proxies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          asset_id INTEGER NOT NULL,
+          file_path TEXT NOT NULL,
+          preset TEXT NOT NULL,
+          status TEXT DEFAULT 'pending'
+        );
+        CREATE INDEX idx_proxies_asset_id ON proxies(asset_id);
+        CREATE INDEX idx_proxies_status ON proxies(status);
+      `);
+      ensureChapterProxyTable(database);
+
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='proxies'").get()
+      ).toBeDefined();
+
+      dropProxiesTable(database);
+
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='proxies'").get()
+      ).toBeUndefined();
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_proxies_asset_id'").get()
+      ).toBeUndefined();
+
+      expect(
+        database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chapter_proxies'").get()
+      ).toBeDefined();
+
+      dropProxiesTable(database);
     } finally {
       closeSqliteDatabase(database);
       fs.rmSync(tempDir, { recursive: true, force: true });

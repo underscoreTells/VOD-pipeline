@@ -7,7 +7,7 @@ import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import { AgentHandlerError, logger, requireProjectId } from './shared.js';
 
 export function registerAgentGroundingHandler(): void {
-  ipcMain.handle(IPC_CHANNELS.AGENT_GROUNDING_STATUS, async (_, payload) => {
+  ipcMain.handle(IPC_CHANNELS.AGENT_GROUNDING_STATUS, async (event, payload) => {
     const projectId = toNumberOrNull(payload?.projectId);
     const chapterId = toNumberOrNull(payload?.chapterId);
     const ensureReady = payload?.ensureReady === true;
@@ -30,9 +30,20 @@ export function registerAgentGroundingHandler(): void {
         throw new AgentHandlerError('Project not found', IPC_ERROR_CODES.NOT_FOUND);
       }
 
+      const onProgress = ensureReady
+        ? (assetId: number, percent: number) => {
+            event.sender.send(IPC_CHANNELS.PROXY_PROGRESS, {
+              chapterId: normalizedChapterId,
+              assetId,
+              percent,
+            });
+          }
+        : undefined;
+
       const groundingStatus = await getAgentGroundingStatus(normalizedProjectId, normalizedChapterId, {
         ensureReady,
         proxyOptions,
+        onProgress,
       });
 
       logger.info(

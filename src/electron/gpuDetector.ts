@@ -39,8 +39,20 @@ const GPU_ENCODER_CANDIDATES: Record<GPUEncoderBackend, GPUEncoderCandidate> = {
   },
 };
 
+export interface GPUStatus {
+  backend: GPUEncoderBackend | 'cpu';
+  encoderName: string | null;
+  encoder: string | null;
+  source: string | null;
+  fallbackReason: string | null;
+  hwaccels: string[];
+  detected: boolean;
+}
+
 let cachedEncoder: GPUEncoderInfo | null = null;
 let cachedFFmpegPath: string | null = null;
+let cachedFallbackReason: string | null = null;
+let cachedHwaccels: string[] = [];
 
 export function getPreferredGPUEncoders(
   platform: NodeJS.Platform = process.platform
@@ -71,18 +83,38 @@ export async function detectGPUEncoders(
 
   console.log('[GPU] Detecting available hardware encoders...');
   cachedFFmpegPath = ffmpegPath;
+  cachedFallbackReason = null;
+  cachedHwaccels = [];
 
-  const candidatePaths = ffmpegPath === 'ffmpeg' ? ['ffmpeg'] : [ffmpegPath, 'ffmpeg'];
+  // Prefer the system ffmpeg for GPU encoder probing: the bundled/development
+  // static builds shipped with this app are typically CPU-only (no NVENC/QSV/
+  // AMF/VAAPI compiled in), so probing the bundled binary first only burns time
+  // before falling back. System ffmpeg first gives the user's GPU-accelerated
+  // build the best chance to win. The bundled path remains a fallback for
+  // environments where the system ffmpeg is absent but the bundled build carries
+  // GPU support (e.g. some macOS evermeet builds).
+  const candidatePaths = ffmpegPath === 'ffmpeg' ? ['ffmpeg'] : ['ffmpeg', ffmpegPath];
 
   for (const executablePath of candidatePaths) {
+    const hwaccels = await probeHwaccels(executablePath);
+    cachedHwaccels = hwaccels;
+    if (hwaccels.length > 0) {
+      console.log(`[GPU] ${executablePath} hwaccels: ${hwaccels.join(', ')}`);
+    } else {
+      console.log(`[GPU] ${executablePath} reports no hwaccel methods`);
+    }
+
     const encoder = await testEncodersOnPath(executablePath);
     if (encoder) {
       cachedEncoder = encoder;
+      cachedFallbackReason = null;
       return encoder;
     }
   }
 
   cachedEncoder = null;
+  cachedFallbackReason =
+    'no supported hardware encoder found on system or bundled ffmpeg (install a GPU-enabled ffmpeg build to enable hardware acceleration)';
   console.log('[GPU] No supported hardware encoder detected; proxies will use CPU fallback.');
   return null;
 }
@@ -100,12 +132,58 @@ async function testEncodersOnPath(ffmpegPath: string): Promise<GPUEncoderInfo | 
   return null;
 }
 
-export function getGPUEncoder(): GPUEncoderInfo | null {
-  return cachedEncoder;
-}
+/**
+ * Probe an ffmpeg binary for advertised hardware acceleration methods.
+ * Runs `ffmpeg -hwaccels` and parses the list. Returns an empty array on
+ * timeout, error, or when the binary reports no methods. The result is logged
+ * by the caller so the user can see whether their binary supports hardware
+ * acceleration before waiting on a long CPU encode.
+ */
+async function probeHwaccels(ffmpegPath: string): Promise<string[]> {
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: string[]) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
 
-export function hasGPUEncoding(): boolean {
-  return cachedEncoder !== null;
+    let stdout = '';
+    const proc = spawn(ffmpegPath, ['-hwaccels'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const timeoutId = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        // Ignore kill failures on timed out probes.
+      }
+      finish([]);
+    }, 5000);
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      clearTimeout(timeoutId);
+      if (code !== 0) {
+        finish([]);
+        return;
+      }
+      const lines = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && line !== 'Hardware acceleration methods:');
+      finish(lines);
+    });
+
+    proc.on('error', () => {
+      clearTimeout(timeoutId);
+      finish([]);
+    });
+  });
 }
 
 export function getGPUFFmpegPath(): string | null {
@@ -115,6 +193,8 @@ export function getGPUFFmpegPath(): string | null {
 export function clearGPUEncoderCache(): void {
   cachedEncoder = null;
   cachedFFmpegPath = null;
+  cachedFallbackReason = null;
+  cachedHwaccels = [];
 }
 
 export function setGPUEncoderForTesting(
@@ -123,6 +203,47 @@ export function setGPUEncoderForTesting(
 ): void {
   cachedEncoder = encoder;
   cachedFFmpegPath = ffmpegPath;
+  cachedFallbackReason = encoder ? null : 'not configured for tests';
+  cachedHwaccels = [];
+}
+
+/**
+ * Read the cached GPU detection state. Exposed to the renderer (via the
+ * `gpu:status` IPC channel) so the Settings UI can surface which encoder
+ * backend won, which ffmpeg binary was selected, or why CPU fallback is in
+ * effect — instead of the previous silent fallback.
+ */
+export function getGPUStatus(): GPUStatus {
+  return {
+    backend: cachedEncoder?.backend ?? 'cpu',
+    encoderName: cachedEncoder?.name ?? null,
+    encoder: cachedEncoder?.encoder ?? null,
+    source: cachedEncoder?.source ?? null,
+    fallbackReason: cachedFallbackReason,
+    hwaccels: cachedHwaccels,
+    detected: cachedEncoder !== null,
+  };
+}
+
+/**
+ * Build the input-side `-hwaccel` decode args for a given backend so decode
+ * (not just encode) runs on the GPU. Previously only the NVENC/CUDA backend
+ * received decode acceleration; QSV/AMF/VideoToolbox used CPU decode + GPU
+ * encode, bottlenecking the pipeline.
+ */
+export function getHwaccelDecodeArgs(backend: GPUEncoderBackend | 'cpu'): string[] {
+  switch (backend) {
+    case 'nvenc':
+      return ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'];
+    case 'qsv':
+      return ['-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv'];
+    case 'amf':
+      return ['-hwaccel', 'd3d11va', '-hwaccel_output_format', 'd3d11'];
+    case 'videotoolbox':
+      return ['-hwaccel', 'videotoolbox'];
+    default:
+      return [];
+  }
 }
 
 function getEncoderTestArgs(candidate: GPUEncoderCandidate): string[] {

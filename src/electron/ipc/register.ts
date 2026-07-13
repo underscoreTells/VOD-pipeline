@@ -4,6 +4,7 @@ import { registerChapterHandlers, CHAPTER_HANDLER_CHANNELS } from './handlers/ch
 import { registerClipHandlers, CLIP_HANDLER_CHANNELS } from './handlers/clips.js';
 import { registerDialogHandlers, DIALOG_HANDLER_CHANNELS } from './handlers/dialog.js';
 import { registerExportHandlers, EXPORT_HANDLER_CHANNELS } from './handlers/exports.js';
+import { registerGpuHandlers, GPU_HANDLER_CHANNELS } from './handlers/gpu.js';
 import { registerProjectHandlers, PROJECT_HANDLER_CHANNELS } from './handlers/projects.js';
 import { registerSettingsHandlers, SETTINGS_HANDLER_CHANNELS } from './handlers/settings.js';
 import { registerSuggestionHandlers, SUGGESTION_HANDLER_CHANNELS } from './handlers/suggestions.js';
@@ -24,6 +25,7 @@ export function registerIpcHandlers(): void {
   registerDialogHandlers();
   registerSuggestionHandlers();
   registerSettingsHandlers();
+  registerGpuHandlers();
 }
 
 export const REGISTERED_IPC_CHANNELS = [
@@ -39,4 +41,5 @@ export const REGISTERED_IPC_CHANNELS = [
   ...DIALOG_HANDLER_CHANNELS,
   ...SUGGESTION_HANDLER_CHANNELS,
   ...SETTINGS_HANDLER_CHANNELS,
+  ...GPU_HANDLER_CHANNELS,
 ];

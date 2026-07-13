@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   applySchemaStatements,
   assertNoAmbiguousLegacyClipsTable,
+  dropProxiesTable,
   ensureChapterProxyTable,
   ensureChatConversationTables,
   ensureClipsTableWithoutStartTime,
@@ -87,6 +88,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
     ensureDetailedTranscriptTable(database);
     ensureChatConversationTables(database);
     ensureChapterProxyTable(database);
+    dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
     applySchemaStatements(database, schema, 'index');

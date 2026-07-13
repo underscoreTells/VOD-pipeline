@@ -14,6 +14,7 @@ const registrations = vi.hoisted(() => ({
   registerDialogHandlers: vi.fn(),
   registerSuggestionHandlers: vi.fn(),
   registerSettingsHandlers: vi.fn(),
+  registerGpuHandlers: vi.fn(),
 }));
 
 vi.mock("../../src/electron/ipc/handlers/projects.js", () => ({
@@ -76,6 +77,11 @@ vi.mock("../../src/electron/ipc/handlers/settings.js", () => ({
   registerSettingsHandlers: registrations.registerSettingsHandlers,
 }));
 
+vi.mock("../../src/electron/ipc/handlers/gpu.js", () => ({
+  GPU_HANDLER_CHANNELS: ["gpu:status"],
+  registerGpuHandlers: registrations.registerGpuHandlers,
+}));
+
 describe("ipc register", () => {
   beforeEach(() => {
     Object.values(registrations).forEach((mock) => mock.mockReset());
@@ -98,6 +104,7 @@ describe("ipc register", () => {
     expect(registrations.registerDialogHandlers).toHaveBeenCalledTimes(1);
     expect(registrations.registerSuggestionHandlers).toHaveBeenCalledTimes(1);
     expect(registrations.registerSettingsHandlers).toHaveBeenCalledTimes(1);
+    expect(registrations.registerGpuHandlers).toHaveBeenCalledTimes(1);
 
     expect(REGISTERED_IPC_CHANNELS).toEqual([
       "project:get",
@@ -113,6 +120,7 @@ describe("ipc register", () => {
       "dialog:showSaveDialog",
       "suggestion:list",
       "settings:get",
+      "gpu:status",
     ]);
     expect(new Set(REGISTERED_IPC_CHANNELS).size).toBe(REGISTERED_IPC_CHANNELS.length);
   });

@@ -168,6 +168,7 @@
       title: 'Video proxy is still preparing',
       body: 'You can keep drafting, but send stays disabled until grounding is ready.',
       progress,
+      percent: agentState.proxyProgressPercent,
       detail: null,
     };
   });
@@ -931,6 +932,15 @@
         <div class="mb-3 rounded-lg border border-accent-destructive bg-accent-destructive/10 px-3 py-2 text-accent-destructive">
           <div class="text-app-xs font-semibold uppercase tracking-[0.06em]">{groundingBanner.title}</div>
           <div class="mt-1 text-app-sm">{groundingBanner.body}</div>
+          {#if groundingBanner.percent !== null && groundingBanner.percent !== undefined}
+            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-accent-destructive/20">
+              <div
+                class="h-full rounded-full bg-accent-destructive transition-[width] duration-300 ease-out"
+                style="width: {Math.min(100, Math.max(0, groundingBanner.percent))}%"
+              ></div>
+            </div>
+            <div class="mt-1 text-app-xs tabular-nums">{groundingBanner.percent}%</div>
+          {/if}
           {#if groundingBanner.progress}
             <div class="mt-1 text-app-xs">{groundingBanner.progress}</div>
           {/if}

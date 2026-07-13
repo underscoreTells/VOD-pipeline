@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   ElectronAPI,
   ProxyOptions,
+  ProxyProgressEvent,
   TranscriptionProgressEvent,
   WaveformProgressEvent,
 } from '../shared/contracts/electron-api.js';
@@ -149,6 +150,16 @@ const electronAPI: ElectronAPI = {
   exports: {
     generate: (projectId, format, filePath) =>
       ipcRenderer.invoke('export:generate', { projectId, format, filePath }),
+  },
+  proxies: {
+    onProgress: (callback) => {
+      const handler = (_event: unknown, data: ProxyProgressEvent) => callback(data);
+      ipcRenderer.on('proxy:progress', handler);
+      return () => ipcRenderer.removeListener('proxy:progress', handler);
+    },
+  },
+  gpu: {
+    getStatus: () => ipcRenderer.invoke('gpu:status'),
   },
   dialog: {
     showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),

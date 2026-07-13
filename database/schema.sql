@@ -162,23 +162,6 @@ CREATE TABLE IF NOT EXISTS waveform_cache (
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
--- Proxy videos for AI analysis (640px, 5fps)
-CREATE TABLE IF NOT EXISTS proxies (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  asset_id INTEGER NOT NULL,
-  file_path TEXT NOT NULL,
-  preset TEXT NOT NULL CHECK(preset IN ('ai_analysis')),
-  width INTEGER,
-  height INTEGER,
-  framerate INTEGER,
-  file_size INTEGER,
-  duration REAL,
-  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'generating', 'ready', 'error')),
-  error_message TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
-);
-
 -- Chapter-trimmed proxy videos for visual analysis
 CREATE TABLE IF NOT EXISTS chapter_proxies (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,8 +236,6 @@ CREATE INDEX IF NOT EXISTS idx_clips_project_id ON clips(project_id);
 CREATE INDEX IF NOT EXISTS idx_clips_asset_id ON clips(asset_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track_index ON clips(track_index);
 CREATE INDEX IF NOT EXISTS idx_waveform_cache_asset_id ON waveform_cache(asset_id);
-CREATE INDEX IF NOT EXISTS idx_proxies_asset_id ON proxies(asset_id);
-CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
 CREATE INDEX IF NOT EXISTS idx_chapter_proxies_chapter_asset ON chapter_proxies(chapter_id, asset_id);
 CREATE INDEX IF NOT EXISTS idx_chapter_proxies_status ON chapter_proxies(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_chapter_id ON suggestions(chapter_id);

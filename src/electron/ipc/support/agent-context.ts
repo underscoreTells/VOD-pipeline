@@ -42,6 +42,7 @@ export async function getAgentGroundingStatus(
   options?: {
     ensureReady?: boolean;
     proxyOptions?: ProxyOptions;
+    onProgress?: (assetId: number, percent: number) => void;
   }
 ): Promise<AgentGroundingStatusData> {
   const chapter = await getChapter(chapterId);
@@ -102,12 +103,16 @@ export async function getAgentGroundingStatus(
 
     if (options?.ensureReady) {
       const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
+      const assetProgress = options.onProgress
+        ? (percent: number) => options.onProgress!(asset.id, percent)
+        : undefined;
       await ensureChapterProxyReady(
         chapter,
         asset,
         normalizedProxyOptions.encodingMode,
         normalizedProxyOptions.quality,
-        'interactive'
+        'interactive',
+        assetProgress
       );
       chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
       chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);

@@ -469,6 +469,28 @@ export interface TranscriptionProgressEvent {
   progress: TranscriptionProgress;
 }
 
+export interface ProxyProgressEvent {
+  chapterId: number;
+  assetId: number;
+  percent: number;
+}
+
+export interface GPUStatusResult {
+  success: boolean;
+  data?: GPUStatusPayload;
+  error?: string;
+}
+
+export interface GPUStatusPayload {
+  backend: 'videotoolbox' | 'nvenc' | 'qsv' | 'amf' | 'cpu';
+  encoderName: string | null;
+  encoder: string | null;
+  source: string | null;
+  fallbackReason: string | null;
+  hwaccels: string[];
+  detected: boolean;
+}
+
 export interface CancelJobResult {
   success: boolean;
   data?: {
@@ -579,6 +601,12 @@ export interface ElectronAPI {
   };
   exports: {
     generate: (projectId: number, format: string, filePath: string) => Promise<ExportResult>;
+  };
+  proxies: {
+    onProgress: (callback: (data: ProxyProgressEvent) => void) => () => void;
+  };
+  gpu: {
+    getStatus: () => Promise<GPUStatusResult>;
   };
   dialog: {
     showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogReturnValue>;

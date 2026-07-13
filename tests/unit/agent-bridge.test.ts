@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentBridge } from "../../src/electron/agent-bridge.js";
 
-vi.mock("electron", () => ({
+const electronState = vi.hoisted(() => ({
   app: {
     getPath: vi.fn(() => "/tmp"),
+    getAppPath: vi.fn(() => "/tmp/app.asar"),
     isPackaged: false,
   },
 }));
 
+vi.mock("electron", () => electronState);
+
 describe("AgentBridge launch and timeout behavior", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    electronState.app.isPackaged = false;
   });
 
   afterEach(() => {
@@ -32,6 +36,16 @@ describe("AgentBridge launch and timeout behavior", () => {
     expect(spec.args[0]).toContain("agent/index.js");
     expect(spec.env.ELECTRON_RUN_AS_NODE).toBe("1");
     expect(spec.env.VOD_PIPELINE_DB_PATH).toBe("/tmp/vod-pipeline.db");
+  });
+
+  it("launches the packaged worker from app.asar so dependencies remain resolvable", () => {
+    electronState.app.isPackaged = true;
+    const bridge = new AgentBridge();
+    const spec = (bridge as unknown as {
+      getWorkerLaunchSpec: () => { args: string[] };
+    }).getWorkerLaunchSpec();
+
+    expect(spec.args[0]).toBe("/tmp/app.asar/dist/src/agent/index.js");
   });
 
   it("sends a cancel control message when a request times out", async () => {

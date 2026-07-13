@@ -18,6 +18,7 @@
     buildProviderConfig,
     getProviderConfigApiKey,
   } from "../state/settings-helpers.js";
+  import { getGPUStatus, type GPUStatusPayload } from "../api/gpu.js";
   import Badge from './ui/Badge.svelte';
   import { Icon } from './ui';
   import { CheckCircle2, Circle, X } from '../constants';
@@ -31,9 +32,28 @@
     kimi: null,
     openrouter: null,
   });
-  
+  let gpuStatus = $state<GPUStatusPayload | null>(null);
+  let gpuStatusLoading = $state(false);
+
   const providers: LLMProviderType[] = ["gemini", "openai", "anthropic", "kimi", "openrouter"];
   const videoProviders: LLMProviderType[] = ["gemini", "kimi"];
+
+  async function loadGpuStatus() {
+    gpuStatusLoading = true;
+    try {
+      const result = await getGPUStatus();
+      gpuStatus = result.data ?? null;
+    } catch (error) {
+      console.warn('[SettingsPanel] Failed to load GPU status:', error);
+      gpuStatus = null;
+    } finally {
+      gpuStatusLoading = false;
+    }
+  }
+
+  $effect(() => {
+    void loadGpuStatus();
+  });
   
   async function handleTestProvider(provider: LLMProviderType) {
     testingProvider = provider;
@@ -214,16 +234,54 @@
         <section class="settings-section mb-8 last:mb-0">
           <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Application Preferences</h3>
           
-          <div class="checkbox-group mb-4">
-            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
-              <input 
-                class="h-4 w-4 cursor-pointer accent-accent-primary"
-                type="checkbox" 
-                bind:checked={settingsState.settings.autoGenerateProxies}
-              />
-              Auto-generate chapter-range proxies for AI analysis
-            </label>
-            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Creates low-resolution chapter-range analysis proxies instead of full-video proxy files</p>
+          <div class="select-group mb-4">
+            <label for="proxy-encoding-mode" class="mb-2 block text-app-sm font-medium text-text-secondary">Proxy Encoding Mode:</label>
+            <select
+              id="proxy-encoding-mode"
+              class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary"
+              bind:value={settingsState.settings.proxyEncodingMode}
+            >
+              <option value="auto">Auto (use GPU if available, else CPU)</option>
+              <option value="gpu">GPU (force hardware acceleration)</option>
+              <option value="cpu">CPU (software encode only)</option>
+            </select>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">
+              Controls hardware acceleration for chapter proxy generation. "Auto" probes your system ffmpeg for GPU encoders; "GPU" forces it (falls back to CPU on failure); "CPU" never uses GPU.
+            </p>
+            {#if gpuStatus}
+              <div class="ml-6 mt-1.5 text-app-xs leading-[1.4]">
+                {#if gpuStatus.detected && gpuStatus.encoderName}
+                  <span class="text-text-secondary">
+                    GPU detected: <span class="font-medium text-text-primary">{gpuStatus.encoderName}</span>
+                    {#if gpuStatus.source}
+                      <span class="text-text-tertiary"> via {gpuStatus.source}</span>
+                    {/if}
+                  </span>
+                {:else if gpuStatus.fallbackReason}
+                  <span class="text-text-tertiary">GPU: {gpuStatus.fallbackReason}</span>
+                {:else}
+                  <span class="text-text-tertiary">GPU: not detected — will use CPU fallback.</span>
+                {/if}
+              </div>
+            {:else if gpuStatusLoading}
+              <div class="ml-6 mt-1.5 text-app-xs text-text-tertiary">Detecting GPU…</div>
+            {/if}
+          </div>
+
+          <div class="select-group mb-4">
+            <label for="proxy-quality" class="mb-2 block text-app-sm font-medium text-text-secondary">Proxy Quality:</label>
+            <select
+              id="proxy-quality"
+              class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary"
+              bind:value={settingsState.settings.proxyQuality}
+            >
+              <option value="high">High (slower, better analysis quality)</option>
+              <option value="balanced">Balanced (recommended)</option>
+              <option value="fast">Fast (smallest proxy, lower quality)</option>
+            </select>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">
+              Affects encoder preset/CRF for chapter-range analysis proxies. Lower quality = smaller proxy files and faster generation.
+            </p>
           </div>
           
           <div class="checkbox-group mb-4">
