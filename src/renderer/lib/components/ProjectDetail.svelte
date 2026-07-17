@@ -9,6 +9,7 @@
   import ChatPanel from './ChatPanel.svelte';
   import ClipPreview from './ClipPreview.svelte';
   import ChapterPreview from './ChapterPreview.svelte';
+  import { prewarmProjectProxies } from '../api/projects.js';
   import { 
     projectDetail, 
     loadProjectDetail, 
@@ -187,6 +188,15 @@
     loadLayout();
     loadProjectDetail(project.id);
     loadChapters(project.id);
+    if (settingsState.settings.autoGenerateProxies) {
+      void prewarmProjectProxies(project.id, buildProxyOptions(settingsState.settings)).then((result) => {
+        if (!result.success) {
+          console.warn('[ProjectPrewarm] Failed to schedule project proxies:', result.error);
+        }
+      }).catch((error) => {
+        console.warn('[ProjectPrewarm] Failed to schedule project proxies:', error);
+      });
+    }
     cleanupKeyboard = initKeyboardShortcuts();
     
     // Set up transcription progress listener

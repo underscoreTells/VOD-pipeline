@@ -32,6 +32,9 @@ export function registerAgentGroundingHandler(): void {
 
       const onProgress = ensureReady
         ? (assetId: number, percent: number) => {
+            if (typeof event.sender.isDestroyed === 'function' && event.sender.isDestroyed()) {
+              return;
+            }
             event.sender.send(IPC_CHANNELS.PROXY_PROGRESS, {
               chapterId: normalizedChapterId,
               assetId,

@@ -487,6 +487,40 @@ function logProxyEncodingPlan(prefix: string, plan: ProxyEncodingPlan): void {
 }
 
 /**
+ * Log a single proxy encode attempt's wall-clock timing. `targetDuration` is
+ * the chapter (or full-source) duration the progress bar is scaled against, so
+ * `duration / wall` gives the effective FFmpeg speed multiplier. Failed GPU
+ * attempts still log their wall time (with `status=failed`) so fallback cost
+ * is visible; the CPU retry carries the GPU `fallbackReason`.
+ */
+function logProxyEncodeTiming(params: {
+  logPrefix: string;
+  backend: GPUEncoderBackend | 'cpu';
+  targetDuration: number;
+  wallSeconds: number;
+  succeeded: boolean;
+  fallbackReason?: string;
+}): void {
+  const { logPrefix, backend, targetDuration, wallSeconds, succeeded, fallbackReason } = params;
+  const parts = [
+    `backend=${backend}`,
+    `duration=${targetDuration.toFixed(2)}s`,
+    `wall=${wallSeconds.toFixed(2)}s`,
+  ];
+  if (succeeded && wallSeconds > 0) {
+    const speed = targetDuration / wallSeconds;
+    parts.push(`speed=${Number.isFinite(speed) ? speed.toFixed(2) : 'n/a'}x`);
+  }
+  if (!succeeded) {
+    parts.push('status=failed');
+  }
+  if (fallbackReason) {
+    parts.push(`fallback=${fallbackReason}`);
+  }
+  console.log(`[${logPrefix}] encode timing ${parts.join(' ')}`);
+}
+
+/**
  * Build the proxy scale + framerate filter args for a given backend.
  *
  * AI proxies target 640px wide @ 5fps. GPU backends use their hardware scaler
@@ -569,8 +603,10 @@ export async function generateAIProxy(
     throw new FFmpegError('AI proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
   }
 
-  // Get source metadata first
-  const metadata = await getVideoMetadata(inputPath);
+  // Validate + normalize the trim range before probing anything. The bounds
+  // are known up front from the chapter, so a trimmed proxy never needs a
+  // source ffprobe: progress duration is derived from endTime - startTime.
+  // The no-trim path keeps the source probe to learn the container duration.
   const trimRange = trimOptions
     ? {
         startTime: Math.max(0, trimOptions.startTime),
@@ -587,9 +623,13 @@ export async function generateAIProxy(
     }
   }
 
-  const targetDuration = trimRange
-    ? Math.max(0.01, trimRange.endTime - trimRange.startTime)
-    : metadata.duration;
+  let targetDuration: number;
+  if (trimRange) {
+    targetDuration = Math.max(0.01, trimRange.endTime - trimRange.startTime);
+  } else {
+    const metadata = await getVideoMetadata(inputPath);
+    targetDuration = metadata.duration;
+  }
 
   const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'Proxy');
   try {
@@ -665,16 +705,31 @@ async function executeProxyGeneration(
     '-y', outputPath,
   ];
 
-  await spawnFFmpeg({
-    executablePath: encodingPlan.ffmpegBinaryPath,
-    args,
-    signal,
-    timeoutMs,
-    logTag: 'Proxy',
-    logCommand: true,
-    onProgress,
-    progressDuration: metadata.duration,
-  });
+  const wallStartMs = performance.now();
+  let encodeSucceeded = false;
+  try {
+    await spawnFFmpeg({
+      executablePath: encodingPlan.ffmpegBinaryPath,
+      args,
+      signal,
+      timeoutMs,
+      logTag: 'Proxy',
+      logCommand: true,
+      onProgress,
+      progressDuration: metadata.duration,
+    });
+    encodeSucceeded = true;
+  } finally {
+    const wallSeconds = (performance.now() - wallStartMs) / 1000;
+    logProxyEncodeTiming({
+      logPrefix: 'Proxy',
+      backend: encodingPlan.backend,
+      targetDuration: metadata.duration,
+      wallSeconds,
+      succeeded: encodeSucceeded,
+      fallbackReason: encodingPlan.fallbackReason,
+    });
+  }
 
   // Read proxy metadata after a successful encode.
   const proxyMetadata = await getVideoMetadata(outputPath);

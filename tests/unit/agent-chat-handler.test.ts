@@ -265,8 +265,7 @@ describe("agent chat handler", () => {
     });
     expect(bridgeMocks.send.mock.calls[0]?.[0]?.metadata?.context).not.toHaveProperty("assets");
     expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenCalledWith(1, 3, {
-      ensureChapterProxyReady: true,
-      proxyOptions: undefined,
+      ensureChapterProxyReady: false,
     });
     expect(result).toMatchObject({
       success: true,
@@ -367,7 +366,7 @@ describe("agent chat handler", () => {
     });
   });
 
-  it("forwards proxy options into chapter context generation", async () => {
+  it("does not regenerate a proxy while building validated chapter context", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
     bridgeMocks.send.mockResolvedValue({
       type: "turn_complete",
@@ -392,15 +391,11 @@ describe("agent chat handler", () => {
     });
 
     expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenCalledWith(1, 3, {
-      ensureChapterProxyReady: true,
-      proxyOptions: {
-        encodingMode: "gpu",
-        quality: "fast",
-      },
+      ensureChapterProxyReady: false,
     });
   });
 
-  it("forwards proxy options during reroll and edit mutations", async () => {
+  it("does not regenerate proxies during reroll and edit mutations", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
     bridgeMocks.send.mockResolvedValue({
       type: "turn_complete",
@@ -425,11 +420,7 @@ describe("agent chat handler", () => {
     });
 
     expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenLastCalledWith(1, 3, {
-      ensureChapterProxyReady: true,
-      proxyOptions: {
-        encodingMode: "cpu",
-        quality: "high",
-      },
+      ensureChapterProxyReady: false,
     });
 
     const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
@@ -446,11 +437,7 @@ describe("agent chat handler", () => {
     });
 
     expect(handlerSupportMocks.buildAgentChatContext).toHaveBeenLastCalledWith(1, 3, {
-      ensureChapterProxyReady: true,
-      proxyOptions: {
-        encodingMode: "gpu",
-        quality: "balanced",
-      },
+      ensureChapterProxyReady: false,
     });
   });
 

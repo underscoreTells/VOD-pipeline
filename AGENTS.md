@@ -8,6 +8,22 @@ An Electron desktop application that transforms Twitch VODs into cohesive YouTub
 
 **See @docs/archive/phase-1-plan.md, @docs/archive/phase-2-plan.md, @docs/archive/phase-3a-plan.md, and @docs/archive/phase-3b-plan.md for archived phase breakdowns.**
 
+## Agent Operating Model
+
+GPT-5.6 sol is the primary orchestrator for work in this repository. Use subagents as much as practical to reduce cost, parallelize independent work, and keep the primary context focused.
+
+- Default to delegating codebase exploration, broad searches, research, test discovery, log analysis, and other well-bounded investigations to subagents.
+- Launch independent subagent tasks in parallel when their work does not overlap.
+- Give each subagent a precise scope, relevant context, expected output, and verification criteria.
+- Do not duplicate work already delegated. Continue with non-overlapping work or wait for the result.
+- Treat subagent output as evidence, not final authority. GPT-5.6 sol is more capable than its subagents and remains responsible for checking important claims, resolving conflicts, and integrating findings into a coherent solution.
+- Keep high-impact, high-value, high-risk, security-sensitive, architecture-defining, data-loss-sensitive, and cross-cutting decisions under GPT-5.6 sol's direct control.
+- GPT-5.6 sol should personally inspect the critical code paths before editing them, even when a subagent mapped those paths first.
+- Delegate implementation only when the task is isolated and the ownership boundary is clear. GPT-5.6 sol must review delegated changes before accepting them.
+- Do not use subagents merely to avoid difficult reasoning. The orchestrator owns root-cause analysis, tradeoff decisions, the final implementation strategy, and the final answer.
+- The orchestrator owns end-to-end verification. Subagents may run focused checks, but GPT-5.6 sol must ensure the combined change is tested appropriately and satisfies the user's request.
+- Prefer the smallest number of focused subagents that provides meaningful parallelism. Avoid fragmentation, redundant agents, and coordination overhead for trivial work.
+
 ## Tech Stack
 
 - **Desktop**: Electron + TypeScript

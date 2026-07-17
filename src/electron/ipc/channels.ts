@@ -5,6 +5,7 @@ export const IPC_CHANNELS = {
   PROJECT_GET: 'project:get',
   PROJECT_UPDATE: 'project:update',
   PROJECT_DELETE: 'project:delete',
+  PROJECT_PROXY_PREWARM: 'project:proxy-prewarm',
 
   // Asset channels
   ASSET_ADD: 'asset:add',

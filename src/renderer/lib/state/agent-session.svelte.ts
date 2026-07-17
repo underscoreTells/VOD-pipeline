@@ -121,6 +121,23 @@ export function initProxyProgressSubscription(): void {
       return;
     }
     agentState.proxyProgressPercent = data.percent;
+    if (data.percent >= 100 && agentState.currentProjectId && agentState.currentChapterId) {
+      clearGroundingPoll();
+      const requestToken = groundingLoadToken;
+      const requestContextKey = getCurrentGroundingContextKey();
+      const chapterId = agentState.currentChapterId;
+      const projectId = agentState.currentProjectId;
+      groundingPollTimeout = setTimeout(() => {
+        void refreshGroundingStatus({
+          chapterId,
+          projectId,
+          requestContextKey,
+          requestToken,
+          ensureReady: false,
+          pollDelayMs: 500,
+        });
+      }, 150);
+    }
   });
 }
 
@@ -200,6 +217,7 @@ function resetGroundingState(status: AgentGroundingStatus = "idle"): void {
   agentState.groundingRequiredVideoAssetCount = 0;
   agentState.groundingReadyVideoAssetCount = 0;
   agentState.groundingErrorDetail = null;
+  agentState.proxyProgressPercent = null;
 }
 
 function getCurrentGroundingContextKey(): string {
@@ -237,6 +255,7 @@ async function refreshGroundingStatus(options: {
   requestContextKey: string;
   requestToken: number;
   ensureReady: boolean;
+  pollDelayMs?: number;
 }): Promise<void> {
   let response;
   try {
@@ -299,8 +318,9 @@ async function refreshGroundingStatus(options: {
         requestContextKey: options.requestContextKey,
         requestToken: options.requestToken,
         ensureReady: false,
+        pollDelayMs: options.pollDelayMs,
       });
-    }, 5000);
+    }, options.pollDelayMs ?? 5000);
     return;
   }
 

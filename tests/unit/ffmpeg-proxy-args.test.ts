@@ -290,4 +290,81 @@ describe("ffmpeg proxy argument generation", () => {
       "-movflags", "+faststart",
     ]));
   });
+
+  function ffprobeTargets(): string[] {
+    return spawnState.calls
+      .filter((call) => call.command === "/mock/ffprobe")
+      .map((call) => call.args[call.args.length - 1]);
+  }
+
+  it("skips the source ffprobe for trimmed chapter proxies but still probes the output", async () => {
+    const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+
+    await generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "cpu",
+      "balanced",
+      { startTime: 12, endTime: 42.5 }
+    );
+
+    const probes = ffprobeTargets();
+    // Trimmed proxies know their duration from the chapter bounds, so the
+    // source is never probed; only the finished output is.
+    expect(probes).not.toContain(inputPath);
+    expect(probes).toContain(outputPath);
+    expect(probes).toHaveLength(1);
+  });
+
+  it("still probes the source when no trim range is supplied", async () => {
+    const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+
+    await generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "cpu",
+      "balanced"
+    );
+
+    const probes = ffprobeTargets();
+    // No-trim path keeps the source probe to learn the container duration,
+    // then probes the generated output.
+    expect(probes).toContain(inputPath);
+    expect(probes).toContain(outputPath);
+    expect(probes).toHaveLength(2);
+  });
+
+  it("logs encode timing with backend, duration, wall, and speed for a successful proxy encode", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "cpu",
+        "balanced",
+        { startTime: 12, endTime: 42.5 }
+      );
+
+      const timingLine = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("[Proxy] encode timing"));
+
+      expect(timingLine).toBeDefined();
+      expect(timingLine).toContain("backend=cpu");
+      expect(timingLine).toContain("duration=30.50s");
+      expect(timingLine).toMatch(/wall=\d+\.\d+s/);
+      expect(timingLine).toMatch(/speed=\d+\.\d+x/);
+      expect(timingLine).not.toContain("status=failed");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });

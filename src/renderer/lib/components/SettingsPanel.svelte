@@ -286,6 +286,18 @@
           
           <div class="checkbox-group mb-4">
             <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
+              <input
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
+                type="checkbox"
+                bind:checked={settingsState.settings.autoGenerateProxies}
+              />
+              Prewarm missing proxies when opening a project
+            </label>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Schedules reusable chapter-range proxies in the background so agent chat is ready before chapters are selected.</p>
+          </div>
+
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
                 class="h-4 w-4 cursor-pointer accent-accent-primary"
                 type="checkbox" 

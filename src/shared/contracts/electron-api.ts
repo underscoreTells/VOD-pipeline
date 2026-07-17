@@ -244,6 +244,15 @@ export interface GetAssetResult {
   error?: string;
 }
 
+export interface ProjectProxyPrewarmResult {
+  success: boolean;
+  data?: {
+    accepted: number;
+    skipped: number;
+  };
+  error?: string;
+}
+
 export interface AddAssetResult {
   success: boolean;
   data?: Asset;
@@ -517,6 +526,7 @@ export interface ElectronAPI {
     getAll: () => Promise<GetProjectsResult>;
     get: (id: number) => Promise<GetProjectResult>;
     delete: (id: number) => Promise<DeleteProjectResult>;
+    prewarmProxies: (id: number, proxyOptions?: ProxyOptions) => Promise<ProjectProxyPrewarmResult>;
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;

@@ -282,6 +282,52 @@ describe("chapter proxy cache validation", () => {
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(4, "ready");
   });
 
+  it("deduplicates import prewarm and selected-chapter requests", async () => {
+    const proxyPath = path.join(tempDir, "deduplicated.mp4");
+    databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue({
+      id: 5,
+      file_path: proxyPath,
+      status: "pending",
+      start_time: 10,
+      end_time: 40,
+    });
+    let finishEncode!: () => void;
+    const encodeGate = new Promise<void>((resolve) => {
+      finishEncode = resolve;
+    });
+    ffmpegMocks.generateAIProxy.mockImplementation(async (
+      _inputPath: string,
+      outputPath: string,
+      onProgress?: (percent: number) => void
+    ) => {
+      onProgress?.(50);
+      await encodeGate;
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "proxy");
+      return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
+    });
+
+    const { ensureChapterProxyReady } = await import("../../src/electron/ipc/handler-support.js");
+    const chapter = { id: 7, start_time: 10, end_time: 40 } as never;
+    const asset = { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never;
+    const prewarm = ensureChapterProxyReady(chapter, asset, "cpu", "balanced", "background");
+    const interactiveProgress = vi.fn();
+    const selected = ensureChapterProxyReady(
+      chapter,
+      asset,
+      "cpu",
+      "balanced",
+      "interactive",
+      interactiveProgress
+    );
+
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce());
+    expect(interactiveProgress).toHaveBeenCalledWith(50);
+    finishEncode();
+    await expect(Promise.all([prewarm, selected])).resolves.toEqual([proxyPath, proxyPath]);
+    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce();
+  });
+
   it("uses an mp4-suffixed temp path for quick reverse proxy generation", async () => {
     ffmpegMocks.generateChapterReverseProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });

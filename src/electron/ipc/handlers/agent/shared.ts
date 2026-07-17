@@ -253,8 +253,7 @@ export async function runConversationTurn(
     options.chapter.id
   );
   const initialContext = await buildAgentChatContext(options.projectId, options.chapter.id, {
-    ensureChapterProxyReady: true,
-    proxyOptions: options.proxyOptions,
+    ensureChapterProxyReady: false,
   });
   const contextWithSuggestions = {
     ...initialContext,

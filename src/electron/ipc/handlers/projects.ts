@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron';
 import { createProject, deleteProject, getProject, listProjects, updateProject } from '../../database/index.js';
 import { createLogger } from '../../logger.js';
+import type { ProxyOptions } from '../../../shared/contracts/electron-api.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
+import { scheduleProjectProxyPrewarm } from '../handler-support.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   projectCreateSchema,
@@ -18,6 +20,7 @@ export const PROJECT_HANDLER_CHANNELS = [
   IPC_CHANNELS.PROJECT_GET,
   IPC_CHANNELS.PROJECT_UPDATE,
   IPC_CHANNELS.PROJECT_DELETE,
+  IPC_CHANNELS.PROJECT_PROXY_PREWARM,
 ];
 
 export function registerProjectHandlers(): void {
@@ -92,6 +95,36 @@ export function registerProjectHandlers(): void {
         : createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.PROJECT_PROXY_PREWARM, async (_, payload) => {
+    const id = payload?.id;
+    logger.info('project:proxy-prewarm', id);
+    try {
+      const parsed = projectGetSchema.safeParse(payload);
+      if (!parsed.success) {
+        return createErrorResponse('Invalid project payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const project = await getProject(parsed.data.id as number);
+      if (!project) {
+        return createErrorResponse('Project not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      const rawProxyOptions = payload?.proxyOptions;
+      if (rawProxyOptions !== undefined && (
+        !rawProxyOptions
+        || typeof rawProxyOptions !== 'object'
+        || !['cpu', 'gpu', 'auto'].includes(rawProxyOptions.encodingMode)
+        || !['high', 'balanced', 'fast'].includes(rawProxyOptions.quality)
+      )) {
+        return createErrorResponse('Invalid proxy options', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const proxyOptions = rawProxyOptions as ProxyOptions | undefined;
+      return createSuccessResponse(
+        await scheduleProjectProxyPrewarm(project.id, proxyOptions)
+      );
+    } catch (error) {
+      return createErrorResponse(error, IPC_ERROR_CODES.UNKNOWN_ERROR);
     }
   });
 }

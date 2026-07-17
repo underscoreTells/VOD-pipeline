@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { isAudiowaveformAvailable } from '../../audiowaveformDetector.js';
+import { getGPUStatus } from '../../gpuDetector.js';
 import {
   createChapterProxy,
   getAsset,
@@ -33,6 +34,7 @@ import {
   isCancellationError,
   promoteHeavyMediaJob,
   type HeavyMediaJobPriority,
+  type HeavyMediaResourceClass,
 } from './heavy-media-queue.js';
 import { normalizeProxyOptions } from './payload.js';
 
@@ -49,10 +51,20 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-const chapterProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
+const chapterProxyGenerationLocks = new Map<string, {
+  epoch: number;
+  promise: Promise<string | undefined>;
+  progressListeners: Set<(percent: number) => void>;
+}>();
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterProxyGenerationEpochs = new Map<string, number>();
+
+function getProxyResourceClass(encodingMode: 'cpu' | 'gpu' | 'auto'): HeavyMediaResourceClass {
+  return encodingMode === 'gpu' || (encodingMode === 'auto' && getGPUStatus().detected)
+    ? 'gpu'
+    : 'cpu';
+}
 
 export async function isChapterProxyArtifactCurrent(
   proxy: Pick<ChapterProxy, 'file_path' | 'start_time' | 'end_time'> | null | undefined,
@@ -203,11 +215,24 @@ export async function ensureChapterProxyReady(
   const generationEpoch = getGenerationEpoch(chapterProxyGenerationEpochs, lockKey);
   const inFlight = chapterProxyGenerationLocks.get(lockKey);
   if (inFlight && inFlight.epoch === generationEpoch) {
+    if (onProgress) {
+      inFlight.progressListeners.add(onProgress);
+    }
     if (priority === 'interactive') {
       promoteHeavyMediaJob(jobKey);
     }
     return inFlight.promise;
   }
+
+  const progressListeners = new Set<(percent: number) => void>();
+  if (onProgress) {
+    progressListeners.add(onProgress);
+  }
+  const emitProgress = (percent: number) => {
+    for (const listener of progressListeners) {
+      listener(percent);
+    }
+  };
 
   const task = (async () => {
     const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
@@ -272,7 +297,7 @@ export async function ensureChapterProxyReady(
         const metadata = await generateAIProxy(
           asset.file_path,
           tempPath,
-          onProgress,
+          progressListeners.size > 0 ? emitProgress : undefined,
           30 * 60 * 1000,
           encodingMode,
           quality,
@@ -299,7 +324,7 @@ export async function ensureChapterProxyReady(
           duration: metadata.duration,
         });
         await updateChapterProxyStatus(chapterProxyId, 'ready');
-      });
+      }, { resourceClass: getProxyResourceClass(encodingMode) });
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
@@ -330,7 +355,11 @@ export async function ensureChapterProxyReady(
     }
   })();
 
-  chapterProxyGenerationLocks.set(lockKey, { epoch: generationEpoch, promise: task });
+  chapterProxyGenerationLocks.set(lockKey, {
+    epoch: generationEpoch,
+    promise: task,
+    progressListeners,
+  });
   try {
     return await task;
   } finally {
