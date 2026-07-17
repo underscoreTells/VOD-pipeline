@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import { getGPUStatus } from '../../gpuDetector.js';
 import {
   getChapter,
   getChapterProxyByChapterAsset,
@@ -16,6 +15,7 @@ import {
 import {
   generateChapterReverseProxy,
   getVideoMetadata,
+  resolveProxyResourceClass,
 } from '../../../pipeline/ffmpeg.js';
 import {
   bumpGenerationEpoch,
@@ -24,7 +24,6 @@ import {
   isCancellationError,
   promoteHeavyMediaJob,
   type HeavyMediaJobPriority,
-  type HeavyMediaResourceClass,
 } from './heavy-media-queue.js';
 import {
   deleteFileIfExists,
@@ -50,12 +49,6 @@ const chapterReverseProxyErrors = new Map<string, string>();
 const chapterReverseProxyValidationCache = new Map<string, { mtimeMs: number; size: number; valid: boolean }>();
 const chapterReverseProxyGenerationEpochs = new Map<string, number>();
 const reverseQuickExecutionModes = new Map<string, ReverseProxyExecutionMode>();
-
-function getProxyResourceClass(encodingMode: 'cpu' | 'gpu' | 'auto'): HeavyMediaResourceClass {
-  return encodingMode === 'gpu' || (encodingMode === 'auto' && getGPUStatus().detected)
-    ? 'gpu'
-    : 'cpu';
-}
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -374,7 +367,7 @@ export async function ensureChapterReverseProxyQuickReady(
           executionMode,
           signal,
         });
-      }, { resourceClass: getProxyResourceClass(normalizedProxyOptions.encodingMode) });
+      }, { resourceClass: await resolveProxyResourceClass(normalizedProxyOptions.encodingMode) });
 
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(quickTempPath, 'ReverseProxy');
@@ -512,7 +505,7 @@ async function ensureChapterReverseProxyFullReady(
 
         generatedPath = proxyPath;
         chapterReverseProxyErrors.delete(lockKey);
-      }, { resourceClass: getProxyResourceClass(normalizedProxyOptions.encodingMode) });
+      }, { resourceClass: await resolveProxyResourceClass(normalizedProxyOptions.encodingMode) });
     } catch (error) {
       await deleteFileIfExists(tempPath, 'ReverseProxy');
       if (isCancellationError(error)) {

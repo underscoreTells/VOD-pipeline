@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import { isAudiowaveformAvailable } from '../../audiowaveformDetector.js';
-import { getGPUStatus } from '../../gpuDetector.js';
 import {
   createChapterProxy,
   getAsset,
@@ -22,6 +21,7 @@ import {
 import {
   generateAIProxy,
   getVideoMetadata,
+  resolveProxyResourceClass,
 } from '../../../pipeline/ffmpeg.js';
 import {
   generateWaveformTiers,
@@ -34,7 +34,6 @@ import {
   isCancellationError,
   promoteHeavyMediaJob,
   type HeavyMediaJobPriority,
-  type HeavyMediaResourceClass,
 } from './heavy-media-queue.js';
 import { normalizeProxyOptions } from './payload.js';
 
@@ -59,12 +58,6 @@ const chapterProxyGenerationLocks = new Map<string, {
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterProxyGenerationEpochs = new Map<string, number>();
-
-function getProxyResourceClass(encodingMode: 'cpu' | 'gpu' | 'auto'): HeavyMediaResourceClass {
-  return encodingMode === 'gpu' || (encodingMode === 'auto' && getGPUStatus().detected)
-    ? 'gpu'
-    : 'cpu';
-}
 
 export async function isChapterProxyArtifactCurrent(
   proxy: Pick<ChapterProxy, 'file_path' | 'start_time' | 'end_time'> | null | undefined,
@@ -324,7 +317,7 @@ export async function ensureChapterProxyReady(
           duration: metadata.duration,
         });
         await updateChapterProxyStatus(chapterProxyId, 'ready');
-      }, { resourceClass: getProxyResourceClass(encodingMode) });
+      }, { resourceClass: await resolveProxyResourceClass(encodingMode) });
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(tempPath, 'ChapterProxy');

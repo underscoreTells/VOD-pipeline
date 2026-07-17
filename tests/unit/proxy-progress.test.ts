@@ -37,6 +37,7 @@ const databaseMocks = vi.hoisted(() => ({
 const ffmpegMocks = vi.hoisted(() => ({
   generateAIProxy: vi.fn(),
   getVideoMetadata: vi.fn(),
+  resolveProxyResourceClass: vi.fn(),
 }));
 
 vi.mock("electron", () => electronMocks);
@@ -95,6 +96,7 @@ describe("proxy:progress IPC emission", () => {
       bitrate: 0,
       container: "mp4",
     });
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("cpu");
     ffmpegMocks.generateAIProxy.mockImplementation(
       async (_input: string, output: string, onProgress?: (pct: number) => void) => {
         if (onProgress) {

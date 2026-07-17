@@ -178,6 +178,20 @@ describe("ffmpeg proxy argument generation", () => {
     expect(ffmpegArgs).not.toContain("-to");
   });
 
+  it("awaits GPU detection before classifying auto proxy jobs", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    const { resolveProxyResourceClass } = await import("../../src/pipeline/ffmpeg.js");
+
+    await expect(resolveProxyResourceClass("auto")).resolves.toBe("gpu");
+    expect(gpuDetectorMocks.detectGPUEncoders).toHaveBeenCalledWith("/mock/ffmpeg");
+  });
+
   it("keeps input-side trimming ahead of NVENC decode setup for GPU chapter proxies", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "nvenc",
@@ -520,6 +534,40 @@ describe("ffmpeg proxy argument generation", () => {
       );
     } finally {
       logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not invalidate the GPU encoder for a non-GPU FFmpeg failure", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "Invalid data found when processing input",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).not.toHaveBeenCalled();
+    } finally {
       warnSpy.mockRestore();
     }
   });

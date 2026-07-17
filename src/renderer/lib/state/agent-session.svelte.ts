@@ -318,7 +318,6 @@ async function refreshGroundingStatus(options: {
         requestContextKey: options.requestContextKey,
         requestToken: options.requestToken,
         ensureReady: false,
-        pollDelayMs: options.pollDelayMs,
       });
     }, options.pollDelayMs ?? 5000);
     return;

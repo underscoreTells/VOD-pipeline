@@ -114,8 +114,10 @@ export function registerProjectHandlers(): void {
       if (rawProxyOptions !== undefined && (
         !rawProxyOptions
         || typeof rawProxyOptions !== 'object'
-        || !['cpu', 'gpu', 'auto'].includes(rawProxyOptions.encodingMode)
-        || !['high', 'balanced', 'fast'].includes(rawProxyOptions.quality)
+        || (rawProxyOptions.encodingMode !== undefined
+          && !['cpu', 'gpu', 'auto'].includes(rawProxyOptions.encodingMode))
+        || (rawProxyOptions.quality !== undefined
+          && !['high', 'balanced', 'fast'].includes(rawProxyOptions.quality))
       )) {
         return createErrorResponse('Invalid proxy options', IPC_ERROR_CODES.VALIDATION_ERROR);
       }

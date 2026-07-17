@@ -32,6 +32,21 @@ export class FFmpegError extends Error {
 type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
 type ProxyGenerationQuality = 'high' | 'balanced' | 'fast';
 
+export async function resolveProxyResourceClass(
+  encodingMode: ProxyGenerationMode
+): Promise<'cpu' | 'gpu'> {
+  if (encodingMode !== 'auto') {
+    return encodingMode;
+  }
+
+  const ffmpegPath = getFFmpegPath();
+  if (!ffmpegPath) {
+    return 'cpu';
+  }
+
+  return await detectGPUEncoders(ffmpegPath.path) ? 'gpu' : 'cpu';
+}
+
 interface ProxyEncodingPlan {
   requestedMode: ProxyGenerationMode;
   useGPU: boolean;
@@ -586,6 +601,26 @@ function getProxyResult(error: unknown): 'failed' | 'cancelled' {
   return error instanceof FFmpegError && error.code === 'cancelled' ? 'cancelled' : 'failed';
 }
 
+function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
+  if (!error.details || typeof error.details !== 'object' || !('error' in error.details)) {
+    return false;
+  }
+
+  const stderr = error.details.error;
+  if (typeof stderr !== 'string') {
+    return false;
+  }
+
+  const gpuFailurePatterns = [
+    /unknown encoder\s+['"]?(?:h264_|hevc_)?(?:nvenc|qsv|amf|videotoolbox)/i,
+    /cannot load (?:libcuda|nvcuda|libmfx|amfrt)/i,
+    /no (?:nvenc|qsv|amf|videotoolbox)[^\n]*capable devices? found/i,
+    /(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)[^\n]*(?:fail|error|not found|not available|unsupported|initializ|cannot|unable)/i,
+    /(?:fail|error|not found|not available|unsupported|initializ|cannot|unable)[^\n]*(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
+  ];
+  return gpuFailurePatterns.some((pattern) => pattern.test(stderr));
+}
+
 /**
  * Build the proxy scale + framerate filter args for a given backend.
  *
@@ -813,7 +848,8 @@ async function executeProxyGeneration(
       if (
         encodingPlan.useGPU &&
         error instanceof FFmpegError &&
-        error.code === 'FFMPEG_ERROR'
+        error.code === 'FFMPEG_ERROR' &&
+        isLikelyGPUEncoderRuntimeFailure(error)
       ) {
         recordGPUEncoderRuntimeFailure(
           { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },
@@ -992,7 +1028,8 @@ async function runChunkedChapterReverseGeneration(params: {
         if (
           encodingPlan.useGPU &&
           error instanceof FFmpegError &&
-          error.code === 'FFMPEG_ERROR'
+          error.code === 'FFMPEG_ERROR' &&
+          isLikelyGPUEncoderRuntimeFailure(error)
         ) {
           recordGPUEncoderRuntimeFailure(
             { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },

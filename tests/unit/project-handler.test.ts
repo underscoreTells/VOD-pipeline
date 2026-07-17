@@ -74,4 +74,15 @@ describe("project handlers", () => {
     expect(supportMocks.scheduleProjectProxyPrewarm).not.toHaveBeenCalled();
     expect(result).toMatchObject({ success: false, code: "VALIDATION_ERROR" });
   });
+
+  it.each([
+    { quality: "fast" },
+    { encodingMode: "gpu" },
+  ])("accepts partial project proxy options: %o", async (proxyOptions) => {
+    const handler = registeredHandlers.get(IPC_CHANNELS.PROJECT_PROXY_PREWARM);
+    const result = await handler?.({}, { id: 7, proxyOptions });
+
+    expect(supportMocks.scheduleProjectProxyPrewarm).toHaveBeenCalledWith(7, proxyOptions);
+    expect(result).toMatchObject({ success: true });
+  });
 });

@@ -33,6 +33,7 @@ const ffmpegMocks = vi.hoisted(() => ({
   generateAIProxy: vi.fn(),
   generateChapterReverseProxy: vi.fn(),
   getVideoMetadata: vi.fn(),
+  resolveProxyResourceClass: vi.fn(),
 }));
 
 vi.mock("electron", () => electronMocks);
@@ -82,6 +83,7 @@ describe("agent grounding status", () => {
       fps: 5,
       duration: 30,
     });
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("cpu");
     ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       fs.writeFileSync(outputPath, "proxy");
