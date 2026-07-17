@@ -1,8 +1,9 @@
 import { ipcMain } from 'electron';
-import { IPC_CHANNELS } from '../channels.js';
-import { createSuccessResponse } from '../shared.js';
+import { IPC_CHANNELS, IPC_ERROR_CODES } from '../channels.js';
+import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import { getGPUStatus, detectGPUEncoders } from '../../gpuDetector.js';
 import { getFFmpegPath } from '../../ffmpegDetector.js';
+import { gpuStatusSchema } from '../schemas.js';
 
 export const GPU_HANDLER_CHANNELS = [IPC_CHANNELS.GPU_STATUS];
 
@@ -16,9 +17,15 @@ export const GPU_HANDLER_CHANNELS = [IPC_CHANNELS.GPU_STATUS];
  * against the resolved ffmpeg path so the UI has real data to display.
  */
 export function registerGpuHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.GPU_STATUS, async () => {
+  ipcMain.handle(IPC_CHANNELS.GPU_STATUS, async (_, payload) => {
+    const parsed = gpuStatusSchema.safeParse(payload);
+    if (!parsed.success) {
+      return createErrorResponse('Invalid GPU status payload', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+
+    const force = parsed.data?.force === true;
     const cached = getGPUStatus();
-    if (cached.detected || cached.fallbackReason) {
+    if (!force && (cached.detected || cached.fallbackReason)) {
       return createSuccessResponse(cached);
     }
 
@@ -26,7 +33,7 @@ export function registerGpuHandlers(): void {
     // so the Settings UI gets real data instead of an empty placeholder.
     const ffmpegPath = getFFmpegPath();
     if (ffmpegPath) {
-      await detectGPUEncoders(ffmpegPath.path);
+      await detectGPUEncoders(ffmpegPath.path, force);
     }
     return createSuccessResponse(getGPUStatus());
   });

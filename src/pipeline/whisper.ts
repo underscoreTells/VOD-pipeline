@@ -196,6 +196,23 @@ function shouldRetryOnCpu(error: unknown): boolean {
   return isLikelyCudaRuntimeFailureText(error.message);
 }
 
+function getWhisperFallbackReason(error: unknown): string {
+  let reason = error instanceof Error ? error.message : String(error);
+  if (error instanceof WhisperError) {
+    const details = error.details;
+    if (details && typeof details === 'object' && 'stderr' in details) {
+      const stderr = (details as { stderr?: unknown }).stderr;
+      if (typeof stderr === 'string' && stderr.trim()) {
+        reason = stderr;
+      }
+    }
+  }
+
+  const excerpt = reason.replace(/\s+/g, ' ').trim() || 'unknown CUDA runtime error';
+  const maxLength = 500;
+  return excerpt.length > maxLength ? `${excerpt.slice(0, maxLength - 3)}...` : excerpt;
+}
+
 async function runWhisperProcess(options: WhisperProcessRunOptions): Promise<TranscriptionResult> {
   const {
     pythonExecutable,
@@ -533,8 +550,9 @@ export async function transcribe(
       throw error;
     }
 
-    console.warn('[Whisper] GPU runtime unavailable, retrying transcription on CPU.');
-    onProgress?.({ percent: 10, status: 'GPU unavailable, retrying on CPU...' });
+    const reason = getWhisperFallbackReason(error);
+    console.warn(`[Whisper] transcription GPU fallback: retrying on CPU reason=${JSON.stringify(reason)}`);
+    onProgress?.({ percent: 10, status: 'Transcription retrying on CPU...' });
 
     return runWhisperProcess({
       pythonExecutable,

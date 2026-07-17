@@ -161,7 +161,7 @@ const electronAPI: ElectronAPI = {
     },
   },
   gpu: {
-    getStatus: () => ipcRenderer.invoke('gpu:status'),
+    getStatus: (options) => ipcRenderer.invoke('gpu:status', options),
   },
   dialog: {
     showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),

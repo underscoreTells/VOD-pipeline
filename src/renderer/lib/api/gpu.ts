@@ -1,8 +1,12 @@
-import type { GPUStatusResult } from '../../../shared/contracts/electron-api.js';
+import type { GPUStatusOptions, GPUStatusResult } from '../../../shared/contracts/electron-api.js';
 import { getElectronApi } from './client.js';
 
-export type { GPUStatusResult, GPUStatusPayload } from '../../../shared/contracts/electron-api.js';
+export type {
+  GPUStatusOptions,
+  GPUStatusResult,
+  GPUStatusPayload,
+} from '../../../shared/contracts/electron-api.js';
 
-export async function getGPUStatus(): Promise<GPUStatusResult> {
-  return await getElectronApi().gpu.getStatus();
+export async function getGPUStatus(options?: GPUStatusOptions): Promise<GPUStatusResult> {
+  return await getElectronApi().gpu.getStatus(options);
 }

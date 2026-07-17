@@ -77,7 +77,11 @@ export async function detectGPUEncoders(
   ffmpegPath: string,
   force = false
 ): Promise<GPUEncoderInfo | null> {
-  if (!force && cachedEncoder && cachedFFmpegPath === ffmpegPath) {
+  if (
+    !force &&
+    cachedFFmpegPath === ffmpegPath &&
+    (cachedEncoder !== null || cachedFallbackReason !== null)
+  ) {
     return cachedEncoder;
   }
 
@@ -188,6 +192,22 @@ async function probeHwaccels(ffmpegPath: string): Promise<string[]> {
 
 export function getGPUFFmpegPath(): string | null {
   return cachedEncoder?.source ?? null;
+}
+
+export function recordGPUEncoderRuntimeFailure(
+  expected: { backend: GPUEncoderBackend; source: string },
+  reason: string
+): void {
+  if (
+    cachedEncoder?.backend !== expected.backend ||
+    cachedEncoder.source !== expected.source
+  ) {
+    return;
+  }
+
+  cachedEncoder = null;
+  cachedFallbackReason =
+    `GPU encoder ${expected.backend} via ${expected.source} failed at runtime: ${reason}`;
 }
 
 export function clearGPUEncoderCache(): void {

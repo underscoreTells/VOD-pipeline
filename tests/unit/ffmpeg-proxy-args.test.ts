@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnState = vi.hoisted(() => ({
   calls: [] as Array<{ command: string; args: string[] }>,
+  failures: [] as Array<{ command: string; code: number; stderr: string }>,
 }));
 
 const ffmpegDetectorMocks = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const gpuDetectorMocks = vi.hoisted(() => ({
   detectGPUEncoders: vi.fn(),
   getGPUFFmpegPath: vi.fn(() => "/mock/ffmpeg"),
   getProxyEncoderArgs: vi.fn(),
+  recordGPUEncoderRuntimeFailure: vi.fn(),
   getHwaccelDecodeArgs: vi.fn((backend: string): string[] => {
     switch (backend) {
       case "nvenc":
@@ -72,6 +74,15 @@ const spawnMock = vi.hoisted(() => vi.fn((command: string, args: string[]) => {
       return;
     }
 
+    const failureIndex = spawnState.failures.findIndex((failure) => failure.command === command);
+    if (failureIndex >= 0) {
+      const [failure] = spawnState.failures.splice(failureIndex, 1);
+      proc.stderr.emit("data", Buffer.from(failure.stderr));
+      proc.emit("close", failure.code);
+      proc.emit("exit", failure.code);
+      return;
+    }
+
     const outputPath = args[args.length - 1];
     if (typeof outputPath === "string" && outputPath !== "-") {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -106,6 +117,7 @@ describe("ffmpeg proxy argument generation", () => {
     fs.writeFileSync(inputPath, "input");
 
     spawnState.calls.length = 0;
+    spawnState.failures.length = 0;
     spawnMock.mockClear();
     ffmpegDetectorMocks.getFFmpegPath.mockClear();
     ffmpegDetectorMocks.getFFprobePath.mockClear();
@@ -114,6 +126,7 @@ describe("ffmpeg proxy argument generation", () => {
     gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/mock/ffmpeg");
     gpuDetectorMocks.getProxyEncoderArgs.mockReset();
     gpuDetectorMocks.getHwaccelDecodeArgs.mockClear();
+    gpuDetectorMocks.recordGPUEncoderRuntimeFailure.mockReset();
     gpuDetectorMocks.getProxyEncoderArgs.mockImplementation((useGPU: boolean) => {
       if (useGPU) {
         return {
@@ -363,6 +376,189 @@ describe("ffmpeg proxy argument generation", () => {
       expect(timingLine).toMatch(/wall=\d+\.\d+s/);
       expect(timingLine).toMatch(/speed=\d+\.\d+x/);
       expect(timingLine).not.toContain("status=failed");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("logs exactly one definitive NVENC completion summary", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      const completionLines = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("[Proxy] complete"));
+
+      expect(completionLines).toHaveLength(1);
+      expect(completionLines[0]).toContain("result=success requested=auto acceleration=gpu");
+      expect(completionLines[0]).toContain("actual=nvenc");
+      expect(completionLines[0]).toContain("codec=h264_nvenc");
+      expect(completionLines[0]).toContain("decode=cuda");
+      expect(completionLines[0]).toContain("scaler=scale_cuda");
+      expect(completionLines[0]).toContain("ffmpeg=/usr/bin/ffmpeg");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("records a GPU encode failure and summarizes the successful CPU retry", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "NVENC initialization failed",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      const logLines = logSpy.mock.calls.map((call) => String(call[0]));
+      const completionLines = logLines.filter((line) => line.includes("[Proxy] complete"));
+      const timingLines = logLines.filter((line) => line.includes("[Proxy] encode timing"));
+
+      expect(completionLines).toHaveLength(1);
+      expect(completionLines[0]).toContain("result=success requested=auto acceleration=cpu");
+      expect(completionLines[0]).toContain("actual=cpu");
+      expect(completionLines[0]).toContain("codec=libx264");
+      expect(completionLines[0]).toContain("decode=cpu");
+      expect(completionLines[0]).toContain("scaler=scale");
+      expect(completionLines[0]).toContain("ffmpeg=/mock/ffmpeg");
+      expect(completionLines[0]).toContain("fallbackFrom=nvenc");
+      expect(completionLines[0]).toContain('reason="Proxy failed with code 1"');
+      expect(timingLines).toHaveLength(2);
+      expect(timingLines[0]).toContain("backend=nvenc");
+      expect(timingLines[0]).toContain("status=failed");
+      expect(timingLines[1]).toContain("backend=cpu");
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).toHaveBeenCalledWith(
+        { backend: "nvenc", source: "/usr/bin/ffmpeg" },
+        "Proxy failed with code 1"
+      );
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("records a reverse GPU chunk failure and summarizes the CPU retry", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "NVENC initialization failed",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateChapterReverseProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateChapterReverseProxy(inputPath, outputPath, {
+        startTime: 0,
+        endTime: 5,
+        fps: 10,
+        encodingMode: "auto",
+        quality: "balanced",
+        executionMode: "background",
+      });
+
+      const completionLines = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("[ReverseProxy] complete"));
+
+      expect(completionLines).toHaveLength(1);
+      expect(completionLines[0]).toContain("result=success requested=auto acceleration=cpu");
+      expect(completionLines[0]).toContain("actual=cpu codec=libx264 decode=cpu scaler=none");
+      expect(completionLines[0]).toContain("ffmpeg=/mock/ffmpeg");
+      expect(completionLines[0]).toContain("fallbackFrom=nvenc");
+      expect(completionLines[0]).toContain('reason="FFmpeg failed with code 1"');
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).toHaveBeenCalledWith(
+        { backend: "nvenc", source: "/usr/bin/ffmpeg" },
+        "FFmpeg failed with code 1"
+      );
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs one cancelled completion summary without invalidating the GPU", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    const controller = new AbortController();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      const generation = generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 },
+        controller.signal
+      );
+      controller.abort();
+
+      await expect(generation).rejects.toMatchObject({ code: "cancelled" });
+      const completionLines = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("[Proxy] complete"));
+
+      expect(completionLines).toHaveLength(1);
+      expect(completionLines[0]).toContain("result=cancelled");
+      expect(completionLines[0]).toContain("acceleration=gpu actual=nvenc");
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).not.toHaveBeenCalled();
     } finally {
       logSpy.mockRestore();
     }

@@ -234,6 +234,123 @@ describe("gpu detector", () => {
     expect(status.fallbackReason).toBeTruthy();
   });
 
+  it("invalidates a matching cached encoder after a runtime failure", async () => {
+    const {
+      getGPUStatus,
+      recordGPUEncoderRuntimeFailure,
+      setGPUEncoderForTesting,
+    } = await import("../../src/electron/gpuDetector.js");
+    setGPUEncoderForTesting({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 2,
+      source: "/usr/bin/ffmpeg",
+    }, "/bundled/ffmpeg");
+
+    recordGPUEncoderRuntimeFailure(
+      { backend: "nvenc", source: "/usr/bin/ffmpeg" },
+      "Proxy failed with code 1"
+    );
+
+    const status = getGPUStatus();
+    expect(status.detected).toBe(false);
+    expect(status.backend).toBe("cpu");
+    expect(status.fallbackReason).toContain("nvenc");
+    expect(status.fallbackReason).toContain("/usr/bin/ffmpeg");
+    expect(status.fallbackReason).toContain("Proxy failed with code 1");
+  });
+
+  it.each([
+    { backend: "qsv" as const, source: "/usr/bin/ffmpeg" },
+    { backend: "nvenc" as const, source: "/other/ffmpeg" },
+  ])("ignores a runtime failure for stale $backend/$source state", async ({ backend, source }) => {
+    const {
+      getGPUStatus,
+      recordGPUEncoderRuntimeFailure,
+      setGPUEncoderForTesting,
+    } = await import("../../src/electron/gpuDetector.js");
+    setGPUEncoderForTesting({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 2,
+      source: "/usr/bin/ffmpeg",
+    }, "/bundled/ffmpeg");
+
+    recordGPUEncoderRuntimeFailure({ backend, source }, "stale failure");
+
+    expect(getGPUStatus()).toMatchObject({
+      detected: true,
+      backend: "nvenc",
+      source: "/usr/bin/ffmpeg",
+      fallbackReason: null,
+    });
+  });
+
+  it("caches a negative result for the same ffmpeg path", async () => {
+    spawnMock.mockImplementation((_executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "");
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+    const { detectGPUEncoders } = await import("../../src/electron/gpuDetector.js");
+
+    await detectGPUEncoders("/bundled/ffmpeg");
+    const firstProbeCount = spawnMock.mock.calls.length;
+    await detectGPUEncoders("/bundled/ffmpeg");
+
+    expect(firstProbeCount).toBeGreaterThan(0);
+    expect(spawnMock).toHaveBeenCalledTimes(firstProbeCount);
+  });
+
+  it("force detection bypasses a negative cache and restores an encoder", async () => {
+    let nvencAvailable = false;
+    spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", nvencAvailable ? "Hardware acceleration methods:\ncuda\n" : "");
+      }
+      const encoder = args[args.indexOf("-c:v") + 1];
+      if (nvencAvailable && executablePath === "ffmpeg" && encoder === "h264_nvenc") {
+        return createSpawnResult(0);
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+    const { detectGPUEncoders, getGPUStatus } = await import("../../src/electron/gpuDetector.js");
+
+    expect(await detectGPUEncoders("/bundled/ffmpeg")).toBeNull();
+    nvencAvailable = true;
+    expect(await detectGPUEncoders("/bundled/ffmpeg")).toBeNull();
+    expect(await detectGPUEncoders("/bundled/ffmpeg", true)).toMatchObject({ backend: "nvenc" });
+    expect(getGPUStatus()).toMatchObject({ detected: true, backend: "nvenc" });
+  });
+
+  it("clearing the cache restores the initial undetected status", async () => {
+    const { clearGPUEncoderCache, getGPUStatus, setGPUEncoderForTesting } = await import(
+      "../../src/electron/gpuDetector.js"
+    );
+    setGPUEncoderForTesting({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 2,
+      source: "/usr/bin/ffmpeg",
+    });
+
+    clearGPUEncoderCache();
+
+    expect(getGPUStatus()).toEqual({
+      backend: "cpu",
+      encoderName: null,
+      encoder: null,
+      source: null,
+      fallbackReason: null,
+      hwaccels: [],
+      detected: false,
+    });
+  });
+
   it.each([
     { backend: "nvenc" as const, expected: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] },
     { backend: "qsv" as const, expected: ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"] },

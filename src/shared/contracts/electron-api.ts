@@ -490,6 +490,10 @@ export interface GPUStatusResult {
   error?: string;
 }
 
+export interface GPUStatusOptions {
+  force?: boolean;
+}
+
 export interface GPUStatusPayload {
   backend: 'videotoolbox' | 'nvenc' | 'qsv' | 'amf' | 'cpu';
   encoderName: string | null;
@@ -616,7 +620,7 @@ export interface ElectronAPI {
     onProgress: (callback: (data: ProxyProgressEvent) => void) => () => void;
   };
   gpu: {
-    getStatus: () => Promise<GPUStatusResult>;
+    getStatus: (options?: GPUStatusOptions) => Promise<GPUStatusResult>;
   };
   dialog: {
     showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogReturnValue>;
