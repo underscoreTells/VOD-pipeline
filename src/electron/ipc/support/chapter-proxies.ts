@@ -23,6 +23,7 @@ import {
   generateAIProxy,
   getVideoMetadata,
   resolveProxyResourceClass,
+  type ProxyFallbackContext,
 } from '../../../pipeline/ffmpeg.js';
 import {
   generateWaveformTiers,
@@ -283,7 +284,11 @@ export async function ensureChapterProxyReady(
     }
 
     try {
-      const generate = (mode: 'cpu' | 'gpu' | 'auto', deferCpuFallback: boolean) => async (signal: AbortSignal) => {
+      const generate = (
+        mode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
         await ensureProxyDirectory();
@@ -291,7 +296,7 @@ export async function ensureChapterProxyReady(
         const metadata = await generateAIProxy(
           asset.file_path,
           tempPath,
-          progressListeners.size > 0 ? emitProgress : undefined,
+          emitProgress,
           30 * 60 * 1000,
           mode,
           quality,
@@ -300,7 +305,8 @@ export async function ensureChapterProxyReady(
             endTime: chapter.end_time,
           },
           signal,
-          deferCpuFallback
+          deferCpuFallback,
+          fallbackContext
         );
 
         if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -321,6 +327,7 @@ export async function ensureChapterProxyReady(
         await updateChapterProxyStatus(chapterProxyId, 'ready');
       };
       const resourceClass = await resolveProxyResourceClass(encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
       await enqueueHeavyMediaJob(
         jobKey,
         'chapterProxy',
@@ -329,8 +336,16 @@ export async function ensureChapterProxyReady(
         {
           resourceClass,
           cpuFallback: {
-            shouldFallback: (error) => error instanceof GPUProxyFallbackError,
-            run: generate('cpu', false),
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
           },
         }
       );

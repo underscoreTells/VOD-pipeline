@@ -295,6 +295,7 @@ describe("chapter proxy cache validation", () => {
       end_time: 40,
     });
     let finishEncode!: () => void;
+    let reportProgress: ((percent: number) => void) | undefined;
     const encodeGate = new Promise<void>((resolve) => {
       finishEncode = resolve;
     });
@@ -303,7 +304,7 @@ describe("chapter proxy cache validation", () => {
       outputPath: string,
       onProgress?: (percent: number) => void
     ) => {
-      onProgress?.(50);
+      reportProgress = onProgress;
       await encodeGate;
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       fs.writeFileSync(outputPath, "proxy");
@@ -314,6 +315,8 @@ describe("chapter proxy cache validation", () => {
     const chapter = { id: 7, start_time: 10, end_time: 40 } as never;
     const asset = { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never;
     const prewarm = ensureChapterProxyReady(chapter, asset, "cpu", "balanced", "background");
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce());
+    expect(reportProgress).toBeTypeOf("function");
     const interactiveProgress = vi.fn();
     const selected = ensureChapterProxyReady(
       chapter,
@@ -324,7 +327,7 @@ describe("chapter proxy cache validation", () => {
       interactiveProgress
     );
 
-    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce());
+    reportProgress?.(50);
     expect(interactiveProgress).toHaveBeenCalledWith(50);
     finishEncode();
     await expect(Promise.all([prewarm, selected])).resolves.toEqual([proxyPath, proxyPath]);

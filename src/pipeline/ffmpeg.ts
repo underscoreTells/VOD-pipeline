@@ -30,14 +30,23 @@ export class FFmpegError extends Error {
 }
 
 export class GPUProxyFallbackError extends Error {
-  constructor(public reason: string) {
+  constructor(
+    public reason: string,
+    public fallbackFrom?: GPUEncoderBackend
+  ) {
     super(reason);
     this.name = 'GPUProxyFallbackError';
   }
 }
 
-type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
+export type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
 type ProxyGenerationQuality = 'high' | 'balanced' | 'fast';
+
+export interface ProxyFallbackContext {
+  requestedMode: ProxyGenerationMode;
+  reason: string;
+  fallbackFrom?: GPUEncoderBackend;
+}
 
 export async function resolveProxyResourceClass(
   encodingMode: ProxyGenerationMode
@@ -571,7 +580,7 @@ function getProxyScalerName(backend: GPUEncoderBackend | 'cpu'): string {
     case 'qsv':
       return 'scale_qsv';
     case 'amf':
-      return 'scale_amf';
+      return 'vpp_amf';
     case 'videotoolbox':
       return 'scale_vt';
     default:
@@ -598,9 +607,8 @@ function logProxyCompletion(params: {
     `scaler=${scaler}`,
     `ffmpeg=${plan.ffmpegBinaryPath}`,
   ];
-  if (fallbackFrom && fallbackReason) {
-    parts.push(`fallbackFrom=${fallbackFrom}`, `reason=${JSON.stringify(fallbackReason)}`);
-  }
+  if (fallbackFrom) parts.push(`fallbackFrom=${fallbackFrom}`);
+  if (fallbackReason) parts.push(`reason=${JSON.stringify(fallbackReason)}`);
   console.log(`[${logPrefix}] complete ${parts.join(' ')}`);
 }
 
@@ -632,7 +640,7 @@ function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
  * Build the proxy scale + framerate filter args for a given backend.
  *
  * AI proxies target 640px wide @ 5fps. GPU backends use their hardware scaler
- * (`scale_cuda`, `scale_qsv`, `scale_amf`, `scale_vt`) so frames stay on the
+  * (`scale_cuda`, `scale_qsv`, `vpp_amf`, `scale_vt`) so frames stay on the
  * GPU between decode and encode. CPU fallback uses the software `scale` +
  * `fps` filters.
  */
@@ -643,7 +651,7 @@ function getProxyScaleFilterArgs(backend: GPUEncoderBackend | 'cpu'): string[] {
     case 'qsv':
       return ['-vf', 'scale_qsv=640:-2', '-r', '5'];
     case 'amf':
-      return ['-vf', 'scale_amf=640:-2', '-r', '5'];
+      return ['-vf', 'vpp_amf=640:-2', '-r', '5'];
     case 'videotoolbox':
       return ['-vf', 'scale_vt=640:-2', '-r', '5'];
     default:
@@ -701,7 +709,8 @@ export async function generateAIProxy(
   quality: ProxyGenerationQuality = 'balanced',
   trimOptions?: { startTime: number; endTime: number },
   signal?: AbortSignal,
-  deferCpuFallback = false
+  deferCpuFallback = false,
+  fallbackContext?: ProxyFallbackContext
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
@@ -741,10 +750,16 @@ export async function generateAIProxy(
   }
 
   const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'Proxy');
-  let finalPlan = initialPlan;
+  let finalPlan = fallbackContext
+    ? {
+        ...initialPlan,
+        requestedMode: fallbackContext.requestedMode,
+        fallbackReason: fallbackContext.reason,
+      }
+    : initialPlan;
   let result: 'success' | 'failed' | 'cancelled' = 'failed';
-  let fallbackFrom: GPUEncoderBackend | undefined;
-  let fallbackReason: string | undefined;
+  let fallbackFrom: GPUEncoderBackend | undefined = fallbackContext?.fallbackFrom;
+  let fallbackReason: string | undefined = fallbackContext?.reason;
   try {
     if (deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
       if (signal?.aborted) {
@@ -756,7 +771,7 @@ export async function generateAIProxy(
     }
     try {
       const output = await executeProxyGeneration(
-        initialPlan,
+        finalPlan,
         inputPath,
         outputPath,
         { duration: targetDuration },
@@ -775,7 +790,7 @@ export async function generateAIProxy(
 
       const reason = error instanceof Error ? error.message : 'unknown gpu encoding error';
       if (deferCpuFallback) {
-        throw new GPUProxyFallbackError(reason);
+        throw new GPUProxyFallbackError(reason, initialPlan.backend as GPUEncoderBackend);
       }
       console.warn(`[Proxy] GPU proxy generation failed; retrying on CPU. reason=${reason}`);
       fallbackFrom = initialPlan.backend as GPUEncoderBackend;
@@ -1131,6 +1146,7 @@ export async function generateChapterReverseProxy(
     executionMode?: 'background' | 'interactive';
     signal?: AbortSignal;
     deferCpuFallback?: boolean;
+    fallbackContext?: ProxyFallbackContext;
   }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
@@ -1212,10 +1228,16 @@ export async function generateChapterReverseProxy(
   };
 
   const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'ReverseProxy');
-  let finalPlan = initialPlan;
+  let finalPlan = options.fallbackContext
+    ? {
+        ...initialPlan,
+        requestedMode: options.fallbackContext.requestedMode,
+        fallbackReason: options.fallbackContext.reason,
+      }
+    : initialPlan;
   let result: 'success' | 'failed' | 'cancelled' = 'failed';
-  let fallbackFrom: GPUEncoderBackend | undefined;
-  let fallbackReason: string | undefined;
+  let fallbackFrom: GPUEncoderBackend | undefined = options.fallbackContext?.fallbackFrom;
+  let fallbackReason: string | undefined = options.fallbackContext?.reason;
   try {
     if (options.deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
       if (signal?.aborted) {
@@ -1226,7 +1248,7 @@ export async function generateChapterReverseProxy(
       );
     }
     try {
-      await generateWithPlan(initialPlan);
+      await generateWithPlan(finalPlan);
     } catch (error) {
       const isCancelled = error instanceof FFmpegError && error.code === 'cancelled';
       if (!initialPlan.useGPU || isCancelled) {
@@ -1235,7 +1257,7 @@ export async function generateChapterReverseProxy(
 
       const reason = error instanceof Error ? error.message : 'unknown gpu reverse generation error';
       if (options.deferCpuFallback) {
-        throw new GPUProxyFallbackError(reason);
+        throw new GPUProxyFallbackError(reason, initialPlan.backend as GPUEncoderBackend);
       }
       console.warn(`[ReverseProxy] GPU reverse generation failed; retrying on CPU. reason=${reason}`);
       fallbackFrom = initialPlan.backend as GPUEncoderBackend;

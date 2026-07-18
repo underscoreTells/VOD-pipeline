@@ -17,6 +17,7 @@ import {
   generateChapterReverseProxy,
   getVideoMetadata,
   resolveProxyResourceClass,
+  type ProxyFallbackContext,
 } from '../../../pipeline/ffmpeg.js';
 import {
   bumpGenerationEpoch,
@@ -323,7 +324,11 @@ export async function ensureChapterReverseProxyQuickReady(
     }
 
     try {
-      const generate = (encodingMode: 'cpu' | 'gpu' | 'auto', deferCpuFallback: boolean) => async (signal: AbortSignal) => {
+      const generate = (
+        encodingMode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         if (await pathExists(quickTempPath)) {
           try {
             await fs.promises.unlink(quickTempPath);
@@ -368,9 +373,11 @@ export async function ensureChapterReverseProxyQuickReady(
           executionMode,
           signal,
           deferCpuFallback,
+          fallbackContext,
         });
       };
       const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
       await enqueueHeavyMediaJob(
         jobKey,
         'reverseQuickWarm',
@@ -379,8 +386,16 @@ export async function ensureChapterReverseProxyQuickReady(
         {
           resourceClass,
           cpuFallback: {
-            shouldFallback: (error) => error instanceof GPUProxyFallbackError,
-            run: generate('cpu', false),
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: normalizedProxyOptions.encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
           },
         }
       );
@@ -476,7 +491,11 @@ async function ensureChapterReverseProxyFullReady(
     let generatedPath: string | undefined;
 
     try {
-      const generate = (encodingMode: 'cpu' | 'gpu' | 'auto', deferCpuFallback: boolean) => async (signal: AbortSignal) => {
+      const generate = (
+        encodingMode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
           generatedPath = proxyPath;
           chapterReverseProxyErrors.delete(lockKey);
@@ -503,6 +522,7 @@ async function ensureChapterReverseProxyFullReady(
           executionMode: 'background',
           signal,
           deferCpuFallback,
+          fallbackContext,
         });
 
         if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -524,6 +544,7 @@ async function ensureChapterReverseProxyFullReady(
         chapterReverseProxyErrors.delete(lockKey);
       };
       const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
       await enqueueHeavyMediaJob(
         jobKey,
         'reverseFullWarm',
@@ -532,8 +553,16 @@ async function ensureChapterReverseProxyFullReady(
         {
           resourceClass,
           cpuFallback: {
-            shouldFallback: (error) => error instanceof GPUProxyFallbackError,
-            run: generate('cpu', false),
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: normalizedProxyOptions.encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
           },
         }
       );

@@ -258,7 +258,7 @@ describe("ffmpeg proxy argument generation", () => {
     expect(ffmpegArgs![ffmpegArgs!.indexOf("-r") + 1]).toBe("5");
   });
 
-  it("emits AMF decode hwaccel flags and scale_amf filter for GPU chapter proxies", async () => {
+  it("emits AMF decode hwaccel flags and vpp_amf filter for GPU chapter proxies", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "amf",
       encoder: "h264_amf",
@@ -288,7 +288,7 @@ describe("ffmpeg proxy argument generation", () => {
     expect(ffmpegArgs).toBeDefined();
 
     expect(ffmpegArgs!.slice(0, 4)).toEqual(["-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11"]);
-    expect(ffmpegArgs).toContain("scale_amf=640:-2");
+    expect(ffmpegArgs).toContain("vpp_amf=640:-2");
   });
 
   it("writes reverse chunks without faststart and concatenates to explicit mp4 output", async () => {
@@ -508,7 +508,7 @@ describe("ffmpeg proxy argument generation", () => {
 
     try {
       const { generateAIProxy, GPUProxyFallbackError } = await import("../../src/pipeline/ffmpeg.js");
-      await expect(generateAIProxy(
+      const generation = generateAIProxy(
         inputPath,
         outputPath,
         undefined,
@@ -518,7 +518,9 @@ describe("ffmpeg proxy argument generation", () => {
         { startTime: 0, endTime: 10 },
         undefined,
         true
-      )).rejects.toBeInstanceOf(GPUProxyFallbackError);
+      );
+      await expect(generation).rejects.toBeInstanceOf(GPUProxyFallbackError);
+      await expect(generation).rejects.toMatchObject({ fallbackFrom: "nvenc" });
 
       const encodeCommands = spawnState.calls.filter((call) => call.args.includes("-c:v"));
       expect(encodeCommands).toHaveLength(1);
@@ -566,6 +568,39 @@ describe("ffmpeg proxy argument generation", () => {
     const encodeCommands = spawnState.calls.filter((call) => call.args.includes("-c:v"));
     expect(encodeCommands).toHaveLength(1);
     expect(encodeCommands[0].args).toEqual(expect.arrayContaining(["-c:v", "libx264"]));
+  });
+
+  it("preserves queued fallback context in the CPU completion summary", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "cpu",
+        "balanced",
+        { startTime: 0, endTime: 10 },
+        undefined,
+        false,
+        {
+          requestedMode: "auto",
+          reason: "Proxy failed with code 1",
+          fallbackFrom: "nvenc",
+        }
+      );
+
+      const completionLine = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("[Proxy] complete"));
+      expect(completionLine).toContain("result=success requested=auto acceleration=cpu");
+      expect(completionLine).toContain("fallbackFrom=nvenc");
+      expect(completionLine).toContain('reason="Proxy failed with code 1"');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("records a reverse GPU chunk failure and summarizes the CPU retry", async () => {
@@ -633,6 +668,36 @@ describe("ffmpeg proxy argument generation", () => {
     })).rejects.toBeInstanceOf(GPUProxyFallbackError);
 
     expect(spawnState.calls.filter((call) => call.args.includes("-c:v"))).toHaveLength(0);
+  });
+
+  it("preserves queued fallback context in the reverse CPU completion summary", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const { generateChapterReverseProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateChapterReverseProxy(inputPath, outputPath, {
+        startTime: 0,
+        endTime: 5,
+        fps: 10,
+        encodingMode: "cpu",
+        quality: "balanced",
+        executionMode: "background",
+        fallbackContext: {
+          requestedMode: "gpu",
+          reason: "FFmpeg failed with code 1",
+          fallbackFrom: "amf",
+        },
+      });
+
+      const completionLine = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("[ReverseProxy] complete"));
+      expect(completionLine).toContain("result=success requested=gpu acceleration=cpu");
+      expect(completionLine).toContain("fallbackFrom=amf");
+      expect(completionLine).toContain('reason="FFmpeg failed with code 1"');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("does not invalidate the GPU encoder for a non-GPU FFmpeg failure", async () => {

@@ -437,7 +437,7 @@ describe("agent grounding status", () => {
     expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledWith(
       sourcePath,
       expect.stringContaining("chapter_7_asset_11_ai_proxy.partial.0.mp4"),
-      undefined,
+      expect.any(Function),
       30 * 60 * 1000,
       "gpu",
       "fast",
@@ -446,7 +446,8 @@ describe("agent grounding status", () => {
         endTime: 40,
       },
       expect.any(AbortSignal),
-      true
+      true,
+      undefined
     );
     await vi.waitFor(() => {
       expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(17, "ready");
