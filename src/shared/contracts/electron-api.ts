@@ -500,7 +500,7 @@ export interface WaveformGenerationResult {
     trackIndex: number;
     tiers: Array<{
       level: 1 | 2 | 3;
-      peaks: Array<{ min: number; max: number }>;
+      peakCount: number;
       sampleRate: number;
       duration: number;
     }>;

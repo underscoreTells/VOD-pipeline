@@ -209,6 +209,39 @@ describe("chapter proxy cache validation", () => {
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(13, "ready");
   });
 
+  it("does not heal a pending proxy built for different chapter bounds", async () => {
+    const proxyPath = path.join(tempDir, "stale-pending-range.mp4");
+    fs.writeFileSync(proxyPath, "stale-proxy");
+    databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue({
+      id: 14,
+      chapter_id: 7,
+      asset_id: 11,
+      file_path: proxyPath,
+      status: "pending",
+      start_time: 5,
+      end_time: 35,
+      width: 640,
+      height: 360,
+      framerate: 5,
+      file_size: 11,
+      duration: 30,
+      error_message: null,
+    });
+
+    const { ensureChapterProxyReady } = await import("../../src/electron/ipc/handler-support.js");
+    await ensureChapterProxyReady(
+      { id: 7, start_time: 10, end_time: 40 } as never,
+      { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never
+    );
+
+    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1);
+    expect(databaseMocks.updateChapterProxyDefinition).toHaveBeenCalledWith(14, expect.objectContaining({
+      start_time: 10,
+      end_time: 40,
+      status: "pending",
+    }));
+  });
+
   it("regenerates the proxy when the cached file is missing", async () => {
     const proxyPath = path.join(tempDir, "missing.mp4");
     databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue({

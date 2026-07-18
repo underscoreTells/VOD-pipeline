@@ -25,6 +25,7 @@
     calculateZoomAroundPointer,
     clampNumber,
     getAdaptiveRulerStep,
+    getTimelineZoomBounds,
     normalizeRange,
     pointerToTime,
     rangesOverlap,
@@ -73,6 +74,7 @@
   let drag = $state<DragState | null>(null);
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
+  let fittedChapterId: number | null = null;
 
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
   const primaryAsset = $derived(assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
@@ -81,8 +83,9 @@
     const value = metadata?.fps;
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 30;
   });
-  const minPps = $derived(viewportWidth > 0 ? viewportWidth / duration : 0.05);
-  const maxPps = $derived(Math.max(400, minPps));
+  const zoomBounds = $derived(getTimelineZoomBounds(duration, viewportWidth));
+  const minPps = $derived(zoomBounds.min);
+  const maxPps = $derived(zoomBounds.max);
   const contentWidth = $derived(Math.max(viewportWidth, duration * timelineState.zoomLevel));
   const visibleDuration = $derived(viewportWidth / Math.max(0.001, timelineState.zoomLevel));
   const rulerTicks = $derived.by(() => {
@@ -502,7 +505,7 @@
     });
     if (viewportRef) resizeObserver.observe(viewportRef);
     const unsubscribe = onWaveformProgress((event) => {
-      if (event.assetId === primaryAsset?.id && event.percent >= 100) {
+      if (event.assetId === primaryAsset?.id && event.progress.percent >= 100) {
         waveformAssetId = null;
         void loadWaveform(event.assetId);
       }
@@ -517,6 +520,25 @@
   $effect(() => {
     const assetId = primaryAsset?.id;
     if (assetId) void untrack(() => loadWaveform(assetId));
+  });
+
+  $effect(() => {
+    const chapterId = chapter.id;
+    const width = viewportWidth;
+    const { min, max } = zoomBounds;
+    if (width <= 0) return;
+
+    untrack(() => {
+      setMinZoom(min);
+      if (fittedChapterId !== chapterId) {
+        fittedChapterId = chapterId;
+        setZoom(min);
+        setScroll(0);
+        if (viewportRef) viewportRef.scrollLeft = 0;
+        return;
+      }
+      if (timelineState.zoomLevel > max) setZoom(max);
+    });
   });
 
   $effect(() => {
@@ -582,7 +604,7 @@
     onwheel={handleWheel}
   >
     <div class="relative min-h-full" style={`width:${contentWidth}px`}>
-      <div class="sticky top-0 z-20 h-7 border-b border-border-subtle bg-surface-raised/95 backdrop-blur-sm" onpointerdown={handleScrubPointerDown} role="slider" tabindex="0" aria-label="Chapter playhead" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
+      <div class="sticky top-0 z-20 h-7 border-b border-border-subtle bg-surface-raised" onpointerdown={handleScrubPointerDown} role="slider" tabindex="0" aria-label="Chapter playhead" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
         {#each rulerTicks as tick (tick)}
           <div class="absolute inset-y-0 border-l border-border-subtle" style={`left:${tick * timelineState.zoomLevel}px`}>
             <span class="absolute left-1 top-1 font-mono text-[10px] tabular-nums text-text-tertiary">{formatTimecode(tick).slice(0, 8)}</span>

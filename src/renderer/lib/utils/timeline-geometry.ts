@@ -54,6 +54,9 @@ const RULER_STEPS: readonly number[] = [
 ];
 
 const RULER_MIN_PIXELS = 80;
+const MIN_TIMELINE_ZOOM = 0.05;
+const MAX_TIMELINE_ZOOM = 400;
+const MAX_TIMELINE_CONTENT_WIDTH = 500_000;
 
 function isFiniteNumber(value: number): boolean {
   return Number.isFinite(value);
@@ -73,6 +76,22 @@ function resolveNeighborBound(
 
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+export function getTimelineZoomBounds(
+  duration: number,
+  viewportWidth: number
+): { min: number; max: number } {
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0.01;
+  const safeViewportWidth = Number.isFinite(viewportWidth) && viewportWidth > 0
+    ? viewportWidth
+    : 1;
+  const min = Math.max(MIN_TIMELINE_ZOOM, safeViewportWidth / safeDuration);
+  const max = Math.max(
+    min,
+    Math.min(MAX_TIMELINE_ZOOM, MAX_TIMELINE_CONTENT_WIDTH / safeDuration)
+  );
+  return { min, max };
 }
 
 export function timeToPixels(time: number, pixelsPerSecond: number): number {

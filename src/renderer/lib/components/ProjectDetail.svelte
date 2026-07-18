@@ -16,8 +16,6 @@
     clearProjectDetail,
     saveProjectTimelineState,
     exportProjectToFile,
-    generateAssetWaveform,
-    getAssetWaveform,
     getMissingProjectAssets
   } from '../state/project-detail.svelte';
   import { 
@@ -89,9 +87,6 @@
     transcribeMissingChaptersOnReopen,
   } from './project-detail-transcription.js';
   import {
-    createChapterWaveformScheduler,
-  } from './project-detail-waveforms.js';
-  import {
     clipOverlapsChapterSourceRange,
     compareClipsBySourceTime,
   } from '../../../shared/utils/clip-timing.js';
@@ -137,20 +132,12 @@
   const MIN_LEFT_SIDEBAR_SECTION_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
-  const MIX_WAVEFORM_TRACK_INDEX = -1;
 
   const transcriptionDeps = {
     getTranscriptionStatus,
     startChapterTranscription,
     setTranscriptionError,
   };
-
-  const waveformScheduler = createChapterWaveformScheduler({
-    resolveAsset: (assetId) => projectDetail.assets.find((item) => item.id === assetId) ?? null,
-    getAssetWaveform,
-    generateAssetWaveform,
-    isPlaybackActive: () => timelineState.isPlaying,
-  });
 
   const layoutController = createProjectDetailLayoutController({
     getLeftWidth: () => layoutState.leftWidth,
@@ -454,11 +441,6 @@
   const chapterPreviewAsset = $derived.by(() =>
     selectedChapterAssets.find((asset) => asset.availability.exists !== false) ?? selectedChapterAssets[0] ?? null
   );
-  const timelineWaveformAssetIds = $derived.by(() => {
-    return selectedChapterAssets
-      .filter((asset) => asset.availability.exists !== false)
-      .map((asset) => asset.id);
-  });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
@@ -502,15 +484,6 @@
     void syncAgentContext(projectId, chapterId);
   });
 
-  $effect(() => {
-    if (timelineWaveformAssetIds.length > 0) {
-      void waveformScheduler.ensureChapterWaveforms(
-        [...timelineWaveformAssetIds],
-        MIX_WAVEFORM_TRACK_INDEX
-      );
-    }
-  });
-  
   // Handle drag and drop for additional imports
   function handleDragOver(e: DragEvent) {
     e.preventDefault();

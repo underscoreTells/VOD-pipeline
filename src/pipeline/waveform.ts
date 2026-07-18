@@ -29,7 +29,10 @@ export class WaveformError extends Error {
 }
 
 const MIX_WAVEFORM_TRACK_INDEX = -1;
+const MAX_TIER1_PEAKS = 100_000;
+const MAX_TIER1_PEAKS_PER_SECOND = 50;
 const MAX_TIER2_PEAKS = 1_000_000;
+const waveformGenerationInFlight = new Map<string, Promise<WaveformGenerationResult>>();
 
 const SUPPORTED_WAVEFORM_AUDIO_EXTENSIONS = new Set([
   '.wav',
@@ -58,6 +61,35 @@ export async function generateWaveformTiers(
   trackIndex: number = 0,
   onProgress?: WaveformProgressCallback,
   options: WaveformGenerationOptions = {}
+): Promise<WaveformGenerationResult> {
+  const includeTier2 = options.includeTier2 ?? true;
+  const generationKey = `${audioPath}:${assetId}:${trackIndex}:${includeTier2}`;
+  const inFlight = waveformGenerationInFlight.get(generationKey);
+  if (inFlight) return inFlight;
+
+  const generation = generateWaveformTiersUncached(
+    audioPath,
+    assetId,
+    trackIndex,
+    onProgress,
+    { includeTier2 }
+  );
+  waveformGenerationInFlight.set(generationKey, generation);
+  try {
+    return await generation;
+  } finally {
+    if (waveformGenerationInFlight.get(generationKey) === generation) {
+      waveformGenerationInFlight.delete(generationKey);
+    }
+  }
+}
+
+async function generateWaveformTiersUncached(
+  audioPath: string,
+  assetId: number,
+  trackIndex: number,
+  onProgress: WaveformProgressCallback | undefined,
+  options: WaveformGenerationOptions
 ): Promise<WaveformGenerationResult> {
   const audiowaveformPath = getAudiowaveformPath();
 
@@ -98,6 +130,7 @@ export async function generateWaveformTiers(
       assetId,
       trackIndex,
       includeTier2,
+      durationSeconds: preparedInput.durationSeconds,
       onProgress,
     });
   } catch (error) {
@@ -124,6 +157,7 @@ interface GenerateWaveformTiersFromPreparedInputArgs {
   assetId: number;
   trackIndex: number;
   includeTier2: boolean;
+  durationSeconds: number | null;
   skipTier1?: boolean;
   skipTier2?: boolean;
   onProgress?: WaveformProgressCallback;
@@ -136,6 +170,7 @@ async function generateAndPersistWaveformTiers({
   assetId,
   trackIndex,
   includeTier2,
+  durationSeconds,
   skipTier1 = false,
   skipTier2 = false,
   onProgress,
@@ -157,7 +192,7 @@ async function generateAndPersistWaveformTiers({
         waveformInputPath,
         tempDir,
         1,
-        256,
+        { pixelsPerSecond: getTier1PixelsPerSecond(durationSeconds) },
         8
       );
 
@@ -193,9 +228,10 @@ async function generateAndPersistWaveformTiers({
 
     let skipTier2ForLength = false;
     if (tier1Result) {
-      const tier1Ratio = WAVEFORM_TIERS[1].ratio;
-      const tier2Ratio = WAVEFORM_TIERS[2].ratio;
-      const estimatedTier2Peaks = Math.round(tier1Result.peaks.length * (tier1Ratio / tier2Ratio));
+      const waveformDuration = durationSeconds ?? tier1Result.duration;
+      const estimatedTier2Peaks = Math.round(
+        waveformDuration * tier1Result.sampleRate / WAVEFORM_TIERS[2].ratio
+      );
       skipTier2ForLength = estimatedTier2Peaks > MAX_TIER2_PEAKS;
     }
 
@@ -226,7 +262,7 @@ async function generateAndPersistWaveformTiers({
       waveformInputPath,
       tempDir,
       2,
-      16,
+      { zoom: 16 },
       16
     );
 
@@ -284,20 +320,22 @@ async function prepareWaveformInput(
   tempDir: string,
   trackIndex: number,
   onProgress?: (percent: number, status: string) => void
-): Promise<{ path: string; tempPath: string | null }> {
+): Promise<{ path: string; tempPath: string | null; durationSeconds: number | null }> {
   const extension = path.extname(inputPath).toLowerCase();
+  const ffmpegPath = getFFmpegPath();
+  const durationSeconds = ffmpegPath
+    ? await getMediaDurationSeconds(ffmpegPath.path, inputPath)
+    : null;
 
   if (SUPPORTED_WAVEFORM_AUDIO_EXTENSIONS.has(extension)) {
-    return { path: inputPath, tempPath: null };
+    return { path: inputPath, tempPath: null, durationSeconds };
   }
 
-  const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
     throw new WaveformError('FFmpeg not found for waveform generation', 'GENERATION_ERROR');
   }
 
   const tempWavPath = path.join(tempDir, `waveform_${randomUUID()}.wav`);
-  const durationSeconds = await getMediaDurationSeconds(ffmpegPath.path, inputPath);
   await transcodeToWaveformAudio(
     ffmpegPath.path,
     getFFprobePath(ffmpegPath.path),
@@ -308,7 +346,18 @@ async function prepareWaveformInput(
     onProgress
   );
 
-  return { path: tempWavPath, tempPath: tempWavPath };
+  return { path: tempWavPath, tempPath: tempWavPath, durationSeconds };
+}
+
+export function getTier1PixelsPerSecond(durationSeconds: number | null): number {
+  if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return MAX_TIER1_PEAKS_PER_SECOND;
+  }
+
+  return Math.max(
+    1,
+    Math.min(MAX_TIER1_PEAKS_PER_SECOND, Math.floor(MAX_TIER1_PEAKS / durationSeconds))
+  );
 }
 
 async function transcodeToWaveformAudio(
@@ -529,14 +578,14 @@ async function generateTierWithAudiowaveform(
   audioPath: string,
   tempDir: string,
   tierLevel: 1 | 2 | 3,
-  zoom: number,
+  resolution: { zoom: number } | { pixelsPerSecond: number },
   bits: 8 | 16
 ): Promise<{ peaks: WaveformPeak[]; sampleRate: number; duration: number } | null> {
   const tempJsonPath = path.join(tempDir, `waveform_${randomUUID()}_tier${tierLevel}.json`);
 
   try {
     // Run audiowaveform with JSON output
-    await executeAudiowaveform(binaryPath, audioPath, tempJsonPath, zoom, bits);
+    await executeAudiowaveform(binaryPath, audioPath, tempJsonPath, resolution, bits);
 
     // Parse JSON output
     const jsonContent = await fs.promises.readFile(tempJsonPath, 'utf-8');
@@ -547,7 +596,8 @@ async function generateTierWithAudiowaveform(
     
     // Calculate duration from sample rate and data length
     const sampleRate = waveformData.sample_rate || 44100;
-    const samplesPerPixel = waveformData.samples_per_pixel || zoom;
+    const samplesPerPixel = waveformData.samples_per_pixel
+      || ('zoom' in resolution ? resolution.zoom : sampleRate / resolution.pixelsPerSecond);
     const duration = (peaks.length * samplesPerPixel) / sampleRate;
 
     return { peaks, sampleRate, duration };
@@ -582,14 +632,16 @@ async function executeAudiowaveform(
   binaryPath: string,
   inputPath: string,
   outputPath: string,
-  zoom: number,
+  resolution: { zoom: number } | { pixelsPerSecond: number },
   bits: 8 | 16
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
       '-i', inputPath,
       '-o', outputPath,
-      '-z', zoom.toString(),
+      ...('zoom' in resolution
+        ? ['-z', resolution.zoom.toString()]
+        : ['--pixels-per-second', resolution.pixelsPerSecond.toString()]),
       '-b', bits.toString(),
     ];
 

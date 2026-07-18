@@ -115,7 +115,11 @@ export async function recoverChapterProxyIfCurrent(
   proxy: ChapterProxyRecord | null | undefined,
   chapter: Pick<ChapterRecord, 'id' | 'start_time' | 'end_time'>
 ): Promise<ChapterProxyRecord | null> {
-  if (!proxy || proxy.status === 'ready' || !isChapterProxyArtifactCurrent(proxy, chapter)) {
+  if (
+    !proxy
+    || proxy.status === 'ready'
+    || !(await isChapterProxyArtifactCurrent(proxy, chapter))
+  ) {
     return proxy ?? null;
   }
 

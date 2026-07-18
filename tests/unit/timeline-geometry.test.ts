@@ -4,6 +4,7 @@ import {
   clampNumber,
   clampRangeAgainstNeighbors,
   getAdaptiveRulerStep,
+  getTimelineZoomBounds,
   mergeRanges,
   normalizeRange,
   pointerToTime,
@@ -16,6 +17,14 @@ import {
 } from '../../src/renderer/lib/utils/timeline-geometry.js';
 
 describe('timeline-geometry general exports', () => {
+  it('fits a newly opened chapter and bounds the maximum rendered width', () => {
+    const duration = 20 * 60;
+    const bounds = getTimelineZoomBounds(duration, 1200);
+
+    expect(bounds.min).toBe(1);
+    expect(bounds.max * duration).toBeLessThanOrEqual(500_000);
+  });
+
   it('timeToPixels converts seconds to pixels and guards invalid input', () => {
     expect(timeToPixels(10, 10)).toBe(100);
     expect(timeToPixels(10, 0)).toBe(0);

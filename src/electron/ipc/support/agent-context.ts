@@ -89,7 +89,17 @@ export async function getAgentGroundingStatus(
       };
     }
 
-    if (!asset.file_path || !fs.existsSync(asset.file_path)) {
+    let sourceExists = false;
+    if (asset.file_path) {
+      try {
+        await fs.promises.access(asset.file_path);
+        sourceExists = true;
+      } catch {
+        sourceExists = false;
+      }
+    }
+
+    if (!sourceExists) {
       return {
         assetId: asset.id,
         status: 'error' as const,
