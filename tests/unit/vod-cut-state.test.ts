@@ -7,6 +7,7 @@ import {
   markVodCutOut,
   markVodCutSaved,
   redoVodCut,
+  setVodCutDuration,
   setVodCutPlayhead,
   undoVodCut,
   updateVodCutRange,
@@ -84,7 +85,7 @@ describe('vod cut state', () => {
     expect(vodCutState.lastSavedAt).toBe('2026-07-18T00:00:00.000Z');
   });
 
-  it('sanitizes invalid persisted ranges and non-finite duration', () => {
+  it('defers persisted range sanitization until duration is available', () => {
     initializeVodCut({
       projectId: 1,
       assetId: 2,
@@ -93,12 +94,24 @@ describe('vod cut state', () => {
         project_id: 1,
         asset_id: 2,
         updated_at: '2026-07-18T00:00:00.000Z',
-        ranges: [{ id: 'bad', title: '', start_time: 20, end_time: 10 }],
+        ranges: [
+          { id: 'valid', title: 'Opening', start_time: 10, end_time: 20 },
+          { id: 'bad', title: '', start_time: 20, end_time: 10 },
+        ],
       },
     });
 
     expect(vodCutState.duration).toBe(0);
     expect(vodCutState.ranges).toEqual([]);
+    expect(vodCutState.isLoading).toBe(true);
+    expect(vodCutState.error).toBeNull();
+
+    setVodCutDuration(100);
+
+    expect(vodCutState.ranges).toEqual([
+      { id: 'valid', title: 'Opening', start_time: 10, end_time: 20 },
+    ]);
+    expect(vodCutState.isLoading).toBe(false);
     expect(vodCutState.error).toBe('Some invalid saved chapter ranges were removed.');
   });
 });

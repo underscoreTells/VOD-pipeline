@@ -33,6 +33,7 @@ const DEFAULT_FPS = 24;
 let nextRangeId = 1;
 let undoStack: VodCutSnapshot[] = [];
 let redoStack: VodCutSnapshot[] = [];
+let pendingDraftRanges: VodCutRange[] | null = null;
 
 export const vodCutState = $state<VodCutState>({
   projectId: null,
@@ -125,6 +126,15 @@ function sanitizeRanges(ranges: VodCutRange[]): VodCutRange[] {
   return accepted;
 }
 
+function applyDraftRanges(ranges: VodCutRange[]): void {
+  vodCutState.ranges = sanitizeRanges(ranges);
+  vodCutState.error = vodCutState.ranges.length === ranges.length
+    ? null
+    : 'Some invalid saved chapter ranges were removed.';
+  vodCutState.isLoading = false;
+  pendingDraftRanges = null;
+}
+
 function overlapsExisting(candidate: VodCutRange, excludedId: string | null = null): boolean {
   return vodCutState.ranges.some((range) => (
     range.id !== excludedId && rangesOverlap(
@@ -153,7 +163,10 @@ export function initializeVodCut(options: {
   vodCutState.duration = Number.isFinite(options.duration) ? Math.max(0, options.duration) : 0;
   vodCutState.fps = options.fps && Number.isFinite(options.fps) ? options.fps : DEFAULT_FPS;
   const draftRanges = options.draft?.ranges ?? [];
-  vodCutState.ranges = sanitizeRanges(draftRanges);
+  pendingDraftRanges = draftRanges.length > 0 && vodCutState.duration <= 0
+    ? cloneRanges(draftRanges)
+    : null;
+  vodCutState.ranges = [];
   vodCutState.selectedRangeId = null;
   vodCutState.pendingIn = null;
   vodCutState.pendingOut = null;
@@ -162,12 +175,11 @@ export function initializeVodCut(options: {
   vodCutState.scrollLeft = 0;
   vodCutState.dirty = false;
   vodCutState.revision = 0;
-  vodCutState.isLoading = false;
+  vodCutState.isLoading = pendingDraftRanges !== null;
   vodCutState.isSaving = false;
   vodCutState.lastSavedAt = options.draft?.updated_at ?? null;
-  vodCutState.error = vodCutState.ranges.length === draftRanges.length
-    ? null
-    : 'Some invalid saved chapter ranges were removed.';
+  vodCutState.error = null;
+  if (!pendingDraftRanges) applyDraftRanges(draftRanges);
   undoStack = [];
   redoStack = [];
 }
@@ -186,6 +198,7 @@ export function setVodCutDuration(duration: number): void {
   if (!Number.isFinite(duration) || duration <= 0) return;
   vodCutState.duration = duration;
   vodCutState.playheadTime = clampTime(vodCutState.playheadTime);
+  if (pendingDraftRanges) applyDraftRanges(pendingDraftRanges);
 }
 
 export function setVodCutView(pixelsPerSecond: number, scrollLeft: number): void {

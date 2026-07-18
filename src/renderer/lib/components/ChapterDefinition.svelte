@@ -341,7 +341,7 @@
       <div class="flex items-center gap-2">
         <h2 class="m-0 truncate text-app-lg font-semibold text-text-primary">Cut VOD into chapters</h2>
         <span class="rounded-sm border border-border-default bg-surface-raised px-2 py-0.5 text-app-xs text-text-tertiary">
-          {vodCutState.isSaving ? 'Saving...' : vodCutState.dirty ? 'Unsaved' : vodCutState.lastSavedAt ? 'Draft saved' : 'New draft'}
+          {vodCutState.isLoading ? 'Loading draft...' : vodCutState.isSaving ? 'Saving...' : vodCutState.dirty ? 'Unsaved' : vodCutState.lastSavedAt ? 'Draft saved' : 'New draft'}
         </span>
       </div>
       <p class="mt-1 truncate text-app-sm text-text-tertiary">{asset.file_path.split(/[/\\]/).pop()} · {formatTime(vodCutState.duration)} · {vodCutState.ranges.length} chapter{vodCutState.ranges.length === 1 ? '' : 's'}</p>
