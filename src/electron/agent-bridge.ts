@@ -311,6 +311,21 @@ export class AgentBridge extends EventEmitter {
       });
   }
 
+  cancelByClientRequestId(clientRequestId: string): boolean {
+    if (!clientRequestId) {
+      return false;
+    }
+
+    for (const [requestId, pending] of this.pendingRequests) {
+      if (pending.streamContext?.clientRequestId === clientRequestId) {
+        this.sendCancelRequest(requestId);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   async stop(): Promise<void> {
     console.log("[AgentBridge] Stopping agent...");
 

@@ -5,3 +5,6 @@ export const CLIP_ROLE_VALUES = ["setup", "escalation", "twist", "payoff", "tran
 export const TURN_OUTCOME_VALUES = ["discussion", "proposal", "clarification"] as const;
 export const PLAYHEAD_GROUNDING_WINDOW_SECONDS = 45;
 export const KEEP_WINDOW_REMOVAL_PREFIX = /^\s*(cut|remove|trim|drop|skip|omit|delete)\b/i;
+export const MAX_CHAPTER_CUT_MAP_CLIP_IDS = 64;
+export const MAX_CHAPTER_CUT_MAP_PAGE_SIZE = 100;
+export const DEFAULT_CHAPTER_CUT_MAP_PAGE_SIZE = 24;

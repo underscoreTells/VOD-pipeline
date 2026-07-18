@@ -8,13 +8,18 @@ import {
   setDatabaseForTesting,
   withTransaction,
 } from "../../src/electron/database/index.js";
-import { combinePrerequisites, requireNativeModule, requireSupportedNode } from "../helpers/prerequisites.js";
+import { requireSupportedNode } from "../helpers/prerequisites.js";
 
-const prerequisite = combinePrerequisites(
-  requireSupportedNode(),
-  requireNativeModule("better-sqlite3")
-);
-const describeTx = prerequisite.ok ? describe : describe.skip;
+const describeTx = (() => {
+  if (!requireSupportedNode().ok) return describe.skip;
+  try {
+    const probe = new Database(":memory:");
+    probe.close();
+    return describe;
+  } catch {
+    return describe.skip;
+  }
+})();
 
 describeTx("suggestion transactions (withTransaction)", () => {
   let db: Database.Database;

@@ -137,6 +137,7 @@ export function registerChapterHandlers(): void {
         start_time?: number;
         end_time?: number;
         display_order?: number;
+        rough_cut_completed_at?: string | null;
       } = {};
 
       if (updates?.title !== undefined) {
@@ -150,6 +151,11 @@ export function registerChapterHandlers(): void {
       }
       if (updates?.display_order !== undefined) {
         normalizedUpdates.display_order = updates.display_order as number;
+      }
+      if (updates?.roughCutCompletedAt !== undefined) {
+        normalizedUpdates.rough_cut_completed_at = updates.roughCutCompletedAt === null
+          ? null
+          : String(updates.roughCutCompletedAt);
       }
 
       const success = await updateChapter(parsed.data.id as number, normalizedUpdates);
@@ -169,9 +175,8 @@ export function registerChapterHandlers(): void {
           });
           await invalidateChapterReverseProxy(parsed.data.id as number, assetId);
         }
+        await deleteDetailedTranscriptsByChapter(parsed.data.id as number);
       }
-
-      await deleteDetailedTranscriptsByChapter(parsed.data.id as number);
       return createSuccessResponse(null);
     } catch (error) {
       if (error instanceof Error && error.message.includes('time')) {

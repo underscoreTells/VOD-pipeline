@@ -10,6 +10,7 @@ import {
   updateClip as updateTimelineClip,
 } from './timeline.svelte';
 import type { Clip } from '../../../shared/types/database';
+import type { CreateClipInput } from '../../../shared/contracts/electron-api.js';
 
 // Command pattern for undo/redo
 export interface Command {
@@ -246,6 +247,43 @@ export class ResizeClipCommand implements Command {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
+  }
+}
+
+export class CreateClipCommand implements Command {
+  private clip: Clip | null = null;
+
+  constructor(
+    public description: string,
+    private readonly input: CreateClipInput
+  ) {}
+
+  get createdClip(): Clip | null {
+    return this.clip;
+  }
+
+  async execute() {
+    if (this.clip) {
+      await persistClipRestore(this.clip);
+      createTimelineClip(this.clip);
+      return;
+    }
+
+    const result = await ipcCreateClip(this.input);
+    if (!result.success || !result.data) {
+      throw new Error(result.error || 'Failed to create clip');
+    }
+    this.clip = cloneClipForHistory(result.data);
+    createTimelineClip(result.data);
+  }
+
+  async undo() {
+    if (!this.clip) return;
+    await persistClipDelete(this.clip.id);
+    timelineState.clips = timelineState.clips.filter((clip) => clip.id !== this.clip?.id);
+    const nextSelectedIds = new Set(timelineState.selectedClipIds);
+    nextSelectedIds.delete(this.clip.id);
+    timelineState.selectedClipIds = nextSelectedIds;
   }
 }
 

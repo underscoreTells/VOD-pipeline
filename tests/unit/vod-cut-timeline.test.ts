@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import * as timelineGeometry from '../../src/renderer/lib/utils/timeline-geometry.js';
+import * as vodCutTimeline from '../../src/renderer/lib/utils/vod-cut-timeline.js';
 import {
   calculateZoomAroundPointer,
   clampNumber,
@@ -11,6 +13,23 @@ import {
 } from '../../src/renderer/lib/utils/vod-cut-timeline.js';
 
 describe('vod-cut-timeline utils', () => {
+  describe('backward-compat re-exports', () => {
+    it('aliases general timeline-geometry functions under vod-specific names', () => {
+      expect(vodCutTimeline.vodTimeToPixels).toBe(timelineGeometry.timeToPixels);
+      expect(vodCutTimeline.pointerToVodTime).toBe(timelineGeometry.pointerToTime);
+      expect(vodCutTimeline.normalizeVodRange).toBe(timelineGeometry.normalizeRange);
+      expect(vodCutTimeline.clampNumber).toBe(timelineGeometry.clampNumber);
+      expect(vodCutTimeline.rangesOverlap).toBe(timelineGeometry.rangesOverlap);
+      expect(vodCutTimeline.clampRangeAgainstNeighbors).toBe(
+        timelineGeometry.clampRangeAgainstNeighbors
+      );
+      expect(vodCutTimeline.calculateZoomAroundPointer).toBe(
+        timelineGeometry.calculateZoomAroundPointer
+      );
+      expect(vodCutTimeline.getAdaptiveRulerStep).toBe(timelineGeometry.getAdaptiveRulerStep);
+    });
+  });
+
   describe('clampNumber', () => {
     it('returns the value when inside the range', () => {
       expect(clampNumber(5, 0, 10)).toBe(5);

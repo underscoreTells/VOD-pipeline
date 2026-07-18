@@ -41,6 +41,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
     start_time: chapter.start_time,
     end_time: chapter.end_time,
     display_order: displayOrder,
+    rough_cut_completed_at: null,
     created_at: now,
   };
 }
@@ -48,7 +49,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
 export async function getChapter(id: number): Promise<Chapter | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE id = ?'
+    'SELECT id, project_id, title, start_time, end_time, display_order, rough_cut_completed_at, created_at FROM chapters WHERE id = ?'
   ).get(id) as Chapter | undefined;
 
   return result || null;
@@ -57,13 +58,13 @@ export async function getChapter(id: number): Promise<Chapter | null> {
 export async function getChaptersByProject(projectId: number): Promise<Chapter[]> {
   const database = await getDatabase();
   return database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE project_id = ? ORDER BY display_order ASC, start_time ASC'
+    'SELECT id, project_id, title, start_time, end_time, display_order, rough_cut_completed_at, created_at FROM chapters WHERE project_id = ? ORDER BY display_order ASC, start_time ASC'
   ).all(projectId) as Chapter[];
 }
 
 export async function updateChapter(
   id: number,
-  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time' | 'display_order'>>
+  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time' | 'display_order' | 'rough_cut_completed_at'>>
 ): Promise<boolean> {
   const database = await getDatabase();
   const current = await getChapter(id);
@@ -98,6 +99,10 @@ export async function updateChapter(
   if (updates.display_order !== undefined) {
     fields.push('display_order = ?');
     values.push(updates.display_order);
+  }
+  if (updates.rough_cut_completed_at !== undefined) {
+    fields.push('rough_cut_completed_at = ?');
+    values.push(updates.rough_cut_completed_at);
   }
 
   if (fields.length === 0) {

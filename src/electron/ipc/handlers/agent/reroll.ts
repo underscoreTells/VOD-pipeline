@@ -9,7 +9,6 @@ import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
   AgentHandlerError,
-  assertChapterGroundingReady,
   logger,
   parseConversationTurnPayload,
   requireConversationId,
@@ -59,7 +58,6 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         provider,
         { requireFreshRuntime: true }
       );
-      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === normalizedMessageId);

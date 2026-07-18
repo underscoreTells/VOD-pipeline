@@ -8,35 +8,24 @@ describe("chat panel composer helpers", () => {
   it("allows submit only when the composer is actionable", () => {
     expect(canSubmitComposerMessage({
       isEditing: false,
-      isGroundingActionBlocked: false,
       isStreaming: false,
       message: "Ship it",
     })).toBe(true);
 
     expect(canSubmitComposerMessage({
       isEditing: false,
-      isGroundingActionBlocked: false,
       isStreaming: false,
       message: "   ",
     })).toBe(false);
 
     expect(canSubmitComposerMessage({
-      isEditing: false,
-      isGroundingActionBlocked: true,
-      isStreaming: false,
-      message: "Ship it",
-    })).toBe(false);
-
-    expect(canSubmitComposerMessage({
       isEditing: true,
-      isGroundingActionBlocked: false,
       isStreaming: false,
       message: "Ship it",
     })).toBe(false);
 
     expect(canSubmitComposerMessage({
       isEditing: false,
-      isGroundingActionBlocked: false,
       isStreaming: true,
       message: "Ship it",
     })).toBe(false);

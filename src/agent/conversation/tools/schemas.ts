@@ -2,6 +2,9 @@ import { z } from "zod";
 import { canonicalSchema as s } from "../../tools/schema.js";
 import {
   CLIP_ROLE_VALUES,
+  DEFAULT_CHAPTER_CUT_MAP_PAGE_SIZE,
+  MAX_CHAPTER_CUT_MAP_CLIP_IDS,
+  MAX_CHAPTER_CUT_MAP_PAGE_SIZE,
   MAX_PROPOSAL_DRAFTS,
   MAX_TRANSCRIPT_WINDOW_REQUESTS,
   MAX_VIDEO_OBSERVATIONS,
@@ -26,6 +29,14 @@ export interface DraftRoughCutProposalsInput {
 export interface FinalizeConversationTurnInput {
   outcome: TurnOutcome;
   assistantResponse: string;
+}
+
+export interface LoadChapterCutMapInput {
+  startLocalTime?: number;
+  endLocalTime?: number;
+  clipIds?: number[];
+  offset?: number;
+  limit?: number;
 }
 
 export const rangeSuggestionSchema = s.object(
@@ -200,3 +211,32 @@ export const videoEvidenceSchema = z.object({
     )
     .max(MAX_VIDEO_OBSERVATIONS),
 });
+
+export const loadChapterCutMapSchema = s.object(
+  {
+    startLocalTime: s.optional(s.number({ minimum: 0 })),
+    endLocalTime: s.optional(s.number({ minimum: 0 })),
+    clipIds: s.optional(
+      s.array(
+        s.integer({ minimum: 1 }),
+        {
+          minItems: 1,
+          maxItems: MAX_CHAPTER_CUT_MAP_CLIP_IDS,
+        }
+      )
+    ),
+    offset: s.optional(s.integer({ minimum: 0 })),
+    limit: s.optional(
+      s.integer({
+        minimum: 1,
+        maximum: MAX_CHAPTER_CUT_MAP_PAGE_SIZE,
+      })
+    ),
+  },
+  {
+    description:
+      "Load a bounded, paginated, filterable view of the current chapter cut map (all input.context.chapterClips) when the 18-line preview in the system prompt is not enough. Optional startLocalTime/endLocalTime filter by chapter-local visible range overlap, clipIds filters to specific clip ids, and offset/limit paginate the filtered result. Defaults to offset=0, limit=" +
+      DEFAULT_CHAPTER_CUT_MAP_PAGE_SIZE +
+      ".",
+  }
+);

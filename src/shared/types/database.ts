@@ -50,6 +50,7 @@ export interface Chapter {
   start_time: number;
   end_time: number;
   display_order: number;
+  rough_cut_completed_at: string | null;
   created_at: string;
 }
 
@@ -143,7 +144,7 @@ export interface ExecutionTraceEntry {
 // Input types (for creating new records)
 export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
-export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order'> & { display_order?: number };
+export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order' | 'rough_cut_completed_at'> & { display_order?: number };
 export type CreateTranscriptInput = Omit<Transcript, 'id'>;
 export type CreateDetailedTranscriptInput = Omit<DetailedTranscript, 'id' | 'created_at'>;
 export type CreateChatConversationInput = Omit<ChatConversation, 'id' | 'thread_id' | 'created_at' | 'updated_at'> & {

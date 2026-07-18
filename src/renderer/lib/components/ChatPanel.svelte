@@ -4,7 +4,6 @@
     applyAllSuggestions,
     branchMessage,
     editMessage,
-    previewAllSuggestions,
     rejectAllSuggestions,
     rerollMessage,
     sendChatMessage,
@@ -14,8 +13,7 @@
     selectConversation,
     removeConversation,
     applySuggestion,
-    previewSuggestion,
-    cancelSuggestionPreviewAction,
+    focusSuggestion,
     rejectSuggestion,
   } from "../state/agent.svelte";
   import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
@@ -39,6 +37,9 @@
     getExecutionTraceStepIndex,
   } from "../../../shared/utils/execution-trace.js";
   import { cn } from "../utils/cn";
+  import { PROVIDER_IDS, getProviderLabel } from '../../../shared/llm/provider-registry.js';
+  import { getSelectedChapter } from '../state/chapters.svelte.js';
+  import { timelineState } from '../state/timeline.svelte.js';
 
   interface Props {
     class?: string;
@@ -53,13 +54,14 @@
   let suggestionsWrapper = $state<HTMLDivElement | null>(null);
   let suggestionsPanel = $state<HTMLDivElement | null>(null);
   let showSuggestions = $state(true);
-  let bulkSuggestionAction = $state<'preview' | 'reject' | 'apply' | null>(null);
+  let bulkSuggestionAction = $state<'reject' | 'apply' | null>(null);
   let busySuggestionIds = $state<number[]>([]);
   let showConversationDropdown = $state(false);
   let copiedMessageId = $state<string | null>(null);
   let editingMessageId = $state<string | null>(null);
   let editingMessageValue = $state("");
   let messageActionPending = $state(false);
+  let previousComposerKey = '';
   let copyResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
   const MESSAGE_INPUT_MIN_HEIGHT = 112;
@@ -69,10 +71,7 @@
   const MIN_VISIBLE_MESSAGES_HEIGHT = 160;
   const SUGGESTION_ACTION_BUTTON_CLASS = 'border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle text-accent-primary hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50';
 
-  const providers = [
-    { value: "gemini", label: "Gemini" },
-    { value: "kimi", label: "Kimi K2.5" },
-  ];
+  const providers = PROVIDER_IDS.map((value) => ({ value, label: getProviderLabel(value) }));
 
   let currentConversation = $derived(
     agentState.conversations.find(c => c.id === agentState.selectedConversationId)
@@ -82,20 +81,11 @@
     () => agentState.suggestions.filter((suggestion) => suggestion.status === 'pending')
   );
 
-  let previewableSuggestions = $derived.by(
-    () => pendingSuggestions.filter((suggestion) => suggestion.clip_id == null)
-  );
-
   let isBulkSuggestionActionRunning = $derived(bulkSuggestionAction !== null);
-  let isGroundingActionBlocked = $derived(
-    Boolean(agentState.currentChapterId)
-      && (agentState.isGroundingStatusLoading || agentState.groundingStatus !== 'ready')
-  );
 
   let canSubmitCurrentMessage = $derived.by(() =>
     canSubmitComposerMessage({
       isEditing: Boolean(editingMessageId),
-      isGroundingActionBlocked,
       isStreaming: agentState.isStreaming,
       message,
     })
@@ -106,11 +96,7 @@
       return "Finish editing the selected message...";
     }
 
-    if (isGroundingActionBlocked) {
-      return "Draft while video grounding finishes...";
-    }
-
-    return "Ask the AI editor...";
+    return "Ask the AI editor about this chapter...";
   });
 
   let isComposerDisabled = $derived(agentState.isStreaming || Boolean(editingMessageId));
@@ -123,6 +109,8 @@
         ? 'No conversations'
         : currentConversation?.title || 'Select conversation'
   );
+  let currentChapter = $derived(getSelectedChapter());
+  let composerKey = $derived(`${agentState.currentProjectId ?? 'none'}:${agentState.currentChapterId ?? 'none'}:${agentState.selectedConversationId ?? 'new'}`);
 
   let groundingBanner = $derived.by(() => {
     if (
@@ -135,7 +123,7 @@
     if (agentState.isGroundingStatusLoading) {
       return {
         title: 'Checking video grounding',
-        body: 'You can keep drafting, but send stays disabled until grounding is ready.',
+        body: 'Transcript-grounded editing is available while video analysis is checked.',
         progress: null,
         detail: null,
       };
@@ -144,7 +132,7 @@
     if (agentState.groundingStatus === 'missing_video_asset') {
       return {
         title: 'No video proxy source available',
-        body: 'Link a video asset to this chapter. You can keep drafting, but send stays disabled until the agent has grounded video.',
+        body: 'Link a video asset for visual analysis. Transcript and timeline editing remain available.',
         progress: null,
         detail: null,
       };
@@ -153,7 +141,7 @@
     if (agentState.groundingStatus === 'error') {
       return {
         title: 'Video proxy failed',
-        body: 'You can keep drafting, but send stays disabled until the chapter proxy can be built.',
+        body: 'Visual analysis is unavailable, but transcript and timeline editing remain available.',
         progress: null,
         detail: agentState.groundingErrorDetail,
       };
@@ -166,7 +154,7 @@
 
     return {
       title: 'Video proxy is still preparing',
-      body: 'You can keep drafting, but send stays disabled until grounding is ready.',
+      body: 'You can chat now. Requests that require visuals may use transcript evidence until the proxy is ready.',
       progress,
       percent: agentState.proxyProgressPercent,
       detail: null,
@@ -183,6 +171,17 @@
     messageInput.style.height = `${nextHeight}px`;
     messageInput.style.overflowY = messageInput.scrollHeight > MESSAGE_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
   }
+
+  $effect(() => {
+    if (composerKey === previousComposerKey) return;
+    previousComposerKey = composerKey;
+    message = agentState.composerDrafts[composerKey] ?? '';
+  });
+
+  $effect(() => {
+    if (!composerKey) return;
+    agentState.composerDrafts[composerKey] = message;
+  });
 
   $effect(() => {
     message;
@@ -311,6 +310,7 @@
 
     const msg = message;
     message = "";
+    agentState.composerDrafts[composerKey] = '';
     autoResizeMessageInput();
     await sendChatMessage(msg);
   }
@@ -340,11 +340,11 @@
   }
 
   function canEditMessage(message: ChatMessage) {
-    return canMutateMessage(message) && !isGroundingActionBlocked && message.role === "user" && !editingMessageId;
+    return canMutateMessage(message) && message.role === "user" && !editingMessageId;
   }
 
   function canRerollMessage(message: ChatMessage) {
-    return canMutateMessage(message) && !isGroundingActionBlocked && message.role !== "system";
+    return canMutateMessage(message) && message.role !== "system";
   }
 
   function startEditingMessage(message: ChatMessage) {
@@ -407,12 +407,26 @@
     return `${format(start)} - ${format(end)}`;
   }
 
+  function formatContextTime(seconds: number): string {
+    const start = currentChapter?.start_time ?? 0;
+    const local = Math.max(0, seconds - start);
+    const minutes = Math.floor(local / 60);
+    const secs = Math.floor(local % 60);
+    return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
   function formatSuggestionPrimaryLine(suggestion: { action_type?: string; target_clip_id?: number | null; in_point: number; out_point: number }) {
     if (suggestion.action_type === 'update_clip') {
       const clipLabel = suggestion.target_clip_id ? `Clip #${suggestion.target_clip_id}` : 'Target clip';
       return `${clipLabel} (${formatDuration(suggestion.in_point, suggestion.out_point)})`;
     }
     return formatDuration(suggestion.in_point, suggestion.out_point);
+  }
+
+  function getSuggestionSourceLabel(suggestion: { chat_message_id?: number | null }): string {
+    if (!suggestion.chat_message_id) return 'From this conversation';
+    const message = agentState.messages.find((item) => item.databaseId === suggestion.chat_message_id);
+    return message ? `From response at ${formatTime(message.timestamp)}` : 'From an earlier response';
   }
 
   function getTraceStepCount(message: { trace: Array<{ label: string; stepIndex?: number }> }) {
@@ -474,24 +488,9 @@
     }
   }
 
-  async function handlePreviewSuggestion(id: number) {
+  function handleReviewSuggestion(id: number) {
     if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
-    busySuggestionIds = getBusySuggestionIdsNext(id, true);
-    try {
-      await previewSuggestion(id);
-    } finally {
-      busySuggestionIds = getBusySuggestionIdsNext(id, false);
-    }
-  }
-
-  async function handleCancelSuggestionPreview(id: number) {
-    if (isBulkSuggestionActionRunning || isSuggestionBusy(id)) return;
-    busySuggestionIds = getBusySuggestionIdsNext(id, true);
-    try {
-      await cancelSuggestionPreviewAction(id);
-    } finally {
-      busySuggestionIds = getBusySuggestionIdsNext(id, false);
-    }
+    focusSuggestion(id);
   }
 
   async function handleApplyAllSuggestions() {
@@ -504,14 +503,9 @@
     }
   }
 
-  async function handlePreviewAllSuggestions() {
-    if (isBulkSuggestionActionRunning || previewableSuggestions.length === 0) return;
-    bulkSuggestionAction = 'preview';
-    try {
-      await previewAllSuggestions();
-    } finally {
-      bulkSuggestionAction = null;
-    }
+  function handleReviewAllSuggestions() {
+    const first = pendingSuggestions[0];
+    if (first) focusSuggestion(first.id);
   }
 
   async function handleRejectAllSuggestions() {
@@ -822,18 +816,17 @@
           style={showSuggestions ? `max-height: ${layoutState.suggestionsTrayMaxHeight}px;` : undefined}
         >
           <div class="suggestions-header sticky top-0 z-[var(--z-panel)] flex items-center justify-between border-b border-border-subtle bg-surface-raised px-3 py-2 shadow-[0_1px_0_rgba(0,0,0,0.06)]">
-            <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggestion{pendingSuggestions.length !== 1 ? 's' : ''}</span>
+            <span class="suggestions-count text-app-xs font-medium text-text-secondary">{pendingSuggestions.length} suggested cut{pendingSuggestions.length !== 1 ? 's' : ''}</span>
             <div class="suggestions-actions flex items-center gap-1">
               <TooltipIconButton
                 class={cn(
                   'h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]',
                   SUGGESTION_ACTION_BUTTON_CLASS,
-                  bulkSuggestionAction === 'preview' && 'animate-pulse'
                 )}
                 icon={Play}
-                onclick={handlePreviewAllSuggestions}
-                disabled={isBulkSuggestionActionRunning || previewableSuggestions.length === 0}
-                tooltip={bulkSuggestionAction === 'preview' ? 'Previewing suggestions' : 'Preview all suggestions'}
+                onclick={handleReviewAllSuggestions}
+                disabled={isBulkSuggestionActionRunning || pendingSuggestions.length === 0}
+                tooltip="Review suggested cuts on the timeline"
                 type="button"
               />
               <TooltipIconButton
@@ -872,40 +865,30 @@
           {#if showSuggestions}
             <div class="suggestions-list flex flex-col gap-2 px-3 pb-2 pt-2">
               {#each pendingSuggestions as suggestion (suggestion.id)}
-                <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-hover">
+                <div class="suggestion-row group/suggestion flex items-start justify-between gap-3 rounded-md border border-transparent px-3 py-2 transition-colors hover:border-border-default hover:bg-surface-hover" class:border-accent-primary={agentState.selectedSuggestionId === suggestion.id} class:bg-accent-primary-subtle={agentState.selectedSuggestionId === suggestion.id}>
                   <div class="suggestion-info flex min-w-0 flex-1 flex-col gap-0.5">
                     <span class="suggestion-time font-mono text-app-xs text-accent-primary">{formatSuggestionPrimaryLine(suggestion)}</span>
+                    <span class="text-[10px] text-text-disabled">{getSuggestionSourceLabel(suggestion)}</span>
                     <span class="suggestion-desc text-app-sm font-medium leading-[1.4] text-text-primary">{suggestion.description || 'No description'}</span>
                     {#if suggestion.reasoning}
                       <span class="suggestion-reasoning text-app-xs leading-[1.4] text-text-tertiary">{suggestion.reasoning}</span>
                     {/if}
                   </div>
-                  <div class="suggestion-actions flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/suggestion:opacity-100 group-focus-within/suggestion:opacity-100">
-                    {#if suggestion.clip_id}
-                      <TooltipIconButton
-                        class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
-                        icon={X}
-                        onclick={() => handleCancelSuggestionPreview(suggestion.id)}
-                        disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                        tooltip="Cancel preview"
-                        type="button"
-                      />
-                    {:else}
-                      <TooltipIconButton
-                        class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
-                        icon={Play}
-                        onclick={() => handlePreviewSuggestion(suggestion.id)}
-                        disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                        tooltip="Preview suggestion"
-                        type="button"
-                      />
-                    {/if}
+                  <div class="suggestion-actions flex shrink-0 items-center gap-1">
+                    <TooltipIconButton
+                      class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
+                      icon={Play}
+                      onclick={() => handleReviewSuggestion(suggestion.id)}
+                      disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
+                      tooltip="Review on timeline"
+                      type="button"
+                    />
                     <TooltipIconButton
                       class={cn('h-7 w-7 rounded-[6px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-95', SUGGESTION_ACTION_BUTTON_CLASS)}
                       icon={Check}
                       onclick={() => handleApplySuggestion(suggestion.id)}
                       disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      tooltip="Apply suggestion"
+                      tooltip="Accept suggested cut"
                       type="button"
                     />
                     <TooltipIconButton
@@ -913,7 +896,7 @@
                       icon={X}
                       onclick={() => handleRejectSuggestion(suggestion.id)}
                       disabled={isBulkSuggestionActionRunning || isSuggestionBusy(suggestion.id)}
-                      tooltip="Reject suggestion"
+                      tooltip="Reject suggested cut"
                       type="button"
                     />
                   </div>
@@ -928,14 +911,33 @@
 
   {#if agentState.currentChapterId}
     <div class="composer-wrapper shrink-0 px-3 pb-3">
+      <div class="mb-2 flex flex-wrap items-center gap-1.5" aria-label="Agent context">
+        <span class="rounded-sm border border-border-default bg-surface-raised px-2 py-1 text-[10px] font-medium text-text-secondary">
+          {currentChapter?.title || 'Current chapter'}
+        </span>
+        {#if agentState.selectedSuggestionId !== null}
+          <span class="rounded-sm border border-accent-warning bg-accent-warning-subtle px-2 py-1 text-[10px] font-medium text-accent-warning">Suggested cut selected</span>
+        {:else}
+          <span class="rounded-sm border border-border-default bg-surface-raised px-2 py-1 text-[10px] text-text-tertiary">Playhead {formatContextTime(timelineState.playheadTime)}</span>
+        {/if}
+        {#if timelineState.selectedClipIds.size > 0}
+          <button type="button" class="rounded-sm border border-accent-primary bg-accent-primary-subtle px-2 py-1 text-[10px] font-medium text-accent-primary" onclick={() => timelineState.selectedClipIds = new Set()}>{timelineState.selectedClipIds.size} cut{timelineState.selectedClipIds.size === 1 ? '' : 's'} selected · clear</button>
+        {:else}
+          <span class="rounded-sm border border-border-default bg-surface-raised px-2 py-1 text-[10px] text-text-tertiary">Whole chapter</span>
+        {/if}
+        <span class="ml-auto inline-flex items-center gap-1.5 text-[10px] text-text-tertiary">
+          <span class="h-1.5 w-1.5 rounded-full" class:bg-accent-primary={agentState.groundingStatus === 'ready'} class:bg-accent-warning={agentState.groundingStatus !== 'ready'}></span>
+          {agentState.groundingStatus === 'ready' ? 'Video ready' : 'Video preparing · transcript chat available'}
+        </span>
+      </div>
       {#if groundingBanner}
-        <div class="mb-3 rounded-lg border border-accent-destructive bg-accent-destructive/10 px-3 py-2 text-accent-destructive">
+        <div class="mb-3 rounded-lg border border-border-default bg-surface-raised px-3 py-2 text-text-secondary">
           <div class="text-app-xs font-semibold uppercase tracking-[0.06em]">{groundingBanner.title}</div>
           <div class="mt-1 text-app-sm">{groundingBanner.body}</div>
           {#if groundingBanner.percent !== null && groundingBanner.percent !== undefined}
-            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-accent-destructive/20">
+            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-border-default">
               <div
-                class="h-full rounded-full bg-accent-destructive transition-[width] duration-300 ease-out"
+                class="h-full rounded-full bg-accent-primary transition-[width] duration-300 ease-out"
                 style="width: {Math.min(100, Math.max(0, groundingBanner.percent))}%"
               ></div>
             </div>

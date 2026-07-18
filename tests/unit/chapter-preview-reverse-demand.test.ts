@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
-  new URL("../../src/renderer/lib/components/ChapterPreview.svelte", import.meta.url),
+  new URL("../../src/renderer/lib/components/ChapterEditorViewer.svelte", import.meta.url),
   "utf8"
 );
 

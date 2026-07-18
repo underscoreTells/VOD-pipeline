@@ -13,9 +13,15 @@
     class?: string;
     projectAssets: Asset[];
     onImportClick: () => void;
+    onChapterSelect?: (chapterId: number) => void | Promise<void>;
   }
 
-  let { class: className = '', projectAssets, onImportClick }: Props = $props();
+  let {
+    class: className = '',
+    projectAssets,
+    onImportClick,
+    onChapterSelect,
+  }: Props = $props();
 
   // Track which groups are expanded
   let expandedGroups = $state<Set<number>>(new Set());
@@ -82,6 +88,10 @@
   }
 
   function handleSelectChapter(chapterId: number) {
+    if (onChapterSelect) {
+      void onChapterSelect(chapterId);
+      return;
+    }
     selectChapter(chapterId);
   }
 
@@ -203,6 +213,9 @@
                       <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                     </div>
                   {/if}
+                  {#if chapter.rough_cut_completed_at}
+                    <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-primary-subtle text-accent-primary" title="Rough cut complete"><Icon icon={Check} size={11} /></span>
+                  {/if}
                   
                   <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                     {formatTime(chapter.end_time - chapter.start_time)}
@@ -274,6 +287,9 @@
                         <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
                         <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                       </div>
+                    {/if}
+                    {#if chapter.rough_cut_completed_at}
+                      <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-primary-subtle text-accent-primary" title="Rough cut complete"><Icon icon={Check} size={11} /></span>
                     {/if}
                     
                     <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>

@@ -1,6 +1,5 @@
 interface ComposerSubmitState {
   isEditing: boolean;
-  isGroundingActionBlocked: boolean;
   isStreaming: boolean;
   message: string;
 }
@@ -16,7 +15,6 @@ export function canSubmitComposerMessage(state: ComposerSubmitState): boolean {
     state.message.trim()
     && !state.isStreaming
     && !state.isEditing
-    && !state.isGroundingActionBlocked
   );
 }
 

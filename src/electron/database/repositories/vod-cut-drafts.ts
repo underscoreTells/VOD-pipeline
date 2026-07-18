@@ -143,6 +143,7 @@ export async function commitVodCut(
         start_time: range.startTime,
         end_time: range.endTime,
         display_order: displayOrder,
+        rough_cut_completed_at: null,
         created_at: createdAt,
       };
       linkAsset.run(chapter.id, assetId);

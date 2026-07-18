@@ -1,5 +1,15 @@
 import type Database from 'better-sqlite3';
+import type { Chapter, Clip, Suggestion } from '../../shared/types/database.js';
 import { getDatabase } from './client.js';
+import {
+  clipMatchesExpectedCreate,
+  clipMatchesExpectedUpdate,
+  computeExpectedCreatedClipFields,
+  computeExpectedUpdatedClipFields,
+  isUpdateSuggestion,
+  normalizeSuggestionRecord,
+  parseSuggestionPreviewSnapshotJson,
+} from './repositories/suggestion-helpers.js';
 
 type ForeignKeyCheckRow = {
   table: string;
@@ -180,7 +190,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -198,6 +208,7 @@ export function ensureSchemaColumns(database: Database.Database): void {
     { table: 'assets', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'display_order', definition: 'INTEGER DEFAULT 0' },
+    { table: 'chapters', column: 'rough_cut_completed_at', definition: 'DATETIME' },
     { table: 'suggestions', column: 'conversation_id', definition: 'INTEGER REFERENCES chat_conversations(id) ON DELETE CASCADE' },
     { table: 'suggestions', column: 'chat_message_id', definition: 'INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE' },
     { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
@@ -626,4 +637,401 @@ function getSchemaStatementType(statement: string): 'table' | 'index' | 'other' 
   }
 
   return 'other';
+}
+
+// ============================================================================
+// Schema-version-3 reconciliation of pending DB-backed suggestion previews
+//
+// Before this build, previewing a suggestion left a live clip on the timeline
+// (a created clip for `create_clip`, or an in-place edit for `update_clip`)
+// tracked only by `suggestions.clip_id` and `suggestions.preview_snapshot_json`.
+// On restart the preview was never reconciled, so stale preview clips
+// accumulated and update_preview clips kept their speculative edits.
+//
+// This idempotent one-time migration (gated by user_version < 3) walks every
+// pending suggestion that still carries a DB-backed preview and:
+//
+//   create_clip, clip untouched   -> delete the preview clip, unlink the row
+//   create_clip, clip diverged    -> keep the clip (user clearly edited it),
+//                                    unlink the row
+//   update_clip, clip untouched   -> restore the clip from preview_snapshot_json,
+//                                    unlink the row
+//   update_clip, clip diverged    -> keep the clip's current state, unlink the row
+//   dangling clip reference       -> unlink the row
+//   applied/rejected rows         -> untouched (applied stays applied)
+//
+// "Untouched" means the live clip still matches exactly what
+// previewSuggestionWithClip would have produced from this suggestion. The
+// comparison reuses the same pure helpers the preview path uses, so the
+// migration cannot drift from the runtime semantics. The preview columns
+// (clip_id, preview_snapshot_json) are preserved on the schema for the
+// ongoing preview feature; only the stale row data is reconciled.
+// ============================================================================
+
+export interface SuggestionPreviewReconciliationStats {
+  /** True when the migration skipped because user_version is already >= 3. */
+  skipped: boolean;
+  createClipsDeleted: number;
+  createClipsPreserved: number;
+  updateSnapshotsRestored: number;
+  updateClipsPreserved: number;
+  danglingUnlinked: number;
+}
+
+type SuggestionRow = Suggestion;
+
+interface ClipRow {
+  id: number;
+  project_id: number;
+  asset_id: number;
+  track_index: number;
+  in_point: number;
+  out_point: number;
+  role: string | null;
+  description: string | null;
+  is_essential: number;
+  created_at: string;
+}
+
+interface ChapterRow {
+  id: number;
+  project_id: number;
+  title: string | null;
+  start_time: number;
+  end_time: number;
+  display_order: number;
+  created_at: string;
+}
+
+interface ChapterAssetRow {
+  asset_id: number;
+  file_type: string | null;
+}
+
+function mapClipRow(row: ClipRow): Clip {
+  return {
+    ...row,
+    role: row.role as Clip['role'],
+    is_essential: Boolean(row.is_essential),
+  };
+}
+
+function mapChapterRow(row: ChapterRow): Chapter {
+  return {
+    ...row,
+    title: row.title ?? '',
+    rough_cut_completed_at: null,
+  };
+}
+
+function readSchemaVersion(database: Database.Database): number {
+  const version = database.pragma('user_version', { simple: true });
+  return typeof version === 'number' ? version : 0;
+}
+
+/**
+ * Idempotent schema-version-3 reconciliation of pending DB-backed suggestion
+ * previews. Safe to call on every bootstrap: it is a no-op once user_version
+ * reaches 3, and a second run before the version is stamped finds no pending
+ * previews to reconcile because the first run already unlinked them.
+ */
+export function reconcilePendingSuggestionPreviews(
+  database: Database.Database
+): SuggestionPreviewReconciliationStats {
+  const stats: SuggestionPreviewReconciliationStats = {
+    skipped: false,
+    createClipsDeleted: 0,
+    createClipsPreserved: 0,
+    updateSnapshotsRestored: 0,
+    updateClipsPreserved: 0,
+    danglingUnlinked: 0,
+  };
+
+  if (readSchemaVersion(database) >= 3) {
+    stats.skipped = true;
+    return stats;
+  }
+
+  if (!tableExists(database, 'suggestions') || !tableExists(database, 'clips')) {
+    return stats;
+  }
+
+  const selectSuggestions = database.prepare(
+    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+            reasoning, provider, action_type, target_clip_id, action_payload_json,
+            preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+     FROM suggestions
+     WHERE status = 'pending'
+       AND (clip_id IS NOT NULL OR preview_snapshot_json IS NOT NULL)`
+  );
+  const selectClip = database.prepare(
+    'SELECT id, project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at FROM clips WHERE id = ?'
+  );
+  const selectChapter = database.prepare(
+    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE id = ?'
+  );
+  const selectChapterAssets = database.prepare(
+    `SELECT a.id AS asset_id, a.file_type AS file_type
+     FROM chapter_assets ca
+     JOIN assets a ON a.id = ca.asset_id
+     WHERE ca.chapter_id = ?`
+  );
+  const deleteClip = database.prepare('DELETE FROM clips WHERE id = ?');
+  const unlinkCreateSuggestion = database.prepare(
+    'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?'
+  );
+  const unlinkUpdateSuggestion = database.prepare(
+    'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?'
+  );
+  const restoreClipFromSnapshot = database.prepare(
+    `UPDATE clips
+     SET in_point = ?, out_point = ?, role = ?, description = ?, is_essential = ?
+     WHERE id = ?`
+  );
+
+  const reconcile = database.transaction(() => {
+    const pending = selectSuggestions.all() as SuggestionRow[];
+    for (const rawRow of pending) {
+      try {
+        const suggestion = normalizeSuggestionRecord(rawRow);
+
+        if (isUpdateSuggestion(suggestion)) {
+          reconcileUpdateSuggestion({
+            suggestion,
+            stats,
+            selectClip,
+            selectChapter,
+            unlinkUpdateSuggestion,
+            restoreClipFromSnapshot,
+          });
+        } else {
+          reconcileCreateSuggestion({
+            suggestion,
+            stats,
+            selectClip,
+            selectChapter,
+            selectChapterAssets,
+            deleteClip,
+            unlinkCreateSuggestion,
+          });
+        }
+      } catch (error) {
+        // A single malformed row must not abort the whole migration or break
+        // bootstrap. Leave the row untouched and continue with the rest; the
+        // migration is idempotent so a later run can retry it once the data is
+        // repaired.
+        const suggestionId = typeof rawRow.id === 'number' ? rawRow.id : -1;
+        console.error(
+          `Database migration: skipped reconciliation of suggestion ${suggestionId}:`,
+          error
+        );
+      }
+    }
+  });
+
+  reconcile();
+
+  const touched =
+    stats.createClipsDeleted +
+    stats.createClipsPreserved +
+    stats.updateSnapshotsRestored +
+    stats.updateClipsPreserved +
+    stats.danglingUnlinked;
+  if (touched > 0) {
+    console.log(
+      `Database migrated: reconciled pending suggestion previews ` +
+      `(create deleted ${stats.createClipsDeleted}, create preserved ${stats.createClipsPreserved}, ` +
+      `update restored ${stats.updateSnapshotsRestored}, update preserved ${stats.updateClipsPreserved}, ` +
+      `dangling unlinked ${stats.danglingUnlinked})`
+    );
+  }
+
+  return stats;
+}
+
+interface ReconcileUpdateContext {
+  suggestion: Suggestion;
+  stats: SuggestionPreviewReconciliationStats;
+  selectClip: Database.Statement;
+  selectChapter: Database.Statement;
+  unlinkUpdateSuggestion: Database.Statement;
+  restoreClipFromSnapshot: Database.Statement;
+}
+
+function reconcileUpdateSuggestion(ctx: ReconcileUpdateContext): void {
+  const { suggestion, stats, selectClip, selectChapter, unlinkUpdateSuggestion, restoreClipFromSnapshot } = ctx;
+
+  const snapshot = parseSuggestionPreviewSnapshotJson(suggestion.preview_snapshot_json);
+  const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+
+  if (!targetClipId) {
+    // No target clip to reconcile; just clear any stray snapshot link.
+    unlinkUpdateSuggestion.run(suggestion.id);
+    return;
+  }
+
+  const clipRow = selectClip.get(targetClipId) as ClipRow | undefined;
+  if (!clipRow) {
+    // Dangling reference: the preview clip is gone. Unlink and preserve nothing.
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.danglingUnlinked += 1;
+    return;
+  }
+
+  if (!snapshot) {
+    // No snapshot means we cannot prove the clip is untouched, so keep the
+    // user's current clip and unlink the suggestion. This is the safe,
+    // non-destructive choice.
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.updateClipsPreserved += 1;
+    return;
+  }
+
+  const chapterRow = selectChapter.get(suggestion.chapter_id) as ChapterRow | undefined;
+  if (!chapterRow) {
+    // Cannot normalize in/out without the chapter; preserve the clip and unlink.
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.updateClipsPreserved += 1;
+    return;
+  }
+
+  const chapter = mapChapterRow(chapterRow);
+  const expected = computeExpectedUpdatedClipFields(suggestion, chapter, snapshot);
+  if (!expected) {
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.updateClipsPreserved += 1;
+    return;
+  }
+
+  const clip = mapClipRow(clipRow);
+  if (clipMatchesExpectedUpdate(clip, expected)) {
+    // Exact untouched preview: restore the clip to its pre-preview snapshot.
+    restoreClipFromSnapshot.run(
+      snapshot.clip.in_point,
+      snapshot.clip.out_point,
+      snapshot.clip.role,
+      snapshot.clip.description,
+      snapshot.clip.is_essential ? 1 : 0,
+      targetClipId
+    );
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.updateSnapshotsRestored += 1;
+  } else {
+    // Manually diverged: keep the clip's current state and unlink.
+    unlinkUpdateSuggestion.run(suggestion.id);
+    stats.updateClipsPreserved += 1;
+  }
+}
+
+interface ReconcileCreateContext {
+  suggestion: Suggestion;
+  stats: SuggestionPreviewReconciliationStats;
+  selectClip: Database.Statement;
+  selectChapter: Database.Statement;
+  selectChapterAssets: Database.Statement;
+  deleteClip: Database.Statement;
+  unlinkCreateSuggestion: Database.Statement;
+}
+
+function reconcileCreateSuggestion(ctx: ReconcileCreateContext): void {
+  const {
+    suggestion,
+    stats,
+    selectClip,
+    selectChapter,
+    selectChapterAssets,
+    deleteClip,
+    unlinkCreateSuggestion,
+  } = ctx;
+
+  const previewClipId = suggestion.clip_id;
+  if (!previewClipId) {
+    // No preview clip; just clear any stray snapshot link.
+    unlinkCreateSuggestion.run(suggestion.id);
+    return;
+  }
+
+  const clipRow = selectClip.get(previewClipId) as ClipRow | undefined;
+  if (!clipRow) {
+    // Dangling reference: preview clip is gone. Unlink the suggestion.
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.danglingUnlinked += 1;
+    return;
+  }
+
+  const chapterRow = selectChapter.get(suggestion.chapter_id) as ChapterRow | undefined;
+  if (!chapterRow) {
+    // Cannot reconstruct the expected clip without the chapter; preserve and unlink.
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.createClipsPreserved += 1;
+    return;
+  }
+
+  const chapter = mapChapterRow(chapterRow);
+  const assetRows = selectChapterAssets.all(suggestion.chapter_id) as ChapterAssetRow[];
+  const videoAssetIds = assetRows
+    .filter((row) => row.file_type === 'video')
+    .map((row) => row.asset_id);
+
+  const expectedAssetId = resolveExpectedCreateAssetId(suggestion, videoAssetIds);
+  if (expectedAssetId === null) {
+    // Ambiguous or missing asset: cannot prove the clip is untouched. Preserve and unlink.
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.createClipsPreserved += 1;
+    return;
+  }
+
+  const expected = computeExpectedCreatedClipFields(suggestion, chapter, expectedAssetId);
+  if (!expected) {
+    // Collapsed window: the preview path would have rejected this, so a live
+    // clip here must be user-created/diverged. Preserve and unlink.
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.createClipsPreserved += 1;
+    return;
+  }
+
+  const clip = mapClipRow(clipRow);
+  if (clipMatchesExpectedCreate(clip, expected)) {
+    // Exact untouched preview: delete the preview clip and unlink.
+    deleteClip.run(previewClipId);
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.createClipsDeleted += 1;
+  } else {
+    // Manually diverged: keep the clip and unlink.
+    unlinkCreateSuggestion.run(suggestion.id);
+    stats.createClipsPreserved += 1;
+  }
+}
+
+/**
+ * Mirrors the asset resolution in `createSuggestionTimelineClip`: an explicit
+ * payload assetId wins if it is a linked video asset; otherwise a single
+ * chapter video asset is implied. Returns null when the resolution is
+ * ambiguous or impossible, which makes the caller treat the preview as
+ * manually diverged (the safe, non-destructive choice).
+ */
+function resolveExpectedCreateAssetId(
+  suggestion: Suggestion,
+  videoAssetIds: number[]
+): number | null {
+  const actionPayloadJson = suggestion.action_payload_json;
+  if (typeof actionPayloadJson === 'string' && actionPayloadJson.length > 0) {
+    try {
+      const parsed = JSON.parse(actionPayloadJson) as { create?: { assetId?: number } };
+      const payloadAssetId = parsed?.create?.assetId;
+      if (typeof payloadAssetId === 'number' && Number.isFinite(payloadAssetId)) {
+        if (videoAssetIds.includes(payloadAssetId)) {
+          return payloadAssetId;
+        }
+        return null;
+      }
+    } catch {
+      // Fall through to single-asset resolution.
+    }
+  }
+
+  if (videoAssetIds.length === 1) {
+    return videoAssetIds[0] ?? null;
+  }
+  return null;
 }

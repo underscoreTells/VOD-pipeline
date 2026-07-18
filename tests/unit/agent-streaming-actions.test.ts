@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const agentApiMocks = vi.hoisted(() => ({
   agentChat: vi.fn(),
   branchAgentMessage: vi.fn(),
+  cancelAgentTurn: vi.fn(),
   createAgentConversation: vi.fn(),
   deleteAgentConversation: vi.fn(),
   editAgentMessage: vi.fn(),
@@ -280,13 +281,9 @@ describe("agent streaming message actions", () => {
     expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
   });
 
-  it("blocks send, edit, and reroll mutations when grounding is not ready", async () => {
+  it("allows transcript-grounded sends while video grounding is not ready", async () => {
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
-    const {
-      sendChatMessage,
-      editMessage,
-      rerollMessage,
-    } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+    const { sendChatMessage } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
 
     agentState.currentProjectId = "1";
     agentState.currentChapterId = "3";
@@ -303,17 +300,24 @@ describe("agent streaming message actions", () => {
     agentState.groundingReadyVideoAssetCount = 0;
     agentState.groundingErrorDetail = null;
     agentState.error = "stale";
+    agentApiMocks.agentChat.mockResolvedValue({
+      success: true,
+      data: {
+        message: "Transcript-grounded response",
+        userMessageId: 100,
+        assistantMessageId: 101,
+        userCreatedAt: "2026-04-18T12:04:00.000Z",
+        assistantCreatedAt: "2026-04-18T12:04:05.000Z",
+        suggestions: [],
+      },
+    });
 
-    expect(await sendChatMessage("Try a new cut")).toBe(false);
-    expect(await editMessage(agentState.messages[0], "Sharper setup")).toBe(false);
-    expect(await rerollMessage(agentState.messages[1])).toBe(false);
+    expect(await sendChatMessage("Try a new cut")).toBe(true);
     expect(agentState.error).toBeNull();
-    expect(agentApiMocks.agentChat).not.toHaveBeenCalled();
-    expect(agentApiMocks.editAgentMessage).not.toHaveBeenCalled();
-    expect(agentApiMocks.rerollAgentMessage).not.toHaveBeenCalled();
+    expect(agentApiMocks.agentChat).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks send while grounding status is still loading", async () => {
+  it("allows transcript-grounded sends while grounding status is loading", async () => {
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
     const { sendChatMessage } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
 
@@ -326,9 +330,69 @@ describe("agent streaming message actions", () => {
     agentState.isGroundingStatusLoading = true;
     agentState.groundingStatus = "idle";
     agentState.error = "stale";
+    agentApiMocks.agentChat.mockResolvedValue({
+      success: true,
+      data: {
+        message: "Transcript-grounded response",
+        userMessageId: 100,
+        assistantMessageId: 101,
+        userCreatedAt: "2026-04-18T12:04:00.000Z",
+        assistantCreatedAt: "2026-04-18T12:04:05.000Z",
+        suggestions: [],
+      },
+    });
 
-    expect(await sendChatMessage("Try a new cut")).toBe(false);
+    expect(await sendChatMessage("Try a new cut")).toBe(true);
     expect(agentState.error).toBeNull();
-    expect(agentApiMocks.agentChat).not.toHaveBeenCalled();
+    expect(agentApiMocks.agentChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an active send and reloads the persisted user message", async () => {
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const {
+      cancelActiveAgentTurn,
+      sendChatMessage,
+    } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+
+    agentState.currentProjectId = "1";
+    agentState.currentChapterId = "3";
+    agentState.selectedConversationId = 2;
+    agentState.conversations = [createConversation()];
+    agentState.messages = [];
+    agentState.isStreaming = false;
+
+    let settleTurn: ((value: { success: false; error: string }) => void) | null = null;
+    agentApiMocks.agentChat.mockReturnValue(new Promise((resolve) => {
+      settleTurn = resolve;
+    }));
+    agentApiMocks.cancelAgentTurn.mockImplementation(async () => {
+      settleTurn?.({ success: false, error: "Agent request cancelled" });
+      return { success: true, data: { cancelled: true } };
+    });
+    agentApiMocks.getAgentConversationMessages.mockResolvedValue({
+      success: true,
+      data: [{
+        id: 100,
+        conversation_id: 2,
+        role: "user",
+        content: "Try a new cut",
+        created_at: "2026-04-18T12:04:00.000Z",
+      }],
+    });
+
+    const sendResult = sendChatMessage("Try a new cut");
+    await vi.waitFor(() => expect(agentState.activeTurn?.status).toBe("running"));
+    const cancelResult = await cancelActiveAgentTurn();
+
+    expect(cancelResult).toBe(true);
+    expect(await sendResult).toBe(false);
+    expect(agentApiMocks.cancelAgentTurn).toHaveBeenCalledTimes(1);
+    expect(agentApiMocks.getAgentConversationMessages).toHaveBeenCalledWith(2);
+    expect(agentState.messages).toEqual([
+      expect.objectContaining({ databaseId: 100, content: "Try a new cut" }),
+    ]);
+    expect(agentState.activeTurn).toBeNull();
+    expect(agentState.isStreaming).toBe(false);
+    expect(agentState.error).toBeNull();
   });
 });

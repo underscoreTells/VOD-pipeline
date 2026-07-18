@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   agentChat,
   branchAgentMessage,
+  cancelAgentTurn,
   editAgentMessage,
   onAgentError,
   onAgentStream,
@@ -43,6 +44,8 @@ type StreamingMutationKind = "send" | "reroll" | "edit";
 interface PendingDraft {
   clientRequestId: string;
   conversationId: number;
+  projectId: string;
+  chapterId: string;
   userMessageDatabaseId?: number;
   userMessageLocalId?: string;
 }
@@ -51,11 +54,30 @@ const pendingDrafts = new SvelteMap<string, PendingDraft>();
 let streamUnsubscribe: (() => void) | null = null;
 let errorUnsubscribe: (() => void) | null = null;
 
+function getToolProgressLabel(toolName: string, state: string): string {
+  const labels: Record<string, string> = {
+    analyzeChapterVideo: 'Analyzing chapter video',
+    loadDetailedTranscriptWindows: 'Reading detailed transcript',
+    draftRoughCutProposals: 'Drafting suggested cuts',
+    finalizeConversationTurn: 'Writing the editing recommendation',
+  };
+  const label = labels[toolName] ?? 'Checking editing context';
+  return state === 'completed' ? `${label} complete` : label;
+}
+
 function ensureStreamingSubscriptions(): void {
   if (!streamUnsubscribe) {
     streamUnsubscribe = onAgentStream((event) => {
       const pending = pendingDrafts.get(event.clientRequestId);
-      if (!pending || pending.conversationId !== event.conversationId) {
+      if (
+        !pending
+        || pending.conversationId !== event.conversationId
+        || pending.projectId !== event.projectId
+        || pending.chapterId !== event.chapterId
+        || agentState.currentProjectId !== event.projectId
+        || agentState.currentChapterId !== event.chapterId
+        || agentState.selectedConversationId !== event.conversationId
+      ) {
         return;
       }
 
@@ -79,7 +101,7 @@ function ensureStreamingSubscriptions(): void {
           event.clientRequestId,
           {
             status: `tool_${event.state}`,
-            message: event.message ?? event.error ?? `${event.toolName} ${event.state}`,
+            message: event.error ?? getToolProgressLabel(event.toolName, event.state),
             nodeName: event.toolName,
             passIndex: event.passIndex,
             stepIndex: event.stepIndex,
@@ -225,19 +247,6 @@ function getStreamingMutationContext():
   };
 }
 
-function isGroundingReadyForAgentMutation(): boolean {
-  if (!agentState.currentChapterId) {
-    return true;
-  }
-
-  if (!agentState.isGroundingStatusLoading && agentState.groundingStatus === "ready") {
-    return true;
-  }
-
-  agentState.error = null;
-  return false;
-}
-
 async function refreshSuggestions(conversationId: number): Promise<void> {
   if (!agentState.currentChapterId || agentState.selectedConversationId !== conversationId) {
     return;
@@ -263,11 +272,27 @@ async function runStreamingMutation(options: {
   agentState.isStreaming = true;
   agentState.error = null;
   pendingDrafts.set(options.pendingDraft.clientRequestId, options.pendingDraft);
+  agentState.activeTurn = {
+    clientRequestId: options.pendingDraft.clientRequestId,
+    projectId: options.pendingDraft.projectId,
+    chapterId: options.pendingDraft.chapterId,
+    conversationId: options.pendingDraft.conversationId,
+    kind: options.kind,
+    status: 'running',
+  };
 
   let shouldReloadConversation = false;
 
   try {
     const response = await options.request(options.pendingDraft.clientRequestId);
+    const isCurrentContext =
+      agentState.currentProjectId === options.pendingDraft.projectId
+      && agentState.currentChapterId === options.pendingDraft.chapterId
+      && agentState.selectedConversationId === options.pendingDraft.conversationId;
+
+    if (!isCurrentContext) {
+      return response.success;
+    }
     if (response.success && response.data) {
       agentState.messages = finalizeSuccessfulMutation(
         agentState.messages,
@@ -287,6 +312,16 @@ async function runStreamingMutation(options: {
     }
 
     const errorMessage = response.error || "Unknown error";
+    const wasCancelled = agentState.activeTurn?.clientRequestId === options.pendingDraft.clientRequestId
+      && agentState.activeTurn.status === 'cancelling';
+    if (wasCancelled) {
+      agentState.messages = agentState.messages.filter(
+        (message) => message.requestId !== options.pendingDraft.clientRequestId
+      );
+      agentState.error = null;
+      shouldReloadConversation = true;
+      return false;
+    }
     agentState.error = errorMessage;
     agentState.messages = failDraftMessage(
       agentState.messages,
@@ -308,6 +343,9 @@ async function runStreamingMutation(options: {
   } finally {
     pendingDrafts.delete(options.pendingDraft.clientRequestId);
     agentState.isStreaming = false;
+    if (agentState.activeTurn?.clientRequestId === options.pendingDraft.clientRequestId) {
+      agentState.activeTurn = null;
+    }
 
     if (shouldReloadConversation) {
       try {
@@ -345,10 +383,6 @@ export async function sendChatMessage(message: string) {
     return false;
   }
 
-  if (!isGroundingReadyForAgentMutation()) {
-    return false;
-  }
-
   const mutationContext = getStreamingMutationContext();
   if (!mutationContext) {
     return false;
@@ -381,6 +415,8 @@ export async function sendChatMessage(message: string) {
     pendingDraft: {
       clientRequestId,
       conversationId,
+      projectId: mutationContext.currentProjectId,
+      chapterId: mutationContext.currentChapterId,
       userMessageLocalId: userMessage.id,
     },
     request: async (requestId) => await agentChat({
@@ -404,10 +440,6 @@ export async function rerollMessage(targetMessage: ChatMessage) {
     || targetMessage.role === "system"
     || targetMessage.databaseId === null
   ) {
-    return false;
-  }
-
-  if (!isGroundingReadyForAgentMutation()) {
     return false;
   }
 
@@ -449,6 +481,8 @@ export async function rerollMessage(targetMessage: ChatMessage) {
     pendingDraft: {
       clientRequestId,
       conversationId,
+      projectId: mutationContext.currentProjectId,
+      chapterId: mutationContext.currentChapterId,
       userMessageDatabaseId: retainedUserMessage.databaseId,
     },
     request: async (requestId) => await rerollAgentMessage({
@@ -472,10 +506,6 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
     || targetMessage.databaseId === null
     || !message.trim()
   ) {
-    return false;
-  }
-
-  if (!isGroundingReadyForAgentMutation()) {
     return false;
   }
 
@@ -514,6 +544,8 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
     pendingDraft: {
       clientRequestId,
       conversationId,
+      projectId: mutationContext.currentProjectId,
+      chapterId: mutationContext.currentChapterId,
       userMessageDatabaseId: targetMessage.databaseId,
     },
     request: async (requestId) => await editAgentMessage({
@@ -569,4 +601,36 @@ export async function branchMessage(targetMessage: ChatMessage) {
     agentState.error = error instanceof Error ? error.message : String(error);
     return false;
   }
+}
+
+export async function cancelActiveAgentTurn(): Promise<boolean> {
+  const activeTurn = agentState.activeTurn;
+  if (!activeTurn || activeTurn.status === 'cancelling') {
+    return !activeTurn;
+  }
+
+  agentState.activeTurn = { ...activeTurn, status: 'cancelling' };
+  const response = await cancelAgentTurn(activeTurn.clientRequestId);
+  if (!response.success) {
+    if (agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId) {
+      agentState.activeTurn = { ...activeTurn, status: 'running' };
+    }
+    agentState.error = response.error || 'Failed to cancel the agent response.';
+    return false;
+  }
+
+  const deadline = Date.now() + 5000;
+  while (
+    agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId
+    && Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  if (agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId) {
+    agentState.error = 'The agent did not stop in time. The chapter was not changed.';
+    return false;
+  }
+
+  return true;
 }

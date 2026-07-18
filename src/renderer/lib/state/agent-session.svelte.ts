@@ -56,15 +56,27 @@ export interface TimelineActionProposal {
   error: string | null;
 }
 
+export interface ActiveAgentTurn {
+  clientRequestId: string;
+  projectId: string;
+  chapterId: string;
+  conversationId: number;
+  kind: 'send' | 'reroll' | 'edit';
+  status: 'running' | 'cancelling';
+}
+
 export interface AgentState {
   messages: ChatMessage[];
   conversations: ChatConversation[];
   selectedConversationId: number | null;
   isLoadingConversations: boolean;
   suggestions: Suggestion[];
+  selectedSuggestionId: number | null;
+  composerDrafts: Record<string, string>;
   timelineProposals: TimelineActionProposal[];
   selectedProvider: LLMProviderType;
   isStreaming: boolean;
+  activeTurn: ActiveAgentTurn | null;
   currentProjectId: string | null;
   currentChapterId: string | null;
   isGroundingStatusLoading: boolean;
@@ -83,9 +95,12 @@ export const agentState = $state<AgentState>({
   selectedConversationId: null,
   isLoadingConversations: false,
   suggestions: [],
+  selectedSuggestionId: null,
+  composerDrafts: {},
   timelineProposals: [],
   selectedProvider: "gemini",
   isStreaming: false,
+  activeTurn: null,
   currentProjectId: null,
   currentChapterId: null,
   isGroundingStatusLoading: false,
@@ -335,6 +350,7 @@ function clearChapterConversationState(clearSuggestions: boolean): void {
 
   if (clearSuggestions) {
     agentState.suggestions = [];
+    agentState.selectedSuggestionId = null;
   }
 }
 
@@ -364,6 +380,7 @@ async function loadConversationSuggestions(
   }
 
   agentState.suggestions = response.data ?? [];
+  agentState.selectedSuggestionId = null;
 }
 
 async function loadChapterConversations(options: {
@@ -459,10 +476,6 @@ export async function syncAgentContext(
   projectId: string | null,
   chapterId: string | null
 ) {
-  if (isStreamingBlocked()) {
-    return;
-  }
-
   const nextContextKey = buildConversationContextKey(projectId, chapterId);
   if (nextContextKey === getCurrentConversationContextKey()) {
     return;

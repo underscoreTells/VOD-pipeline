@@ -23,6 +23,7 @@ import {
 } from "./transcript-windows.js";
 import { createDraftRoughCutProposalsTool } from "./proposals.js";
 import { createFinalizeConversationTurnTool } from "./finalize.js";
+import { createLoadChapterCutMapTool } from "./chapter-cut-map.js";
 
 export interface ConversationToolDependencies {
   analyzeChapterVideo?: (
@@ -77,6 +78,7 @@ export function createConversationTools(
       accumulator,
       loadDetailedTranscriptWindowsImpl
     ),
+    createLoadChapterCutMapTool(input, writer),
     createDraftRoughCutProposalsTool(input, accumulator),
     createFinalizeConversationTurnTool(accumulator),
   ];

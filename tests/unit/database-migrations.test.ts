@@ -7,7 +7,9 @@ import {
   closeDatabase,
   createClip,
   ensureClipsTableWithoutStartTime,
+  getSchemaVersion,
   initializeDatabase,
+  reconcilePendingSuggestionPreviews,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setDatabaseForTesting,
@@ -692,6 +694,139 @@ describeNative('database clip migration repair', () => {
       ).toBeDefined();
 
       dropProxiesTable(database);
+    } finally {
+      closeSqliteDatabase(database);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeNative('schema-version-3 pending preview reconciliation (bootstrap)', () => {
+  function seedPendingCreatePreview(database: Database.Database): {
+    suggestionId: number;
+    clipId: number;
+  } {
+    const ids = seedProjectGraph(database);
+    insertClip(database, ids, 1, 120, 180, 'setup', 'preview create');
+
+    database.prepare(
+      `INSERT INTO suggestions (
+        id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+        reasoning, provider, action_type, target_clip_id, action_payload_json,
+        preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      1,
+      ids.chapterId,
+      ids.conversationId,
+      ids.chatMessageId,
+      120,
+      180,
+      'preview create',
+      'reason',
+      'gemini',
+      'create_clip',
+      null,
+      JSON.stringify({ create: { trackIndex: 0, role: 'setup' } }),
+      null,
+      'pending',
+      0,
+      '2026-04-24T00:00:00.000Z',
+      null,
+      1
+    );
+
+    return { suggestionId: 1, clipId: 1 };
+  }
+
+  it('reconciles old pending previews and advances to the current schema during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-');
+    const dbPath = path.join(tempDir, 'v3.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(builder);
+      // Simulate a pre-v3 database: stamp user_version=2 after seeding.
+      builder.pragma('user_version = 2');
+      expect(builder.pragma('user_version', { simple: true })).toBe(2);
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(4);
+      expect(() => validateClipMigrationState(database)).not.toThrow();
+
+      // The exact untouched create preview was deleted and the suggestion unlinked.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT status, clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(1) as { status: string; clip_id: number | null; preview_snapshot_json: string | null };
+      expect(row.status).toBe('pending');
+      expect(row.clip_id).toBeNull();
+      expect(row.preview_snapshot_json).toBeNull();
+
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(4);
+      // Reopening must not re-reconcile and must not throw.
+      expect(() => validateClipMigrationState(reopened)).not.toThrow();
+      expect(
+        reopened.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }
+      ).toEqual({ n: 0 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('stamps the current schema version on a fresh database with nothing to reconcile', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-fresh-');
+    const dbPath = path.join(tempDir, 'fresh.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+
+    try {
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(4);
+      expect(() => validateClipMigrationState(database)).not.toThrow();
+      expect(
+        (database.prepare('SELECT COUNT(*) AS n FROM suggestions').get() as { n: number }).n
+      ).toBe(0);
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips reconciliation when user_version is already 3', () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-skip-');
+    const dbPath = path.join(tempDir, 'skip.db');
+    const database = new Database(dbPath);
+    database.pragma('journal_mode = WAL');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(database);
+      // Pretend the migration already ran: stamp version 3 with the preview still
+      // present (e.g. a newer preview created after the v3 migration). The
+      // reconciliation must leave it alone.
+      database.pragma('user_version = 3');
+
+      const stats = reconcilePendingSuggestionPreviews(database);
+      expect(stats.skipped).toBe(true);
+      expect(stats.createClipsDeleted).toBe(0);
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeDefined();
+      const row = database.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number };
+      expect(row.clip_id).toBe(clipId);
     } finally {
       closeSqliteDatabase(database);
       fs.rmSync(tempDir, { recursive: true, force: true });

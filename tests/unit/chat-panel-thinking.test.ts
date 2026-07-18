@@ -86,11 +86,11 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body).toContain("Ask the AI editor...");
+    expect(body).toContain("Ask the AI editor about this chapter...");
     expect(body).toContain('title="Send message"');
   });
 
-  it("shows a destructive grounding banner and disabled composer while proxies are generating", () => {
+  it("keeps chat available while video proxies are generating", () => {
     resetAgentState();
     agentState.groundingStatus = "generating";
     agentState.groundingMessage = "Video proxy is still preparing. Agent chat is locked until grounding is ready.";
@@ -100,11 +100,11 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("Video proxy is still preparing");
-    expect(body).toContain("You can keep drafting, but send stays disabled until grounding is ready.");
+    expect(body).toContain("You can chat now. Requests that require visuals may use transcript evidence until the proxy is ready.");
     expect(body).toContain("1/2 video assets ready");
-    expect(body).toContain("Draft while video grounding finishes...");
+    expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
     expect(composerMatch?.[0]).toBeDefined();
     expect(composerMatch?.[0]).not.toContain("disabled");
 
@@ -120,11 +120,11 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("Checking video grounding");
-    expect(body).toContain("You can keep drafting, but send stays disabled until grounding is ready.");
+    expect(body).toContain("Transcript-grounded editing is available while video analysis is checked.");
     expect(body).not.toContain("video assets ready");
-    expect(body).toContain("Draft while video grounding finishes...");
+    expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
     expect(composerMatch?.[0]).toBeDefined();
     expect(composerMatch?.[0]).not.toContain("disabled");
 
@@ -132,7 +132,7 @@ describe("chat panel thinking disclosure", () => {
     expect(sendButtonMatch?.[0]).toContain("disabled");
   });
 
-  it("shows a destructive grounding banner when proxy generation fails", () => {
+  it("keeps transcript and timeline chat available when proxy generation fails", () => {
     resetAgentState();
     agentState.groundingStatus = "error";
     agentState.groundingMessage = "Video proxy failed to build. Agent chat is locked until grounding is available.";
@@ -141,11 +141,11 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("Video proxy failed");
-    expect(body).toContain("You can keep drafting, but send stays disabled until the chapter proxy can be built.");
+    expect(body).toContain("Visual analysis is unavailable, but transcript and timeline editing remain available.");
     expect(body).toContain("ffmpeg exited with status 1");
-    expect(body).toContain("Draft while video grounding finishes...");
+    expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Draft while video grounding finishes\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
     expect(composerMatch?.[0]).toBeDefined();
     expect(composerMatch?.[0]).not.toContain("disabled");
   });
@@ -296,7 +296,7 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body).toContain('aria-label="Preview all suggestions"');
+    expect(body).toContain('aria-label="Review suggested cuts on the timeline"');
     expect(body).toContain('aria-label="Reject all suggestions"');
     expect(body).toContain('aria-label="Apply all suggestions"');
     expect(body).toContain("suggestions-resize-handle");

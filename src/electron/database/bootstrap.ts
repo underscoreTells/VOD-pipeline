@@ -12,6 +12,7 @@ import {
   ensureDetailedTranscriptTable,
   ensureSchemaColumns,
   ensureVodCutDraftTable,
+  reconcilePendingSuggestionPreviews,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setSchemaVersion,
@@ -93,6 +94,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
     dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
+    reconcilePendingSuggestionPreviews(database);
     applySchemaStatements(database, schema, 'index');
     validateClipMigrationState(database);
     // Record the schema revision this build expects; the imperative

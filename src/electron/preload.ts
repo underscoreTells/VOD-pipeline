@@ -19,6 +19,8 @@ const electronAPI: ElectronAPI = {
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
+    cancelTurn: (clientRequestId) =>
+      ipcRenderer.invoke('agent:cancel-turn', { clientRequestId }),
     getGroundingStatus: (params) => ipcRenderer.invoke('agent:grounding-status', params),
     rerollMessage: (params) => ipcRenderer.invoke('agent:reroll-message', params),
     editMessage: (params) => ipcRenderer.invoke('agent:edit-message', params),
@@ -41,15 +43,15 @@ const electronAPI: ElectronAPI = {
       return () => ipcRenderer.removeListener('agent:error', handler);
     },
     getSuggestions: (params) => ipcRenderer.invoke('suggestion:get-by-chapter', params),
-    previewSuggestion: (suggestionId) =>
-      ipcRenderer.invoke('suggestion:preview', { id: suggestionId }),
-    cancelSuggestionPreview: (suggestionId) =>
-      ipcRenderer.invoke('suggestion:cancel-preview', { id: suggestionId }),
     applySuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:apply', { id: suggestionId }),
     rejectSuggestion: (suggestionId) =>
       ipcRenderer.invoke('suggestion:reject', { id: suggestionId }),
     applyAllSuggestions: (params) => ipcRenderer.invoke('suggestion:apply-all', params),
+    applySuggestionBatch: (params) => ipcRenderer.invoke('suggestion:apply-batch', params),
+    rejectSuggestionBatch: (params) => ipcRenderer.invoke('suggestion:reject-batch', params),
+    restoreSuggestionBatch: (params) => ipcRenderer.invoke('suggestion:restore-batch', params),
+    revertSuggestionBatch: (params) => ipcRenderer.invoke('suggestion:revert-batch', params),
   },
   settings: {
     encrypt: async (text) => {

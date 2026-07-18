@@ -15,6 +15,15 @@ import {
   getClip,
   updateClip,
 } from './clips.js';
+import {
+  clampToRange,
+  isUpdateSuggestion,
+  normalizeSuggestionClipWindow,
+  normalizeSuggestionRecord,
+  parseSuggestionActionPayload,
+  parseSuggestionPreviewSnapshot,
+  serializeSuggestionPreviewSnapshot,
+} from './suggestion-helpers.js';
 
 export interface ApplySuggestionResult {
   success: boolean;
@@ -29,43 +38,6 @@ export interface CancelSuggestionPreviewResult {
   error?: string;
 }
 
-interface SuggestionActionPayload {
-  create?: {
-    assetId?: number;
-    trackIndex?: number;
-    role?: Clip['role'];
-    description?: string | null;
-    isEssential?: boolean;
-  };
-  update?: {
-    inPoint?: number;
-    outPoint?: number;
-    role?: Clip['role'];
-    description?: string | null;
-    isEssential?: boolean;
-  };
-}
-
-interface SuggestionPreviewSnapshot {
-  clip: {
-    id: number;
-    in_point: number;
-    out_point: number;
-    role: Clip['role'];
-    description: string | null;
-    is_essential: boolean;
-  };
-}
-
-interface NormalizedSuggestionClipWindow {
-  inPoint: number;
-  outPoint: number;
-}
-
-function clampToRange(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 /**
  * Thrown inside a suggestion transaction to roll back all writes while
  * still returning a structured failure result to the caller.
@@ -75,101 +47,6 @@ class SuggestionRollback extends Error {
     super(result.error ?? 'Suggestion operation failed');
     this.name = 'SuggestionRollback';
   }
-}
-
-function normalizeSuggestionRecord(row: Suggestion): Suggestion {
-  return {
-    ...row,
-    conversation_id: typeof row.conversation_id === 'number' && Number.isFinite(row.conversation_id)
-      ? row.conversation_id
-      : null,
-    chat_message_id: typeof row.chat_message_id === 'number' && Number.isFinite(row.chat_message_id)
-      ? row.chat_message_id
-      : null,
-    action_type: row.action_type === 'update_clip' ? 'update_clip' : 'create_clip',
-    target_clip_id: typeof row.target_clip_id === 'number' && Number.isFinite(row.target_clip_id)
-      ? row.target_clip_id
-      : null,
-    action_payload_json: typeof row.action_payload_json === 'string' ? row.action_payload_json : null,
-    preview_snapshot_json: typeof row.preview_snapshot_json === 'string' ? row.preview_snapshot_json : null,
-  };
-}
-
-function isUpdateSuggestion(suggestion: Suggestion): boolean {
-  return suggestion.action_type === 'update_clip';
-}
-
-function parseSuggestionActionPayload(suggestion: Suggestion): SuggestionActionPayload | null {
-  if (!suggestion.action_payload_json) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(suggestion.action_payload_json) as SuggestionActionPayload;
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseSuggestionPreviewSnapshot(
-  suggestion: Suggestion
-): SuggestionPreviewSnapshot | null {
-  if (!suggestion.preview_snapshot_json) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(suggestion.preview_snapshot_json) as SuggestionPreviewSnapshot;
-    if (!parsed || typeof parsed !== 'object' || !parsed.clip || typeof parsed.clip !== 'object') {
-      return null;
-    }
-
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function serializeSuggestionPreviewSnapshot(clip: Clip): string {
-  return JSON.stringify({
-    clip: {
-      id: clip.id,
-      in_point: clip.in_point,
-      out_point: clip.out_point,
-      role: clip.role,
-      description: clip.description,
-      is_essential: clip.is_essential,
-    },
-  } satisfies SuggestionPreviewSnapshot);
-}
-
-function normalizeSuggestionClipWindow(
-  suggestion: Suggestion,
-  chapter: Chapter
-): NormalizedSuggestionClipWindow {
-  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-
-  const looksLikeLegacyGlobal =
-    suggestion.in_point > chapterDuration + 1 ||
-    suggestion.out_point > chapterDuration + 1 ||
-    suggestion.in_point < -0.5 ||
-    suggestion.out_point < -0.5;
-
-  const localInRaw = looksLikeLegacyGlobal
-    ? suggestion.in_point - chapter.start_time
-    : suggestion.in_point;
-  const localOutRaw = looksLikeLegacyGlobal
-    ? suggestion.out_point - chapter.start_time
-    : suggestion.out_point;
-
-  const localInPoint = clampToRange(localInRaw, 0, chapterDuration);
-  const localOutPoint = clampToRange(localOutRaw, localInPoint, chapterDuration);
-
-  return {
-    inPoint: chapter.start_time + localInPoint,
-    outPoint: chapter.start_time + localOutPoint,
-  };
 }
 
 async function applyUpdateSuggestionToClip(
@@ -754,6 +631,15 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
 }
 
 export async function rejectSuggestion(id: number): Promise<boolean> {
+  try {
+    return await withTransaction(() => rejectSuggestionTx(id));
+  } catch (error) {
+    console.error(`[rejectSuggestion] Error rejecting suggestion ${id}:`, error);
+    return false;
+  }
+}
+
+async function rejectSuggestionTx(id: number): Promise<boolean> {
   const database = await getDatabase();
   const suggestion = await getSuggestion(id);
   if (!suggestion) {
@@ -849,4 +735,389 @@ export async function clearPendingSuggestions(chapterId: number): Promise<number
     "DELETE FROM suggestions WHERE chapter_id = ? AND status = 'pending'"
   ).run(chapterId);
   return result.changes;
+}
+
+// ============================================================================
+// Transactional batch operations
+//
+// Each batch runs every step inside a single transaction (BEGIN IMMEDIATE).
+// A logical failure on any item aborts the whole batch and rolls back every
+// preceding write, so a batch result is either fully committed or fully
+// rolled back. The caller-supplied `beforeSnapshot` on revert inputs is the
+// minimal safe contract for undoing applied update_clip suggestions: the
+// applied row no longer carries its pre-apply snapshot, so the caller must
+// supply the exact clip state captured before apply.
+// ============================================================================
+
+export interface SuggestionBatchItemResult {
+  suggestionId: number;
+  success: boolean;
+  clip?: Clip;
+  error?: string;
+}
+
+export interface SuggestionBatchResult {
+  /** True iff every item succeeded and the batch committed. */
+  success: boolean;
+  /** Number of items that committed. Always 0 when success is false. */
+  appliedCount: number;
+  total: number;
+  /** Per-item outcomes. When success is false, results reflect the attempted state pre-rollback. */
+  results: SuggestionBatchItemResult[];
+  /** First error message when success is false. */
+  error?: string;
+}
+
+/**
+ * Clip state to restore when reverting an applied `update_clip` suggestion.
+ * Required for update_clip reverts; ignored for create_clip reverts (which
+ * delete the created clip instead).
+ */
+export interface SuggestionRevertSnapshot {
+  clip: {
+    in_point: number;
+    out_point: number;
+    role: Clip['role'];
+    description: string | null;
+    is_essential: boolean;
+  };
+}
+
+export interface SuggestionBatchRevertItem {
+  suggestionId: number;
+  beforeSnapshot?: SuggestionRevertSnapshot | null;
+}
+
+class SuggestionBatchAbort extends Error {
+  constructor(
+    public readonly suggestionId: number,
+    message: string,
+    public readonly clip?: Clip
+  ) {
+    super(message);
+    this.name = 'SuggestionBatchAbort';
+  }
+}
+
+function emptyFailure(total: number, error: string): SuggestionBatchResult {
+  return {
+    success: false,
+    appliedCount: 0,
+    total,
+    results: [],
+    error,
+  };
+}
+
+/**
+ * Atomically apply a batch of pending suggestions. Either every suggestion
+ * is applied (clips created/updated and statuses flipped to 'applied') or no
+ * writes persist. A logical failure (e.g. missing chapter, ambiguous asset)
+ * on any item rolls back the entire batch.
+ */
+export async function applySuggestionsBatch(
+  suggestionIds: number[]
+): Promise<SuggestionBatchResult> {
+  const total = suggestionIds.length;
+  if (total === 0) {
+    return { success: true, appliedCount: 0, total: 0, results: [] };
+  }
+
+  const collected: SuggestionBatchItemResult[] = [];
+  try {
+    return await withTransaction(async () => {
+      for (const id of suggestionIds) {
+        const result = await applySuggestionWithClipTx(id);
+        if (!result.success || !result.clip) {
+          throw new SuggestionBatchAbort(
+            id,
+            result.error ?? 'Suggestion operation failed'
+          );
+        }
+        collected.push({
+          suggestionId: id,
+          success: true,
+          clip: result.clip,
+        });
+      }
+      return {
+        success: true,
+        appliedCount: collected.length,
+        total,
+        results: collected,
+      } satisfies SuggestionBatchResult;
+    });
+  } catch (error) {
+    if (error instanceof SuggestionBatchAbort) {
+      const abortResult: SuggestionBatchItemResult = {
+        suggestionId: error.suggestionId,
+        success: false,
+        error: error.message,
+      };
+      return {
+        success: false,
+        appliedCount: 0,
+        total,
+        results: [...collected, abortResult],
+        error: error.message,
+      };
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[applySuggestionsBatch] Error applying batch:', error);
+    return emptyFailure(total, errorMessage);
+  }
+}
+
+/**
+ * Atomically reject a batch of suggestions. Each suggestion's preview
+ * artifacts are cleaned up (preview clips deleted, update snapshots restored)
+ * and statuses flipped to 'rejected'. Any failure rolls back the entire batch.
+ */
+export async function rejectSuggestionsBatch(
+  suggestionIds: number[]
+): Promise<SuggestionBatchResult> {
+  return rejectOrRestoreBatch(suggestionIds, 'reject');
+}
+
+/**
+ * Atomically restore a batch of rejected suggestions back to pending. No
+ * preview artifacts are re-created: the suggestion is simply un-rejected so
+ * it can be previewed/applied again. Any failure rolls back the entire batch.
+ */
+export async function restoreRejectedSuggestionsBatch(
+  suggestionIds: number[]
+): Promise<SuggestionBatchResult> {
+  return rejectOrRestoreBatch(suggestionIds, 'restore');
+}
+
+async function rejectOrRestoreBatch(
+  suggestionIds: number[],
+  mode: 'reject' | 'restore'
+): Promise<SuggestionBatchResult> {
+  const total = suggestionIds.length;
+  if (total === 0) {
+    return { success: true, appliedCount: 0, total: 0, results: [] };
+  }
+
+  const collected: SuggestionBatchItemResult[] = [];
+  try {
+    return await withTransaction(async () => {
+      for (const id of suggestionIds) {
+        const outcome = await rejectOrRestoreSuggestionTx(id, mode);
+        if (!outcome.success) {
+          throw new SuggestionBatchAbort(id, outcome.error ?? 'Suggestion operation failed');
+        }
+        collected.push({
+          suggestionId: id,
+          success: true,
+          clip: outcome.clip,
+        });
+      }
+      return {
+        success: true,
+        appliedCount: collected.length,
+        total,
+        results: collected,
+      } satisfies SuggestionBatchResult;
+    });
+  } catch (error) {
+    if (error instanceof SuggestionBatchAbort) {
+      const abortResult: SuggestionBatchItemResult = {
+        suggestionId: error.suggestionId,
+        success: false,
+        error: error.message,
+      };
+      return {
+        success: false,
+        appliedCount: 0,
+        total,
+        results: [...collected, abortResult],
+        error: error.message,
+      };
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[${mode}SuggestionsBatch] Error:`, error);
+    return emptyFailure(total, errorMessage);
+  }
+}
+
+async function rejectOrRestoreSuggestionTx(
+  id: number,
+  mode: 'reject' | 'restore'
+): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+  const suggestion = await getSuggestion(id);
+  if (!suggestion) {
+    return { success: false, error: 'Suggestion not found' };
+  }
+
+  if (mode === 'reject') {
+    if (suggestion.status === 'rejected') {
+      return { success: true };
+    }
+    if (suggestion.status !== 'pending') {
+      return { success: false, error: 'Suggestion is not pending' };
+    }
+    const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
+    if (!cleanupResult.success) {
+      return {
+        success: false,
+        error: cleanupResult.error ?? 'Failed cleaning suggestion preview artifacts',
+      };
+    }
+    const result = database.prepare(
+      "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
+    ).run(id);
+    if (result.changes === 0) {
+      return { success: false, error: 'Failed to update suggestion status' };
+    }
+    return { success: true, clip: cleanupResult.clip };
+  }
+
+  // mode === 'restore'
+  if (suggestion.status !== 'rejected') {
+    return { success: false, error: 'Suggestion is not rejected' };
+  }
+  const result = database.prepare(
+    "UPDATE suggestions SET status = 'pending', applied_at = NULL WHERE id = ?"
+  ).run(id);
+  if (result.changes === 0) {
+    return { success: false, error: 'Failed to restore suggestion status' };
+  }
+  return { success: true };
+}
+/**
+ * Atomically revert a batch of applied suggestions. For `create_clip`
+ * suggestions the linked clip is deleted and the suggestion returns to
+ * pending. For `update_clip` suggestions the caller must supply the exact
+ * pre-apply clip `beforeSnapshot` so the clip can be restored; a missing
+ * snapshot for an update_clip item aborts the batch. Any failure rolls back
+ * the entire batch.
+ */
+export async function revertAppliedSuggestionsBatch(
+  items: SuggestionBatchRevertItem[]
+): Promise<SuggestionBatchResult> {
+  const total = items.length;
+  if (total === 0) {
+    return { success: true, appliedCount: 0, total: 0, results: [] };
+  }
+
+  const collected: SuggestionBatchItemResult[] = [];
+  try {
+    return await withTransaction(async () => {
+      for (const item of items) {
+        const outcome = await revertAppliedSuggestionTx(item);
+        if (!outcome.success) {
+          throw new SuggestionBatchAbort(
+            item.suggestionId,
+            outcome.error ?? 'Suggestion operation failed',
+            outcome.clip
+          );
+        }
+        collected.push({
+          suggestionId: item.suggestionId,
+          success: true,
+          clip: outcome.clip,
+        });
+      }
+      return {
+        success: true,
+        appliedCount: collected.length,
+        total,
+        results: collected,
+      } satisfies SuggestionBatchResult;
+    });
+  } catch (error) {
+    if (error instanceof SuggestionBatchAbort) {
+      const abortResult: SuggestionBatchItemResult = {
+        suggestionId: error.suggestionId,
+        success: false,
+        error: error.message,
+        clip: error.clip,
+      };
+      return {
+        success: false,
+        appliedCount: 0,
+        total,
+        results: [...collected, abortResult],
+        error: error.message,
+      };
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[revertAppliedSuggestionsBatch] Error reverting batch:', error);
+    return emptyFailure(total, errorMessage);
+  }
+}
+
+async function revertAppliedSuggestionTx(
+  item: SuggestionBatchRevertItem
+): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+  const suggestion = await getSuggestion(item.suggestionId);
+  if (!suggestion) {
+    return { success: false, error: 'Suggestion not found' };
+  }
+  if (suggestion.status !== 'applied') {
+    return { success: false, error: 'Suggestion is not applied' };
+  }
+
+  if (isUpdateSuggestion(suggestion)) {
+    const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+    if (!targetClipId) {
+      return { success: false, error: 'Applied update suggestion has no target clip' };
+    }
+    const targetClip = await getClip(targetClipId);
+    if (!targetClip) {
+      return { success: false, error: `Target clip ${targetClipId} not found` };
+    }
+    if (!item.beforeSnapshot) {
+      return {
+        success: false,
+        error: 'beforeSnapshot is required to revert an applied update_clip suggestion',
+      };
+    }
+    const restored = await updateClip(targetClip.id, {
+      in_point: item.beforeSnapshot.clip.in_point,
+      out_point: item.beforeSnapshot.clip.out_point,
+      role: item.beforeSnapshot.clip.role,
+      description: item.beforeSnapshot.clip.description,
+      is_essential: item.beforeSnapshot.clip.is_essential,
+    });
+    if (!restored) {
+      return { success: false, error: `Failed to restore clip ${targetClip.id}` };
+    }
+    const refreshed = await getClip(targetClip.id);
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
+    ).run(item.suggestionId);
+    if (updateResult.changes === 0) {
+      throw new SuggestionRollback({
+        success: false,
+        error: 'Failed to update suggestion status',
+      });
+    }
+    return { success: true, clip: refreshed ?? undefined };
+  }
+
+  const appliedClipId = suggestion.clip_id;
+  if (appliedClipId) {
+    const existingClip = await getClip(appliedClipId);
+    if (!existingClip) {
+      // Dangling reference: clear the link and continue reverting the row.
+      database.prepare('UPDATE suggestions SET clip_id = NULL WHERE id = ?').run(item.suggestionId);
+    } else {
+      await deleteClip(appliedClipId);
+    }
+  }
+
+  const updateResult = database.prepare(
+    "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
+  ).run(item.suggestionId);
+  if (updateResult.changes === 0) {
+    throw new SuggestionRollback({
+      success: false,
+      error: 'Failed to update suggestion status',
+    });
+  }
+  return { success: true };
 }

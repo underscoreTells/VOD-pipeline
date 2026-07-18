@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   start_time REAL NOT NULL,
   end_time REAL NOT NULL,
   display_order INTEGER DEFAULT 0,      -- User-defined display order
+  rough_cut_completed_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -197,6 +198,14 @@ CREATE TABLE IF NOT EXISTS chapter_proxies (
 );
 
 -- AI cut suggestions (pending user approval)
+--   clip_id           linked clip on the timeline; for 'applied' rows this is the
+--                     committed clip; for 'pending' rows (preview state) this is
+--                     the transient preview clip (create_clip) or the in-place
+--                     edited target clip (update_clip).
+--   preview_snapshot_json  for 'pending' update_clip previews, the pre-preview
+--                     snapshot of the target clip used to undo the preview.
+--                     Cleared on apply/cancel/reject. Both columns are retained
+--                     on the schema for the v3 preview reconciliation migration.
 CREATE TABLE IF NOT EXISTS suggestions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chapter_id INTEGER NOT NULL,
