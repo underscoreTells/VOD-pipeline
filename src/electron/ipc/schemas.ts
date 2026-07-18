@@ -85,6 +85,32 @@ export const chapterProxyCancelSchema = z.object({
   assetId: z.coerce.number().int().positive(),
 });
 
+export const vodCutDraftKeySchema = z.object({
+  projectId: z.coerce.number().int().positive(),
+  assetId: z.coerce.number().int().positive(),
+});
+
+export const vodCutRangeSchema = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  start_time: z.coerce.number().nonnegative(),
+  end_time: z.coerce.number().positive(),
+});
+
+export const vodCutDraftSaveSchema = vodCutDraftKeySchema.extend({
+  ranges: z.array(vodCutRangeSchema),
+});
+
+export const vodCutCommitSchema = vodCutDraftKeySchema.extend({
+  ranges: z.array(z.object({
+    title: z.string().min(1),
+    startTime: z.coerce.number().nonnegative(),
+    endTime: z.coerce.number().positive(),
+  })).min(1),
+  prewarmProxy: z.boolean().optional(),
+  proxyOptions: optionalObject,
+});
+
 // ===========================================================================
 // Clips
 // ===========================================================================

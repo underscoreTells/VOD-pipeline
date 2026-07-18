@@ -14,6 +14,7 @@
     projectDetail, 
     loadProjectDetail, 
     addAssetToProject, 
+    deleteProjectAsset,
     clearProjectDetail,
     saveProjectTimelineState,
     exportProjectToFile,
@@ -25,8 +26,6 @@
     chaptersState, 
     loadChapters, 
     clearChaptersState,
-    createChapter,
-    linkAssetToChapter,
     autoCreateChaptersFromFiles,
     setImportChoice,
     setIsImporting,
@@ -68,9 +67,9 @@
   import { syncAgentContext } from '../state/agent.svelte';
   import { toAgentChapterId } from './project-detail-helpers.js';
   import {
-    createProjectChaptersFromDefinition,
     importProjectFiles,
   } from './project-detail-import.js';
+  import { commitVodCut } from '../api/vod-cuts.js';
   import {
     exportProjectWithDialog,
   } from './project-detail-export.js';
@@ -78,6 +77,7 @@
     createProjectDetailLayoutController,
   } from './project-detail-layout.js';
   import {
+    autoTranscribeChapters,
     transcribeMissingChaptersOnReopen,
   } from './project-detail-transcription.js';
   import {
@@ -90,7 +90,7 @@
   import ProjectEditorHeader from './ProjectEditorHeader.svelte';
   import Icon from './ui/Icon.svelte';
   import { BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
-  import type { Project, Asset } from '$shared/types/database';
+  import type { Project, Asset, VodCutRange } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
   
   interface Props {
@@ -127,6 +127,7 @@
   let previousAgentContextKey = $state<string | null>(null);
   let initialChapterLoadEvaluated = $state(false);
   let scheduledMissingChapterTranscription = $state(false);
+  let vodResumeEvaluated = $state(false);
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -247,8 +248,6 @@
       await importProjectFiles(project.id, filePaths, {
         addAssetToProject,
         autoCreateChaptersFromFiles,
-        createChapter,
-        linkAssetToChapter,
         selectChapter,
         autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
         ...transcriptionDeps,
@@ -263,24 +262,33 @@
   }
   
   // Handle chapter creation from ChapterDefinition
-  async function handleChaptersDefined(chapterInputs: Array<{ title: string; startTime: number; endTime: number }>) {
+  async function handleChaptersDefined(ranges: VodCutRange[]) {
     if (!vodAssetForDefinition) return;
     try {
-      await createProjectChaptersFromDefinition(
-        project.id,
-        vodAssetForDefinition,
-        chapterInputs,
-        {
-          addAssetToProject,
-          autoCreateChaptersFromFiles,
-          createChapter,
-          linkAssetToChapter,
-          selectChapter,
-          autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
-          ...transcriptionDeps,
-        },
-        getChapterImportProxyOptions()
-      );
+      const result = await commitVodCut({
+        projectId: project.id,
+        assetId: vodAssetForDefinition.id,
+        ranges: ranges.map((range) => ({
+          title: range.title,
+          startTime: range.start_time,
+          endTime: range.end_time,
+        })),
+        prewarmProxy: settingsState.settings.proxyGenerationOnImport,
+        proxyOptions: buildProxyOptions(settingsState.settings),
+      });
+      if (!result.success || !result.data?.length) {
+        throw new Error(result.error || 'Failed to create chapters');
+      }
+
+      await loadChapters(project.id);
+      selectChapter(result.data[0].id);
+      if (settingsState.settings.autoTranscribeOnImport) {
+        await autoTranscribeChapters(
+          result.data.map((chapter) => chapter.id),
+          transcriptionDeps,
+          { awaitCompletion: false, background: true },
+        );
+      }
 
       showChapterDefinition = false;
       vodAssetForDefinition = null;
@@ -289,15 +297,22 @@
       console.error('Failed to create chapters:', error);
       setError(`Failed to create chapters: ${(error as Error).message}`);
       setIsImporting(false);
+      throw error;
     }
   }
   
   // Handle cancel from ChapterDefinition
-  function handleChapterDefinitionCancel() {
+  async function handleChapterDefinitionCancel() {
+    await onBack();
+  }
+
+  async function handleChapterDefinitionDiscard() {
+    if (!vodAssetForDefinition) return;
+    const deleted = await deleteProjectAsset(vodAssetForDefinition.id);
+    if (!deleted) throw new Error('Failed to discard imported VOD');
     showChapterDefinition = false;
     vodAssetForDefinition = null;
     setIsImporting(false);
-    // Optionally delete the VOD asset that was created
   }
 
   const selectedChapter = $derived.by(() => getSelectedChapter());
@@ -314,6 +329,18 @@
     if (chapterId === previousSelectedChapterId) return;
     clearTimelineSelection();
     previousSelectedChapterId = chapterId;
+  });
+
+  $effect(() => {
+    if (vodResumeEvaluated) return;
+    if (projectDetail.projectId !== project.id) return;
+    if (projectDetail.isLoadingAssets || chaptersState.isLoading || chaptersState.isImporting) return;
+    vodResumeEvaluated = true;
+    if (chaptersState.chapters.length > 0) return;
+    const resumableAsset = projectDetail.assets.find((asset) => asset.file_type === 'video');
+    if (!resumableAsset) return;
+    vodAssetForDefinition = resumableAsset;
+    showChapterDefinition = true;
   });
 
   const selectedChapterAssetIds = $derived.by(() => {
@@ -574,6 +601,7 @@
         projectId={project.id}
         onComplete={handleChaptersDefined}
         onCancel={handleChapterDefinitionCancel}
+        onDiscard={handleChapterDefinitionDiscard}
       />
     {:else if chaptersState.isImporting}
       <!-- Import Choice Mode -->

@@ -3,6 +3,7 @@ import type {
   GetAssetResult,
   GetAssetsResult,
   ProxyOptions,
+  DeleteAssetResult,
 } from '../../../shared/contracts/electron-api.js';
 import { getElectronApi } from './client.js';
 
@@ -27,4 +28,8 @@ export async function addAsset(
   proxyOptions?: ProxyOptions
 ): Promise<AddAssetResult> {
   return await getElectronApi().assets.add(projectId, filePath, proxyOptions);
+}
+
+export async function deleteAsset(id: number): Promise<DeleteAssetResult> {
+  return await getElectronApi().assets.delete(id);
 }

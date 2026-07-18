@@ -1,4 +1,10 @@
-import { addAsset as ipcAddAsset, getAssetsByProject as ipcGetAssets, type AddAssetResult, type GetAssetsResult } from '../api/assets.js';
+import {
+  addAsset as ipcAddAsset,
+  deleteAsset as ipcDeleteAsset,
+  getAssetsByProject as ipcGetAssets,
+  type AddAssetResult,
+  type GetAssetsResult,
+} from '../api/assets.js';
 import {
   createClip as ipcCreateClip,
   deleteClip as ipcDeleteClip,
@@ -192,6 +198,18 @@ export async function addAssetToProject(projectId: number, filePath: string): Pr
   } catch (error) {
     setError((error as Error).message);
     return null;
+  }
+}
+
+export async function deleteProjectAsset(assetId: number): Promise<boolean> {
+  try {
+    const result = await ipcDeleteAsset(assetId);
+    if (!result.success) throw new Error(result.error || 'Failed to delete asset');
+    projectDetail.assets = projectDetail.assets.filter((asset) => asset.id !== assetId);
+    return true;
+  } catch (error) {
+    setError((error as Error).message);
+    return false;
   }
 }
 

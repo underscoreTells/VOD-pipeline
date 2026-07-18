@@ -28,6 +28,7 @@ import {
   compareClipsBySourceTime,
   splitClipAtSourceTime,
 } from '../../../shared/utils/clip-timing.js';
+import { vodCutState } from './vod-cut.svelte.js';
 
 type ShortcutHandler = () => void | Promise<unknown>;
 
@@ -247,6 +248,9 @@ function toggleInOut() {
 
 // Handle keyboard event
 export function handleKeyDown(event: KeyboardEvent): boolean {
+  if (vodCutState.projectId !== null) {
+    return false;
+  }
   // Skip if user is in an input field
   if (isInputFieldActive()) {
     return false;

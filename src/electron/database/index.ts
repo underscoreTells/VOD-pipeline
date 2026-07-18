@@ -13,3 +13,4 @@ export * from './repositories/waveforms.js';
 export * from './repositories/chat.js';
 export * from './repositories/proxies.js';
 export * from './repositories/suggestions.js';
+export * from './repositories/vod-cut-drafts.js';

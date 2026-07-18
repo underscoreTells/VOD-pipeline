@@ -9,17 +9,6 @@ interface ImportDeps {
     assets: Asset[],
     linkOptions?: LinkAssetToChapterOptions
   ) => Promise<Array<{ id: number }>>;
-  createChapter: (
-    projectId: number,
-    title: string,
-    startTime: number,
-    endTime: number
-  ) => Promise<{ id: number } | null>;
-  linkAssetToChapter: (
-    chapterId: number,
-    assetId: number,
-    options?: LinkAssetToChapterOptions
-  ) => Promise<boolean>;
   selectChapter: (chapterId: number) => void;
   autoTranscribeOnImport: boolean;
   getTranscriptionStatus: (autoSetup?: boolean) => Promise<{
@@ -65,48 +54,4 @@ export async function importProjectFiles(
   if (created.length > 0) {
     deps.selectChapter(created[0].id);
   }
-}
-
-export async function createProjectChaptersFromDefinition(
-  projectId: number,
-  vodAsset: Asset,
-  chapterInputs: Array<{ title: string; startTime: number; endTime: number }>,
-  deps: ImportDeps,
-  linkOptions?: LinkAssetToChapterOptions
-): Promise<number | null> {
-  let firstChapterId: number | null = null;
-  const createdChapterIds: number[] = [];
-
-  for (const input of chapterInputs) {
-    const chapter = await deps.createChapter(
-      projectId,
-      input.title,
-      input.startTime,
-      input.endTime
-    );
-
-    if (!chapter) {
-      continue;
-    }
-
-    if (!firstChapterId) {
-      firstChapterId = chapter.id;
-    }
-
-    await deps.linkAssetToChapter(chapter.id, vodAsset.id, linkOptions);
-    createdChapterIds.push(chapter.id);
-  }
-
-  if (deps.autoTranscribeOnImport) {
-    await autoTranscribeChapters(createdChapterIds, deps, {
-      awaitCompletion: false,
-      background: true,
-    });
-  }
-
-  if (firstChapterId) {
-    deps.selectChapter(firstChapterId);
-  }
-
-  return firstChapterId;
 }

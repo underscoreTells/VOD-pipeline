@@ -8,6 +8,8 @@ import type {
   Project,
   Suggestion,
   TimelineState,
+  VodCutDraft,
+  VodCutRange,
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
 import type { NamingModelId } from '../llm/naming-models.js';
@@ -51,6 +53,11 @@ export interface GetProjectResult {
 }
 
 export interface DeleteProjectResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface DeleteAssetResult {
   success: boolean;
   error?: string;
 }
@@ -333,6 +340,38 @@ export interface CreateChapterResult {
   error?: string;
 }
 
+export interface SaveVodCutDraftInput {
+  projectId: number;
+  assetId: number;
+  ranges: VodCutRange[];
+}
+
+export interface CommitVodCutInput {
+  projectId: number;
+  assetId: number;
+  ranges: Array<{ title: string; startTime: number; endTime: number }>;
+  prewarmProxy?: boolean;
+  proxyOptions?: ProxyOptions;
+}
+
+export interface VodCutDraftResult {
+  success: boolean;
+  data?: VodCutDraft | null;
+  error?: string;
+}
+
+export interface ClearVodCutDraftResult {
+  success: boolean;
+  data?: null;
+  error?: string;
+}
+
+export interface CommitVodCutResult {
+  success: boolean;
+  data?: Chapter[];
+  error?: string;
+}
+
 export interface GetChaptersResult {
   success: boolean;
   data?: Chapter[];
@@ -560,6 +599,7 @@ export interface ElectronAPI {
     get: (id: number) => Promise<GetAssetResult>;
     getByProject: (projectId: number) => Promise<GetAssetsResult>;
     add: (projectId: number, filePath: string, proxyOptions?: ProxyOptions) => Promise<AddAssetResult>;
+    delete: (id: number) => Promise<DeleteAssetResult>;
   };
   chapters: {
     create: (input: CreateChapterInput) => Promise<CreateChapterResult>;
@@ -578,6 +618,12 @@ export interface ElectronAPI {
       options?: GetChapterReverseProxyOptions
     ) => Promise<GetChapterReverseProxyResult>;
     cancelProxy: (chapterId: number, assetId: number) => Promise<CancelJobResult>;
+  };
+  vodCuts: {
+    saveDraft: (input: SaveVodCutDraftInput) => Promise<VodCutDraftResult>;
+    loadDraft: (projectId: number, assetId: number) => Promise<VodCutDraftResult>;
+    clearDraft: (projectId: number, assetId: number) => Promise<ClearVodCutDraftResult>;
+    commit: (input: CommitVodCutInput) => Promise<CommitVodCutResult>;
   };
   clips: {
     getByProject: (projectId: number) => Promise<GetClipsResult>;

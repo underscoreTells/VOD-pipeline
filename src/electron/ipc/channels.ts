@@ -27,6 +27,12 @@ export const IPC_CHANNELS = {
   CHAPTER_REVERSE_PROXY_GET: 'chapter:reverse-proxy-get',
   CHAPTER_PROXY_CANCEL: 'chapter:proxy-cancel',
 
+  // Full-VOD cutting draft channels
+  VOD_CUT_DRAFT_SAVE: 'vod-cut:draft-save',
+  VOD_CUT_DRAFT_LOAD: 'vod-cut:draft-load',
+  VOD_CUT_DRAFT_CLEAR: 'vod-cut:draft-clear',
+  VOD_CUT_COMMIT: 'vod-cut:commit',
+
   // Proxy generation channels
   PROXY_PROGRESS: 'proxy:progress',
   GPU_STATUS: 'gpu:status',

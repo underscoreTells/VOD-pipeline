@@ -76,6 +76,7 @@ const electronAPI: ElectronAPI = {
     getByProject: (projectId) => ipcRenderer.invoke('asset:get-by-project', { projectId }),
     add: (projectId, filePath, proxyOptions?: ProxyOptions) =>
       ipcRenderer.invoke('asset:add', { projectId, filePath, proxyOptions }),
+    delete: (id) => ipcRenderer.invoke('asset:delete', { id }),
   },
   chapters: {
     create: (input) =>
@@ -101,6 +102,12 @@ const electronAPI: ElectronAPI = {
       }),
     cancelProxy: (chapterId, assetId) =>
       ipcRenderer.invoke('chapter:proxy-cancel', { chapterId, assetId }),
+  },
+  vodCuts: {
+    saveDraft: (input) => ipcRenderer.invoke('vod-cut:draft-save', input),
+    loadDraft: (projectId, assetId) => ipcRenderer.invoke('vod-cut:draft-load', { projectId, assetId }),
+    clearDraft: (projectId, assetId) => ipcRenderer.invoke('vod-cut:draft-clear', { projectId, assetId }),
+    commit: (input) => ipcRenderer.invoke('vod-cut:commit', input),
   },
   clips: {
     getByProject: (projectId) => ipcRenderer.invoke('clip:get-by-project', { projectId }),

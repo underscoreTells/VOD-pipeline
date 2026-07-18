@@ -3,6 +3,7 @@ export {
   addAssetToProject,
   clearProjectDetail,
   createProjectClip,
+  deleteProjectAsset,
   deleteProjectClip,
   executeDeleteClip,
   executeResizeClip,
