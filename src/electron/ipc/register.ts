@@ -11,6 +11,7 @@ import { registerSuggestionHandlers, SUGGESTION_HANDLER_CHANNELS } from './handl
 import { registerTimelineHandlers, TIMELINE_HANDLER_CHANNELS } from './handlers/timeline.js';
 import { registerTranscriptionHandlers, TRANSCRIPTION_HANDLER_CHANNELS } from './handlers/transcription.js';
 import { registerWaveformHandlers, WAVEFORM_HANDLER_CHANNELS } from './handlers/waveforms.js';
+import { registerVodCutHandlers, VOD_CUT_HANDLER_CHANNELS } from './handlers/vod-cuts.js';
 
 export function registerIpcHandlers(): void {
   registerProjectHandlers();
@@ -26,6 +27,7 @@ export function registerIpcHandlers(): void {
   registerSuggestionHandlers();
   registerSettingsHandlers();
   registerGpuHandlers();
+  registerVodCutHandlers();
 }
 
 export const REGISTERED_IPC_CHANNELS = [
@@ -42,4 +44,5 @@ export const REGISTERED_IPC_CHANNELS = [
   ...SUGGESTION_HANDLER_CHANNELS,
   ...SETTINGS_HANDLER_CHANNELS,
   ...GPU_HANDLER_CHANNELS,
+  ...VOD_CUT_HANDLER_CHANNELS,
 ];

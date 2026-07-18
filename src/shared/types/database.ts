@@ -58,6 +58,20 @@ export interface ChapterAsset {
   asset_id: number;
 }
 
+export interface VodCutRange {
+  id: string;
+  title: string;
+  start_time: number;
+  end_time: number;
+}
+
+export interface VodCutDraft {
+  project_id: number;
+  asset_id: number;
+  ranges: VodCutRange[];
+  updated_at: string;
+}
+
 export interface Transcript {
   id: number;
   chapter_id: number;

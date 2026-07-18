@@ -15,6 +15,7 @@ const registrations = vi.hoisted(() => ({
   registerSuggestionHandlers: vi.fn(),
   registerSettingsHandlers: vi.fn(),
   registerGpuHandlers: vi.fn(),
+  registerVodCutHandlers: vi.fn(),
 }));
 
 vi.mock("../../src/electron/ipc/handlers/projects.js", () => ({
@@ -82,6 +83,16 @@ vi.mock("../../src/electron/ipc/handlers/gpu.js", () => ({
   registerGpuHandlers: registrations.registerGpuHandlers,
 }));
 
+vi.mock("../../src/electron/ipc/handlers/vod-cuts.js", () => ({
+  VOD_CUT_HANDLER_CHANNELS: [
+    "vod-cut:draft-save",
+    "vod-cut:draft-load",
+    "vod-cut:draft-clear",
+    "vod-cut:commit",
+  ],
+  registerVodCutHandlers: registrations.registerVodCutHandlers,
+}));
+
 describe("ipc register", () => {
   beforeEach(() => {
     Object.values(registrations).forEach((mock) => mock.mockReset());
@@ -105,6 +116,7 @@ describe("ipc register", () => {
     expect(registrations.registerSuggestionHandlers).toHaveBeenCalledTimes(1);
     expect(registrations.registerSettingsHandlers).toHaveBeenCalledTimes(1);
     expect(registrations.registerGpuHandlers).toHaveBeenCalledTimes(1);
+    expect(registrations.registerVodCutHandlers).toHaveBeenCalledTimes(1);
 
     expect(REGISTERED_IPC_CHANNELS).toEqual([
       "project:get",
@@ -121,6 +133,10 @@ describe("ipc register", () => {
       "suggestion:list",
       "settings:get",
       "gpu:status",
+      "vod-cut:draft-save",
+      "vod-cut:draft-load",
+      "vod-cut:draft-clear",
+      "vod-cut:commit",
     ]);
     expect(new Set(REGISTERED_IPC_CHANNELS).size).toBe(REGISTERED_IPC_CHANNELS.length);
   });

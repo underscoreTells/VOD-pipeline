@@ -180,7 +180,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -228,6 +228,20 @@ export function ensureSchemaColumns(database: Database.Database): void {
       ON suggestions(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_suggestions_chat_message_id
       ON suggestions(chat_message_id);
+  `);
+}
+
+export function ensureVodCutDraftTable(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS vod_cut_drafts (
+      project_id INTEGER NOT NULL,
+      asset_id INTEGER NOT NULL,
+      ranges_json TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (project_id, asset_id),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    );
   `);
 }
 

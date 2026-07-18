@@ -11,6 +11,7 @@ import {
   ensureClipsTableWithoutStartTime,
   ensureDetailedTranscriptTable,
   ensureSchemaColumns,
+  ensureVodCutDraftTable,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setSchemaVersion,
@@ -88,6 +89,7 @@ export async function initializeDatabase(): Promise<Database.Database> {
     ensureDetailedTranscriptTable(database);
     ensureChatConversationTables(database);
     ensureChapterProxyTable(database);
+    ensureVodCutDraftTable(database);
     dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
