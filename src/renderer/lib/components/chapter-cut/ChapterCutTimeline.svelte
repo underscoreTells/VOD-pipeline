@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import type { Chapter, Clip, Suggestion } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
-  import { generateWaveform, getWaveform, onWaveformProgress } from '../../api/waveforms.js';
+  import { getWaveform, onWaveformProgress } from '../../api/waveforms.js';
   import {
     createProjectClip,
     executeSlideClipWindow,
@@ -20,6 +20,7 @@
   } from '../../state/timeline.svelte.js';
   import { canRedo, canUndo, redo, undo } from '../../state/undo-redo.svelte.js';
   import { agentState, focusSuggestion } from '../../state/agent.svelte.js';
+  import { generateAssetWaveform } from '../../state/project-waveforms.svelte.js';
   import {
     calculateZoomAroundPointer,
     clampNumber,
@@ -34,6 +35,10 @@
   import Icon from '../ui/Icon.svelte';
   import { Minus, Pause, Play } from '../../constants.js';
   import { cn } from '../../utils/cn.js';
+  import {
+    shouldRequestChapterWaveform,
+    type ChapterWaveformStatus,
+  } from './chapter-cut-waveform.js';
 
   interface Props {
     projectId: number;
@@ -62,8 +67,9 @@
   let viewportWidth = $state(0);
   let waveformPeaks = $state<Array<{ min: number; max: number }>>([]);
   let waveformDuration = $state(0);
-  let waveformStatus = $state<'loading' | 'ready' | 'unavailable'>('loading');
+  let waveformStatus = $state<ChapterWaveformStatus>('loading');
   let waveformAssetId = $state<number | null>(null);
+  const waveformLoadsInFlight = new Set<number>();
   let drag = $state<DragState | null>(null);
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
@@ -454,23 +460,37 @@
   }
 
   async function loadWaveform(assetId: number): Promise<void> {
-    if (waveformAssetId === assetId && waveformStatus === 'ready') return;
+    if (!shouldRequestChapterWaveform({
+      assetId,
+      waveformAssetId,
+      waveformStatus,
+      isInFlight: waveformLoadsInFlight.has(assetId),
+    })) return;
+
+    waveformLoadsInFlight.add(assetId);
     waveformAssetId = assetId;
     waveformStatus = 'loading';
-    let result = await getWaveform(assetId, -1, 1);
-    if (!result.success || !result.data) {
-      const generated = await generateWaveform(assetId, -1, { playbackActive: false });
-      if (generated.success) result = await getWaveform(assetId, -1, 1);
+    try {
+      let result = await getWaveform(assetId, -1, 1);
+      if (!result.success || !result.data) {
+        await generateAssetWaveform(assetId, -1, { playbackActive: false }, { uiMode: 'background' });
+        result = await getWaveform(assetId, -1, 1);
+      }
+      if (waveformAssetId !== assetId) return;
+      if (!result.success || !result.data) {
+        waveformStatus = 'unavailable';
+        return;
+      }
+      waveformPeaks = result.data.peaks;
+      waveformDuration = result.data.duration;
+      waveformStatus = 'ready';
+      requestAnimationFrame(drawWaveform);
+    } catch (error) {
+      if (waveformAssetId === assetId) waveformStatus = 'unavailable';
+      console.warn(`[ChapterCutTimeline] Waveform unavailable for asset ${assetId}`, error);
+    } finally {
+      waveformLoadsInFlight.delete(assetId);
     }
-    if (waveformAssetId !== assetId) return;
-    if (!result.success || !result.data) {
-      waveformStatus = 'unavailable';
-      return;
-    }
-    waveformPeaks = result.data.peaks;
-    waveformDuration = result.data.duration;
-    waveformStatus = 'ready';
-    requestAnimationFrame(drawWaveform);
   }
 
   onMount(() => {
@@ -495,7 +515,8 @@
   });
 
   $effect(() => {
-    if (primaryAsset?.id) void loadWaveform(primaryAsset.id);
+    const assetId = primaryAsset?.id;
+    if (assetId) void untrack(() => loadWaveform(assetId));
   });
 
   $effect(() => {
