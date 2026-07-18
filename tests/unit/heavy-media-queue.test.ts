@@ -242,6 +242,64 @@ describe("heavy media scheduler resource pools", () => {
     t2.finish();
     await flushPending();
   });
+
+  it("does not overlap transcription with CPU proxy work", async () => {
+    configure({ cpuProxy: 2, gpuProxy: 1, transcription: 1 });
+
+    const cpu = trackedJob("shared-cpu:proxy", "proxy", []);
+    const transcription = trackedJob("shared-cpu:transcription", "transcription", []);
+    const gpu = trackedJob("shared-cpu:gpu", "gpu", []);
+
+    const cpuPromise = enqueueHeavyMediaJob(cpu.key, "chapterProxy", "background", cpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const gpuPromise = enqueueHeavyMediaJob(gpu.key, "chapterProxy", "background", gpu.run, {
+      resourceClass: "gpu",
+    });
+
+    expect(cpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(gpu.isStarted).toBe(true);
+
+    cpu.finish();
+    await cpuPromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(true);
+
+    transcription.finish();
+    gpu.finish();
+    await Promise.all([transcriptionPromise, gpuPromise]);
+  });
+
+  it("holds CPU proxies while transcription is active", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const transcription = trackedJob("shared-cpu:first-transcription", "transcription", []);
+    const cpu = trackedJob("shared-cpu:queued-proxy", "proxy", []);
+
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const cpuPromise = enqueueHeavyMediaJob(cpu.key, "chapterProxy", "background", cpu.run);
+
+    expect(transcription.isStarted).toBe(true);
+    expect(cpu.isStarted).toBe(false);
+
+    transcription.finish();
+    await transcriptionPromise;
+    await flushPending();
+    expect(cpu.isStarted).toBe(true);
+
+    cpu.finish();
+    await cpuPromise;
+  });
 });
 
 describe("heavy media scheduler burst and ordering", () => {
@@ -668,12 +726,12 @@ describe("heavy media scheduler configuration", () => {
 
     resetHeavyMediaScheduler();
     const restored = getHeavyMediaSchedulerLimits();
-    expect(restored.gpuProxy).toBe(2);
+    expect(restored.gpuProxy).toBe(1);
     expect(restored.transcription).toBe(1);
     expect(restored.fullReverse).toBe(1);
     expect(restored.interactiveOverflow).toBe(1);
     expect(restored.cpuProxy).toBeGreaterThanOrEqual(1);
-    expect(restored.cpuProxy).toBeLessThanOrEqual(4);
+    expect(restored.cpuProxy).toBeLessThanOrEqual(2);
   });
 
   it("applyDefault via reset clears all running/queued state", async () => {

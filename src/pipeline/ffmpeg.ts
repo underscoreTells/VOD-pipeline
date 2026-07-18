@@ -633,7 +633,18 @@ function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
     /(?<![/\\_.-])\b(?:nvenc|qsv|amf|videotoolbox|vtcompression)[^\n]{0,80}(?:initializ(?:ation|e|ing)? failed|failed to (?:initialize|initialise|create|open)|not available|unsupported)/i,
     /(?:failed|unable) to (?:initialize|initialise|create) [^\n]{0,40}(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
   ];
-  return gpuFailurePatterns.some((pattern) => pattern.test(stderr));
+  if (gpuFailurePatterns.some((pattern) => pattern.test(stderr))) {
+    return true;
+  }
+
+  const inputFailurePatterns = [
+    /error opening input (?:file|files)/i,
+    /invalid data found when processing input/i,
+    /no such file or directory/i,
+    /permission denied/i,
+    /moov atom not found/i,
+  ];
+  return !inputFailurePatterns.some((pattern) => pattern.test(stderr));
 }
 
 /**

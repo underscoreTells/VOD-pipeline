@@ -120,7 +120,7 @@ describe("gpu detector", () => {
         backend: "cpu",
         videoCodec: "libx264",
       },
-      requiredArgs: ["-preset", "ultrafast", "-crf", "32"],
+      requiredArgs: ["-preset", "ultrafast", "-crf", "32", "-threads"],
     },
     {
       label: "VideoToolbox",
