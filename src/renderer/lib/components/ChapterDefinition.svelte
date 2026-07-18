@@ -50,6 +50,7 @@
   let previewRangeId = $state<string | null>(null);
   let mediaDuration = $state(0);
   let saveTimer: number | null = null;
+  let preserveDraftOnCleanup = true;
   const videoSrc = $derived(buildPlayableAssetUrl(asset));
   const assetUnavailable = $derived(asset.availability?.exists === false);
   const selectedRange = $derived(vodCutState.ranges.find((range) => range.id === vodCutState.selectedRangeId) ?? null);
@@ -206,9 +207,13 @@
   async function handleComplete(): Promise<void> {
     if (vodCutState.ranges.length === 0 || isCompleting) return;
     isCompleting = true;
+    preserveDraftOnCleanup = false;
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = null;
     try {
       await onComplete(vodCutState.ranges);
     } catch (error) {
+      preserveDraftOnCleanup = true;
       setVodCutError(error instanceof Error ? error.message : String(error));
     } finally {
       isCompleting = false;
@@ -274,7 +279,7 @@
   }
 
   $effect(() => {
-    if (!isReady || !vodCutState.dirty || vodCutState.isSaving) return;
+    if (!isReady || isCompleting || !vodCutState.dirty || vodCutState.isSaving) return;
     const rangeSignature = vodCutState.ranges.map((range) => `${range.id}:${range.title}:${range.start_time}:${range.end_time}`).join('|');
     void rangeSignature;
     if (saveTimer !== null) window.clearTimeout(saveTimer);
@@ -313,7 +318,7 @@
       window.removeEventListener('keydown', handleKeydown);
       if (saveTimer !== null) window.clearTimeout(saveTimer);
       seekController.reset();
-      const pendingDraft = vodCutState.dirty && vodCutState.projectId && vodCutState.assetId
+      const pendingDraft = preserveDraftOnCleanup && vodCutState.dirty && vodCutState.projectId && vodCutState.assetId
         ? {
             projectId: vodCutState.projectId,
             assetId: vodCutState.assetId,
