@@ -320,13 +320,14 @@ export async function ensureChapterProxyReady(
         });
         await updateChapterProxyStatus(chapterProxyId, 'ready');
       };
+      const resourceClass = await resolveProxyResourceClass(encodingMode);
       await enqueueHeavyMediaJob(
         jobKey,
         'chapterProxy',
         priority,
-        generate(encodingMode, true),
+        generate(encodingMode, resourceClass === 'gpu'),
         {
-          resourceClass: await resolveProxyResourceClass(encodingMode),
+          resourceClass,
           cpuFallback: {
             shouldFallback: (error) => error instanceof GPUProxyFallbackError,
             run: generate('cpu', false),

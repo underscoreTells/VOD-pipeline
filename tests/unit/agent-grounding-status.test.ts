@@ -374,6 +374,7 @@ describe("agent grounding status", () => {
 
   it("passes renderer-selected proxy options through grounding-driven proxy generation", async () => {
     const proxyPath = path.join(tempDir, "proxy-options.mp4");
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("gpu");
 
     databaseMocks.getChapterProxyByChapterAsset
       .mockResolvedValueOnce({

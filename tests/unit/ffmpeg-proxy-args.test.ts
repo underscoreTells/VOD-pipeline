@@ -528,6 +528,46 @@ describe("ffmpeg proxy argument generation", () => {
     }
   });
 
+  it("defers a plan-time CPU fallback when the queued GPU is no longer available", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue(null);
+
+    const { generateAIProxy, GPUProxyFallbackError } = await import("../../src/pipeline/ffmpeg.js");
+    await expect(generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "auto",
+      "balanced",
+      { startTime: 0, endTime: 10 },
+      undefined,
+      true
+    )).rejects.toBeInstanceOf(GPUProxyFallbackError);
+
+    expect(spawnState.calls.filter((call) => call.args.includes("-c:v"))).toHaveLength(0);
+  });
+
+  it("runs a plan-time CPU fallback when the job was initially routed to CPU", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue(null);
+
+    const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+    await generateAIProxy(
+      inputPath,
+      outputPath,
+      undefined,
+      undefined,
+      "auto",
+      "balanced",
+      { startTime: 0, endTime: 10 },
+      undefined,
+      false
+    );
+
+    const encodeCommands = spawnState.calls.filter((call) => call.args.includes("-c:v"));
+    expect(encodeCommands).toHaveLength(1);
+    expect(encodeCommands[0].args).toEqual(expect.arrayContaining(["-c:v", "libx264"]));
+  });
+
   it("records a reverse GPU chunk failure and summarizes the CPU retry", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "nvenc",
@@ -574,6 +614,25 @@ describe("ffmpeg proxy argument generation", () => {
       logSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+
+  it("defers a reverse plan-time CPU fallback when the queued GPU is no longer available", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue(null);
+
+    const { generateChapterReverseProxy, GPUProxyFallbackError } = await import(
+      "../../src/pipeline/ffmpeg.js"
+    );
+    await expect(generateChapterReverseProxy(inputPath, outputPath, {
+      startTime: 0,
+      endTime: 5,
+      fps: 10,
+      encodingMode: "auto",
+      quality: "balanced",
+      executionMode: "background",
+      deferCpuFallback: true,
+    })).rejects.toBeInstanceOf(GPUProxyFallbackError);
+
+    expect(spawnState.calls.filter((call) => call.args.includes("-c:v"))).toHaveLength(0);
   });
 
   it("does not invalidate the GPU encoder for a non-GPU FFmpeg failure", async () => {

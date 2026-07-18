@@ -746,6 +746,14 @@ export async function generateAIProxy(
   let fallbackFrom: GPUEncoderBackend | undefined;
   let fallbackReason: string | undefined;
   try {
+    if (deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
+      if (signal?.aborted) {
+        throw new FFmpegError('AI proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
+      }
+      throw new GPUProxyFallbackError(
+        initialPlan.fallbackReason ?? 'gpu encoder unavailable at run time'
+      );
+    }
     try {
       const output = await executeProxyGeneration(
         initialPlan,
@@ -1209,6 +1217,14 @@ export async function generateChapterReverseProxy(
   let fallbackFrom: GPUEncoderBackend | undefined;
   let fallbackReason: string | undefined;
   try {
+    if (options.deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
+      if (signal?.aborted) {
+        throw new FFmpegError('Reverse proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
+      }
+      throw new GPUProxyFallbackError(
+        initialPlan.fallbackReason ?? 'gpu encoder unavailable at run time'
+      );
+    }
     try {
       await generateWithPlan(initialPlan);
     } catch (error) {

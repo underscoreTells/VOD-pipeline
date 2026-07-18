@@ -370,13 +370,14 @@ export async function ensureChapterReverseProxyQuickReady(
           deferCpuFallback,
         });
       };
+      const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
       await enqueueHeavyMediaJob(
         jobKey,
         'reverseQuickWarm',
         queuePriority,
-        generate(normalizedProxyOptions.encodingMode, true),
+        generate(normalizedProxyOptions.encodingMode, resourceClass === 'gpu'),
         {
-          resourceClass: await resolveProxyResourceClass(normalizedProxyOptions.encodingMode),
+          resourceClass,
           cpuFallback: {
             shouldFallback: (error) => error instanceof GPUProxyFallbackError,
             run: generate('cpu', false),
@@ -522,13 +523,14 @@ async function ensureChapterReverseProxyFullReady(
         generatedPath = proxyPath;
         chapterReverseProxyErrors.delete(lockKey);
       };
+      const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
       await enqueueHeavyMediaJob(
         jobKey,
         'reverseFullWarm',
         priority,
-        generate(normalizedProxyOptions.encodingMode, true),
+        generate(normalizedProxyOptions.encodingMode, resourceClass === 'gpu'),
         {
-          resourceClass: await resolveProxyResourceClass(normalizedProxyOptions.encodingMode),
+          resourceClass,
           cpuFallback: {
             shouldFallback: (error) => error instanceof GPUProxyFallbackError,
             run: generate('cpu', false),

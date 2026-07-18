@@ -227,6 +227,7 @@ describe("chapter proxy cache validation", () => {
 
     expect(result).toBe(proxyPath);
     expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1);
+    expect(ffmpegMocks.generateAIProxy.mock.calls[0][8]).toBe(false);
     expect(databaseMocks.updateChapterProxyDefinition).toHaveBeenCalledWith(2, expect.objectContaining({
       start_time: 10,
       end_time: 40,
