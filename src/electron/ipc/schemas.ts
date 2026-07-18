@@ -225,3 +225,11 @@ export const transcribeChapterSchema = z.object({
 export const transcribeCancelSchema = z.object({
   chapterId: z.coerce.number().int().positive(),
 });
+
+// ===========================================================================
+// GPU
+// ===========================================================================
+
+export const gpuStatusSchema = z.object({
+  force: z.boolean().optional(),
+}).optional();

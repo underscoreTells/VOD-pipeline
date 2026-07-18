@@ -18,6 +18,8 @@ import {
 } from './chapter-proxies.js';
 import { normalizeProxyOptions } from './payload.js';
 
+const groundingSchedulingErrors = new Map<string, string>();
+
 function getGroundingStatusMessage(
   status: AgentGroundingStatusData['status']
 ): string {
@@ -72,78 +74,83 @@ export async function getAgentGroundingStatus(
     };
   }
 
-  const assets: AgentGroundingStatusData['assets'] = [];
-  let readyVideoAssetCount = 0;
-  let hasError = false;
-  let hasGenerating = false;
-
-  for (const asset of chapterVideoAssets) {
+  const normalizedProxyOptions = normalizeProxyOptions(options?.proxyOptions);
+  const assets = await Promise.all(chapterVideoAssets.map(async (asset) => {
+    const groundingKey = `${chapter.id}:${asset.id}`;
     let chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
     chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-    let reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
+    const reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
 
     if (reusableChapterProxy) {
-      readyVideoAssetCount += 1;
-      assets.push({
+      groundingSchedulingErrors.delete(groundingKey);
+      return {
         assetId: asset.id,
-        status: 'ready',
-      });
-      continue;
+        status: 'ready' as const,
+      };
     }
 
     if (!asset.file_path || !fs.existsSync(asset.file_path)) {
-      hasError = true;
-      assets.push({
+      return {
         assetId: asset.id,
-        status: 'error',
+        status: 'error' as const,
         error: 'Source media file is missing.',
-      });
-      continue;
+      };
     }
 
     if (options?.ensureReady) {
-      const normalizedProxyOptions = normalizeProxyOptions(options.proxyOptions);
+      groundingSchedulingErrors.delete(groundingKey);
       const assetProgress = options.onProgress
         ? (percent: number) => options.onProgress!(asset.id, percent)
         : undefined;
-      await ensureChapterProxyReady(
+      void ensureChapterProxyReady(
         chapter,
         asset,
         normalizedProxyOptions.encodingMode,
         normalizedProxyOptions.quality,
         'interactive',
         assetProgress
-      );
-      chapterProxy = await getChapterProxyByChapterAsset(chapter.id, asset.id);
-      chapterProxy = await recoverChapterProxyIfCurrent(chapterProxy, chapter);
-      reusableChapterProxy = await getReusableChapterProxy(chapterProxy, chapter);
+      ).catch((error) => {
+        groundingSchedulingErrors.set(
+          groundingKey,
+          error instanceof Error ? error.message : String(error)
+        );
+        console.warn(
+          `[AgentGrounding] Failed scheduling proxy chapter=${chapter.id} asset=${asset.id}:`,
+          error
+        );
+      });
+      return {
+        assetId: asset.id,
+        status: 'generating' as const,
+      };
     }
 
-    if (reusableChapterProxy) {
-      readyVideoAssetCount += 1;
-      assets.push({
+    const schedulingError = groundingSchedulingErrors.get(groundingKey);
+    if (schedulingError) {
+      return {
         assetId: asset.id,
-        status: 'ready',
-      });
-      continue;
+        status: 'error' as const,
+        error: schedulingError,
+      };
     }
 
     if (chapterProxy?.status === 'error') {
-      hasError = true;
-      assets.push({
+      return {
         assetId: asset.id,
-        status: 'error',
+        status: 'error' as const,
         error: chapterProxy.error_message ?? 'Video proxy generation failed.',
-      });
-      continue;
+      };
     }
 
-    hasGenerating = true;
-    assets.push({
+    return {
       assetId: asset.id,
-      status: 'generating',
-    });
-  }
+      status: 'generating' as const,
+    };
+  }));
+
+  const readyVideoAssetCount = assets.filter((asset) => asset.status === 'ready').length;
+  const hasError = assets.some((asset) => asset.status === 'error');
+  const hasGenerating = assets.some((asset) => asset.status === 'generating');
 
   const status: AgentGroundingStatusData['status'] = hasError
     ? 'error'

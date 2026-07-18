@@ -14,6 +14,8 @@ const electronAPI: ElectronAPI = {
     getAll: () => ipcRenderer.invoke('project:get-all'),
     get: (id) => ipcRenderer.invoke('project:get', { id }),
     delete: (id) => ipcRenderer.invoke('project:delete', { id }),
+    prewarmProxies: (id, proxyOptions) =>
+      ipcRenderer.invoke('project:proxy-prewarm', { id, proxyOptions }),
   },
   agent: {
     chat: (params) => ipcRenderer.invoke('agent:chat', params),
@@ -159,7 +161,7 @@ const electronAPI: ElectronAPI = {
     },
   },
   gpu: {
-    getStatus: () => ipcRenderer.invoke('gpu:status'),
+    getStatus: (options) => ipcRenderer.invoke('gpu:status', options),
   },
   dialog: {
     showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),

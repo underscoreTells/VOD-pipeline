@@ -19,8 +19,11 @@ import {
   getChapterProxyTempPath,
 } from '../../paths.js';
 import {
+  GPUProxyFallbackError,
   generateAIProxy,
   getVideoMetadata,
+  resolveProxyResourceClass,
+  type ProxyFallbackContext,
 } from '../../../pipeline/ffmpeg.js';
 import {
   generateWaveformTiers,
@@ -49,7 +52,11 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-const chapterProxyGenerationLocks = new Map<string, { epoch: number; promise: Promise<string | undefined> }>();
+const chapterProxyGenerationLocks = new Map<string, {
+  epoch: number;
+  promise: Promise<string | undefined>;
+  progressListeners: Set<(percent: number) => void>;
+}>();
 const chapterWaveformPrewarmLocks = new Map<string, Promise<void>>();
 const chapterMediaPrewarmLocks = new Map<string, Promise<void>>();
 const chapterProxyGenerationEpochs = new Map<string, number>();
@@ -203,11 +210,24 @@ export async function ensureChapterProxyReady(
   const generationEpoch = getGenerationEpoch(chapterProxyGenerationEpochs, lockKey);
   const inFlight = chapterProxyGenerationLocks.get(lockKey);
   if (inFlight && inFlight.epoch === generationEpoch) {
+    if (onProgress) {
+      inFlight.progressListeners.add(onProgress);
+    }
     if (priority === 'interactive') {
       promoteHeavyMediaJob(jobKey);
     }
     return inFlight.promise;
   }
+
+  const progressListeners = new Set<(percent: number) => void>();
+  if (onProgress) {
+    progressListeners.add(onProgress);
+  }
+  const emitProgress = (percent: number) => {
+    for (const listener of progressListeners) {
+      listener(percent);
+    }
+  };
 
   const task = (async () => {
     const existing = await getChapterProxyByChapterAsset(chapter.id, asset.id);
@@ -264,7 +284,11 @@ export async function ensureChapterProxyReady(
     }
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async (signal) => {
+      const generate = (
+        mode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
         await ensureProxyDirectory();
@@ -272,15 +296,17 @@ export async function ensureChapterProxyReady(
         const metadata = await generateAIProxy(
           asset.file_path,
           tempPath,
-          onProgress,
+          emitProgress,
           30 * 60 * 1000,
-          encodingMode,
+          mode,
           quality,
           {
             startTime: chapter.start_time,
             endTime: chapter.end_time,
           },
-          signal
+          signal,
+          deferCpuFallback,
+          fallbackContext
         );
 
         if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -299,7 +325,30 @@ export async function ensureChapterProxyReady(
           duration: metadata.duration,
         });
         await updateChapterProxyStatus(chapterProxyId, 'ready');
-      });
+      };
+      const resourceClass = await resolveProxyResourceClass(encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
+      await enqueueHeavyMediaJob(
+        jobKey,
+        'chapterProxy',
+        priority,
+        generate(encodingMode, resourceClass === 'gpu'),
+        {
+          resourceClass,
+          cpuFallback: {
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
+          },
+        }
+      );
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
@@ -330,7 +379,11 @@ export async function ensureChapterProxyReady(
     }
   })();
 
-  chapterProxyGenerationLocks.set(lockKey, { epoch: generationEpoch, promise: task });
+  chapterProxyGenerationLocks.set(lockKey, {
+    epoch: generationEpoch,
+    promise: task,
+    progressListeners,
+  });
   try {
     return await task;
   } finally {

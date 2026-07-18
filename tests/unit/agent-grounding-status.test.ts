@@ -33,6 +33,7 @@ const ffmpegMocks = vi.hoisted(() => ({
   generateAIProxy: vi.fn(),
   generateChapterReverseProxy: vi.fn(),
   getVideoMetadata: vi.fn(),
+  resolveProxyResourceClass: vi.fn(),
 }));
 
 vi.mock("electron", () => electronMocks);
@@ -82,6 +83,7 @@ describe("agent grounding status", () => {
       fps: 5,
       duration: 30,
     });
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("cpu");
     ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       fs.writeFileSync(outputPath, "proxy");
@@ -284,8 +286,18 @@ describe("agent grounding status", () => {
     }
   );
 
-  it("regenerates a missing proxy when ensureReady is true and returns ready", async () => {
+  it("returns generating before the proxy completes, then reports ready", async () => {
     const proxyPath = path.join(tempDir, "rebuild.mp4");
+    let finishEncode!: () => void;
+    const encodeGate = new Promise<void>((resolve) => {
+      finishEncode = resolve;
+    });
+    ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
+      await encodeGate;
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "proxy");
+      return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
+    });
 
     databaseMocks.getChapterProxyByChapterAsset
       .mockResolvedValueOnce({
@@ -335,11 +347,23 @@ describe("agent grounding status", () => {
       });
 
     const { getAgentGroundingStatus } = await import("../../src/electron/ipc/handler-support.js");
-    const result = await getAgentGroundingStatus(1, 7, { ensureReady: true });
+    const result = await getAgentGroundingStatus(1, 7, {
+      ensureReady: true,
+      proxyOptions: { encodingMode: "gpu", quality: "balanced" },
+    });
 
-    expect(result.status).toBe("ready");
-    expect(result.readyVideoAssetCount).toBe(1);
-    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("generating");
+    expect(result.readyVideoAssetCount).toBe(0);
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1));
+    expect(databaseMocks.updateChapterProxyStatus).not.toHaveBeenCalledWith(15, "ready");
+
+    finishEncode();
+    await vi.waitFor(() => {
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(15, "ready");
+    });
+    const readyResult = await getAgentGroundingStatus(1, 7, { ensureReady: false });
+    expect(readyResult.status).toBe("ready");
+    expect(readyResult.readyVideoAssetCount).toBe(1);
     expect(databaseMocks.updateChapterProxyDefinition).toHaveBeenCalledWith(15, expect.objectContaining({
       start_time: 10,
       end_time: 40,
@@ -350,6 +374,7 @@ describe("agent grounding status", () => {
 
   it("passes renderer-selected proxy options through grounding-driven proxy generation", async () => {
     const proxyPath = path.join(tempDir, "proxy-options.mp4");
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("gpu");
 
     databaseMocks.getChapterProxyByChapterAsset
       .mockResolvedValueOnce({
@@ -399,7 +424,7 @@ describe("agent grounding status", () => {
       });
 
     const { getAgentGroundingStatus } = await import("../../src/electron/ipc/handler-support.js");
-    await getAgentGroundingStatus(1, 7, {
+    const result = await getAgentGroundingStatus(1, 7, {
       ensureReady: true,
       proxyOptions: {
         encodingMode: "gpu",
@@ -407,10 +432,12 @@ describe("agent grounding status", () => {
       },
     });
 
+    expect(result.status).toBe("generating");
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1));
     expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledWith(
       sourcePath,
       expect.stringContaining("chapter_7_asset_11_ai_proxy.partial.0.mp4"),
-      undefined,
+      expect.any(Function),
       30 * 60 * 1000,
       "gpu",
       "fast",
@@ -418,8 +445,74 @@ describe("agent grounding status", () => {
         startTime: 10,
         endTime: 40,
       },
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      true,
+      undefined
     );
+    await vi.waitFor(() => {
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(17, "ready");
+    });
+  });
+
+  it("schedules all linked video assets before either encode completes", async () => {
+    databaseMocks.getAssetsByProject.mockResolvedValue([
+      { id: 11, project_id: 1, file_type: "video", file_path: sourcePath },
+      { id: 12, project_id: 1, file_type: "video", file_path: sourcePath },
+    ]);
+    databaseMocks.getAssetsForChapter.mockResolvedValue([11, 12]);
+    databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue(null);
+    databaseMocks.createChapterProxy.mockImplementation(async (input) => ({
+      id: input.asset_id + 100,
+      file_path: input.file_path,
+    }));
+    let finishEncodes!: () => void;
+    const encodeGate = new Promise<void>((resolve) => {
+      finishEncodes = resolve;
+    });
+    ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
+      await encodeGate;
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "proxy");
+      return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
+    });
+
+    const { getAgentGroundingStatus } = await import("../../src/electron/ipc/handler-support.js");
+    const result = await getAgentGroundingStatus(1, 7, {
+      ensureReady: true,
+      proxyOptions: { encodingMode: "gpu", quality: "balanced" },
+    });
+
+    expect(result).toMatchObject({
+      status: "generating",
+      requiredVideoAssetCount: 2,
+      readyVideoAssetCount: 0,
+    });
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(2));
+    finishEncodes();
+    await vi.waitFor(() => {
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(111, "ready");
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(112, "ready");
+    });
+  });
+
+  it("surfaces asynchronous proxy setup failures on the next status poll", async () => {
+    databaseMocks.getChapterProxyByChapterAsset
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValue(null);
+    const { getAgentGroundingStatus } = await import("../../src/electron/ipc/handler-support.js");
+
+    const initial = await getAgentGroundingStatus(1, 7, { ensureReady: true });
+    expect(initial.status).toBe("generating");
+    await vi.waitFor(() => {
+      expect(databaseMocks.getChapterProxyByChapterAsset).toHaveBeenCalledTimes(2);
+    });
+
+    const failed = await getAgentGroundingStatus(1, 7, { ensureReady: false });
+    expect(failed.status).toBe("error");
+    expect(failed.assets).toEqual([
+      { assetId: 11, status: "error", error: "database unavailable" },
+    ]);
   });
 
   it("returns missing_video_asset when the chapter has no linked video assets", async () => {

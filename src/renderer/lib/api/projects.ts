@@ -3,6 +3,8 @@ import type {
   DeleteProjectResult,
   GetProjectResult,
   GetProjectsResult,
+  ProjectProxyPrewarmResult,
+  ProxyOptions,
 } from '../../../shared/contracts/electron-api.js';
 import { getElectronApi } from './client.js';
 
@@ -11,6 +13,7 @@ export type {
   DeleteProjectResult,
   GetProjectResult,
   GetProjectsResult,
+  ProjectProxyPrewarmResult,
 } from '../../../shared/contracts/electron-api.js';
 
 export async function createProject(name: string): Promise<CreateProjectResult> {
@@ -27,4 +30,11 @@ export async function getProject(id: number): Promise<GetProjectResult> {
 
 export async function deleteProject(id: number): Promise<DeleteProjectResult> {
   return await getElectronApi().projects.delete(id);
+}
+
+export async function prewarmProjectProxies(
+  id: number,
+  proxyOptions?: ProxyOptions
+): Promise<ProjectProxyPrewarmResult> {
+  return await getElectronApi().projects.prewarmProxies(id, proxyOptions);
 }

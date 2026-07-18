@@ -1,20 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   cancelHeavyMediaJob,
+  configureHeavyMediaScheduler,
   enqueueHeavyMediaJob,
   isCancellationError,
+  resetHeavyMediaScheduler,
 } from "../../src/electron/ipc/support/heavy-media-queue.js";
 
-// The heavy media queue is a module-level singleton with max concurrency 1.
-// Tests share that state, so each test uses unique keys and must fully drain
-// the queue before finishing to avoid leaking an active slot into the next test.
+// The heavy media queue is a module-level singleton. Tests pin every pool to a
+// single slot so the "occupy the slot, then enqueue a second job" pattern
+// holds deterministically. Each test uses unique keys and must drain the queue
+// before finishing; afterEach resets the scheduler as a safety net.
 
 function flushPending(): Promise<void> {
   // A macrotask delay lets every pending microtask (the queue pump's
   // .then/.catch/.finally chain) settle before the next assertion.
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
+
+beforeEach(() => {
+  resetHeavyMediaScheduler();
+  configureHeavyMediaScheduler({
+    cpuProxy: 1,
+    gpuProxy: 1,
+    transcription: 1,
+    fullReverse: 1,
+    interactiveOverflow: 1,
+  });
+});
+
+afterEach(async () => {
+  await flushPending();
+  resetHeavyMediaScheduler();
+});
 
 // A fake job whose run fn resolves once the signal aborts, mirroring how the
 // real pipeline run fns cooperate with cancellation.

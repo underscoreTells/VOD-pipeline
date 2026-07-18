@@ -674,7 +674,7 @@
     }
 
     if (chapter && asset.file_type === 'video' && asset.availability?.exists !== false) {
-      void refreshReverseProxy(true, 'background');
+      void refreshReverseProxy(false, 'background');
     }
   });
 

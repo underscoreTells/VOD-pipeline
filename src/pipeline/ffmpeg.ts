@@ -3,7 +3,14 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { getFFmpegPath, getFFprobePath } from '../electron/ffmpegDetector.js';
-import { detectGPUEncoders, getGPUFFmpegPath, getProxyEncoderArgs, getHwaccelDecodeArgs, type GPUEncoderBackend } from '../electron/gpuDetector.js';
+import {
+  detectGPUEncoders,
+  getGPUFFmpegPath,
+  getProxyEncoderArgs,
+  getHwaccelDecodeArgs,
+  recordGPUEncoderRuntimeFailure,
+  type GPUEncoderBackend,
+} from '../electron/gpuDetector.js';
 import type {
   VideoMetadata,
   AudioTrackMetadata,
@@ -22,8 +29,39 @@ export class FFmpegError extends Error {
   }
 }
 
-type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
+export class GPUProxyFallbackError extends Error {
+  constructor(
+    public reason: string,
+    public fallbackFrom?: GPUEncoderBackend
+  ) {
+    super(reason);
+    this.name = 'GPUProxyFallbackError';
+  }
+}
+
+export type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
 type ProxyGenerationQuality = 'high' | 'balanced' | 'fast';
+
+export interface ProxyFallbackContext {
+  requestedMode: ProxyGenerationMode;
+  reason: string;
+  fallbackFrom?: GPUEncoderBackend;
+}
+
+export async function resolveProxyResourceClass(
+  encodingMode: ProxyGenerationMode
+): Promise<'cpu' | 'gpu'> {
+  if (encodingMode === 'cpu') {
+    return 'cpu';
+  }
+
+  const ffmpegPath = getFFmpegPath();
+  if (!ffmpegPath) {
+    return 'cpu';
+  }
+
+  return await detectGPUEncoders(ffmpegPath.path) ? 'gpu' : 'cpu';
+}
 
 interface ProxyEncodingPlan {
   requestedMode: ProxyGenerationMode;
@@ -487,10 +525,122 @@ function logProxyEncodingPlan(prefix: string, plan: ProxyEncodingPlan): void {
 }
 
 /**
+ * Log a single proxy encode attempt's wall-clock timing. `targetDuration` is
+ * the chapter (or full-source) duration the progress bar is scaled against, so
+ * `duration / wall` gives the effective FFmpeg speed multiplier. Failed GPU
+ * attempts still log their wall time (with `status=failed`) so fallback cost
+ * is visible; the CPU retry carries the GPU `fallbackReason`.
+ */
+function logProxyEncodeTiming(params: {
+  logPrefix: string;
+  backend: GPUEncoderBackend | 'cpu';
+  targetDuration: number;
+  wallSeconds: number;
+  succeeded: boolean;
+  fallbackReason?: string;
+}): void {
+  const { logPrefix, backend, targetDuration, wallSeconds, succeeded, fallbackReason } = params;
+  const parts = [
+    `backend=${backend}`,
+    `duration=${targetDuration.toFixed(2)}s`,
+    `wall=${wallSeconds.toFixed(2)}s`,
+  ];
+  if (succeeded && wallSeconds > 0) {
+    const speed = targetDuration / wallSeconds;
+    parts.push(`speed=${Number.isFinite(speed) ? speed.toFixed(2) : 'n/a'}x`);
+  }
+  if (!succeeded) {
+    parts.push('status=failed');
+  }
+  if (fallbackReason) {
+    parts.push(`fallback=${fallbackReason}`);
+  }
+  console.log(`[${logPrefix}] encode timing ${parts.join(' ')}`);
+}
+
+function getProxyDecodeName(backend: GPUEncoderBackend | 'cpu'): string {
+  switch (backend) {
+    case 'nvenc':
+      return 'cuda';
+    case 'qsv':
+      return 'qsv';
+    case 'amf':
+      return 'd3d11va';
+    case 'videotoolbox':
+      return 'videotoolbox';
+    default:
+      return 'cpu';
+  }
+}
+
+function getProxyScalerName(backend: GPUEncoderBackend | 'cpu'): string {
+  switch (backend) {
+    case 'nvenc':
+      return 'scale_cuda';
+    case 'qsv':
+      return 'scale_qsv';
+    case 'amf':
+      return 'vpp_amf';
+    case 'videotoolbox':
+      return 'scale_vt';
+    default:
+      return 'scale';
+  }
+}
+
+function logProxyCompletion(params: {
+  logPrefix: 'Proxy' | 'ReverseProxy';
+  result: 'success' | 'failed' | 'cancelled';
+  plan: ProxyEncodingPlan;
+  scaler: string;
+  fallbackFrom?: GPUEncoderBackend;
+  fallbackReason?: string;
+}): void {
+  const { logPrefix, result, plan, scaler, fallbackFrom, fallbackReason } = params;
+  const parts = [
+    `result=${result}`,
+    `requested=${plan.requestedMode}`,
+    `acceleration=${plan.useGPU ? 'gpu' : 'cpu'}`,
+    `actual=${plan.backend}`,
+    `codec=${plan.videoCodec}`,
+    `decode=${getProxyDecodeName(plan.backend)}`,
+    `scaler=${scaler}`,
+    `ffmpeg=${plan.ffmpegBinaryPath}`,
+  ];
+  if (fallbackFrom) parts.push(`fallbackFrom=${fallbackFrom}`);
+  if (fallbackReason) parts.push(`reason=${JSON.stringify(fallbackReason)}`);
+  console.log(`[${logPrefix}] complete ${parts.join(' ')}`);
+}
+
+function getProxyResult(error: unknown): 'failed' | 'cancelled' {
+  return error instanceof FFmpegError && error.code === 'cancelled' ? 'cancelled' : 'failed';
+}
+
+function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
+  if (!error.details || typeof error.details !== 'object' || !('error' in error.details)) {
+    return false;
+  }
+
+  const stderr = error.details.error;
+  if (typeof stderr !== 'string') {
+    return false;
+  }
+
+  const gpuFailurePatterns = [
+    /unknown encoder\s+['"]?(?:h264_|hevc_)?(?:nvenc|qsv|amf|videotoolbox)/i,
+    /cannot load (?:libcuda|nvcuda|libmfx|amfrt)/i,
+    /no (?:nvenc|qsv|amf|videotoolbox)[^\n]*capable devices? found/i,
+    /(?<![/\\_.-])\b(?:nvenc|qsv|amf|videotoolbox|vtcompression)[^\n]{0,80}(?:initializ(?:ation|e|ing)? failed|failed to (?:initialize|initialise|create|open)|not available|unsupported)/i,
+    /(?:failed|unable) to (?:initialize|initialise|create) [^\n]{0,40}(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
+  ];
+  return gpuFailurePatterns.some((pattern) => pattern.test(stderr));
+}
+
+/**
  * Build the proxy scale + framerate filter args for a given backend.
  *
  * AI proxies target 640px wide @ 5fps. GPU backends use their hardware scaler
- * (`scale_cuda`, `scale_qsv`, `scale_amf`, `scale_vt`) so frames stay on the
+  * (`scale_cuda`, `scale_qsv`, `vpp_amf`, `scale_vt`) so frames stay on the
  * GPU between decode and encode. CPU fallback uses the software `scale` +
  * `fps` filters.
  */
@@ -501,7 +651,7 @@ function getProxyScaleFilterArgs(backend: GPUEncoderBackend | 'cpu'): string[] {
     case 'qsv':
       return ['-vf', 'scale_qsv=640:-2', '-r', '5'];
     case 'amf':
-      return ['-vf', 'scale_amf=640:-2', '-r', '5'];
+      return ['-vf', 'vpp_amf=640:-2', '-r', '5'];
     case 'videotoolbox':
       return ['-vf', 'scale_vt=640:-2', '-r', '5'];
     default:
@@ -558,7 +708,9 @@ export async function generateAIProxy(
   encodingMode: ProxyGenerationMode = 'auto',
   quality: ProxyGenerationQuality = 'balanced',
   trimOptions?: { startTime: number; endTime: number },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  deferCpuFallback = false,
+  fallbackContext?: ProxyFallbackContext
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
@@ -569,8 +721,10 @@ export async function generateAIProxy(
     throw new FFmpegError('AI proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
   }
 
-  // Get source metadata first
-  const metadata = await getVideoMetadata(inputPath);
+  // Validate + normalize the trim range before probing anything. The bounds
+  // are known up front from the chapter, so a trimmed proxy never needs a
+  // source ffprobe: progress duration is derived from endTime - startTime.
+  // The no-trim path keeps the source probe to learn the container duration.
   const trimRange = trimOptions
     ? {
         startTime: Math.max(0, trimOptions.startTime),
@@ -587,42 +741,87 @@ export async function generateAIProxy(
     }
   }
 
-  const targetDuration = trimRange
-    ? Math.max(0.01, trimRange.endTime - trimRange.startTime)
-    : metadata.duration;
+  let targetDuration: number;
+  if (trimRange) {
+    targetDuration = Math.max(0.01, trimRange.endTime - trimRange.startTime);
+  } else {
+    const metadata = await getVideoMetadata(inputPath);
+    targetDuration = metadata.duration;
+  }
 
   const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'Proxy');
+  let finalPlan = fallbackContext
+    ? {
+        ...initialPlan,
+        requestedMode: fallbackContext.requestedMode,
+        fallbackReason: fallbackContext.reason,
+      }
+    : initialPlan;
+  let result: 'success' | 'failed' | 'cancelled' = 'failed';
+  let fallbackFrom: GPUEncoderBackend | undefined = fallbackContext?.fallbackFrom;
+  let fallbackReason: string | undefined = fallbackContext?.reason;
   try {
-    return await executeProxyGeneration(
-      initialPlan,
-      inputPath,
-      outputPath,
-      { duration: targetDuration },
-      onProgress,
-      timeoutMs,
-      trimRange,
-      signal
-    );
-  } catch (error) {
-    const isCancelled = error instanceof FFmpegError && error.code === 'cancelled';
-    if (!initialPlan.useGPU || isCancelled) {
-      throw error;
+    if (deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
+      if (signal?.aborted) {
+        throw new FFmpegError('AI proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
+      }
+      throw new GPUProxyFallbackError(
+        initialPlan.fallbackReason ?? 'gpu encoder unavailable at run time'
+      );
     }
+    try {
+      const output = await executeProxyGeneration(
+        finalPlan,
+        inputPath,
+        outputPath,
+        { duration: targetDuration },
+        onProgress,
+        timeoutMs,
+        trimRange,
+        signal
+      );
+      result = 'success';
+      return output;
+    } catch (error) {
+      const isCancelled = error instanceof FFmpegError && error.code === 'cancelled';
+      if (!initialPlan.useGPU || isCancelled) {
+        throw error;
+      }
 
-    const reason = error instanceof Error ? error.message : 'unknown gpu encoding error';
-    console.warn(`[Proxy] GPU proxy generation failed; retrying on CPU. reason=${reason}`);
-    const cpuPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
-    logProxyEncodingPlan('Proxy', cpuPlan);
-    return await executeProxyGeneration(
-      cpuPlan,
-      inputPath,
-      outputPath,
-      { duration: targetDuration },
-      onProgress,
-      timeoutMs,
-      trimRange,
-      signal
-    );
+      const reason = error instanceof Error ? error.message : 'unknown gpu encoding error';
+      if (deferCpuFallback) {
+        throw new GPUProxyFallbackError(reason, initialPlan.backend as GPUEncoderBackend);
+      }
+      console.warn(`[Proxy] GPU proxy generation failed; retrying on CPU. reason=${reason}`);
+      fallbackFrom = initialPlan.backend as GPUEncoderBackend;
+      fallbackReason = reason;
+      finalPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
+      logProxyEncodingPlan('Proxy', finalPlan);
+      const output = await executeProxyGeneration(
+        finalPlan,
+        inputPath,
+        outputPath,
+        { duration: targetDuration },
+        onProgress,
+        timeoutMs,
+        trimRange,
+        signal
+      );
+      result = 'success';
+      return output;
+    }
+  } catch (error) {
+    result = getProxyResult(error);
+    throw error;
+  } finally {
+    logProxyCompletion({
+      logPrefix: 'Proxy',
+      result,
+      plan: finalPlan,
+      scaler: getProxyScalerName(finalPlan.backend),
+      fallbackFrom,
+      fallbackReason,
+    });
   }
 }
 
@@ -665,16 +864,46 @@ async function executeProxyGeneration(
     '-y', outputPath,
   ];
 
-  await spawnFFmpeg({
-    executablePath: encodingPlan.ffmpegBinaryPath,
-    args,
-    signal,
-    timeoutMs,
-    logTag: 'Proxy',
-    logCommand: true,
-    onProgress,
-    progressDuration: metadata.duration,
-  });
+  const wallStartMs = performance.now();
+  let encodeSucceeded = false;
+  try {
+    try {
+      await spawnFFmpeg({
+        executablePath: encodingPlan.ffmpegBinaryPath,
+        args,
+        signal,
+        timeoutMs,
+        logTag: 'Proxy',
+        logCommand: true,
+        onProgress,
+        progressDuration: metadata.duration,
+      });
+    } catch (error) {
+      if (
+        encodingPlan.useGPU &&
+        error instanceof FFmpegError &&
+        error.code === 'FFMPEG_ERROR' &&
+        isLikelyGPUEncoderRuntimeFailure(error)
+      ) {
+        recordGPUEncoderRuntimeFailure(
+          { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },
+          error.message
+        );
+      }
+      throw error;
+    }
+    encodeSucceeded = true;
+  } finally {
+    const wallSeconds = (performance.now() - wallStartMs) / 1000;
+    logProxyEncodeTiming({
+      logPrefix: 'Proxy',
+      backend: encodingPlan.backend,
+      targetDuration: metadata.duration,
+      wallSeconds,
+      succeeded: encodeSucceeded,
+      fallbackReason: encodingPlan.fallbackReason,
+    });
+  }
 
   // Read proxy metadata after a successful encode.
   const proxyMetadata = await getVideoMetadata(outputPath);
@@ -739,6 +968,7 @@ function toConcatFileEntry(filePath: string): string {
 }
 
 async function runChunkedChapterReverseGeneration(params: {
+  encodingPlan: ProxyEncodingPlan;
   ffmpegBinaryPath: string;
   inputPath: string;
   outputPath: string;
@@ -754,6 +984,7 @@ async function runChunkedChapterReverseGeneration(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const {
+    encodingPlan,
     ffmpegBinaryPath,
     inputPath,
     outputPath,
@@ -825,7 +1056,22 @@ async function runChunkedChapterReverseGeneration(params: {
         '-y', chunkPath
       );
 
-      await runFFmpeg(ffmpegBinaryPath, args, timeoutMs, { logCommand: false, signal });
+      try {
+        await runFFmpeg(ffmpegBinaryPath, args, timeoutMs, { logCommand: false, signal });
+      } catch (error) {
+        if (
+          encodingPlan.useGPU &&
+          error instanceof FFmpegError &&
+          error.code === 'FFMPEG_ERROR' &&
+          isLikelyGPUEncoderRuntimeFailure(error)
+        ) {
+          recordGPUEncoderRuntimeFailure(
+            { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },
+            error.message
+          );
+        }
+        throw error;
+      }
 
       completedChunks += 1;
       if (completedChunks === 1 || completedChunks === totalChunks || completedChunks % logStep === 0) {
@@ -899,6 +1145,8 @@ export async function generateChapterReverseProxy(
     maxParallelChunks?: number;
     executionMode?: 'background' | 'interactive';
     signal?: AbortSignal;
+    deferCpuFallback?: boolean;
+    fallbackContext?: ProxyFallbackContext;
   }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
@@ -962,6 +1210,7 @@ export async function generateChapterReverseProxy(
     );
 
     await runChunkedChapterReverseGeneration({
+      encodingPlan,
       ffmpegBinaryPath: encodingPlan.ffmpegBinaryPath,
       inputPath,
       outputPath,
@@ -979,29 +1228,67 @@ export async function generateChapterReverseProxy(
   };
 
   const initialPlan = await resolveProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, 'ReverseProxy');
+  let finalPlan = options.fallbackContext
+    ? {
+        ...initialPlan,
+        requestedMode: options.fallbackContext.requestedMode,
+        fallbackReason: options.fallbackContext.reason,
+      }
+    : initialPlan;
+  let result: 'success' | 'failed' | 'cancelled' = 'failed';
+  let fallbackFrom: GPUEncoderBackend | undefined = options.fallbackContext?.fallbackFrom;
+  let fallbackReason: string | undefined = options.fallbackContext?.reason;
   try {
-    await generateWithPlan(initialPlan);
-  } catch (error) {
-    const isCancelled = error instanceof FFmpegError && error.code === 'cancelled';
-    if (!initialPlan.useGPU || isCancelled) {
-      throw error;
+    if (options.deferCpuFallback && encodingMode !== 'cpu' && !initialPlan.useGPU) {
+      if (signal?.aborted) {
+        throw new FFmpegError('Reverse proxy generation cancelled before start', 'cancelled', { reason: 'aborted' });
+      }
+      throw new GPUProxyFallbackError(
+        initialPlan.fallbackReason ?? 'gpu encoder unavailable at run time'
+      );
+    }
+    try {
+      await generateWithPlan(finalPlan);
+    } catch (error) {
+      const isCancelled = error instanceof FFmpegError && error.code === 'cancelled';
+      if (!initialPlan.useGPU || isCancelled) {
+        throw error;
+      }
+
+      const reason = error instanceof Error ? error.message : 'unknown gpu reverse generation error';
+      if (options.deferCpuFallback) {
+        throw new GPUProxyFallbackError(reason, initialPlan.backend as GPUEncoderBackend);
+      }
+      console.warn(`[ReverseProxy] GPU reverse generation failed; retrying on CPU. reason=${reason}`);
+      fallbackFrom = initialPlan.backend as GPUEncoderBackend;
+      fallbackReason = reason;
+      finalPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
+      logProxyEncodingPlan('ReverseProxy', finalPlan);
+      await generateWithPlan(finalPlan);
     }
 
-    const reason = error instanceof Error ? error.message : 'unknown gpu reverse generation error';
-    console.warn(`[ReverseProxy] GPU reverse generation failed; retrying on CPU. reason=${reason}`);
-    const cpuPlan = buildCpuProxyEncodingPlan(ffmpegPath.path, encodingMode, quality, reason);
-    logProxyEncodingPlan('ReverseProxy', cpuPlan);
-    await generateWithPlan(cpuPlan);
+    const outputMetadata = await getVideoMetadata(outputPath, 60000);
+    const stats = fs.statSync(outputPath);
+    result = 'success';
+
+    return {
+      width: outputMetadata.width,
+      height: outputMetadata.height,
+      framerate: Math.round(outputMetadata.fps),
+      fileSize: stats.size,
+      duration: outputMetadata.duration,
+    };
+  } catch (error) {
+    result = getProxyResult(error);
+    throw error;
+  } finally {
+    logProxyCompletion({
+      logPrefix: 'ReverseProxy',
+      result,
+      plan: finalPlan,
+      scaler: 'none',
+      fallbackFrom,
+      fallbackReason,
+    });
   }
-
-  const outputMetadata = await getVideoMetadata(outputPath, 60000);
-  const stats = fs.statSync(outputPath);
-
-  return {
-    width: outputMetadata.width,
-    height: outputMetadata.height,
-    framerate: Math.round(outputMetadata.fps),
-    fileSize: stats.size,
-    duration: outputMetadata.duration,
-  };
 }

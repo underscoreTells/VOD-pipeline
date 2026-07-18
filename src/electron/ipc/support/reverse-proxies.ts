@@ -13,8 +13,11 @@ import {
   type ReverseProxyVariant,
 } from '../../paths.js';
 import {
+  GPUProxyFallbackError,
   generateChapterReverseProxy,
   getVideoMetadata,
+  resolveProxyResourceClass,
+  type ProxyFallbackContext,
 } from '../../../pipeline/ffmpeg.js';
 import {
   bumpGenerationEpoch,
@@ -321,7 +324,11 @@ export async function ensureChapterReverseProxyQuickReady(
     }
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'reverseQuickWarm', queuePriority, async (signal) => {
+      const generate = (
+        encodingMode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         if (await pathExists(quickTempPath)) {
           try {
             await fs.promises.unlink(quickTempPath);
@@ -359,14 +366,39 @@ export async function ensureChapterReverseProxyQuickReady(
           startTime: inputStartTime,
           endTime: inputEndTime,
           fps,
-          encodingMode: normalizedProxyOptions.encodingMode,
+          encodingMode,
           quality: normalizedProxyOptions.quality,
           chunkDurationSec: 45,
           maxParallelChunks: executionMode === 'interactive' ? 2 : 1,
           executionMode,
           signal,
+          deferCpuFallback,
+          fallbackContext,
         });
-      });
+      };
+      const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
+      await enqueueHeavyMediaJob(
+        jobKey,
+        'reverseQuickWarm',
+        queuePriority,
+        generate(normalizedProxyOptions.encodingMode, resourceClass === 'gpu'),
+        {
+          resourceClass,
+          cpuFallback: {
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: normalizedProxyOptions.encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
+          },
+        }
+      );
 
       if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(quickTempPath, 'ReverseProxy');
@@ -459,7 +491,11 @@ async function ensureChapterReverseProxyFullReady(
     let generatedPath: string | undefined;
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'reverseFullWarm', priority, async (signal) => {
+      const generate = (
+        encodingMode: 'cpu' | 'gpu' | 'auto',
+        deferCpuFallback: boolean,
+        fallbackContext?: ProxyFallbackContext
+      ) => async (signal: AbortSignal) => {
         if (await ensureChapterReverseProxyCacheValid(chapter.id, asset.id, 'full')) {
           generatedPath = proxyPath;
           chapterReverseProxyErrors.delete(lockKey);
@@ -479,12 +515,14 @@ async function ensureChapterReverseProxyFullReady(
           startTime: chapter.start_time,
           endTime: chapter.end_time,
           fps: 15,
-          encodingMode: normalizedProxyOptions.encodingMode,
+          encodingMode,
           quality: normalizedProxyOptions.quality,
           chunkDurationSec: 11,
           maxParallelChunks: 1,
           executionMode: 'background',
           signal,
+          deferCpuFallback,
+          fallbackContext,
         });
 
         if (getGenerationEpoch(chapterReverseProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -504,7 +542,30 @@ async function ensureChapterReverseProxyFullReady(
 
         generatedPath = proxyPath;
         chapterReverseProxyErrors.delete(lockKey);
-      });
+      };
+      const resourceClass = await resolveProxyResourceClass(normalizedProxyOptions.encodingMode);
+      let fallbackContext: ProxyFallbackContext | undefined;
+      await enqueueHeavyMediaJob(
+        jobKey,
+        'reverseFullWarm',
+        priority,
+        generate(normalizedProxyOptions.encodingMode, resourceClass === 'gpu'),
+        {
+          resourceClass,
+          cpuFallback: {
+            shouldFallback: (error) => {
+              if (!(error instanceof GPUProxyFallbackError)) return false;
+              fallbackContext = {
+                requestedMode: normalizedProxyOptions.encodingMode,
+                reason: error.reason,
+                fallbackFrom: error.fallbackFrom,
+              };
+              return true;
+            },
+            run: (signal) => generate('cpu', false, fallbackContext)(signal),
+          },
+        }
+      );
     } catch (error) {
       await deleteFileIfExists(tempPath, 'ReverseProxy');
       if (isCancellationError(error)) {

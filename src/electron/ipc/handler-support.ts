@@ -28,6 +28,8 @@ export {
   ensureChapterReverseProxyQuickReady,
 } from './support/reverse-proxies.js';
 
+export { scheduleProjectProxyPrewarm } from './support/project-prewarm.js';
+
 export {
   enqueueHeavyMediaJob,
   cancelHeavyMediaJob,

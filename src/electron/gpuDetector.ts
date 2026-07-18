@@ -53,6 +53,7 @@ let cachedEncoder: GPUEncoderInfo | null = null;
 let cachedFFmpegPath: string | null = null;
 let cachedFallbackReason: string | null = null;
 let cachedHwaccels: string[] = [];
+const inFlightDetections = new Map<string, Promise<GPUEncoderInfo | null>>();
 
 export function getPreferredGPUEncoders(
   platform: NodeJS.Platform = process.platform
@@ -77,10 +78,38 @@ export async function detectGPUEncoders(
   ffmpegPath: string,
   force = false
 ): Promise<GPUEncoderInfo | null> {
-  if (!force && cachedEncoder && cachedFFmpegPath === ffmpegPath) {
+  if (
+    !force &&
+    cachedFFmpegPath === ffmpegPath &&
+    (cachedEncoder !== null || cachedFallbackReason !== null)
+  ) {
     return cachedEncoder;
   }
 
+  const inFlightDetection = inFlightDetections.get(ffmpegPath);
+  if (inFlightDetection) {
+    if (!force) {
+      return await inFlightDetection;
+    }
+    await inFlightDetection;
+    const subsequentDetection = inFlightDetections.get(ffmpegPath);
+    if (subsequentDetection) {
+      return await subsequentDetection;
+    }
+  }
+
+  const promise = detectGPUEncodersUncached(ffmpegPath);
+  inFlightDetections.set(ffmpegPath, promise);
+  try {
+    return await promise;
+  } finally {
+    if (inFlightDetections.get(ffmpegPath) === promise) {
+      inFlightDetections.delete(ffmpegPath);
+    }
+  }
+}
+
+async function detectGPUEncodersUncached(ffmpegPath: string): Promise<GPUEncoderInfo | null> {
   console.log('[GPU] Detecting available hardware encoders...');
   cachedFFmpegPath = ffmpegPath;
   cachedFallbackReason = null;
@@ -190,11 +219,28 @@ export function getGPUFFmpegPath(): string | null {
   return cachedEncoder?.source ?? null;
 }
 
+export function recordGPUEncoderRuntimeFailure(
+  expected: { backend: GPUEncoderBackend; source: string },
+  reason: string
+): void {
+  if (
+    cachedEncoder?.backend !== expected.backend ||
+    cachedEncoder.source !== expected.source
+  ) {
+    return;
+  }
+
+  cachedEncoder = null;
+  cachedFallbackReason =
+    `GPU encoder ${expected.backend} via ${expected.source} failed at runtime: ${reason}`;
+}
+
 export function clearGPUEncoderCache(): void {
   cachedEncoder = null;
   cachedFFmpegPath = null;
   cachedFallbackReason = null;
   cachedHwaccels = [];
+  inFlightDetections.clear();
 }
 
 export function setGPUEncoderForTesting(

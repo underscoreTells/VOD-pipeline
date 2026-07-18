@@ -33,6 +33,7 @@ const ffmpegMocks = vi.hoisted(() => ({
   generateAIProxy: vi.fn(),
   generateChapterReverseProxy: vi.fn(),
   getVideoMetadata: vi.fn(),
+  resolveProxyResourceClass: vi.fn(),
 }));
 
 vi.mock("electron", () => electronMocks);
@@ -63,6 +64,7 @@ describe("chapter proxy cache validation", () => {
       fps: 5,
       duration: 30,
     });
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("cpu");
     ffmpegMocks.generateAIProxy.mockImplementation(async (_inputPath: string, outputPath: string) => {
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       fs.writeFileSync(outputPath, "proxy");
@@ -225,6 +227,7 @@ describe("chapter proxy cache validation", () => {
 
     expect(result).toBe(proxyPath);
     expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1);
+    expect(ffmpegMocks.generateAIProxy.mock.calls[0][8]).toBe(false);
     expect(databaseMocks.updateChapterProxyDefinition).toHaveBeenCalledWith(2, expect.objectContaining({
       start_time: 10,
       end_time: 40,
@@ -280,6 +283,55 @@ describe("chapter proxy cache validation", () => {
     expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledTimes(1);
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(4, "generating");
     expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(4, "ready");
+  });
+
+  it("deduplicates import prewarm and selected-chapter requests", async () => {
+    const proxyPath = path.join(tempDir, "deduplicated.mp4");
+    databaseMocks.getChapterProxyByChapterAsset.mockResolvedValue({
+      id: 5,
+      file_path: proxyPath,
+      status: "pending",
+      start_time: 10,
+      end_time: 40,
+    });
+    let finishEncode!: () => void;
+    let reportProgress: ((percent: number) => void) | undefined;
+    const encodeGate = new Promise<void>((resolve) => {
+      finishEncode = resolve;
+    });
+    ffmpegMocks.generateAIProxy.mockImplementation(async (
+      _inputPath: string,
+      outputPath: string,
+      onProgress?: (percent: number) => void
+    ) => {
+      reportProgress = onProgress;
+      await encodeGate;
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, "proxy");
+      return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
+    });
+
+    const { ensureChapterProxyReady } = await import("../../src/electron/ipc/handler-support.js");
+    const chapter = { id: 7, start_time: 10, end_time: 40 } as never;
+    const asset = { id: 11, file_type: "video", file_path: "/tmp/input.mp4" } as never;
+    const prewarm = ensureChapterProxyReady(chapter, asset, "cpu", "balanced", "background");
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce());
+    expect(reportProgress).toBeTypeOf("function");
+    const interactiveProgress = vi.fn();
+    const selected = ensureChapterProxyReady(
+      chapter,
+      asset,
+      "cpu",
+      "balanced",
+      "interactive",
+      interactiveProgress
+    );
+
+    reportProgress?.(50);
+    expect(interactiveProgress).toHaveBeenCalledWith(50);
+    finishEncode();
+    await expect(Promise.all([prewarm, selected])).resolves.toEqual([proxyPath, proxyPath]);
+    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalledOnce();
   });
 
   it("uses an mp4-suffixed temp path for quick reverse proxy generation", async () => {

@@ -37,6 +37,7 @@ const databaseMocks = vi.hoisted(() => ({
 const ffmpegMocks = vi.hoisted(() => ({
   generateAIProxy: vi.fn(),
   getVideoMetadata: vi.fn(),
+  resolveProxyResourceClass: vi.fn(),
 }));
 
 vi.mock("electron", () => electronMocks);
@@ -95,13 +96,16 @@ describe("proxy:progress IPC emission", () => {
       bitrate: 0,
       container: "mp4",
     });
+    ffmpegMocks.resolveProxyResourceClass.mockResolvedValue("cpu");
     ffmpegMocks.generateAIProxy.mockImplementation(
-      async (_input: string, _output: string, onProgress?: (pct: number) => void) => {
+      async (_input: string, output: string, onProgress?: (pct: number) => void) => {
         if (onProgress) {
           onProgress(25);
           onProgress(50);
           onProgress(100);
         }
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.writeFileSync(output, "proxy");
         return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
       }
     );
@@ -111,15 +115,30 @@ describe("proxy:progress IPC emission", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("forwards proxy generation progress to the renderer via proxy:progress", async () => {
+  it("continues forwarding progress after the initial status IPC returns", async () => {
     const { registerAgentGroundingHandler } = await import("../../src/electron/ipc/handlers/agent/grounding.js");
     registerAgentGroundingHandler();
 
     const handler = registeredHandlers.get(IPC_CHANNELS.AGENT_GROUNDING_STATUS);
     expect(handler).toBeDefined();
 
+    let emitProgress: ((percent: number) => void) | undefined;
+    let finishEncode!: () => void;
+    const encodeGate = new Promise<void>((resolve) => {
+      finishEncode = resolve;
+    });
+    ffmpegMocks.generateAIProxy.mockImplementation(
+      async (_input: string, output: string, onProgress?: (pct: number) => void) => {
+        emitProgress = onProgress;
+        await encodeGate;
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.writeFileSync(output, "proxy");
+        return { width: 640, height: 360, framerate: 5, fileSize: 5, duration: 30 };
+      }
+    );
+
     const senderSend = vi.fn();
-    const mockEvent = { sender: { send: senderSend } };
+    const mockEvent = { sender: { send: senderSend, isDestroyed: vi.fn(() => false) } };
 
     const result = await handler?.(mockEvent, {
       projectId: "1",
@@ -127,8 +146,12 @@ describe("proxy:progress IPC emission", () => {
       ensureReady: true,
     });
 
-    expect(result).toMatchObject({ success: true });
-    expect(ffmpegMocks.generateAIProxy).toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true, data: { status: "generating" } });
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalled());
+
+    emitProgress?.(25);
+    emitProgress?.(50);
+    emitProgress?.(100);
 
     const progressCalls = senderSend.mock.calls.filter(
       (call) => call[0] === IPC_CHANNELS.PROXY_PROGRESS
@@ -150,6 +173,26 @@ describe("proxy:progress IPC emission", () => {
       assetId: 11,
       percent: 100,
     });
+    finishEncode();
+    await vi.waitFor(() => {
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(90, "ready");
+    });
+  });
+
+  it("does not send progress after the originating renderer is destroyed", async () => {
+    const { registerAgentGroundingHandler } = await import("../../src/electron/ipc/handlers/agent/grounding.js");
+    registerAgentGroundingHandler();
+    const handler = registeredHandlers.get(IPC_CHANNELS.AGENT_GROUNDING_STATUS);
+    const senderSend = vi.fn();
+    const mockEvent = { sender: { send: senderSend, isDestroyed: vi.fn(() => true) } };
+
+    await handler?.(mockEvent, { projectId: "1", chapterId: "7", ensureReady: true });
+    await vi.waitFor(() => expect(ffmpegMocks.generateAIProxy).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(90, "ready");
+    });
+
+    expect(senderSend).not.toHaveBeenCalled();
   });
 
   it("does not emit progress when ensureReady is false", async () => {

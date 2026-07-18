@@ -244,6 +244,15 @@ export interface GetAssetResult {
   error?: string;
 }
 
+export interface ProjectProxyPrewarmResult {
+  success: boolean;
+  data?: {
+    accepted: number;
+    skipped: number;
+  };
+  error?: string;
+}
+
 export interface AddAssetResult {
   success: boolean;
   data?: Asset;
@@ -481,6 +490,10 @@ export interface GPUStatusResult {
   error?: string;
 }
 
+export interface GPUStatusOptions {
+  force?: boolean;
+}
+
 export interface GPUStatusPayload {
   backend: 'videotoolbox' | 'nvenc' | 'qsv' | 'amf' | 'cpu';
   encoderName: string | null;
@@ -517,6 +530,7 @@ export interface ElectronAPI {
     getAll: () => Promise<GetProjectsResult>;
     get: (id: number) => Promise<GetProjectResult>;
     delete: (id: number) => Promise<DeleteProjectResult>;
+    prewarmProxies: (id: number, proxyOptions?: ProxyOptions) => Promise<ProjectProxyPrewarmResult>;
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;
@@ -606,7 +620,7 @@ export interface ElectronAPI {
     onProgress: (callback: (data: ProxyProgressEvent) => void) => () => void;
   };
   gpu: {
-    getStatus: () => Promise<GPUStatusResult>;
+    getStatus: (options?: GPUStatusOptions) => Promise<GPUStatusResult>;
   };
   dialog: {
     showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogReturnValue>;

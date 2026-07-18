@@ -34,18 +34,23 @@
   });
   let gpuStatus = $state<GPUStatusPayload | null>(null);
   let gpuStatusLoading = $state(false);
+  let gpuStatusError = $state<string | null>(null);
 
   const providers: LLMProviderType[] = ["gemini", "openai", "anthropic", "kimi", "openrouter"];
   const videoProviders: LLMProviderType[] = ["gemini", "kimi"];
 
-  async function loadGpuStatus() {
+  async function loadGpuStatus(force = false) {
     gpuStatusLoading = true;
+    gpuStatusError = null;
     try {
-      const result = await getGPUStatus();
-      gpuStatus = result.data ?? null;
+      const result = await getGPUStatus({ force });
+      if (!result.success || !result.data) {
+        throw new Error(result.error || 'GPU status is unavailable');
+      }
+      gpuStatus = result.data;
     } catch (error) {
       console.warn('[SettingsPanel] Failed to load GPU status:', error);
-      gpuStatus = null;
+      gpuStatusError = error instanceof Error ? error.message : 'GPU detection failed';
     } finally {
       gpuStatusLoading = false;
     }
@@ -248,24 +253,39 @@
             <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">
               Controls hardware acceleration for chapter proxy generation. "Auto" probes your system ffmpeg for GPU encoders; "GPU" forces it (falls back to CPU on failure); "CPU" never uses GPU.
             </p>
-            {#if gpuStatus}
-              <div class="ml-6 mt-1.5 text-app-xs leading-[1.4]">
-                {#if gpuStatus.detected && gpuStatus.encoderName}
-                  <span class="text-text-secondary">
-                    GPU detected: <span class="font-medium text-text-primary">{gpuStatus.encoderName}</span>
-                    {#if gpuStatus.source}
-                      <span class="text-text-tertiary"> via {gpuStatus.source}</span>
-                    {/if}
-                  </span>
-                {:else if gpuStatus.fallbackReason}
-                  <span class="text-text-tertiary">GPU: {gpuStatus.fallbackReason}</span>
-                {:else}
-                  <span class="text-text-tertiary">GPU: not detected — will use CPU fallback.</span>
+            <div class="ml-6 mt-1.5 flex items-start justify-between gap-3 text-app-xs leading-[1.4]">
+              <div class="min-w-0 flex-1" aria-live="polite">
+                {#if gpuStatus}
+                  {#if gpuStatus.detected && gpuStatus.encoderName}
+                    <span class="text-text-secondary">
+                      GPU detected: <span class="font-medium text-text-primary">{gpuStatus.encoderName}</span>
+                      {#if gpuStatus.source}
+                        <span class="text-text-tertiary"> via {gpuStatus.source}</span>
+                      {/if}
+                    </span>
+                  {:else if gpuStatus.fallbackReason}
+                    <span class="text-text-tertiary">GPU: {gpuStatus.fallbackReason}</span>
+                  {:else}
+                    <span class="text-text-tertiary">GPU: not detected — will use CPU fallback.</span>
+                  {/if}
+                  {#if gpuStatusError}
+                    <span class="mt-1 block text-accent-destructive">Re-detection failed: {gpuStatusError}</span>
+                  {/if}
+                {:else if gpuStatusError}
+                  <span class="text-accent-destructive">GPU status unavailable: {gpuStatusError}</span>
+                {:else if gpuStatusLoading}
+                  <span class="text-text-tertiary">Detecting GPU...</span>
                 {/if}
               </div>
-            {:else if gpuStatusLoading}
-              <div class="ml-6 mt-1.5 text-app-xs text-text-tertiary">Detecting GPU…</div>
-            {/if}
+              <button
+                type="button"
+                class="shrink-0 rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={() => void loadGpuStatus(true)}
+                disabled={gpuStatusLoading}
+              >
+                {gpuStatusLoading ? 'Detecting...' : 'Re-detect'}
+              </button>
+            </div>
           </div>
 
           <div class="select-group mb-4">
@@ -284,6 +304,18 @@
             </p>
           </div>
           
+          <div class="checkbox-group mb-4">
+            <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
+              <input
+                class="h-4 w-4 cursor-pointer accent-accent-primary"
+                type="checkbox"
+                bind:checked={settingsState.settings.autoGenerateProxies}
+              />
+              Prewarm missing proxies when opening a project
+            </label>
+            <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">Schedules reusable chapter-range proxies in the background so agent chat is ready before chapters are selected.</p>
+          </div>
+
           <div class="checkbox-group mb-4">
             <label class="flex cursor-pointer items-center gap-2 text-app-sm font-medium text-text-secondary">
               <input 
