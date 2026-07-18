@@ -5,7 +5,7 @@ export type HeavyMediaJobPriority = 'background' | 'interactive';
 export type HeavyMediaResourceClass = 'cpu' | 'gpu';
 export type HeavyMediaResourcePool = 'cpuProxy' | 'gpuProxy' | 'transcription';
 
-export interface HeavyMediaEnqueueOptions {
+export interface HeavyMediaEnqueueOptions<T = unknown> {
   /**
    * Hardware resource class the job targets. Proxy-generating jobs
    * (`chapterProxy`, `reverseQuickWarm`, `reverseFullWarm`) are routed to the
@@ -17,6 +17,10 @@ export interface HeavyMediaEnqueueOptions {
    * proxy/reverse jobs.
    */
   resourceClass?: HeavyMediaResourceClass;
+  cpuFallback?: {
+    shouldFallback: (error: unknown) => boolean;
+    run: (signal: AbortSignal) => Promise<T>;
+  };
 }
 
 export interface HeavyMediaSchedulerLimits {
@@ -46,6 +50,8 @@ type HeavyMediaJob<T> = {
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (reason?: unknown) => void;
   controller: AbortController;
+  cpuFallback: HeavyMediaEnqueueOptions<T>['cpuFallback'];
+  runAttempt: number;
 };
 
 export class HeavyMediaCancellationError extends Error {
@@ -239,6 +245,7 @@ function releaseHeavyMediaSlot(job: HeavyMediaJob<unknown>): void {
 
 function runHeavyMediaJob(job: HeavyMediaJob<unknown>): void {
   const queueWaitMs = performance.now() - job.queuedAt;
+  const runAttempt = job.runAttempt;
   console.log(
     `[HeavyMedia] Starting type=${job.type} key=${job.key} pool=${job.pool} queueWait=${queueWaitMs.toFixed(0)}ms`
   );
@@ -248,11 +255,34 @@ function runHeavyMediaJob(job: HeavyMediaJob<unknown>): void {
       job.resolve(value);
     })
     .catch((error) => {
+      if (
+        job.pool === 'gpuProxy'
+        && job.cpuFallback?.shouldFallback(error)
+        && job.schedulerEpoch === heavyMediaSchedulerEpoch
+      ) {
+        console.warn(`[HeavyMedia] Requeueing GPU fallback on CPU type=${job.type} key=${job.key}`);
+        releaseHeavyMediaSlot(job);
+        job.resourceClass = 'cpu';
+        job.pool = 'cpuProxy';
+        job.inOverflow = false;
+        job.started = false;
+        job.sequence = heavyMediaJobSequence++;
+        job.queuedAt = performance.now();
+        job.run = job.cpuFallback.run;
+        job.cpuFallback = undefined;
+        job.runAttempt += 1;
+        heavyMediaQueue.push(job);
+        pumpHeavyMediaQueue();
+        return;
+      }
       console.warn(`[HeavyMedia] Job failed type=${job.type} key=${job.key}:`, error);
       job.reject(error);
     })
     .finally(() => {
       if (job.schedulerEpoch !== heavyMediaSchedulerEpoch) {
+        return;
+      }
+      if (job.runAttempt !== runAttempt) {
         return;
       }
       releaseHeavyMediaSlot(job);
@@ -287,7 +317,7 @@ export function enqueueHeavyMediaJob<T>(
   type: HeavyMediaJobType,
   priority: HeavyMediaJobPriority,
   run: (signal: AbortSignal) => Promise<T>,
-  options?: HeavyMediaEnqueueOptions
+  options?: HeavyMediaEnqueueOptions<T>
 ): Promise<T> {
   const existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
   if (existing) {
@@ -327,6 +357,8 @@ export function enqueueHeavyMediaJob<T>(
     resolve,
     reject,
     controller: new AbortController(),
+    cpuFallback: options?.cpuFallback,
+    runAttempt: 0,
   };
 
   heavyMediaJobs.set(key, job as HeavyMediaJob<unknown>);

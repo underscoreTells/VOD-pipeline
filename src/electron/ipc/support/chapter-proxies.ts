@@ -19,6 +19,7 @@ import {
   getChapterProxyTempPath,
 } from '../../paths.js';
 import {
+  GPUProxyFallbackError,
   generateAIProxy,
   getVideoMetadata,
   resolveProxyResourceClass,
@@ -282,7 +283,7 @@ export async function ensureChapterProxyReady(
     }
 
     try {
-      await enqueueHeavyMediaJob(jobKey, 'chapterProxy', priority, async (signal) => {
+      const generate = (mode: 'cpu' | 'gpu' | 'auto', deferCpuFallback: boolean) => async (signal: AbortSignal) => {
         await deleteFileIfExists(tempPath, 'ChapterProxy');
         await updateChapterProxyStatus(chapterProxyId, 'generating');
         await ensureProxyDirectory();
@@ -292,13 +293,14 @@ export async function ensureChapterProxyReady(
           tempPath,
           progressListeners.size > 0 ? emitProgress : undefined,
           30 * 60 * 1000,
-          encodingMode,
+          mode,
           quality,
           {
             startTime: chapter.start_time,
             endTime: chapter.end_time,
           },
-          signal
+          signal,
+          deferCpuFallback
         );
 
         if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
@@ -317,7 +319,20 @@ export async function ensureChapterProxyReady(
           duration: metadata.duration,
         });
         await updateChapterProxyStatus(chapterProxyId, 'ready');
-      }, { resourceClass: await resolveProxyResourceClass(encodingMode) });
+      };
+      await enqueueHeavyMediaJob(
+        jobKey,
+        'chapterProxy',
+        priority,
+        generate(encodingMode, true),
+        {
+          resourceClass: await resolveProxyResourceClass(encodingMode),
+          cpuFallback: {
+            shouldFallback: (error) => error instanceof GPUProxyFallbackError,
+            run: generate('cpu', false),
+          },
+        }
+      );
 
       if (getGenerationEpoch(chapterProxyGenerationEpochs, lockKey) !== generationEpoch) {
         await deleteFileIfExists(tempPath, 'ChapterProxy');

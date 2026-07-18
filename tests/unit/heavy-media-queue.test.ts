@@ -150,6 +150,58 @@ describe("heavy media scheduler resource pools", () => {
     await flushPending();
   });
 
+  it("requeues a GPU fallback under CPU capacity", async () => {
+    configure({ cpuProxy: 1, gpuProxy: 1, interactiveOverflow: 0 });
+
+    const cpuBlocker = trackedJob("fallback:cpu-blocker", "blocker", []);
+    const cpuFallback = trackedJob("fallback:cpu-retry", "fallback", []);
+    const nextGpu = trackedJob("fallback:next-gpu", "gpu", []);
+    const fallbackError = new Error("GPU fallback requested");
+
+    const blockerPromise = enqueueHeavyMediaJob(
+      cpuBlocker.key,
+      "chapterProxy",
+      "background",
+      cpuBlocker.run
+    );
+    const fallbackPromise = enqueueHeavyMediaJob(
+      "fallback:proxy",
+      "chapterProxy",
+      "background",
+      async () => {
+        throw fallbackError;
+      },
+      {
+        resourceClass: "gpu",
+        cpuFallback: {
+          shouldFallback: (error) => error === fallbackError,
+          run: cpuFallback.run,
+        },
+      }
+    );
+
+    await flushPending();
+    expect(cpuFallback.isStarted).toBe(false);
+
+    const nextGpuPromise = enqueueHeavyMediaJob(
+      nextGpu.key,
+      "chapterProxy",
+      "background",
+      nextGpu.run,
+      { resourceClass: "gpu" }
+    );
+    expect(nextGpu.isStarted).toBe(true);
+
+    cpuBlocker.finish();
+    await blockerPromise;
+    await flushPending();
+    expect(cpuFallback.isStarted).toBe(true);
+
+    cpuFallback.finish();
+    nextGpu.finish();
+    await Promise.all([fallbackPromise, nextGpuPromise]);
+  });
+
   it("defaults resourceClass to cpu when no options are passed (backward compatible)", async () => {
     configure({ cpuProxy: 1, gpuProxy: 2 });
 

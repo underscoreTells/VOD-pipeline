@@ -444,7 +444,8 @@ describe("agent grounding status", () => {
         startTime: 10,
         endTime: 40,
       },
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      true
     );
     await vi.waitFor(() => {
       expect(databaseMocks.updateChapterProxyStatus).toHaveBeenCalledWith(17, "ready");

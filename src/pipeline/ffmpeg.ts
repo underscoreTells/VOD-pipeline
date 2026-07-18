@@ -29,14 +29,21 @@ export class FFmpegError extends Error {
   }
 }
 
+export class GPUProxyFallbackError extends Error {
+  constructor(public reason: string) {
+    super(reason);
+    this.name = 'GPUProxyFallbackError';
+  }
+}
+
 type ProxyGenerationMode = 'cpu' | 'gpu' | 'auto';
 type ProxyGenerationQuality = 'high' | 'balanced' | 'fast';
 
 export async function resolveProxyResourceClass(
   encodingMode: ProxyGenerationMode
 ): Promise<'cpu' | 'gpu'> {
-  if (encodingMode !== 'auto') {
-    return encodingMode;
+  if (encodingMode === 'cpu') {
+    return 'cpu';
   }
 
   const ffmpegPath = getFFmpegPath();
@@ -615,8 +622,8 @@ function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
     /unknown encoder\s+['"]?(?:h264_|hevc_)?(?:nvenc|qsv|amf|videotoolbox)/i,
     /cannot load (?:libcuda|nvcuda|libmfx|amfrt)/i,
     /no (?:nvenc|qsv|amf|videotoolbox)[^\n]*capable devices? found/i,
-    /(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)[^\n]*(?:fail|error|not found|not available|unsupported|initializ|cannot|unable)/i,
-    /(?:fail|error|not found|not available|unsupported|initializ|cannot|unable)[^\n]*(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
+    /(?<![/\\_.-])\b(?:nvenc|qsv|amf|videotoolbox|vtcompression)[^\n]{0,80}(?:initializ(?:ation|e|ing)? failed|failed to (?:initialize|initialise|create|open)|not available|unsupported)/i,
+    /(?:failed|unable) to (?:initialize|initialise|create) [^\n]{0,40}(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
   ];
   return gpuFailurePatterns.some((pattern) => pattern.test(stderr));
 }
@@ -693,7 +700,8 @@ export async function generateAIProxy(
   encodingMode: ProxyGenerationMode = 'auto',
   quality: ProxyGenerationQuality = 'balanced',
   trimOptions?: { startTime: number; endTime: number },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  deferCpuFallback = false
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
   if (!ffmpegPath) {
@@ -758,6 +766,9 @@ export async function generateAIProxy(
       }
 
       const reason = error instanceof Error ? error.message : 'unknown gpu encoding error';
+      if (deferCpuFallback) {
+        throw new GPUProxyFallbackError(reason);
+      }
       console.warn(`[Proxy] GPU proxy generation failed; retrying on CPU. reason=${reason}`);
       fallbackFrom = initialPlan.backend as GPUEncoderBackend;
       fallbackReason = reason;
@@ -1111,6 +1122,7 @@ export async function generateChapterReverseProxy(
     maxParallelChunks?: number;
     executionMode?: 'background' | 'interactive';
     signal?: AbortSignal;
+    deferCpuFallback?: boolean;
   }
 ): Promise<{ width: number; height: number; framerate: number; fileSize: number; duration: number }> {
   const ffmpegPath = getFFmpegPath();
@@ -1206,6 +1218,9 @@ export async function generateChapterReverseProxy(
       }
 
       const reason = error instanceof Error ? error.message : 'unknown gpu reverse generation error';
+      if (options.deferCpuFallback) {
+        throw new GPUProxyFallbackError(reason);
+      }
       console.warn(`[ReverseProxy] GPU reverse generation failed; retrying on CPU. reason=${reason}`);
       fallbackFrom = initialPlan.backend as GPUEncoderBackend;
       fallbackReason = reason;

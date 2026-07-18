@@ -305,6 +305,53 @@ describe("gpu detector", () => {
     expect(spawnMock).toHaveBeenCalledTimes(firstProbeCount);
   });
 
+  it("shares an in-flight detection for concurrent callers", async () => {
+    spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "Hardware acceleration methods:\ncuda\n");
+      }
+      const encoder = args[args.indexOf("-c:v") + 1];
+      if (executablePath === "ffmpeg" && encoder === "h264_nvenc") {
+        return createSpawnResult(0);
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+    const { detectGPUEncoders } = await import("../../src/electron/gpuDetector.js");
+
+    const results = await Promise.all([
+      detectGPUEncoders("/bundled/ffmpeg"),
+      detectGPUEncoders("/bundled/ffmpeg"),
+      detectGPUEncoders("/bundled/ffmpeg"),
+    ]);
+
+    expect(results).toEqual([
+      expect.objectContaining({ backend: "nvenc", source: "ffmpeg" }),
+      expect.objectContaining({ backend: "nvenc", source: "ffmpeg" }),
+      expect.objectContaining({ backend: "nvenc", source: "ffmpeg" }),
+    ]);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs a fresh forced detection after an in-flight probe", async () => {
+    spawnMock.mockImplementation((executablePath: string, args: string[]) => {
+      if (args[0] === "-hwaccels") {
+        return createSpawnResult(0, "", "Hardware acceleration methods:\ncuda\n");
+      }
+      const encoder = args[args.indexOf("-c:v") + 1];
+      if (executablePath === "ffmpeg" && encoder === "h264_nvenc") {
+        return createSpawnResult(0);
+      }
+      return createSpawnResult(1, "Unknown encoder");
+    });
+    const { detectGPUEncoders } = await import("../../src/electron/gpuDetector.js");
+
+    const initial = detectGPUEncoders("/bundled/ffmpeg");
+    const forced = detectGPUEncoders("/bundled/ffmpeg", true);
+    await Promise.all([initial, forced]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(4);
+  });
+
   it("force detection bypasses a negative cache and restores an encoder", async () => {
     let nvencAvailable = false;
     spawnMock.mockImplementation((executablePath: string, args: string[]) => {

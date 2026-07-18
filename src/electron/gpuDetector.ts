@@ -53,6 +53,7 @@ let cachedEncoder: GPUEncoderInfo | null = null;
 let cachedFFmpegPath: string | null = null;
 let cachedFallbackReason: string | null = null;
 let cachedHwaccels: string[] = [];
+const inFlightDetections = new Map<string, Promise<GPUEncoderInfo | null>>();
 
 export function getPreferredGPUEncoders(
   platform: NodeJS.Platform = process.platform
@@ -85,6 +86,30 @@ export async function detectGPUEncoders(
     return cachedEncoder;
   }
 
+  const inFlightDetection = inFlightDetections.get(ffmpegPath);
+  if (inFlightDetection) {
+    if (!force) {
+      return await inFlightDetection;
+    }
+    await inFlightDetection;
+    const subsequentDetection = inFlightDetections.get(ffmpegPath);
+    if (subsequentDetection) {
+      return await subsequentDetection;
+    }
+  }
+
+  const promise = detectGPUEncodersUncached(ffmpegPath);
+  inFlightDetections.set(ffmpegPath, promise);
+  try {
+    return await promise;
+  } finally {
+    if (inFlightDetections.get(ffmpegPath) === promise) {
+      inFlightDetections.delete(ffmpegPath);
+    }
+  }
+}
+
+async function detectGPUEncodersUncached(ffmpegPath: string): Promise<GPUEncoderInfo | null> {
   console.log('[GPU] Detecting available hardware encoders...');
   cachedFFmpegPath = ffmpegPath;
   cachedFallbackReason = null;
@@ -215,6 +240,7 @@ export function clearGPUEncoderCache(): void {
   cachedFFmpegPath = null;
   cachedFallbackReason = null;
   cachedHwaccels = [];
+  inFlightDetections.clear();
 }
 
 export function setGPUEncoderForTesting(

@@ -490,6 +490,44 @@ describe("ffmpeg proxy argument generation", () => {
     }
   });
 
+  it("defers a GPU fallback without starting the CPU retry", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "NVENC initialization failed",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy, GPUProxyFallbackError } = await import("../../src/pipeline/ffmpeg.js");
+      await expect(generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 },
+        undefined,
+        true
+      )).rejects.toBeInstanceOf(GPUProxyFallbackError);
+
+      const encodeCommands = spawnState.calls.filter((call) => call.args.includes("-c:v"));
+      expect(encodeCommands).toHaveLength(1);
+      expect(encodeCommands[0].command).toBe("/usr/bin/ffmpeg");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("records a reverse GPU chunk failure and summarizes the CPU retry", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "nvenc",
@@ -551,6 +589,40 @@ describe("ffmpeg proxy argument generation", () => {
       command: "/usr/bin/ffmpeg",
       code: 1,
       stderr: "Invalid data found when processing input",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not treat a GPU-related input path as an encoder failure", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "Error opening input file /videos/cuda/demo.mp4",
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
