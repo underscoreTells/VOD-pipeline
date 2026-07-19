@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { shouldRequestChapterWaveform } from '../../src/renderer/lib/components/chapter-cut/chapter-cut-waveform.js';
+import {
+  shouldReloadWaveformOnProgress,
+  shouldRequestChapterWaveform,
+} from '../../src/renderer/lib/components/chapter-cut/chapter-cut-waveform.js';
 
 describe('chapter cut waveform loading', () => {
   it('does not retry an unavailable waveform for the same asset', () => {
@@ -27,5 +30,38 @@ describe('chapter cut waveform loading', () => {
       waveformStatus: 'unavailable',
       isInFlight: false,
     })).toBe(true);
+  });
+
+  it('does not reload on generation progress while a load is in flight', () => {
+    expect(shouldReloadWaveformOnProgress({
+      eventAssetId: 7,
+      primaryAssetId: 7,
+      percent: 100,
+      isInFlight: true,
+    })).toBe(false);
+  });
+
+  it('reloads on completed generation when no load is in flight', () => {
+    expect(shouldReloadWaveformOnProgress({
+      eventAssetId: 7,
+      primaryAssetId: 7,
+      percent: 100,
+      isInFlight: false,
+    })).toBe(true);
+  });
+
+  it('ignores progress for other assets or incomplete generation', () => {
+    expect(shouldReloadWaveformOnProgress({
+      eventAssetId: 8,
+      primaryAssetId: 7,
+      percent: 100,
+      isInFlight: false,
+    })).toBe(false);
+    expect(shouldReloadWaveformOnProgress({
+      eventAssetId: 7,
+      primaryAssetId: 7,
+      percent: 62,
+      isInFlight: false,
+    })).toBe(false);
   });
 });

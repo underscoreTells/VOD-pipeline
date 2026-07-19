@@ -154,40 +154,77 @@ export interface ExpectedCreateClipFields extends ExpectedClipFields {
 }
 
 /**
- * Computes the clip shape that `previewSuggestionWithClip` would have created
- * for a `create_clip` suggestion. `assetId` must already be resolved by the
- * caller (the single chapter video asset or the explicit payload assetId).
- * Returns null only if the window collapses to non-positive duration, which
- * `previewSuggestionWithClip` would have rejected rather than persisted.
+ * Candidate global windows for a suggestion range. Previews were
+ * materialized by builds that stored suggestion ranges either chapter-local
+ * or as legacy global source times, so the reconciliation must accept both
+ * interpretations to recognize an untouched preview.
  */
-export function computeExpectedCreatedClipFields(
+function computeSuggestionWindowCandidates(
+  suggestion: Suggestion,
+  chapter: Chapter
+): NormalizedSuggestionClipWindow[] {
+  const localWindow = normalizeSuggestionClipWindow(suggestion, chapter);
+
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const legacyLocalIn = clampToRange(suggestion.in_point - chapter.start_time, 0, chapterDuration);
+  const legacyLocalOut = clampToRange(
+    suggestion.out_point - chapter.start_time,
+    legacyLocalIn,
+    chapterDuration
+  );
+  const legacyWindow: NormalizedSuggestionClipWindow = {
+    inPoint: chapter.start_time + legacyLocalIn,
+    outPoint: chapter.start_time + legacyLocalOut,
+  };
+
+  if (
+    legacyWindow.inPoint === localWindow.inPoint &&
+    legacyWindow.outPoint === localWindow.outPoint
+  ) {
+    return [localWindow];
+  }
+  return [localWindow, legacyWindow];
+}
+
+/**
+ * Computes the clip shapes that `previewSuggestionWithClip` could have
+ * created for a `create_clip` suggestion — one per plausible interpretation
+ * of the stored range (chapter-local and legacy global source times).
+ * `assetId` must already be resolved by the caller (the single chapter video
+ * asset or the explicit payload assetId). Windows that collapse to
+ * non-positive duration, which `previewSuggestionWithClip` would have
+ * rejected rather than persisted, are omitted.
+ */
+export function computeExpectedCreatedClipCandidates(
   suggestion: Suggestion,
   chapter: Chapter,
   assetId: number
-): ExpectedCreateClipFields | null {
+): ExpectedCreateClipFields[] {
   const actionPayload = parseSuggestionActionPayload(suggestion);
   const createPayload = actionPayload?.create;
-  const window = normalizeSuggestionClipWindow(suggestion, chapter);
-
-  if (window.inPoint >= window.outPoint) {
-    return null;
-  }
 
   const trackIndex =
     typeof createPayload?.trackIndex === 'number' && Number.isFinite(createPayload.trackIndex)
       ? createPayload.trackIndex
       : 0;
 
-  return {
-    project_id: chapter.project_id,
-    asset_id: assetId,
-    track_index: trackIndex,
-    in_point: window.inPoint,
-    out_point: window.outPoint,
-    role: createPayload?.role ?? null,
-    description: createPayload?.description ?? suggestion.description,
-    is_essential: createPayload?.isEssential ?? true,
-  };
+  const candidates: ExpectedCreateClipFields[] = [];
+  for (const window of computeSuggestionWindowCandidates(suggestion, chapter)) {
+    if (window.inPoint >= window.outPoint) {
+      continue;
+    }
+    candidates.push({
+      project_id: chapter.project_id,
+      asset_id: assetId,
+      track_index: trackIndex,
+      in_point: window.inPoint,
+      out_point: window.outPoint,
+      role: createPayload?.role ?? null,
+      description: createPayload?.description ?? suggestion.description,
+      is_essential: createPayload?.isEssential ?? true,
+    });
+  }
+  return candidates;
 }
 
 /**

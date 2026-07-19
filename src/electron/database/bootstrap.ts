@@ -96,14 +96,14 @@ export async function initializeDatabase(): Promise<Database.Database> {
     dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
-    // Normalize legacy global suggestion ranges to chapter-local first: the
-    // preview reconciliation below compares stored ranges against live clips
-    // using the chapter-local convention. The pre-migration version is the
-    // migration's provenance signal (legacy range conversion only applies
-    // below version 1), so capture it before anything runs.
+    // Reconcile materialized previews before normalizing suggestion ranges:
+    // preview recognition compares stored ranges against live clips, and
+    // mutating a stranded range first would destroy that evidence. The
+    // pre-migration version is captured so failed rows can be retried with
+    // the same provenance on the next startup.
     const originalSchemaVersion = await getSchemaVersion(database);
-    const rangeStats = normalizeStoredSuggestionRangesToChapterLocal(database);
     const previewStats = reconcilePendingSuggestionPreviews(database);
+    const rangeStats = normalizeStoredSuggestionRangesToChapterLocal(database);
     applySchemaStatements(database, schema, 'index');
     validateClipMigrationState(database);
     // Record the schema revision this build expects; the imperative

@@ -5,7 +5,7 @@ import {
   clampToRange,
   clipMatchesExpectedCreate,
   clipMatchesExpectedUpdate,
-  computeExpectedCreatedClipFields,
+  computeExpectedCreatedClipCandidates,
   computeExpectedUpdatedClipFields,
   isUpdateSuggestion,
   normalizeSuggestionRecord,
@@ -691,30 +691,39 @@ type SuggestionRow = Suggestion;
 // Schema-version-5 suggestion range normalization
 //
 // Older builds persisted suggestion in/out points as global source times while
-// current builds persist chapter-local values. A heuristic cannot always tell
-// the two apart (a legacy global range that happens to fit inside the chapter
-// duration is indistinguishable from a chapter-local one), so the runtime no
-// longer guesses: this idempotent one-time migration (gated by
-// user_version < 5) makes the coordinate convention explicit.
+// current builds persist chapter-local values. Neither a range heuristic nor
+// the database's user_version can classify a stored row: version stamping
+// never converted row data, and chapter bound edits can strand chapter-local
+// rows out of range. This idempotent one-time migration (gated by
+// user_version < 5) therefore decides per row from concrete evidence:
 //
-// Provenance: chapter-local writes predate version stamping, and schema
-// version 1 was already stamped after chapter-local suggestion writes
-// existed, so out-of-range rows in a versioned database are chapter-local
-// rows stranded by chapter bound edits — they are clamped back into the
-// chapter range. Only databases older than version 1 (no stamped
-// user_version) may hold legacy global-source rows; for those, values that
-// cannot be chapter-local (beyond the chapter duration or negative, past a
-// negligible floating-point epsilon) are rewritten into chapter-local
-// coordinates. Rows that already fit the chapter range are left untouched,
-// fixing the convention that all stored suggestion ranges are chapter-local
-// from version 5 onward.
+//   create preview still materialized -> the live preview clip is ground
+//       truth for the intended window; derive local from it
+//   created before chapter-local storage shipped (see
+//       CHAPTER_LOCAL_STORAGE_CUTOFF) -> must be a legacy global range;
+//       shift it by the chapter start
+//   anything else -> a chapter-local row stranded by a bound edit; clamp it
+//       back into the chapter range
+//
+// Rows that already fit the chapter range are left untouched, fixing the
+// convention that all stored suggestion ranges are chapter-local from
+// version 5 onward.
 // ============================================================================
+
+/**
+ * Suggestions created before this timestamp were written by builds that
+ * stored ranges as global source times; chapter-local storage shipped with
+ * the proposal-first clip actions build (2026-02-14 23:12 UTC).
+ */
+const CHAPTER_LOCAL_STORAGE_CUTOFF = '2026-02-14T23:12:17';
 
 export interface SuggestionRangeNormalizationStats {
   /** True when the migration skipped because user_version is already >= 5. */
   skipped: boolean;
   /** Rows rewritten from legacy global source times to chapter-local. */
   converted: number;
+  /** Rows whose intended window was recovered from a live preview clip. */
+  resolvedFromPreview: number;
   /** Chapter-local rows clamped back into bounds after chapter edits. */
   clampedOutOfRange: number;
   /** Rows skipped because their chapter no longer exists. */
@@ -733,6 +742,7 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
   const stats: SuggestionRangeNormalizationStats = {
     skipped: false,
     converted: 0,
+    resolvedFromPreview: 0,
     clampedOutOfRange: 0,
     orphanedSkipped: 0,
     rowsFailed: 0,
@@ -748,18 +758,15 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
     return stats;
   }
 
-  // Only databases without a stamped schema version can contain legacy
-  // global-source ranges: version 1 was already stamped after chapter-local
-  // suggestion writes existed, and chapter bound edits could strand those
-  // local rows out of range. In versioned databases an out-of-range row is
-  // therefore a chapter-local row and must be clamped, not shifted.
-  const treatOutOfRangeAsLegacyGlobal = currentVersion < 1;
-
   const selectRows = database.prepare(
     `SELECT s.id AS suggestion_id, s.in_point AS in_point, s.out_point AS out_point,
+            s.action_type AS action_type, s.clip_id AS clip_id, s.created_at AS created_at,
             c.start_time AS chapter_start, c.end_time AS chapter_end
      FROM suggestions s
      LEFT JOIN chapters c ON c.id = s.chapter_id`
+  );
+  const selectClipRange = database.prepare(
+    'SELECT in_point, out_point FROM clips WHERE id = ?'
   );
   const updateRange = database.prepare(
     'UPDATE suggestions SET in_point = ?, out_point = ? WHERE id = ?'
@@ -769,6 +776,9 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
     suggestion_id: number;
     in_point: number;
     out_point: number;
+    action_type: string | null;
+    clip_id: number | null;
+    created_at: string | null;
     chapter_start: number | null;
     chapter_end: number | null;
   }
@@ -790,8 +800,7 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
         // Persisted chapter-local values are clamped to [0, chapterDuration]
         // by the write path, so anything outside those bounds (beyond a
-        // negligible floating-point epsilon) is either a legacy global source
-        // time (pre-v2 databases) or a local row stranded by a bound edit.
+        // negligible floating-point epsilon) needs normalization.
         const rangeEpsilon = 1e-6;
         const isOutOfRange =
           row.in_point > chapterDuration + rangeEpsilon ||
@@ -802,7 +811,26 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           continue;
         }
 
-        if (treatOutOfRangeAsLegacyGlobal) {
+        // A materialized create preview clip records the exact window the
+        // preview path produced, which is ground truth for both legacy and
+        // chapter-local rows.
+        if (row.action_type !== 'update_clip' && row.clip_id !== null) {
+          const previewClip = selectClipRange.get(row.clip_id) as
+            | { in_point: number; out_point: number }
+            | undefined;
+          if (previewClip) {
+            const localIn = clampToRange(previewClip.in_point - row.chapter_start, 0, chapterDuration);
+            const localOut = clampToRange(previewClip.out_point - row.chapter_start, localIn, chapterDuration);
+            updateRange.run(localIn, localOut, row.suggestion_id);
+            stats.resolvedFromPreview += 1;
+            continue;
+          }
+        }
+
+        const isLegacyGlobal =
+          typeof row.created_at !== 'string' ||
+          row.created_at < CHAPTER_LOCAL_STORAGE_CUTOFF;
+        if (isLegacyGlobal) {
           const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
           const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
           updateRange.run(localIn, localOut, row.suggestion_id);
@@ -814,8 +842,8 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           stats.clampedOutOfRange += 1;
         }
       } catch (error) {
-        // Leave the row untouched; bootstrap keeps user_version below 5 while
-        // rowsFailed is non-zero so a later startup retries the conversion.
+        // Leave the row untouched; bootstrap keeps the original user_version
+        // while rowsFailed is non-zero so a later startup retries the row.
         stats.rowsFailed += 1;
         console.error(
           `Database migration: skipped range normalization of suggestion ${row.suggestion_id}:`,
@@ -829,14 +857,16 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
 
   if (
     stats.converted > 0 ||
+    stats.resolvedFromPreview > 0 ||
     stats.clampedOutOfRange > 0 ||
     stats.rowsFailed > 0 ||
     stats.orphanedSkipped > 0
   ) {
     console.log(
       `Database migrated: normalized suggestion ranges to chapter-local ` +
-      `(converted ${stats.converted}, clamped ${stats.clampedOutOfRange}, ` +
-      `orphaned skipped ${stats.orphanedSkipped}, failed ${stats.rowsFailed})`
+      `(converted ${stats.converted}, resolved from preview ${stats.resolvedFromPreview}, ` +
+      `clamped ${stats.clampedOutOfRange}, orphaned skipped ${stats.orphanedSkipped}, ` +
+      `failed ${stats.rowsFailed})`
     );
   }
 
@@ -1147,8 +1177,8 @@ function reconcileCreateSuggestion(ctx: ReconcileCreateContext): void {
     return;
   }
 
-  const expected = computeExpectedCreatedClipFields(suggestion, chapter, expectedAssetId);
-  if (!expected) {
+  const expectedCandidates = computeExpectedCreatedClipCandidates(suggestion, chapter, expectedAssetId);
+  if (expectedCandidates.length === 0) {
     // Collapsed window: the preview path would have rejected this, so a live
     // clip here must be user-created/diverged. Preserve and unlink.
     unlinkCreateSuggestion.run(suggestion.id);
@@ -1157,7 +1187,7 @@ function reconcileCreateSuggestion(ctx: ReconcileCreateContext): void {
   }
 
   const clip = mapClipRow(clipRow);
-  if (clipMatchesExpectedCreate(clip, expected)) {
+  if (expectedCandidates.some((expected) => clipMatchesExpectedCreate(clip, expected))) {
     // Exact untouched preview: delete the preview clip and unlink.
     deleteClip.run(previewClipId);
     unlinkCreateSuggestion.run(suggestion.id);

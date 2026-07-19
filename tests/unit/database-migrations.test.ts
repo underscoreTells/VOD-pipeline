@@ -886,7 +886,8 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     database: Database.Database,
     ids: SeededIds,
     inPoint: number,
-    outPoint: number
+    outPoint: number,
+    options: { createdAt?: string; clipId?: number | null } = {}
   ): number {
     return database.prepare(
       `INSERT INTO suggestions (
@@ -909,9 +910,9 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       null,
       'pending',
       0,
-      '2026-04-24T00:00:00.000Z',
+      options.createdAt ?? '2026-04-24T00:00:00.000Z',
       null,
-      null
+      options.clipId ?? null
     ).lastInsertRowid as number;
   }
 
@@ -932,10 +933,11 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     try {
       builder.exec(readCurrentSchema());
       const ids = seedProjectGraph(builder);
-      // Chapter spans 100-180, so a stored 120-150 range cannot be
-      // chapter-local: it must be a legacy global source range. Only
-      // databases without a stamped schema version can hold legacy rows.
-      const suggestionId = insertSuggestion(builder, ids, 120, 150);
+      // Chapter spans 100-180, so a stored 120-150 range written before
+      // chapter-local storage shipped must be a legacy global source range.
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
       expect(builder.pragma('user_version', { simple: true })).toBe(0);
       closeSqliteDatabase(builder);
 
@@ -986,7 +988,9 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       // Chapter spans 100-200: a legacy-global 100.2-100.8 range is within one
       // second of the 100-second duration but still cannot be chapter-local.
       database.prepare('UPDATE chapters SET start_time = 100, end_time = 200 WHERE id = ?').run(ids.chapterId);
-      const suggestionId = insertSuggestion(database, ids, 100.2, 100.8);
+      const suggestionId = insertSuggestion(database, ids, 100.2, 100.8, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
 
       const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
 
@@ -999,7 +1003,36 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
-  it('clamps out-of-range rows as chapter-local in versioned databases', () => {
+  it('derives the intended window from a materialized create preview clip', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // The preview clip records the window the preview path actually
+      // produced, so it disambiguates the stored range even for rows written
+      // after chapter-local storage shipped.
+      const previewClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'preview create', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, { clipId: previewClipId });
+      database.pragma('user_version = 4');
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(1);
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps out-of-range rows written after chapter-local storage shipped', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');
 
@@ -1007,12 +1040,10 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       database.exec(readCurrentSchema());
       const ids = seedProjectGraph(database);
       // Chapter-local 70-80 became out of range after the chapter bounds
-      // changed to 100-160; it must be clamped, not shifted. Schema v1 was
-      // stamped after chapter-local writes existed, so this applies to every
-      // versioned database.
+      // changed to 100-160; written after chapter-local storage shipped, it
+      // must be clamped, not shifted.
       database.prepare('UPDATE chapters SET start_time = 100, end_time = 160 WHERE id = ?').run(ids.chapterId);
       const suggestionId = insertSuggestion(database, ids, 70, 80);
-      database.pragma('user_version = 1');
 
       const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
 
@@ -1020,6 +1051,111 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       expect(stats.clampedOutOfRange).toBe(1);
       expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 60, out_point: 60 });
     } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('reconciles a legacy preview before normalizing its range during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3v5-');
+    const dbPath = path.join(tempDir, 'v3v5.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Legacy-global pending preview: stored range 120-150 with the
+      // materialized clip at the same global window in the 100-180 chapter.
+      const previewClipId = builder.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'cut', 1, '2026-01-15T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+        clipId: previewClipId,
+      });
+      builder.pragma('user_version = 2');
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(5);
+      // The reconciliation recognized the preview via its legacy-global
+      // interpretation and removed it before the range was normalized.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT in_point, out_point, clip_id FROM suggestions WHERE id = ?'
+      ).get(suggestionId) as { in_point: number; out_point: number; clip_id: number | null };
+      expect(row.clip_id).toBeNull();
+      expect(row).toMatchObject({ in_point: 20, out_point: 50 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores only the base snapshot when update previews share a target clip', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+
+      const targetClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 140, 160, 'setup', 'second edit', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+
+      const insertUpdatePreview = (snapshot: { in: number; out: number; description: string }) =>
+        database.prepare(
+          `INSERT INTO suggestions (
+            chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+            reasoning, provider, action_type, target_clip_id, action_payload_json,
+            preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ids.chapterId, ids.conversationId, ids.chatMessageId, 10, 20, 'preview update', 'reason',
+          'gemini', 'update_clip', targetClipId, JSON.stringify({ update: { outPoint: 60 } }),
+          JSON.stringify({
+            clip: {
+              id: targetClipId,
+              in_point: snapshot.in,
+              out_point: snapshot.out,
+              role: 'setup',
+              description: snapshot.description,
+              is_essential: true,
+            },
+          }),
+          'pending', 0, '2026-04-24T00:00:00.000Z', null, targetClipId
+        ).lastInsertRowid as number;
+
+      // The clip went A (base) -> B -> current; only A may be restored.
+      const olderSuggestionId = insertUpdatePreview({ in: 110, out: 170, description: 'base state' });
+      const newerSuggestionId = insertUpdatePreview({ in: 120, out: 165, description: 'first edit' });
+
+      await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+
+      const clip = database.prepare(
+        'SELECT in_point, out_point, description FROM clips WHERE id = ?'
+      ).get(targetClipId) as { in_point: number; out_point: number; description: string };
+      expect(clip).toEqual({ in_point: 110, out_point: 170, description: 'base state' });
+
+      for (const suggestionId of [olderSuggestionId, newerSuggestionId]) {
+        const row = database.prepare(
+          'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+        ).get(suggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+        expect(row.clip_id).toBeNull();
+        expect(row.preview_snapshot_json).toBeNull();
+      }
+    } finally {
+      setDatabaseForTesting(null);
       closeSqliteDatabase(database);
     }
   });

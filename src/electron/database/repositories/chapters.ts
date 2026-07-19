@@ -140,11 +140,15 @@ function cancelChapterSuggestionPreviews(
   database: Database.Database,
   chapterId: number
 ): void {
+  // Oldest first: when several pending update previews target the same clip,
+  // the oldest snapshot holds the clip's base state; restoring any later
+  // snapshot would leave stale preview state materialized.
   const rows = database.prepare(
     `SELECT id, action_type, target_clip_id, clip_id, preview_snapshot_json
      FROM suggestions
      WHERE chapter_id = ? AND status = 'pending'
-       AND (clip_id IS NOT NULL OR preview_snapshot_json IS NOT NULL)`
+       AND (clip_id IS NOT NULL OR preview_snapshot_json IS NOT NULL)
+     ORDER BY id ASC`
   ).all(chapterId) as Array<{
     id: number;
     action_type: string | null;
@@ -163,11 +167,12 @@ function cancelChapterSuggestionPreviews(
     'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
   );
 
+  const restoredTargetClipIds = new Set<number>();
   for (const row of rows) {
     if (row.action_type === 'update_clip') {
       const snapshot = parseSuggestionPreviewSnapshotJson(row.preview_snapshot_json);
       const targetClipId = row.target_clip_id ?? row.clip_id;
-      if (snapshot && targetClipId !== null) {
+      if (snapshot && targetClipId !== null && !restoredTargetClipIds.has(targetClipId)) {
         restoreClip.run(
           snapshot.clip.in_point,
           snapshot.clip.out_point,
@@ -176,6 +181,7 @@ function cancelChapterSuggestionPreviews(
           snapshot.clip.is_essential ? 1 : 0,
           targetClipId
         );
+        restoredTargetClipIds.add(targetClipId);
       }
     } else if (row.clip_id !== null) {
       deletePreviewClip.run(row.clip_id);

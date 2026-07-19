@@ -41,6 +41,7 @@
   import { Minus, Pause, Play } from '../../constants.js';
   import { cn } from '../../utils/cn.js';
   import {
+    shouldReloadWaveformOnProgress,
     shouldRequestChapterWaveform,
     type ChapterWaveformStatus,
   } from './chapter-cut-waveform.js';
@@ -563,10 +564,14 @@
     });
     if (viewportRef) resizeObserver.observe(viewportRef);
     const unsubscribe = onWaveformProgress((event) => {
-      if (event.assetId === primaryAsset?.id && event.progress.percent >= 100) {
-        waveformAssetId = null;
-        void loadWaveform(event.assetId);
-      }
+      if (!shouldReloadWaveformOnProgress({
+        eventAssetId: event.assetId,
+        primaryAssetId: primaryAsset?.id ?? null,
+        percent: event.progress.percent,
+        isInFlight: waveformLoadsInFlight.has(event.assetId),
+      })) return;
+      waveformAssetId = null;
+      void loadWaveform(event.assetId);
     });
     return () => {
       resizeObserver.disconnect();
