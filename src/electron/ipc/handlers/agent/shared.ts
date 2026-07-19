@@ -339,6 +339,7 @@ export async function runConversationTurn(
   if (response.type !== 'turn_complete') {
     throw new Error('Unexpected agent response type');
   }
+  options.signal?.throwIfAborted();
 
   const finalResult = response.result && typeof response.result === 'object'
     ? (response.result as Record<string, unknown>)

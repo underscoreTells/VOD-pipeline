@@ -1133,6 +1133,60 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
+  it('converts post-cutoff rows whose values only fit the chapter global bounds', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // A legacy build kept running past the cutoff wrote global source
+      // times: 120-150 cannot be chapter-local in the 100-180 chapter
+      // (duration 80) but sits exactly inside the chapter's global bounds,
+      // so the range evidence overrides the post-cutoff timestamp.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-04-24T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('derives ambiguous in-bounds rows from a linked clip before trusting timestamps', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000, so a stored 120-150 range fits both the
+      // local and the global reading; the linked clip at the global 120-150
+      // window is ground truth for the intended chapter-local window.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const linkedClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'preview create', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, { clipId: linkedClipId });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(1);
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
   it('clamps out-of-range rows written after chapter-local storage shipped', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');

@@ -9,6 +9,11 @@ import {
   createClip as createTimelineClip,
   updateClip as updateTimelineClip,
 } from './timeline.svelte';
+import {
+  enqueueClipAutoName,
+  hasClipDescription,
+  processClipAutoNameQueue,
+} from './clip-auto-name.svelte.js';
 import type { Clip } from '../../../shared/types/database';
 import type { CreateClipInput } from '../../../shared/contracts/electron-api.js';
 
@@ -266,6 +271,10 @@ export class CreateClipCommand implements Command {
     if (this.clip) {
       await persistClipRestore(this.clip);
       createTimelineClip(this.clip);
+      if (!hasClipDescription(this.clip)) {
+        enqueueClipAutoName(this.clip.id);
+        void processClipAutoNameQueue();
+      }
       return;
     }
 
@@ -279,10 +288,15 @@ export class CreateClipCommand implements Command {
 
   async undo() {
     if (!this.clip) return;
-    await persistClipDelete(this.clip.id);
-    timelineState.clips = timelineState.clips.filter((clip) => clip.id !== this.clip?.id);
+    const clipId = this.clip.id;
+    const latest = timelineState.clips.find((clip) => clip.id === clipId);
+    if (latest) {
+      this.clip = cloneClipForHistory(latest);
+    }
+    await persistClipDelete(clipId);
+    timelineState.clips = timelineState.clips.filter((clip) => clip.id !== clipId);
     const nextSelectedIds = new Set(timelineState.selectedClipIds);
-    nextSelectedIds.delete(this.clip.id);
+    nextSelectedIds.delete(clipId);
     timelineState.selectedClipIds = nextSelectedIds;
   }
 }

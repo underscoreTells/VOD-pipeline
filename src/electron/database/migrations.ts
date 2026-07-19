@@ -697,20 +697,26 @@ type SuggestionRow = Suggestion;
 // Older builds persisted suggestion in/out points as global source times while
 // current builds persist chapter-local values. Neither a range heuristic nor
 // the database's user_version can classify a stored row: version stamping
-// never converted row data, and chapter bound edits can strand chapter-local
-// rows out of range. This migration (gated by user_version < 6 — version 5
-// databases went through an earlier pass that left pre-cutoff in-bounds
-// global rows untouched — and by the per-row range_space marker so retried
-// runs never reprocess a row) decides per row from concrete evidence:
+// never converted row data, chapter bound edits can strand chapter-local
+// rows out of range, and a legacy build kept running past the chapter-local
+// cutoff still wrote global times. This migration (gated by user_version < 6 —
+// version 5 databases went through an earlier pass that left pre-cutoff
+// in-bounds global rows untouched — and by the per-row range_space marker so
+// retried runs never reprocess a row) decides per row from concrete evidence
+// first and only falls back to created-at provenance when the evidence is
+// genuinely ambiguous:
 //
-//   created before chapter-local storage shipped (see
-//       CHAPTER_LOCAL_STORAGE_CUTOFF) -> must be a legacy global range;
-//       shift it by the chapter start, even when it fits the chapter duration
-//   in-bounds afterwards -> already chapter-local; just mark it
-//   out-of-range with a materialized create preview -> the live preview clip
-//       is ground truth for the intended window; derive local from it
-//   out-of-range otherwise -> a chapter-local row stranded by a bound edit;
-//       clamp it back into the chapter range
+//   linked non-update clip -> the materialized create preview / applied
+//       clip records the exact global window the suggestion produced;
+//       derive the chapter-local window from it
+//   fits only the chapter's global bounds -> legacy global source times,
+//       even when written after the cutoff by a build the user kept
+//       running past it; shift by the chapter start
+//   fits only the chapter-local bounds -> already chapter-local; mark it
+//   fits both (or neither) -> ambiguous; created-at provenance breaks the
+//       tie: pre-cutoff rows shift by the chapter start, post-cutoff
+//       in-bounds rows are marked, post-cutoff out-of-range rows are
+//       chapter-local rows stranded by a bound edit and are clamped
 //
 // Every processed row is marked range_space = 'chapter_local', fixing the
 // convention that all stored suggestion ranges are chapter-local from
@@ -720,7 +726,10 @@ type SuggestionRow = Suggestion;
 /**
  * Suggestions created before this timestamp were written by builds that
  * stored ranges as global source times; chapter-local storage shipped with
- * the proposal-first clip actions build (2026-02-14 23:12 UTC).
+ * the proposal-first clip actions build (2026-02-14 23:12 UTC). The wall
+ * clock cannot classify a row on its own — a legacy build kept running past
+ * this date still wrote global times — so it is only used to break ties
+ * after concrete range evidence fails to.
  */
 const CHAPTER_LOCAL_STORAGE_CUTOFF = '2026-02-14T23:12:17';
 
@@ -818,14 +827,68 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         }
 
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
+        const rangeEpsilon = 1e-6;
+
+        // A linked non-update clip (a materialized create preview or the
+        // applied result) records the exact global window the suggestion
+        // produced — ground truth for the intended chapter-local window,
+        // regardless of which build wrote the row or when.
+        if (row.action_type !== 'update_clip' && row.clip_id !== null) {
+          const linkedClip = selectClipRange.get(row.clip_id) as
+            | { in_point: number; out_point: number }
+            | undefined;
+          if (linkedClip) {
+            const localIn = clampToRange(linkedClip.in_point - row.chapter_start, 0, chapterDuration);
+            const localOut = clampToRange(linkedClip.out_point - row.chapter_start, localIn, chapterDuration);
+            if (localIn !== row.in_point || localOut !== row.out_point) {
+              updateRange.run(localIn, localOut, row.suggestion_id);
+              stats.resolvedFromPreview += 1;
+            } else {
+              markRange.run(row.suggestion_id);
+            }
+            continue;
+          }
+        }
+
+        // Concrete range evidence beats wall-clock provenance: the write
+        // path clamps chapter-local values to [0, chapterDuration], and a
+        // suggestion's global source times must sit inside its chapter's
+        // bounds, so a range that only fits one interpretation is classified
+        // by that fit alone.
+        const fitsChapterLocal =
+          row.in_point >= -rangeEpsilon &&
+          row.out_point >= -rangeEpsilon &&
+          row.in_point <= chapterDuration + rangeEpsilon &&
+          row.out_point <= chapterDuration + rangeEpsilon;
+        const fitsChapterGlobal =
+          row.in_point >= row.chapter_start - rangeEpsilon &&
+          row.out_point <= row.chapter_end + rangeEpsilon;
+
+        // Cannot be chapter-local but sits inside the chapter's global
+        // bounds: legacy global source times, even when a legacy build wrote
+        // the row after the cutoff.
+        if (!fitsChapterLocal && fitsChapterGlobal) {
+          const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
+          const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
+          updateRange.run(localIn, localOut, row.suggestion_id);
+          stats.converted += 1;
+          continue;
+        }
+
+        // Cannot be global source times inside this chapter, so the values
+        // are already chapter-local.
+        if (fitsChapterLocal && !fitsChapterGlobal) {
+          markRange.run(row.suggestion_id);
+          continue;
+        }
+
+        // The remaining rows are genuinely ambiguous — both interpretations
+        // fit, or neither does because the chapter bounds moved after the
+        // row was written — so created-at provenance breaks the tie.
         const isLegacyGlobal =
           typeof row.created_at !== 'string' ||
           normalizeSuggestionCreatedAt(row.created_at) < CHAPTER_LOCAL_STORAGE_CUTOFF;
 
-        // Pre-cutoff rows are provably legacy global source times, so shift
-        // them even when the values happen to fit inside the chapter
-        // duration — an in-bounds number is not proof of chapter-local
-        // provenance.
         if (isLegacyGlobal) {
           const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
           const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
@@ -838,36 +901,14 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           continue;
         }
 
-        // Persisted chapter-local values are clamped to [0, chapterDuration]
-        // by the write path, so anything outside those bounds (beyond a
-        // negligible floating-point epsilon) needs normalization.
-        const rangeEpsilon = 1e-6;
-        const isOutOfRange =
-          row.in_point > chapterDuration + rangeEpsilon ||
-          row.out_point > chapterDuration + rangeEpsilon ||
-          row.in_point < -rangeEpsilon ||
-          row.out_point < -rangeEpsilon;
-        if (!isOutOfRange) {
+        if (fitsChapterLocal) {
           markRange.run(row.suggestion_id);
           continue;
         }
 
-        // A materialized create preview clip records the exact window the
-        // preview path produced, which is ground truth for the intended
-        // chapter-local window.
-        if (row.action_type !== 'update_clip' && row.clip_id !== null) {
-          const previewClip = selectClipRange.get(row.clip_id) as
-            | { in_point: number; out_point: number }
-            | undefined;
-          if (previewClip) {
-            const localIn = clampToRange(previewClip.in_point - row.chapter_start, 0, chapterDuration);
-            const localOut = clampToRange(previewClip.out_point - row.chapter_start, localIn, chapterDuration);
-            updateRange.run(localIn, localOut, row.suggestion_id);
-            stats.resolvedFromPreview += 1;
-            continue;
-          }
-        }
-
+        // A post-cutoff row that fits neither interpretation is a
+        // chapter-local row stranded by a bound edit; clamp it back into
+        // the chapter range.
         const localIn = clampToRange(row.in_point, 0, chapterDuration);
         const localOut = clampToRange(row.out_point, localIn, chapterDuration);
         updateRange.run(localIn, localOut, row.suggestion_id);

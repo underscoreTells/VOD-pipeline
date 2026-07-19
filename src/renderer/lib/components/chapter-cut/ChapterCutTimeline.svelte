@@ -538,7 +538,8 @@
         await generateAssetWaveform(assetId, -1, { playbackActive: false }, { uiMode: 'background' });
         result = await getWaveform(assetId, -1, 1);
       }
-      if (waveformAssetId !== assetId) return;
+      if (primaryAsset?.id !== assetId) return;
+      waveformAssetId = assetId;
       if (!result.success || !result.data) {
         waveformStatus = 'unavailable';
         return;
@@ -548,7 +549,10 @@
       waveformStatus = 'ready';
       requestAnimationFrame(drawWaveform);
     } catch (error) {
-      if (waveformAssetId === assetId) waveformStatus = 'unavailable';
+      if (primaryAsset?.id === assetId) {
+        waveformAssetId = assetId;
+        waveformStatus = 'unavailable';
+      }
       console.warn(`[ChapterCutTimeline] Waveform unavailable for asset ${assetId}`, error);
     } finally {
       waveformLoadsInFlight.delete(assetId);
