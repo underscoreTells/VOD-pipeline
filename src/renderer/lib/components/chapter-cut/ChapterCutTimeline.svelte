@@ -83,6 +83,7 @@
   let drag = $state<DragState | null>(null);
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
+  let pinnedDragAsset = $state<ProjectAsset | null>(null);
   let fittedChapterId: number | null = null;
   let clipContextMenu = $state({
     clipId: null as number | null,
@@ -96,7 +97,7 @@
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
   // The asset shown in the editor viewer drives the waveform and new-cut
   // creation so edits always target the footage the user is looking at.
-  const activeAsset = $derived(viewedAsset ?? assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
+  const activeAsset = $derived(pinnedDragAsset ?? viewedAsset ?? assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
   const fps = $derived.by(() => {
     const metadata = activeAsset?.metadata as Record<string, unknown> | null | undefined;
     const value = metadata?.fps;
@@ -167,6 +168,7 @@
     window.removeEventListener('pointercancel', handleWindowPointerEnd);
     drag = null;
     dragPreview = null;
+    pinnedDragAsset = null;
   }
 
   function scrubTo(local: number): void {
@@ -241,6 +243,9 @@
       agentState.selectedSuggestionId = null;
       timelineState.selectedClipIds = new Set([clip.id]);
       scrubTo(localTime(clip.in_point));
+      // Clips on other assets are selectable but not draggable; selecting one
+      // switches the viewed asset (and with it editability and z-order).
+      if (clip.asset_id !== activeAsset?.id) return;
       const start = localTime(clip.in_point);
       const end = localTime(clip.out_point);
       dragPreview = { start, end };
@@ -273,19 +278,23 @@
     }
 
     event.preventDefault();
+    // Capture the viewed asset before clearing selection and pin it for the
+    // drag; clearing selection would otherwise drop the viewer back to the
+    // first asset mid-drag while the drag still targets the viewed one.
+    const dragAsset = activeAsset;
     clearSelection();
     agentState.selectedSuggestionId = null;
-    const assetId = activeAsset?.id;
-    if (!assetId) {
+    if (!dragAsset) {
       scrubTo(time);
       return;
     }
+    pinnedDragAsset = dragAsset;
     dragPreview = { start: time, end: time };
     beginDrag(event, {
       mode: 'create',
       pointerId: event.pointerId,
       startClientX: event.clientX,
-      assetId,
+      assetId: dragAsset.id,
       anchor: time,
     });
   }
@@ -705,8 +714,12 @@
           {@const visual = drag?.clipId === clip.id && dragPreview ? dragPreview : { start: localTime(clip.in_point), end: localTime(clip.out_point) }}
           {@const role = clip.role || 'unassigned'}
           {@const roleConfig = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned}
+          {@const editable = clip.asset_id === activeAsset?.id}
           <div
-            class="chapter-clip-overlay group/cut absolute bottom-3 top-7 z-[5] flex cursor-grab items-center overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)] active:cursor-grabbing"
+            class={cn(
+              'chapter-clip-overlay group/cut absolute bottom-3 top-7 flex items-center overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)]',
+              editable ? 'z-[5] cursor-grab active:cursor-grabbing' : 'z-[4] cursor-pointer opacity-60'
+            )}
             class:ring-2={timelineState.selectedClipIds.has(clip.id)}
             class:ring-accent-primary={timelineState.selectedClipIds.has(clip.id)}
             data-clip-id={clip.id}
@@ -715,11 +728,17 @@
             tabindex="0"
             aria-label={`${clip.description || 'Untitled cut'}, right-click for actions`}
             style={`left:${visual.start * timelineState.zoomLevel}px;width:${Math.max(3, (visual.end - visual.start) * timelineState.zoomLevel)}px;background:${roleConfig.subtleCssVar};border-color:${roleConfig.cssVar}`}
-            title={`${clip.description || 'Untitled cut'} · ${formatTimecode(visual.start)}–${formatTimecode(visual.end)} · Ctrl/Cmd-drag to move`}
+            title={editable
+              ? `${clip.description || 'Untitled cut'} · ${formatTimecode(visual.start)}–${formatTimecode(visual.end)} · Ctrl/Cmd-drag to move`
+              : `${clip.description || 'Untitled cut'} · ${formatTimecode(visual.start)}–${formatTimecode(visual.end)} · Select to edit on its source`}
           >
-            <div class="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize rounded-l-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="start"></div>
+            {#if editable}
+              <div class="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize rounded-l-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="start"></div>
+            {/if}
             <span class="pointer-events-none block min-w-0 flex-1 truncate px-3 text-app-xs font-medium text-text-primary">{clip.description || 'Untitled cut'}</span>
-            <div class="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize rounded-r-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="end"></div>
+            {#if editable}
+              <div class="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize rounded-r-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="end"></div>
+            {/if}
           </div>
         {/each}
 

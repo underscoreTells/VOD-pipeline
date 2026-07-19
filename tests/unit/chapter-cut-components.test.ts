@@ -98,4 +98,21 @@ describe('chapter cut workspace', () => {
     expect(projectDetailSource).toContain('requestChapterSelection(result.data[0].id);');
     expect(projectDetailSource).toContain('requestChapterSelection(created[0].id);');
   });
+
+  it('pins the viewed asset before clearing selection for a create drag', () => {
+    expect(timelineSource).toContain('pinnedDragAsset ?? viewedAsset');
+    expect(timelineSource).toContain('const dragAsset = activeAsset;');
+    expect(timelineSource.indexOf('const dragAsset = activeAsset;')).toBeLessThan(
+      timelineSource.indexOf('clearSelection();')
+    );
+    expect(timelineSource).toContain('pinnedDragAsset = dragAsset;');
+    expect(timelineSource).toContain('pinnedDragAsset = null;');
+  });
+
+  it('keeps cuts from other assets selectable without stealing drag hit-testing', () => {
+    expect(timelineSource).toContain('editable = clip.asset_id === activeAsset?.id');
+    expect(timelineSource).toContain('if (clip.asset_id !== activeAsset?.id) return;');
+    expect(timelineSource).toContain("editable ? 'z-[5] cursor-grab active:cursor-grabbing' : 'z-[4] cursor-pointer opacity-60'");
+    expect(timelineSource).toContain('Select to edit on its source');
+  });
 });
