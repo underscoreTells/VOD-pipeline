@@ -119,6 +119,7 @@
   let scheduledMissingChapterTranscription = $state(false);
   let vodResumeEvaluated = $state(false);
   let pendingChapterSelection = $state<number | null>(null);
+  let pendingChapterCompletion = $state<number | null>(null);
   let pendingNavigationBack = $state(false);
   let isCancellingAgentTurn = $state(false);
 
@@ -318,14 +319,8 @@
     focusSuggestion(pendingAgentSuggestions[next].id);
   }
 
-  async function toggleSelectedChapterCompletion() {
-    if (!selectedChapter) return;
-    const isComplete = Boolean(selectedChapter.rough_cut_completed_at);
-    if (!isComplete && agentState.suggestions.some((suggestion) => suggestion.status === 'pending')) {
-      const proceed = window.confirm('This chapter still has pending suggested cuts. Mark it complete anyway?');
-      if (!proceed) return;
-    }
-    const updated = await updateChapter(selectedChapter.id, {
+  async function persistChapterCompletion(chapterId: number, isComplete: boolean) {
+    const updated = await updateChapter(chapterId, {
       roughCutCompletedAt: isComplete ? null : new Date().toISOString(),
     });
     if (!updated || isComplete) return;
@@ -333,9 +328,26 @@
     const ordered = [...chaptersState.chapters].sort(
       (left, right) => left.display_order - right.display_order || left.start_time - right.start_time
     );
-    const index = ordered.findIndex((chapter) => chapter.id === selectedChapter.id);
+    const index = ordered.findIndex((chapter) => chapter.id === chapterId);
     const next = ordered[index + 1];
     if (next) requestChapterSelection(next.id);
+  }
+
+  async function toggleSelectedChapterCompletion() {
+    if (!selectedChapter) return;
+    const chapterId = selectedChapter.id;
+    const isComplete = Boolean(selectedChapter.rough_cut_completed_at);
+    if (!isComplete && agentState.suggestions.some((suggestion) => suggestion.status === 'pending')) {
+      const proceed = window.confirm('This chapter still has pending suggested cuts. Mark it complete anyway?');
+      if (!proceed) return;
+    }
+    if (!isComplete && agentState.activeTurn) {
+      pendingChapterCompletion = chapterId;
+      pendingChapterSelection = null;
+      pendingNavigationBack = false;
+      return;
+    }
+    await persistChapterCompletion(chapterId, isComplete);
   }
 
   function finishChapterSelection(chapterId: number) {
@@ -365,6 +377,7 @@
   function dismissAgentCancelDialog() {
     if (isCancellingAgentTurn) return;
     pendingChapterSelection = null;
+    pendingChapterCompletion = null;
     pendingNavigationBack = false;
   }
 
@@ -376,11 +389,15 @@
       if (!cancelled) return;
 
       const chapterId = pendingChapterSelection;
+      const completionChapterId = pendingChapterCompletion;
       const shouldNavigateBack = pendingNavigationBack;
       pendingChapterSelection = null;
+      pendingChapterCompletion = null;
       pendingNavigationBack = false;
 
-      if (chapterId !== null) {
+      if (completionChapterId !== null) {
+        await persistChapterCompletion(completionChapterId, false);
+      } else if (chapterId !== null) {
         finishChapterSelection(chapterId);
       } else if (shouldNavigateBack) {
         await onBack();
@@ -905,7 +922,7 @@
   {/if}
   
   <!-- Export Dialog -->
-  {#if pendingChapterSelection !== null || pendingNavigationBack}
+  {#if pendingChapterSelection !== null || pendingChapterCompletion !== null || pendingNavigationBack}
     <div
       class="dialog-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60 px-4"
       role="presentation"
@@ -922,7 +939,7 @@
       >
         <p class="mb-2 text-app-xs font-semibold uppercase tracking-[0.08em] text-accent-warning">Agent response in progress</p>
         <h2 id="cancel-agent-turn-title" class="m-0 text-app-lg font-semibold text-text-primary">
-          Cancel this response before leaving?
+          {pendingChapterCompletion !== null ? 'Cancel this response before completing?' : 'Cancel this response before leaving?'}
         </h2>
         <p class="mb-0 mt-3 text-app-sm leading-[1.6] text-text-secondary">
           The response belongs to {selectedChapter?.title || 'this chapter'}. Cancelling keeps your message in the conversation so you can reroll it later.
@@ -942,7 +959,7 @@
             onclick={confirmAgentCancellation}
             disabled={isCancellingAgentTurn}
           >
-            {isCancellingAgentTurn ? 'Cancelling...' : 'Cancel response & leave'}
+            {isCancellingAgentTurn ? 'Cancelling...' : pendingChapterCompletion !== null ? 'Cancel response & complete' : 'Cancel response & leave'}
           </button>
         </div>
       </div>

@@ -190,7 +190,10 @@ function tryAcquireHeavyMediaSlot(job: HeavyMediaJob<unknown>): boolean {
   }
 
   const isCpu = job.pool === 'cpuProxy';
-  if (isCpu && activeTranscription > 0) {
+  if (
+    isCpu
+    && (activeTranscription > 0 || heavyMediaQueue.some((queuedJob) => queuedJob.pool === 'transcription'))
+  ) {
     return false;
   }
   const active = isCpu ? activeCpuProxy : activeGpuProxy;

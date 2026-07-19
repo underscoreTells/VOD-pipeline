@@ -14,6 +14,7 @@
     selectClip,
     setExcludeCutContent,
     setMinZoom,
+    setPlaying,
     setPlayhead,
     setScroll,
     setZoom,
@@ -90,6 +91,7 @@
 
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
   const primaryAsset = $derived(assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
+  const canPlay = $derived(primaryAsset !== null && primaryAsset.availability.exists !== false);
   const fps = $derived.by(() => {
     const metadata = primaryAsset?.metadata as Record<string, unknown> | null | undefined;
     const value = metadata?.fps;
@@ -570,6 +572,10 @@
   });
 
   $effect(() => {
+    if (!canPlay && timelineState.isPlaying) setPlaying(false);
+  });
+
+  $effect(() => {
     const chapterId = chapter.id;
     const width = viewportWidth;
     const { min, max } = zoomBounds;
@@ -605,7 +611,7 @@
 <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border-default bg-surface-base" aria-label="Chapter cut timeline">
   <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border-default px-3 py-2">
     <div class="flex items-center gap-2">
-      <button class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover" onclick={togglePlayback} aria-label={timelineState.isPlaying ? 'Pause' : 'Play'}>
+      <button class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-accent-primary text-white transition-colors hover:bg-accent-primary-hover disabled:cursor-not-allowed disabled:opacity-40" onclick={togglePlayback} aria-label={timelineState.isPlaying ? 'Pause' : 'Play'} disabled={!canPlay}>
         <Icon icon={timelineState.isPlaying ? Pause : Play} size={14} />
       </button>
       <span class="font-mono text-app-sm tabular-nums text-text-primary">{formatTimecode(localTime(timelineState.playheadTime))}</span>

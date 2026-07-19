@@ -768,7 +768,7 @@ describe("ffmpeg proxy argument generation", () => {
     }
   });
 
-  it("invalidates a GPU pipeline after a filter reinitialization failure", async () => {
+  it("does not invalidate a GPU pipeline for a generic filter reinitialization failure", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "qsv",
       encoder: "h264_qsv",
@@ -792,6 +792,51 @@ describe("ffmpeg proxy argument generation", () => {
       command: "/usr/bin/ffmpeg",
       code: 1,
       stderr: "Error reinitializing filters! Failed to inject frame into filter network",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("invalidates a GPU pipeline when a filter failure identifies the active backend", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "qsv",
+      encoder: "h264_qsv",
+      name: "Intel Quick Sync",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    gpuDetectorMocks.getProxyEncoderArgs.mockImplementation((useGPU: boolean) => useGPU
+      ? {
+          backend: "qsv",
+          videoCodec: "h264_qsv",
+          videoArgs: ["-c:v", "h264_qsv", "-preset", "fast", "-global_quality", "28"],
+        }
+      : {
+          backend: "cpu",
+          videoCodec: "libx264",
+          videoArgs: ["-c:v", "libx264", "-preset", "fast", "-crf", "28"],
+        });
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "[h264_qsv @ 0x1234] Error reinitializing filters! Failed to inject frame into filter network",
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

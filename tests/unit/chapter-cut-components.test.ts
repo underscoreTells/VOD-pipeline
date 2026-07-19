@@ -74,4 +74,14 @@ describe('chapter cut workspace', () => {
     expect(projectDetailSource).toContain('chapterEndTime={selectedChapter?.end_time}');
     expect(cutListSource).toContain('Math.min(Math.max(0, seconds - chapterStartTime), chapterDuration)');
   });
+
+  it('cancels an active agent turn before completing a chapter', () => {
+    expect(projectDetailSource).toContain('pendingChapterCompletion = chapterId;');
+    expect(projectDetailSource).toContain('await persistChapterCompletion(completionChapterId, false);');
+  });
+
+  it('stops and disables playback when no timeline asset is playable', () => {
+    expect(timelineSource).toContain('if (!canPlay && timelineState.isPlaying) setPlaying(false);');
+    expect(timelineSource).toContain('disabled={!canPlay}');
+  });
 });
