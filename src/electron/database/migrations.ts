@@ -694,11 +694,18 @@ type SuggestionRow = Suggestion;
 // the two apart (a legacy global range that happens to fit inside the chapter
 // duration is indistinguishable from a chapter-local one), so the runtime no
 // longer guesses: this idempotent one-time migration (gated by
-// user_version < 5) rewrites every row that is unambiguously legacy-global —
-// values that cannot be chapter-local because they exceed the chapter
-// duration or are negative — into chapter-local coordinates. Rows that
-// already fit the chapter range are left untouched, fixing the convention
-// that all stored suggestion ranges are chapter-local from version 5 onward.
+// user_version < 5) makes the coordinate convention explicit.
+//
+// Provenance: chapter-local writes predate version stamping, and schema-v2
+// rows were already written chapter-local, so out-of-range rows in a v2+
+// database are chapter-local rows stranded by chapter bound edits — they are
+// clamped back into the chapter range. Only databases older than version 2
+// may hold legacy global-source rows; for those, values that cannot be
+// chapter-local (beyond the chapter duration or negative, past a negligible
+// floating-point epsilon) are rewritten into chapter-local coordinates. Rows
+// that already fit the chapter range are left untouched, fixing the
+// convention that all stored suggestion ranges are chapter-local from
+// version 5 onward.
 // ============================================================================
 
 export interface SuggestionRangeNormalizationStats {
@@ -706,6 +713,8 @@ export interface SuggestionRangeNormalizationStats {
   skipped: boolean;
   /** Rows rewritten from legacy global source times to chapter-local. */
   converted: number;
+  /** Chapter-local rows clamped back into bounds after chapter edits. */
+  clampedOutOfRange: number;
   /** Rows skipped because their chapter no longer exists. */
   orphanedSkipped: number;
   /**
@@ -721,11 +730,13 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
   const stats: SuggestionRangeNormalizationStats = {
     skipped: false,
     converted: 0,
+    clampedOutOfRange: 0,
     orphanedSkipped: 0,
     rowsFailed: 0,
   };
 
-  if (readSchemaVersion(database) >= 5) {
+  const currentVersion = readSchemaVersion(database);
+  if (currentVersion >= 5) {
     stats.skipped = true;
     return stats;
   }
@@ -733,6 +744,12 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
   if (!tableExists(database, 'suggestions') || !tableExists(database, 'chapters')) {
     return stats;
   }
+
+  // Schema-v2 rows were already written chapter-local, so only databases
+  // older than version 2 can contain legacy global-source ranges. In newer
+  // databases an out-of-range row is a chapter-local row stranded by a
+  // chapter bound edit and must be clamped, not shifted.
+  const treatOutOfRangeAsLegacyGlobal = currentVersion < 2;
 
   const selectRows = database.prepare(
     `SELECT s.id AS suggestion_id, s.in_point AS in_point, s.out_point AS out_point,
@@ -769,22 +786,29 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
         // Persisted chapter-local values are clamped to [0, chapterDuration]
         // by the write path, so anything outside those bounds (beyond a
-        // negligible floating-point epsilon) must be a legacy global source
-        // time and has to be converted before version 5 is stamped.
+        // negligible floating-point epsilon) is either a legacy global source
+        // time (pre-v2 databases) or a local row stranded by a bound edit.
         const rangeEpsilon = 1e-6;
-        const looksLikeLegacyGlobal =
+        const isOutOfRange =
           row.in_point > chapterDuration + rangeEpsilon ||
           row.out_point > chapterDuration + rangeEpsilon ||
           row.in_point < -rangeEpsilon ||
           row.out_point < -rangeEpsilon;
-        if (!looksLikeLegacyGlobal) {
+        if (!isOutOfRange) {
           continue;
         }
 
-        const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
-        const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
-        updateRange.run(localIn, localOut, row.suggestion_id);
-        stats.converted += 1;
+        if (treatOutOfRangeAsLegacyGlobal) {
+          const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
+          const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
+          updateRange.run(localIn, localOut, row.suggestion_id);
+          stats.converted += 1;
+        } else {
+          const localIn = clampToRange(row.in_point, 0, chapterDuration);
+          const localOut = clampToRange(row.out_point, localIn, chapterDuration);
+          updateRange.run(localIn, localOut, row.suggestion_id);
+          stats.clampedOutOfRange += 1;
+        }
       } catch (error) {
         // Leave the row untouched; bootstrap keeps user_version below 5 while
         // rowsFailed is non-zero so a later startup retries the conversion.
@@ -799,10 +823,16 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
 
   migrate();
 
-  if (stats.converted > 0 || stats.rowsFailed > 0 || stats.orphanedSkipped > 0) {
+  if (
+    stats.converted > 0 ||
+    stats.clampedOutOfRange > 0 ||
+    stats.rowsFailed > 0 ||
+    stats.orphanedSkipped > 0
+  ) {
     console.log(
       `Database migrated: normalized suggestion ranges to chapter-local ` +
-      `(converted ${stats.converted}, orphaned skipped ${stats.orphanedSkipped}, failed ${stats.rowsFailed})`
+      `(converted ${stats.converted}, clamped ${stats.clampedOutOfRange}, ` +
+      `orphaned skipped ${stats.orphanedSkipped}, failed ${stats.rowsFailed})`
     );
   }
 

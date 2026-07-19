@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import type {
   Chapter,
   CreateChapterInput,
@@ -109,12 +110,48 @@ export async function updateChapter(
     return true;
   }
 
-  values.push(id);
-  const result = database.prepare(
-    `UPDATE chapters SET ${fields.join(', ')} WHERE id = ?`
-  ).run(...values);
+  const boundsChanged =
+    updates.start_time !== undefined || updates.end_time !== undefined;
 
-  return result.changes > 0;
+  const applyUpdates = database.transaction(() => {
+    values.push(id);
+    const result = database.prepare(
+      `UPDATE chapters SET ${fields.join(', ')} WHERE id = ?`
+    ).run(...values);
+
+    if (result.changes > 0 && boundsChanged) {
+      // Stored suggestion ranges are chapter-local, so keep them inside the
+      // new bounds instead of stranding them out of range.
+      clampChapterSuggestionRanges(database, id, newStart, newEnd);
+    }
+
+    return result.changes > 0;
+  });
+
+  return applyUpdates();
+}
+
+function clampChapterSuggestionRanges(
+  database: Database.Database,
+  chapterId: number,
+  chapterStart: number,
+  chapterEnd: number
+): void {
+  const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
+  const rows = database.prepare(
+    'SELECT id, in_point, out_point FROM suggestions WHERE chapter_id = ?'
+  ).all(chapterId) as Array<{ id: number; in_point: number; out_point: number }>;
+  const updateRange = database.prepare(
+    'UPDATE suggestions SET in_point = ?, out_point = ? WHERE id = ?'
+  );
+
+  for (const row of rows) {
+    const localIn = Math.min(Math.max(row.in_point, 0), chapterDuration);
+    const localOut = Math.min(Math.max(row.out_point, localIn), chapterDuration);
+    if (localIn !== row.in_point || localOut !== row.out_point) {
+      updateRange.run(localIn, localOut, row.id);
+    }
+  }
 }
 
 export async function deleteChapter(id: number): Promise<boolean> {

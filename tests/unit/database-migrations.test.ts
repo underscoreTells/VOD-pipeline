@@ -14,6 +14,7 @@ import {
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setDatabaseForTesting,
+  updateChapter,
   validateClipMigrationState,
 } from '../../src/electron/database/index.js';
 import { dropProxiesTable, ensureChapterProxyTable } from '../../src/electron/database/migrations.js';
@@ -931,9 +932,10 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       builder.exec(readCurrentSchema());
       const ids = seedProjectGraph(builder);
       // Chapter spans 100-180, so a stored 120-150 range cannot be
-      // chapter-local: it must be a legacy global source range.
+      // chapter-local: it must be a legacy global source range. Only
+      // databases older than schema version 2 can hold legacy-global rows.
       const suggestionId = insertSuggestion(builder, ids, 120, 150);
-      builder.pragma('user_version = 4');
+      builder.pragma('user_version = 1');
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
@@ -992,6 +994,60 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       expect(range.in_point).toBeCloseTo(0.2, 5);
       expect(range.out_point).toBeCloseTo(0.8, 5);
     } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps out-of-range rows as chapter-local in schema-v2+ databases', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter-local 70.2-70.8 became out of range after the chapter bounds
+      // changed from 100-200 to 50-120; it must be clamped, not shifted.
+      database.prepare('UPDATE chapters SET start_time = 50, end_time = 120 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 70.2, 70.8);
+      database.pragma('user_version = 2');
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(1);
+      const range = getSuggestionRange(database, suggestionId);
+      expect(range.in_point).toBeCloseTo(70, 5);
+      expect(range.out_point).toBeCloseTo(70, 5);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps chapter-local suggestion ranges when chapter bounds shrink', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+      const suggestionId = insertSuggestion(database, ids, 70.2, 70.8);
+
+      const updated = await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+      expect(updated).toBe(true);
+
+      // The new duration is 70, so the previously in-range local window is
+      // clamped back into bounds instead of being stranded out of range.
+      const range = getSuggestionRange(database, suggestionId);
+      expect(range.in_point).toBeCloseTo(70, 5);
+      expect(range.out_point).toBeCloseTo(70, 5);
+
+      // Non-bound updates leave suggestion ranges alone.
+      const unaffectedId = insertSuggestion(database, ids, 10, 20);
+      await updateChapter(ids.chapterId, { title: 'Renamed' });
+      expect(getSuggestionRange(database, unaffectedId)).toEqual({ in_point: 10, out_point: 20 });
+    } finally {
+      setDatabaseForTesting(null);
       closeSqliteDatabase(database);
     }
   });
