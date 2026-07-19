@@ -692,15 +692,16 @@ export interface SuggestionPreviewReconciliationStats {
 type SuggestionRow = Suggestion;
 
 // ============================================================================
-// Schema-version-5 suggestion range normalization
+// Schema-version-6 suggestion range normalization
 //
 // Older builds persisted suggestion in/out points as global source times while
 // current builds persist chapter-local values. Neither a range heuristic nor
 // the database's user_version can classify a stored row: version stamping
 // never converted row data, and chapter bound edits can strand chapter-local
-// rows out of range. This migration (gated by user_version < 5, and by the
-// per-row range_space marker so retried runs never reprocess a row) therefore
-// decides per row from concrete evidence:
+// rows out of range. This migration (gated by user_version < 6 — version 5
+// databases went through an earlier pass that left pre-cutoff in-bounds
+// global rows untouched — and by the per-row range_space marker so retried
+// runs never reprocess a row) decides per row from concrete evidence:
 //
 //   created before chapter-local storage shipped (see
 //       CHAPTER_LOCAL_STORAGE_CUTOFF) -> must be a legacy global range;
@@ -713,7 +714,7 @@ type SuggestionRow = Suggestion;
 //
 // Every processed row is marked range_space = 'chapter_local', fixing the
 // convention that all stored suggestion ranges are chapter-local from
-// version 5 onward.
+// version 6 onward.
 // ============================================================================
 
 /**
@@ -723,8 +724,17 @@ type SuggestionRow = Suggestion;
  */
 const CHAPTER_LOCAL_STORAGE_CUTOFF = '2026-02-14T23:12:17';
 
+/**
+ * Normalize a stored timestamp for lexical comparison with the cutoff:
+ * rows written by SQLite's CURRENT_TIMESTAMP default use a space separator
+ * (`YYYY-MM-DD HH:MM:SS`) while the app writes ISO strings with `T`.
+ */
+function normalizeSuggestionCreatedAt(value: string): string {
+  return value.replace(' ', 'T');
+}
+
 export interface SuggestionRangeNormalizationStats {
-  /** True when the migration skipped because user_version is already >= 5. */
+  /** True when the migration skipped because user_version is already >= 6. */
   skipped: boolean;
   /** Rows rewritten from legacy global source times to chapter-local. */
   converted: number;
@@ -755,7 +765,7 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
   };
 
   const currentVersion = readSchemaVersion(database);
-  if (currentVersion >= 5) {
+  if (currentVersion >= 6) {
     stats.skipped = true;
     return stats;
   }
@@ -810,7 +820,7 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
         const isLegacyGlobal =
           typeof row.created_at !== 'string' ||
-          row.created_at < CHAPTER_LOCAL_STORAGE_CUTOFF;
+          normalizeSuggestionCreatedAt(row.created_at) < CHAPTER_LOCAL_STORAGE_CUTOFF;
 
         // Pre-cutoff rows are provably legacy global source times, so shift
         // them even when the values happen to fit inside the chapter
@@ -1194,21 +1204,40 @@ interface ReconcileUpdateGroupContext {
   restoreClipFromSnapshot: Database.Statement;
 }
 
+function expectedMatchesSnapshot(
+  expected: ExpectedClipFields,
+  snapshot: SuggestionPreviewSnapshot
+): boolean {
+  return (
+    expected.in_point === snapshot.clip.in_point &&
+    expected.out_point === snapshot.clip.out_point &&
+    expected.role === snapshot.clip.role &&
+    expected.description === snapshot.clip.description &&
+    expected.is_essential === snapshot.clip.is_essential
+  );
+}
+
 /**
  * Reconcile every pending update preview targeting one clip as a chain.
- * Previews stack (base A -> preview B -> preview C), so the live clip can
- * only match the newest preview's expected state; when it does, the clip is
- * restored to the oldest snapshot in the chain — the true base — rather than
- * an intermediate preview state.
+ * Previews could be materialized in any order, so the chain is reconstructed
+ * from snapshot -> expected links rather than suggestion order: the live
+ * clip must match exactly one preview's expected output (the newest), and
+ * walking backwards from it must link every preview's snapshot to the
+ * preceding preview's expected output. Only then is the clip restored to
+ * the chain's base snapshot; any broken or ambiguous link means a user edit
+ * diverged the chain, so the live clip is kept instead.
  */
 function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
   const { group, stats, selectClip, selectChapter, unlinkUpdateSuggestion, restoreClipFromSnapshot } = ctx;
-  const ordered = [...group].sort((left, right) => left.id - right.id);
   const unlinkAll = () => {
-    for (const row of ordered) unlinkUpdateSuggestion.run(row.id);
+    for (const row of group) unlinkUpdateSuggestion.run(row.id);
+  };
+  const preserveAll = () => {
+    unlinkAll();
+    stats.updateClipsPreserved += group.length;
   };
 
-  const targetClipId = ordered[0].target_clip_id ?? ordered[0].clip_id;
+  const targetClipId = group[0].target_clip_id ?? group[0].clip_id;
   if (!targetClipId) {
     unlinkAll();
     return;
@@ -1218,56 +1247,72 @@ function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
   if (!clipRow) {
     // Dangling reference: the preview clip is gone. Unlink and preserve nothing.
     unlinkAll();
-    stats.danglingUnlinked += ordered.length;
+    stats.danglingUnlinked += group.length;
     return;
   }
 
-  let baseSnapshot: SuggestionPreviewSnapshot | null = null;
-  let newestExpected: ExpectedClipFields | null = null;
-  for (const row of ordered) {
+  const links: Array<{
+    row: Suggestion;
+    snapshot: SuggestionPreviewSnapshot;
+    expected: ExpectedClipFields;
+  }> = [];
+  for (const row of group) {
     const snapshot = parseSuggestionPreviewSnapshotJson(row.preview_snapshot_json);
     const chapterRow = selectChapter.get(row.chapter_id) as ChapterRow | undefined;
     if (!snapshot || !chapterRow) {
       // Cannot prove the chain is intact, so keep the clip's current state
       // and unlink every preview in it. This is the safe, non-destructive
       // choice.
-      unlinkAll();
-      stats.updateClipsPreserved += ordered.length;
+      preserveAll();
       return;
     }
 
     const chapter = mapChapterRow(chapterRow);
     const expected = computeExpectedUpdatedClipFields(row, chapter, snapshot);
     if (!expected) {
-      unlinkAll();
-      stats.updateClipsPreserved += ordered.length;
+      preserveAll();
       return;
     }
-
-    baseSnapshot ??= snapshot;
-    newestExpected = expected;
+    links.push({ row, snapshot, expected });
   }
 
   const clip = mapClipRow(clipRow);
-  if (baseSnapshot && newestExpected && clipMatchesExpectedUpdate(clip, newestExpected)) {
-    // The live clip matches the newest preview's output, so the whole chain
-    // is untouched: restore the clip to the chain's true base snapshot.
-    restoreClipFromSnapshot.run(
-      baseSnapshot.clip.in_point,
-      baseSnapshot.clip.out_point,
-      baseSnapshot.clip.role,
-      baseSnapshot.clip.description,
-      baseSnapshot.clip.is_essential ? 1 : 0,
-      targetClipId
-    );
-    unlinkAll();
-    stats.updateSnapshotsRestored += 1;
+  const newestCandidates = links.filter((link) => clipMatchesExpectedUpdate(clip, link.expected));
+  if (newestCandidates.length !== 1) {
+    // No preview produced the live state (diverged) or several did (ambiguous).
+    preserveAll();
     return;
   }
 
-  // Manually diverged: keep the clip's current state and unlink.
+  const visited = new Set<number>();
+  let base = newestCandidates[0];
+  visited.add(base.row.id);
+  while (visited.size < links.length) {
+    const predecessor = links.find(
+      (link) => !visited.has(link.row.id) && expectedMatchesSnapshot(link.expected, base.snapshot)
+    );
+    if (!predecessor) break;
+    visited.add(predecessor.row.id);
+    base = predecessor;
+  }
+
+  if (visited.size !== links.length) {
+    // A snapshot does not match the preceding preview's expected output: a
+    // user edit broke the chain, so restoring the base would erase it.
+    preserveAll();
+    return;
+  }
+
+  restoreClipFromSnapshot.run(
+    base.snapshot.clip.in_point,
+    base.snapshot.clip.out_point,
+    base.snapshot.clip.role,
+    base.snapshot.clip.description,
+    base.snapshot.clip.is_essential ? 1 : 0,
+    targetClipId
+  );
   unlinkAll();
-  stats.updateClipsPreserved += ordered.length;
+  stats.updateSnapshotsRestored += 1;
 }
 
 interface ReconcileCreateContext {

@@ -489,6 +489,64 @@ describeMigration("schema-version-3 pending preview reconciliation", () => {
     expect(kept.description).toBe("user edit");
   });
 
+  it("reconstructs the preview chain from snapshot links, not suggestion ids", () => {
+    const fixtures = insertFixtures();
+    // The clip went A(100-200) -> B(100-140) -> C(100-150), but the row that
+    // produced A->B was created after the row that produced B->C.
+    const live = insertClip(fixtures, { in_point: 100, out_point: 150, description: "orig", role: "setup" });
+    const newerStateSuggestionId = insertUpdateSuggestion(
+      fixtures.chapterId,
+      live.id,
+      previewSnapshotJson({ ...live, out_point: 140 }),
+      { action_payload_json: JSON.stringify({ update: { outPoint: 150 } }) }
+    );
+    const baseSuggestionId = insertUpdateSuggestion(
+      fixtures.chapterId,
+      live.id,
+      previewSnapshotJson({ ...live, out_point: 200 }),
+      { action_payload_json: JSON.stringify({ update: { outPoint: 140 } }) }
+    );
+
+    const stats = reconcilePendingSuggestionPreviews(db);
+
+    expect(stats.updateSnapshotsRestored).toBe(1);
+    expect(stats.updateClipsPreserved).toBe(0);
+    const restored = db.prepare("SELECT out_point FROM clips WHERE id = ?").get(live.id) as { out_point: number };
+    expect(restored.out_point).toBe(200);
+    for (const suggestionId of [newerStateSuggestionId, baseSuggestionId]) {
+      const row = getSuggestionRow(suggestionId);
+      expect(row.clip_id).toBeNull();
+      expect(row.preview_snapshot_json).toBeNull();
+    }
+  });
+
+  it("keeps the live clip when a user edit breaks the snapshot chain", () => {
+    const fixtures = insertFixtures();
+    // A(100-200) -> preview B(100-140), user edit to X(100-999), then preview
+    // X -> C(100-150). The live clip matches the newest preview, but the
+    // chain is broken, so nothing is restored.
+    const live = insertClip(fixtures, { in_point: 100, out_point: 150, description: "orig", role: "setup" });
+    insertUpdateSuggestion(
+      fixtures.chapterId,
+      live.id,
+      previewSnapshotJson({ ...live, out_point: 200 }),
+      { action_payload_json: JSON.stringify({ update: { outPoint: 140 } }) }
+    );
+    insertUpdateSuggestion(
+      fixtures.chapterId,
+      live.id,
+      previewSnapshotJson({ ...live, out_point: 999 }),
+      { action_payload_json: JSON.stringify({ update: { outPoint: 150 } }) }
+    );
+
+    const stats = reconcilePendingSuggestionPreviews(db);
+
+    expect(stats.updateSnapshotsRestored).toBe(0);
+    expect(stats.updateClipsPreserved).toBe(2);
+    const kept = db.prepare("SELECT out_point FROM clips WHERE id = ?").get(live.id) as { out_point: number };
+    expect(kept.out_point).toBe(150);
+  });
+
   it("reconciles a mixed batch of create and update previews in one pass", () => {
     const fixtures = insertFixtures();
 

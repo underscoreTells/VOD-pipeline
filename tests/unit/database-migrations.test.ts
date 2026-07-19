@@ -1083,6 +1083,56 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
+  it('runs the corrective pass for version-5 databases and skips at version 6', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // A pre-cutoff global range that fits the chapter duration was left
+      // unchanged by the previous v5 pass and must be revisited now.
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+      database.pragma('user_version = 5');
+
+      const first = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(first.skipped).toBe(false);
+      expect(first.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+
+      database.pragma('user_version = 6');
+      const second = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(second.skipped).toBe(true);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('normalizes SQLite CURRENT_TIMESTAMP formats before classifying provenance', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter-local suggestion written after the cutoff in SQLite's
+      // space-separated timestamp format: it must not be treated as legacy.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-02-14 23:30:00',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 120, out_point: 150 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
   it('clamps out-of-range rows written after chapter-local storage shipped', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');
