@@ -408,6 +408,7 @@ export function cancelHeavyMediaJob(key: string): boolean {
     }
     heavyMediaJobs.delete(job.key);
     job.reject(new HeavyMediaCancellationError());
+    pumpHeavyMediaQueue();
     return true;
   }
 

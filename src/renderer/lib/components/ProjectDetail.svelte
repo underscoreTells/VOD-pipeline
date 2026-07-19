@@ -234,7 +234,7 @@
       await importProjectFiles(project.id, filePaths, {
         addAssetToProject,
         autoCreateChaptersFromFiles,
-        selectChapter,
+        selectChapter: requestChapterSelection,
         autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
         ...transcriptionDeps,
       }, getChapterImportProxyOptions());
@@ -267,7 +267,7 @@
       }
 
       await loadChapters(project.id);
-      selectChapter(result.data[0].id);
+      requestChapterSelection(result.data[0].id);
       if (settingsState.settings.autoTranscribeOnImport) {
         await autoTranscribeChapters(
           result.data.map((chapter) => chapter.id),
@@ -464,7 +464,31 @@
     const selectedClipAsset = selectedClip
       ? selectedChapterAssets.find((asset) => asset.id === selectedClip.asset_id)
       : null;
+    const selectedSuggestion = agentState.suggestions.find(
+      (suggestion) => suggestion.id === agentState.selectedSuggestionId
+    );
+    let selectedSuggestionAssetId: number | null = null;
+    if (selectedSuggestion?.target_clip_id) {
+      selectedSuggestionAssetId = timelineState.clips.find(
+        (clip) => clip.id === selectedSuggestion.target_clip_id
+      )?.asset_id ?? null;
+    } else if (selectedSuggestion?.action_payload_json) {
+      try {
+        const payload = JSON.parse(selectedSuggestion.action_payload_json) as {
+          create?: { assetId?: number };
+        };
+        if (typeof payload.create?.assetId === 'number') {
+          selectedSuggestionAssetId = payload.create.assetId;
+        }
+      } catch {
+        // Malformed action payloads are handled when the suggestion is applied.
+      }
+    }
+    const selectedSuggestionAsset = selectedSuggestionAssetId === null
+      ? null
+      : selectedChapterAssets.find((asset) => asset.id === selectedSuggestionAssetId);
     return selectedClipAsset
+      ?? selectedSuggestionAsset
       ?? selectedChapterAssets.find((asset) => asset.availability.exists !== false)
       ?? selectedChapterAssets[0]
       ?? null;
@@ -544,7 +568,7 @@
                 getChapterImportProxyOptions()
               );
               if (created.length > 0) {
-                selectChapter(created[0].id);
+                requestChapterSelection(created[0].id);
               }
             }
           }
@@ -853,6 +877,7 @@
                         assets={selectedChapterAssets}
                         clips={selectedChapterClips}
                         suggestions={agentState.suggestions}
+                        playbackAvailable={chapterPreviewAsset !== null && chapterPreviewAsset.availability.exists !== false}
                       />
                     {/if}
                   </div>

@@ -344,6 +344,41 @@ describe("heavy media scheduler resource pools", () => {
     queuedCpu.finish();
     await queuedPromise;
   });
+
+  it("repumps CPU proxies after cancelling a waiting transcription", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const activeCpu = trackedJob("shared-cpu:active", "active", []);
+    const transcription = trackedJob("shared-cpu:cancelled-transcription", "transcription", []);
+    const queuedCpu = trackedJob("shared-cpu:blocked", "blocked", []);
+
+    const activePromise = enqueueHeavyMediaJob(activeCpu.key, "chapterProxy", "background", activeCpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "interactive",
+      transcription.run
+    );
+    const queuedPromise = enqueueHeavyMediaJob(
+      queuedCpu.key,
+      "chapterProxy",
+      "background",
+      queuedCpu.run
+    );
+
+    expect(activeCpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(queuedCpu.isStarted).toBe(false);
+
+    const cancelled = expect(transcriptionPromise).rejects.toBeInstanceOf(HeavyMediaCancellationError);
+    expect(cancelHeavyMediaJob(transcription.key)).toBe(true);
+    await cancelled;
+    expect(queuedCpu.isStarted).toBe(true);
+
+    activeCpu.finish();
+    queuedCpu.finish();
+    await Promise.all([activePromise, queuedPromise]);
+  });
 });
 
 describe("heavy media scheduler burst and ordering", () => {

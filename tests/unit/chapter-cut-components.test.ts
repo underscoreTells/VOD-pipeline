@@ -75,13 +75,27 @@ describe('chapter cut workspace', () => {
     expect(cutListSource).toContain('Math.min(Math.max(0, seconds - chapterStartTime), chapterDuration)');
   });
 
+  it('previews suggestions against their source asset', () => {
+    expect(projectDetailSource).toContain('suggestion.id === agentState.selectedSuggestionId');
+    expect(projectDetailSource).toContain('clip.id === selectedSuggestion.target_clip_id');
+    expect(projectDetailSource).toContain('payload.create?.assetId');
+    expect(projectDetailSource).toContain('?? selectedSuggestionAsset');
+  });
+
   it('cancels an active agent turn before completing a chapter', () => {
     expect(projectDetailSource).toContain('pendingChapterCompletion = chapterId;');
     expect(projectDetailSource).toContain('await persistChapterCompletion(completionChapterId, false);');
   });
 
-  it('stops and disables playback when no timeline asset is playable', () => {
-    expect(timelineSource).toContain('if (!canPlay && timelineState.isPlaying) setPlaying(false);');
-    expect(timelineSource).toContain('disabled={!canPlay}');
+  it('stops and disables playback when the previewed asset is unavailable', () => {
+    expect(projectDetailSource).toContain('playbackAvailable={chapterPreviewAsset !== null && chapterPreviewAsset.availability.exists !== false}');
+    expect(timelineSource).toContain('if (!playbackAvailable && timelineState.isPlaying) setPlaying(false);');
+    expect(timelineSource).toContain('disabled={!playbackAvailable}');
+  });
+
+  it('routes import-driven chapter selection through the active-turn guard', () => {
+    expect(projectDetailSource).toContain('selectChapter: requestChapterSelection');
+    expect(projectDetailSource).toContain('requestChapterSelection(result.data[0].id);');
+    expect(projectDetailSource).toContain('requestChapterSelection(created[0].id);');
   });
 });
