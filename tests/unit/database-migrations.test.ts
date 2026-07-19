@@ -784,6 +784,50 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
     }
   });
 
+  it('holds the schema version below 3 while a preview row fails reconciliation', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-retry-');
+    const dbPath = path.join(tempDir, 'v3-retry.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(builder);
+      // Simulate a pre-v3 database with a row whose reconciliation always fails.
+      builder.pragma('user_version = 2');
+      builder.exec(
+        "CREATE TRIGGER fail_clip_delete BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'forced failure'); END;"
+      );
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      // The version is held below the v3 gate so the next startup retries.
+      expect(await getSchemaVersion(database)).toBe(2);
+      const stuckRow = database.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number | null };
+      expect(stuckRow.clip_id).toBe(clipId);
+
+      // Repair the data; the next bootstrap retries and advances the version.
+      database.exec('DROP TRIGGER fail_clip_delete');
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(4);
+      expect(reopened.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      const reconciledRow = reopened.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number | null };
+      expect(reconciledRow.clip_id).toBeNull();
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('stamps the current schema version on a fresh database with nothing to reconcile', async () => {
     const tempDir = createTempDir('vod-pipeline-migration-v3-fresh-');
     const dbPath = path.join(tempDir, 'fresh.db');

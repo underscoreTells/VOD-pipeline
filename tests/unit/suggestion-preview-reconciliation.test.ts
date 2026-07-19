@@ -476,6 +476,7 @@ describeMigration("schema-version-3 pending preview reconciliation", () => {
       updateSnapshotsRestored: 1,
       updateClipsPreserved: 1,
       danglingUnlinked: 0,
+      rowsFailed: 0,
     });
 
     // Exact create clip gone; diverged create kept; exact update restored; diverged update kept.
@@ -580,5 +581,24 @@ describeMigration("schema-version-3 pending preview reconciliation", () => {
     const orphanRow = getSuggestionRow(orphanSuggestionId);
     expect(orphanRow.status).toBe("pending");
     expect(orphanRow.clip_id).toBeNull();
+  });
+
+  it("counts rows that fail reconciliation and leaves them for a later retry", () => {
+    const fixtures = insertFixtures();
+    const clip = insertClip(fixtures, { in_point: 120, out_point: 180, description: "preview create", role: null });
+    const suggestionId = insertCreateSuggestion(fixtures.chapterId, clip.id);
+
+    db.exec(
+      "CREATE TRIGGER fail_clip_delete BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'forced failure'); END;"
+    );
+
+    const stats = reconcilePendingSuggestionPreviews(db);
+
+    expect(stats.rowsFailed).toBe(1);
+    expect(stats.createClipsDeleted).toBe(0);
+    expect(stats.createClipsPreserved).toBe(0);
+    const row = getSuggestionRow(suggestionId);
+    expect(row.clip_id).toBe(clip.id);
+    expect(db.prepare("SELECT 1 FROM clips WHERE id = ?").get(clip.id)).toBeDefined();
   });
 });

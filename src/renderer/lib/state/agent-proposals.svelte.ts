@@ -8,6 +8,7 @@ import {
 } from '../api/agent.js';
 import { getAssetsForChapter, getSelectedChapter } from './chapters.svelte.js';
 import { rangesOverlap } from '../utils/timeline-geometry.js';
+import { normalizeSuggestionWindowForChapter } from '../../../shared/utils/clip-timing.js';
 import {
   createClip as createTimelineClip,
   deleteClip as deleteTimelineClip,
@@ -98,10 +99,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return 'A suggested cut has no unambiguous source asset.';
-    const proposed = {
-      start: chapter.start_time + suggestion.in_point,
-      end: chapter.start_time + suggestion.out_point,
-    };
+    const proposed = normalizeSuggestionWindowForChapter(suggestion, chapter);
     const conflictsWithCut = timelineState.clips.some((clip) =>
       clip.asset_id === assetId
       && clip.id !== suggestion.target_clip_id
@@ -225,7 +223,7 @@ export function focusSuggestion(suggestionId: number): boolean {
   if (!suggestion || !chapter) return false;
   agentState.selectedSuggestionId = suggestionId;
   timelineState.selectedClipIds = new Set();
-  setPlayhead(chapter.start_time + suggestion.in_point);
+  setPlayhead(normalizeSuggestionWindowForChapter(suggestion, chapter).start);
   return true;
 }
 

@@ -676,6 +676,11 @@ export interface SuggestionPreviewReconciliationStats {
   updateSnapshotsRestored: number;
   updateClipsPreserved: number;
   danglingUnlinked: number;
+  /**
+   * Rows whose reconciliation threw and were left untouched. When non-zero,
+   * bootstrap must keep user_version below 3 so a later startup retries them.
+   */
+  rowsFailed: number;
 }
 
 type SuggestionRow = Suggestion;
@@ -745,6 +750,7 @@ export function reconcilePendingSuggestionPreviews(
     updateSnapshotsRestored: 0,
     updateClipsPreserved: 0,
     danglingUnlinked: 0,
+    rowsFailed: 0,
   };
 
   if (readSchemaVersion(database) >= 3) {
@@ -818,8 +824,10 @@ export function reconcilePendingSuggestionPreviews(
       } catch (error) {
         // A single malformed row must not abort the whole migration or break
         // bootstrap. Leave the row untouched and continue with the rest; the
-        // migration is idempotent so a later run can retry it once the data is
-        // repaired.
+        // migration is idempotent and bootstrap keeps user_version below 3
+        // while rowsFailed is non-zero, so a later startup retries it once
+        // the data is repaired.
+        stats.rowsFailed += 1;
         const suggestionId = typeof rawRow.id === 'number' ? rawRow.id : -1;
         console.error(
           `Database migration: skipped reconciliation of suggestion ${suggestionId}:`,
@@ -837,12 +845,12 @@ export function reconcilePendingSuggestionPreviews(
     stats.updateSnapshotsRestored +
     stats.updateClipsPreserved +
     stats.danglingUnlinked;
-  if (touched > 0) {
+  if (touched > 0 || stats.rowsFailed > 0) {
     console.log(
       `Database migrated: reconciled pending suggestion previews ` +
       `(create deleted ${stats.createClipsDeleted}, create preserved ${stats.createClipsPreserved}, ` +
       `update restored ${stats.updateSnapshotsRestored}, update preserved ${stats.updateClipsPreserved}, ` +
-      `dangling unlinked ${stats.danglingUnlinked})`
+      `dangling unlinked ${stats.danglingUnlinked}, failed ${stats.rowsFailed})`
     );
   }
 

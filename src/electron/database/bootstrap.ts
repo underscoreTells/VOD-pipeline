@@ -94,13 +94,25 @@ export async function initializeDatabase(): Promise<Database.Database> {
     dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
-    reconcilePendingSuggestionPreviews(database);
+    const reconciliationStats = reconcilePendingSuggestionPreviews(database);
     applySchemaStatements(database, schema, 'index');
     validateClipMigrationState(database);
     // Record the schema revision this build expects; the imperative
     // ensure* helpers above are idempotent, so the version is primarily a
-    // marker for future migration tooling and diagnostics.
-    await setSchemaVersion(CURRENT_SCHEMA_VERSION, database);
+    // marker for future migration tooling and diagnostics. When some
+    // suggestion preview rows could not be reconciled, hold the version
+    // below the version-3 reconciliation gate so the next startup retries
+    // them instead of permanently skipping the migration.
+    const targetSchemaVersion = reconciliationStats.rowsFailed > 0
+      ? Math.min(CURRENT_SCHEMA_VERSION, 2)
+      : CURRENT_SCHEMA_VERSION;
+    if (reconciliationStats.rowsFailed > 0) {
+      console.warn(
+        `Database schema version held at ${targetSchemaVersion}: ` +
+        `${reconciliationStats.rowsFailed} suggestion preview row(s) still need reconciliation`
+      );
+    }
+    await setSchemaVersion(targetSchemaVersion, database);
     console.log('Database schema initialized successfully');
 
     return database;

@@ -44,6 +44,7 @@
     shouldRequestChapterWaveform,
     type ChapterWaveformStatus,
   } from './chapter-cut-waveform.js';
+  import { normalizeSuggestionWindowForChapter } from '../../../../shared/utils/clip-timing.js';
 
   interface Props {
     projectId: number;
@@ -197,10 +198,18 @@
     return primaryAsset?.id ?? null;
   }
 
+  function suggestionLocalRange(suggestion: Suggestion): { start: number; end: number } {
+    const range = normalizeSuggestionWindowForChapter(suggestion, chapter);
+    return {
+      start: clampNumber(range.start - chapter.start_time, 0, duration),
+      end: clampNumber(range.end - chapter.start_time, 0, duration),
+    };
+  }
+
   function suggestionHasConflict(suggestion: Suggestion): boolean {
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return true;
-    const proposed = { start: suggestion.in_point, end: suggestion.out_point };
+    const proposed = suggestionLocalRange(suggestion);
     return clipsForAsset(assetId, suggestion.target_clip_id ?? undefined).some((clip) =>
       rangesOverlap(proposed, { start: localTime(clip.in_point), end: localTime(clip.out_point) }, 1 / fps / 2)
     );
@@ -704,6 +713,7 @@
 
         {#each pendingSuggestions as suggestion (suggestion.id)}
           {@const conflict = suggestionHasConflict(suggestion)}
+          {@const suggestionRange = suggestionLocalRange(suggestion)}
           <button
             type="button"
             class={cn(
@@ -715,7 +725,7 @@
             class:ring-2={agentState.selectedSuggestionId === suggestion.id}
             class:ring-accent-primary={agentState.selectedSuggestionId === suggestion.id}
             data-suggestion-id={suggestion.id}
-            style={`left:${suggestion.in_point * timelineState.zoomLevel}px;width:${Math.max(3, (suggestion.out_point - suggestion.in_point) * timelineState.zoomLevel)}px`}
+            style={`left:${suggestionRange.start * timelineState.zoomLevel}px;width:${Math.max(3, (suggestionRange.end - suggestionRange.start) * timelineState.zoomLevel)}px`}
             title={conflict ? `Conflict: ${suggestion.description || 'Suggested cut'}` : suggestion.description || 'Suggested cut'}
           >
             <span class="block truncate">{conflict ? 'Conflict · ' : 'Suggested · '}{suggestion.description || 'Untitled'}</span>
@@ -741,7 +751,8 @@
         <div class="absolute top-1.5 h-4 rounded-sm bg-accent-primary/45" style={`left:${localTime(clip.in_point) / duration * 100}%;width:${Math.max(0.2, (localTime(clip.out_point) - localTime(clip.in_point)) / duration * 100)}%`}></div>
       {/each}
       {#each pendingSuggestions as suggestion (suggestion.id)}
-        <div class="absolute top-1.5 h-4 rounded-sm border border-dashed border-accent-warning bg-accent-warning-subtle" style={`left:${suggestion.in_point / duration * 100}%;width:${Math.max(0.2, (suggestion.out_point - suggestion.in_point) / duration * 100)}%`}></div>
+        {@const suggestionRange = suggestionLocalRange(suggestion)}
+        <div class="absolute top-1.5 h-4 rounded-sm border border-dashed border-accent-warning bg-accent-warning-subtle" style={`left:${suggestionRange.start / duration * 100}%;width:${Math.max(0.2, (suggestionRange.end - suggestionRange.start) / duration * 100)}%`}></div>
       {/each}
       <div class="absolute inset-y-0 rounded-sm border-2 border-accent-primary bg-accent-primary/10" style={`left:${overviewWindowLeft}%;width:${overviewWindowWidth}%`}></div>
       <div class="absolute inset-y-0 w-px bg-accent-destructive" style={`left:${localTime(timelineState.playheadTime) / duration * 100}%`}></div>
