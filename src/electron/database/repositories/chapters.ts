@@ -201,7 +201,7 @@ function clampChapterSuggestionRanges(
     'SELECT id, in_point, out_point FROM suggestions WHERE chapter_id = ?'
   ).all(chapterId) as Array<{ id: number; in_point: number; out_point: number }>;
   const updateRange = database.prepare(
-    'UPDATE suggestions SET in_point = ?, out_point = ? WHERE id = ?'
+    `UPDATE suggestions SET in_point = ?, out_point = ?, range_space = 'chapter_local' WHERE id = ?`
   );
 
   for (const row of rows) {

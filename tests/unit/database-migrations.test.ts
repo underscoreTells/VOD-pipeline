@@ -759,7 +759,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(5);
+      expect(await getSchemaVersion(database)).toBe(6);
       expect(() => validateClipMigrationState(database)).not.toThrow();
 
       // The exact untouched create preview was deleted and the suggestion unlinked.
@@ -773,7 +773,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(5);
+      expect(await getSchemaVersion(reopened)).toBe(6);
       // Reopening must not re-reconcile and must not throw.
       expect(() => validateClipMigrationState(reopened)).not.toThrow();
       expect(
@@ -817,7 +817,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       database.exec('DROP TRIGGER fail_clip_delete');
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(5);
+      expect(await getSchemaVersion(reopened)).toBe(6);
       expect(reopened.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
       const reconciledRow = reopened.prepare(
         'SELECT clip_id FROM suggestions WHERE id = ?'
@@ -838,7 +838,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
     try {
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(5);
+      expect(await getSchemaVersion(database)).toBe(6);
       expect(() => validateClipMigrationState(database)).not.toThrow();
       expect(
         (database.prepare('SELECT COUNT(*) AS n FROM suggestions').get() as { n: number }).n
@@ -942,13 +942,13 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(5);
+      expect(await getSchemaVersion(database)).toBe(6);
       expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
 
       // A second bootstrap must not shift the range again.
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(5);
+      expect(await getSchemaVersion(reopened)).toBe(6);
       expect(getSuggestionRange(reopened, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
     } finally {
       closeDatabase();
@@ -998,6 +998,57 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       const range = getSuggestionRange(database, suggestionId);
       expect(range.in_point).toBeCloseTo(0.2, 5);
       expect(range.out_point).toBeCloseTo(0.8, 5);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('converts in-bounds legacy-global ranges using created-at provenance', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000: a legacy global 150-160 range fits the
+      // 900-second duration numerically, but the pre-cutoff created_at proves
+      // it uses global coordinates.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('does not reprocess marked rows when a retried run follows a failure', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const first = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(first.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
+
+      // A retry (e.g. after the version was held for a failed row) must not
+      // shift the already-converted range a second time.
+      const second = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(second.converted).toBe(0);
+      expect(second.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
     } finally {
       closeSqliteDatabase(database);
     }
@@ -1081,7 +1132,7 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(5);
+      expect(await getSchemaVersion(database)).toBe(6);
       // The reconciliation recognized the preview via its legacy-global
       // interpretation and removed it before the range was normalized.
       expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();

@@ -10,6 +10,8 @@ import {
   isUpdateSuggestion,
   normalizeSuggestionRecord,
   parseSuggestionPreviewSnapshotJson,
+  type ExpectedClipFields,
+  type SuggestionPreviewSnapshot,
 } from './repositories/suggestion-helpers.js';
 
 type ForeignKeyCheckRow = {
@@ -191,7 +193,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -217,6 +219,7 @@ export function ensureSchemaColumns(database: Database.Database): void {
     { table: 'suggestions', column: 'target_clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },
     { table: 'suggestions', column: 'action_payload_json', definition: 'TEXT' },
     { table: 'suggestions', column: 'preview_snapshot_json', definition: 'TEXT' },
+    { table: 'suggestions', column: 'range_space', definition: 'TEXT' },
   ];
 
   const failedMigrations: string[] = [];
@@ -656,7 +659,8 @@ function getSchemaStatementType(statement: string): 'table' | 'index' | 'other' 
 //   create_clip, clip diverged    -> keep the clip (user clearly edited it),
 //                                    unlink the row
 //   update_clip, clip untouched   -> restore the clip from preview_snapshot_json,
-//                                    unlink the row
+//                                    unlink the row (previews sharing a target
+//                                    are unwound as a chain to the base snapshot)
 //   update_clip, clip diverged    -> keep the clip's current state, unlink the row
 //   dangling clip reference       -> unlink the row
 //   applied/rejected rows         -> untouched (applied stays applied)
@@ -694,18 +698,20 @@ type SuggestionRow = Suggestion;
 // current builds persist chapter-local values. Neither a range heuristic nor
 // the database's user_version can classify a stored row: version stamping
 // never converted row data, and chapter bound edits can strand chapter-local
-// rows out of range. This idempotent one-time migration (gated by
-// user_version < 5) therefore decides per row from concrete evidence:
+// rows out of range. This migration (gated by user_version < 5, and by the
+// per-row range_space marker so retried runs never reprocess a row) therefore
+// decides per row from concrete evidence:
 //
-//   create preview still materialized -> the live preview clip is ground
-//       truth for the intended window; derive local from it
 //   created before chapter-local storage shipped (see
 //       CHAPTER_LOCAL_STORAGE_CUTOFF) -> must be a legacy global range;
-//       shift it by the chapter start
-//   anything else -> a chapter-local row stranded by a bound edit; clamp it
-//       back into the chapter range
+//       shift it by the chapter start, even when it fits the chapter duration
+//   in-bounds afterwards -> already chapter-local; just mark it
+//   out-of-range with a materialized create preview -> the live preview clip
+//       is ground truth for the intended window; derive local from it
+//   out-of-range otherwise -> a chapter-local row stranded by a bound edit;
+//       clamp it back into the chapter range
 //
-// Rows that already fit the chapter range are left untouched, fixing the
+// Every processed row is marked range_space = 'chapter_local', fixing the
 // convention that all stored suggestion ranges are chapter-local from
 // version 5 onward.
 // ============================================================================
@@ -763,13 +769,17 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
             s.action_type AS action_type, s.clip_id AS clip_id, s.created_at AS created_at,
             c.start_time AS chapter_start, c.end_time AS chapter_end
      FROM suggestions s
-     LEFT JOIN chapters c ON c.id = s.chapter_id`
+     LEFT JOIN chapters c ON c.id = s.chapter_id
+     WHERE s.range_space IS NULL`
   );
   const selectClipRange = database.prepare(
     'SELECT in_point, out_point FROM clips WHERE id = ?'
   );
   const updateRange = database.prepare(
-    'UPDATE suggestions SET in_point = ?, out_point = ? WHERE id = ?'
+    `UPDATE suggestions SET in_point = ?, out_point = ?, range_space = 'chapter_local' WHERE id = ?`
+  );
+  const markRange = database.prepare(
+    `UPDATE suggestions SET range_space = 'chapter_local' WHERE id = ?`
   );
 
   interface SuggestionRangeRow {
@@ -798,6 +808,26 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         }
 
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
+        const isLegacyGlobal =
+          typeof row.created_at !== 'string' ||
+          row.created_at < CHAPTER_LOCAL_STORAGE_CUTOFF;
+
+        // Pre-cutoff rows are provably legacy global source times, so shift
+        // them even when the values happen to fit inside the chapter
+        // duration — an in-bounds number is not proof of chapter-local
+        // provenance.
+        if (isLegacyGlobal) {
+          const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
+          const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
+          if (localIn !== row.in_point || localOut !== row.out_point) {
+            updateRange.run(localIn, localOut, row.suggestion_id);
+            stats.converted += 1;
+          } else {
+            markRange.run(row.suggestion_id);
+          }
+          continue;
+        }
+
         // Persisted chapter-local values are clamped to [0, chapterDuration]
         // by the write path, so anything outside those bounds (beyond a
         // negligible floating-point epsilon) needs normalization.
@@ -808,12 +838,13 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           row.in_point < -rangeEpsilon ||
           row.out_point < -rangeEpsilon;
         if (!isOutOfRange) {
+          markRange.run(row.suggestion_id);
           continue;
         }
 
         // A materialized create preview clip records the exact window the
-        // preview path produced, which is ground truth for both legacy and
-        // chapter-local rows.
+        // preview path produced, which is ground truth for the intended
+        // chapter-local window.
         if (row.action_type !== 'update_clip' && row.clip_id !== null) {
           const previewClip = selectClipRange.get(row.clip_id) as
             | { in_point: number; out_point: number }
@@ -827,20 +858,10 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           }
         }
 
-        const isLegacyGlobal =
-          typeof row.created_at !== 'string' ||
-          row.created_at < CHAPTER_LOCAL_STORAGE_CUTOFF;
-        if (isLegacyGlobal) {
-          const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
-          const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
-          updateRange.run(localIn, localOut, row.suggestion_id);
-          stats.converted += 1;
-        } else {
-          const localIn = clampToRange(row.in_point, 0, chapterDuration);
-          const localOut = clampToRange(row.out_point, localIn, chapterDuration);
-          updateRange.run(localIn, localOut, row.suggestion_id);
-          stats.clampedOutOfRange += 1;
-        }
+        const localIn = clampToRange(row.in_point, 0, chapterDuration);
+        const localOut = clampToRange(row.out_point, localIn, chapterDuration);
+        updateRange.run(localIn, localOut, row.suggestion_id);
+        stats.clampedOutOfRange += 1;
       } catch (error) {
         // Leave the row untouched; bootstrap keeps the original user_version
         // while rowsFailed is non-zero so a later startup retries the row.
@@ -985,10 +1006,37 @@ export function reconcilePendingSuggestionPreviews(
 
   const reconcile = database.transaction(() => {
     const pending = selectSuggestions.all() as SuggestionRow[];
+    // Sequential update previews can target the same clip (base A -> B -> C).
+    // Reconciling them row-by-row would unlink the older preview as
+    // "diverged" and restore the intermediate state, so group them by target
+    // and unwind each chain from its true base snapshot.
+    const updateGroups = new Map<number, Suggestion[]>();
+    const singles: Suggestion[] = [];
     for (const rawRow of pending) {
       try {
         const suggestion = normalizeSuggestionRecord(rawRow);
+        if (isUpdateSuggestion(suggestion)) {
+          const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
+          if (targetClipId) {
+            const group = updateGroups.get(targetClipId) ?? [];
+            group.push(suggestion);
+            updateGroups.set(targetClipId, group);
+            continue;
+          }
+        }
+        singles.push(suggestion);
+      } catch (error) {
+        stats.rowsFailed += 1;
+        const suggestionId = typeof rawRow.id === 'number' ? rawRow.id : -1;
+        console.error(
+          `Database migration: skipped reconciliation of suggestion ${suggestionId}:`,
+          error
+        );
+      }
+    }
 
+    for (const suggestion of singles) {
+      try {
         if (isUpdateSuggestion(suggestion)) {
           reconcileUpdateSuggestion({
             suggestion,
@@ -1016,9 +1064,27 @@ export function reconcilePendingSuggestionPreviews(
         // while rowsFailed is non-zero, so a later startup retries it once
         // the data is repaired.
         stats.rowsFailed += 1;
-        const suggestionId = typeof rawRow.id === 'number' ? rawRow.id : -1;
         console.error(
-          `Database migration: skipped reconciliation of suggestion ${suggestionId}:`,
+          `Database migration: skipped reconciliation of suggestion ${suggestion.id}:`,
+          error
+        );
+      }
+    }
+
+    for (const group of updateGroups.values()) {
+      try {
+        reconcileUpdatePreviewGroup({
+          group,
+          stats,
+          selectClip,
+          selectChapter,
+          unlinkUpdateSuggestion,
+          restoreClipFromSnapshot,
+        });
+      } catch (error) {
+        stats.rowsFailed += 1;
+        console.error(
+          `Database migration: skipped reconciliation of update preview chain targeting clip ${group[0]?.target_clip_id ?? group[0]?.clip_id}:`,
           error
         );
       }
@@ -1117,6 +1183,91 @@ function reconcileUpdateSuggestion(ctx: ReconcileUpdateContext): void {
     unlinkUpdateSuggestion.run(suggestion.id);
     stats.updateClipsPreserved += 1;
   }
+}
+
+interface ReconcileUpdateGroupContext {
+  group: Suggestion[];
+  stats: SuggestionPreviewReconciliationStats;
+  selectClip: Database.Statement;
+  selectChapter: Database.Statement;
+  unlinkUpdateSuggestion: Database.Statement;
+  restoreClipFromSnapshot: Database.Statement;
+}
+
+/**
+ * Reconcile every pending update preview targeting one clip as a chain.
+ * Previews stack (base A -> preview B -> preview C), so the live clip can
+ * only match the newest preview's expected state; when it does, the clip is
+ * restored to the oldest snapshot in the chain — the true base — rather than
+ * an intermediate preview state.
+ */
+function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
+  const { group, stats, selectClip, selectChapter, unlinkUpdateSuggestion, restoreClipFromSnapshot } = ctx;
+  const ordered = [...group].sort((left, right) => left.id - right.id);
+  const unlinkAll = () => {
+    for (const row of ordered) unlinkUpdateSuggestion.run(row.id);
+  };
+
+  const targetClipId = ordered[0].target_clip_id ?? ordered[0].clip_id;
+  if (!targetClipId) {
+    unlinkAll();
+    return;
+  }
+
+  const clipRow = selectClip.get(targetClipId) as ClipRow | undefined;
+  if (!clipRow) {
+    // Dangling reference: the preview clip is gone. Unlink and preserve nothing.
+    unlinkAll();
+    stats.danglingUnlinked += ordered.length;
+    return;
+  }
+
+  let baseSnapshot: SuggestionPreviewSnapshot | null = null;
+  let newestExpected: ExpectedClipFields | null = null;
+  for (const row of ordered) {
+    const snapshot = parseSuggestionPreviewSnapshotJson(row.preview_snapshot_json);
+    const chapterRow = selectChapter.get(row.chapter_id) as ChapterRow | undefined;
+    if (!snapshot || !chapterRow) {
+      // Cannot prove the chain is intact, so keep the clip's current state
+      // and unlink every preview in it. This is the safe, non-destructive
+      // choice.
+      unlinkAll();
+      stats.updateClipsPreserved += ordered.length;
+      return;
+    }
+
+    const chapter = mapChapterRow(chapterRow);
+    const expected = computeExpectedUpdatedClipFields(row, chapter, snapshot);
+    if (!expected) {
+      unlinkAll();
+      stats.updateClipsPreserved += ordered.length;
+      return;
+    }
+
+    baseSnapshot ??= snapshot;
+    newestExpected = expected;
+  }
+
+  const clip = mapClipRow(clipRow);
+  if (baseSnapshot && newestExpected && clipMatchesExpectedUpdate(clip, newestExpected)) {
+    // The live clip matches the newest preview's output, so the whole chain
+    // is untouched: restore the clip to the chain's true base snapshot.
+    restoreClipFromSnapshot.run(
+      baseSnapshot.clip.in_point,
+      baseSnapshot.clip.out_point,
+      baseSnapshot.clip.role,
+      baseSnapshot.clip.description,
+      baseSnapshot.clip.is_essential ? 1 : 0,
+      targetClipId
+    );
+    unlinkAll();
+    stats.updateSnapshotsRestored += 1;
+    return;
+  }
+
+  // Manually diverged: keep the clip's current state and unlink.
+  unlinkAll();
+  stats.updateClipsPreserved += ordered.length;
 }
 
 interface ReconcileCreateContext {

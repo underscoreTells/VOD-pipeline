@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   applied_at DATETIME,
   clip_id INTEGER, -- Linked clip on timeline when applied
+  range_space TEXT, -- NULL until the v5 migration classifies the row; 'chapter_local' afterwards
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (chat_message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,

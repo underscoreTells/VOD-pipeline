@@ -272,9 +272,10 @@ export async function createSuggestion(
       preview_snapshot_json,
       status,
       display_order,
-      clip_id
+      clip_id,
+      range_space
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'chapter_local')`
   ).run(
     suggestion.chapter_id,
     suggestion.conversation_id ?? null,
