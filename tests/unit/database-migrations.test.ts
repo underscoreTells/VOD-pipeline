@@ -887,7 +887,7 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     ids: SeededIds,
     inPoint: number,
     outPoint: number,
-    options: { createdAt?: string; clipId?: number | null } = {}
+    options: { createdAt?: string; clipId?: number | null; status?: string; actionType?: string } = {}
   ): number {
     return database.prepare(
       `INSERT INTO suggestions (
@@ -904,11 +904,11 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       'cut',
       'reason',
       'gemini',
-      'create_clip',
+      options.actionType ?? 'create_clip',
       null,
       JSON.stringify({ create: { trackIndex: 0 } }),
       null,
-      'pending',
+      options.status ?? 'pending',
       0,
       options.createdAt ?? '2026-04-24T00:00:00.000Z',
       null,
@@ -1133,20 +1133,19 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
-  it('converts post-cutoff rows whose values only fit the chapter global bounds', () => {
+  it('converts pre-cutoff rows whose values only fit the chapter global bounds', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');
 
     try {
       database.exec(readCurrentSchema());
       const ids = seedProjectGraph(database);
-      // A legacy build kept running past the cutoff wrote global source
-      // times: 120-150 cannot be chapter-local in the 100-180 chapter
-      // (duration 80) but sits exactly inside the chapter's global bounds,
-      // so the range evidence overrides the post-cutoff timestamp.
+      // 120-150 cannot be chapter-local in the 100-180 chapter (duration
+      // 80) and the row predates chapter-local storage: legacy global
+      // source times.
       database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
       const suggestionId = insertSuggestion(database, ids, 120, 150, {
-        createdAt: '2026-04-24T00:00:00.000Z',
+        createdAt: '2026-01-15T00:00:00.000Z',
       });
 
       const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
@@ -1154,6 +1153,33 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       expect(stats.converted).toBe(1);
       expect(stats.clampedOutOfRange).toBe(0);
       expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps post-cutoff rows stranded by a bound edit that still fit the global bounds', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter-local 120-150 was written after the cutoff while the
+      // chapter spanned 100-1000; the chapter was later shortened to
+      // 100-180, so the row is out of local bounds yet still fits the new
+      // global bounds. Fitting the global bounds does not prove legacy
+      // provenance, so the row is clamped, not shifted.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-04-24T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 80, out_point: 80 });
     } finally {
       closeSqliteDatabase(database);
     }
@@ -1182,6 +1208,39 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       expect(stats.resolvedFromPreview).toBe(1);
       expect(stats.converted).toBe(0);
       expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('ignores the linked clip of an applied suggestion when classifying the range', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000. The committed clip of an applied suggestion
+      // remains editable; after the user moved it to 500-560 its bounds are
+      // not evidence of the historical suggestion window, so the stored
+      // post-cutoff chapter-local 120-150 range must be left untouched.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const movedClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 500, 560, null, 'applied cut', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        clipId: movedClipId,
+        status: 'applied',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(0);
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 120, out_point: 150 });
     } finally {
       closeSqliteDatabase(database);
     }

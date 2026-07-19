@@ -878,6 +878,7 @@
                         clips={selectedChapterClips}
                         suggestions={agentState.suggestions}
                         playbackAvailable={chapterPreviewAsset !== null && chapterPreviewAsset.availability.exists !== false}
+                        activeAsset={chapterPreviewAsset}
                       />
                     {/if}
                   </div>

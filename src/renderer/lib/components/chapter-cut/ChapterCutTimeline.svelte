@@ -54,6 +54,7 @@
     clips: Clip[];
     suggestions: Suggestion[];
     playbackAvailable: boolean;
+    activeAsset: ProjectAsset | null;
   }
 
   type DragState = {
@@ -69,7 +70,7 @@
     originalEnd?: number;
   };
 
-  let { projectId, chapter, assets, clips, suggestions, playbackAvailable }: Props = $props();
+  let { projectId, chapter, assets, clips, suggestions, playbackAvailable, activeAsset: viewedAsset }: Props = $props();
   let viewportRef = $state<HTMLDivElement | null>(null);
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
@@ -93,9 +94,11 @@
   const WAVEFORM_HEIGHT = 104;
 
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
-  const primaryAsset = $derived(assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
+  // The asset shown in the editor viewer drives the waveform and new-cut
+  // creation so edits always target the footage the user is looking at.
+  const activeAsset = $derived(viewedAsset ?? assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
   const fps = $derived.by(() => {
-    const metadata = primaryAsset?.metadata as Record<string, unknown> | null | undefined;
+    const metadata = activeAsset?.metadata as Record<string, unknown> | null | undefined;
     const value = metadata?.fps;
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 30;
   });
@@ -196,7 +199,7 @@
         // Fall back to the primary chapter asset.
       }
     }
-    return primaryAsset?.id ?? null;
+    return activeAsset?.id ?? null;
   }
 
   function suggestionLocalRange(suggestion: Suggestion): { start: number; end: number } {
@@ -272,7 +275,7 @@
     event.preventDefault();
     clearSelection();
     agentState.selectedSuggestionId = null;
-    const assetId = primaryAsset?.id;
+    const assetId = activeAsset?.id;
     if (!assetId) {
       scrubTo(time);
       return;
@@ -501,7 +504,7 @@
     context.globalAlpha = 0.72;
     context.beginPath();
     const visibleStart = viewportRef.scrollLeft / timelineState.zoomLevel;
-    const sourceDuration = waveformDuration || primaryAsset?.duration || duration;
+    const sourceDuration = waveformDuration || activeAsset?.duration || duration;
     for (let x = 0; x < width; x += 1) {
       const chapterLocal = visibleStart + x / timelineState.zoomLevel;
       const source = chapter.start_time + chapterLocal;
@@ -538,7 +541,7 @@
         await generateAssetWaveform(assetId, -1, { playbackActive: false }, { uiMode: 'background' });
         result = await getWaveform(assetId, -1, 1);
       }
-      if (primaryAsset?.id !== assetId) return;
+      if (activeAsset?.id !== assetId) return;
       waveformAssetId = assetId;
       if (!result.success || !result.data) {
         waveformStatus = 'unavailable';
@@ -549,7 +552,7 @@
       waveformStatus = 'ready';
       requestAnimationFrame(drawWaveform);
     } catch (error) {
-      if (primaryAsset?.id === assetId) {
+      if (activeAsset?.id === assetId) {
         waveformAssetId = assetId;
         waveformStatus = 'unavailable';
       }
@@ -570,7 +573,7 @@
     const unsubscribe = onWaveformProgress((event) => {
       if (!shouldReloadWaveformOnProgress({
         eventAssetId: event.assetId,
-        primaryAssetId: primaryAsset?.id ?? null,
+        activeAssetId: activeAsset?.id ?? null,
         percent: event.progress.percent,
         isInFlight: waveformLoadsInFlight.has(event.assetId),
       })) return;
@@ -585,7 +588,7 @@
   });
 
   $effect(() => {
-    const assetId = primaryAsset?.id;
+    const assetId = activeAsset?.id;
     if (assetId) void untrack(() => loadWaveform(assetId));
   });
 
@@ -685,10 +688,10 @@
       </div>
 
       <div class="chapter-waveform-track relative h-[104px] cursor-crosshair overflow-hidden border-b border-border-subtle bg-surface-page text-text-tertiary" onpointerdown={handleTimelinePointerDown} role="slider" tabindex="0" aria-label="Chapter waveform and retained ranges" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
-        {#if primaryAsset}
+        {#if activeAsset}
           <div class="pointer-events-none sticky left-0 z-10 flex h-6 w-fit max-w-56 items-center gap-2 rounded-br-md border-r border-b border-border-subtle bg-surface-raised/95 px-2 text-app-xs text-text-tertiary">
             <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary"></span>
-            <span class="truncate">{primaryAsset.file_path.split(/[/\\]/).pop() || `Source ${primaryAsset.id}`}</span>
+            <span class="truncate">{activeAsset.file_path.split(/[/\\]/).pop() || `Source ${activeAsset.id}`}</span>
           </div>
         {/if}
         {#if waveformStatus === 'loading'}

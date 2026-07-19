@@ -20,7 +20,7 @@ export function shouldRequestChapterWaveform({
 
 interface ShouldReloadWaveformOnProgressParams {
   eventAssetId: number;
-  primaryAssetId: number | null;
+  activeAssetId: number | null;
   percent: number;
   isInFlight: boolean;
 }
@@ -33,11 +33,11 @@ interface ShouldReloadWaveformOnProgressParams {
  */
 export function shouldReloadWaveformOnProgress({
   eventAssetId,
-  primaryAssetId,
+  activeAssetId,
   percent,
   isInFlight,
 }: ShouldReloadWaveformOnProgressParams): boolean {
-  if (eventAssetId !== primaryAssetId) return false;
+  if (eventAssetId !== activeAssetId) return false;
   if (percent < 100) return false;
   return !isInFlight;
 }

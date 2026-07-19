@@ -35,7 +35,7 @@ describe('chapter cut waveform loading', () => {
   it('does not reload on generation progress while a load is in flight', () => {
     expect(shouldReloadWaveformOnProgress({
       eventAssetId: 7,
-      primaryAssetId: 7,
+      activeAssetId: 7,
       percent: 100,
       isInFlight: true,
     })).toBe(false);
@@ -44,7 +44,7 @@ describe('chapter cut waveform loading', () => {
   it('reloads on completed generation when no load is in flight', () => {
     expect(shouldReloadWaveformOnProgress({
       eventAssetId: 7,
-      primaryAssetId: 7,
+      activeAssetId: 7,
       percent: 100,
       isInFlight: false,
     })).toBe(true);
@@ -53,13 +53,13 @@ describe('chapter cut waveform loading', () => {
   it('ignores progress for other assets or incomplete generation', () => {
     expect(shouldReloadWaveformOnProgress({
       eventAssetId: 8,
-      primaryAssetId: 7,
+      activeAssetId: 7,
       percent: 100,
       isInFlight: false,
     })).toBe(false);
     expect(shouldReloadWaveformOnProgress({
       eventAssetId: 7,
-      primaryAssetId: 7,
+      activeAssetId: 7,
       percent: 62,
       isInFlight: false,
     })).toBe(false);
