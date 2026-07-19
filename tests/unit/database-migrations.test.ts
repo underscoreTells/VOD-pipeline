@@ -973,6 +973,29 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
+  it('converts legacy-global ranges that only slightly exceed the chapter duration', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-200: a legacy-global 100.2-100.8 range is within one
+      // second of the 100-second duration but still cannot be chapter-local.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 200 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 100.2, 100.8);
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      const range = getSuggestionRange(database, suggestionId);
+      expect(range.in_point).toBeCloseTo(0.2, 5);
+      expect(range.out_point).toBeCloseTo(0.8, 5);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
   it('skips suggestions whose chapter is missing without failing the migration', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');

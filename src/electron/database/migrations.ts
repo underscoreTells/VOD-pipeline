@@ -767,11 +767,16 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         }
 
         const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
+        // Persisted chapter-local values are clamped to [0, chapterDuration]
+        // by the write path, so anything outside those bounds (beyond a
+        // negligible floating-point epsilon) must be a legacy global source
+        // time and has to be converted before version 5 is stamped.
+        const rangeEpsilon = 1e-6;
         const looksLikeLegacyGlobal =
-          row.in_point > chapterDuration + 1 ||
-          row.out_point > chapterDuration + 1 ||
-          row.in_point < -0.5 ||
-          row.out_point < -0.5;
+          row.in_point > chapterDuration + rangeEpsilon ||
+          row.out_point > chapterDuration + rangeEpsilon ||
+          row.in_point < -rangeEpsilon ||
+          row.out_point < -rangeEpsilon;
         if (!looksLikeLegacyGlobal) {
           continue;
         }
