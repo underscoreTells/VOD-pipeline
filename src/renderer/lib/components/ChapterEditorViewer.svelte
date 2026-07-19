@@ -574,13 +574,29 @@
         videoRef.currentTime = reverseTime;
       }
 
-      const mappedGlobalTime = fromReverseProxyTime(chapter, reverseTime);
+      let mappedGlobalTime = fromReverseProxyTime(chapter, reverseTime);
+      let loopedToRangeEnd = false;
+      if (viewerMode !== 'Chapter') {
+        if (mappedGlobalTime > viewerRange.end + 0.01) {
+          mappedGlobalTime = viewerRange.end;
+          videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
+        } else if (mappedGlobalTime <= viewerRange.start + 0.01) {
+          mappedGlobalTime = viewerRange.end;
+          videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
+          loopedToRangeEnd = true;
+          if (!timelineState.isPlaying) {
+            videoRef.pause();
+          }
+        }
+      }
+
       currentTime = mappedGlobalTime;
       if (!(isProgrammaticPlayheadSeek && !timelineState.isPlaying)) {
         setPlayhead(mappedGlobalTime);
       }
 
       if (
+        !loopedToRangeEnd &&
         timelineState.isPlaying &&
         timelineState.shuttleDirection === -1 &&
         reverseTime >= duration - 0.001
