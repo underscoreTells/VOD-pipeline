@@ -679,7 +679,8 @@ export interface SuggestionPreviewReconciliationStats {
   danglingUnlinked: number;
   /**
    * Rows whose reconciliation threw and were left untouched. When non-zero,
-   * bootstrap must keep user_version below 3 so a later startup retries them.
+   * bootstrap keeps the original user_version so a later startup retries
+   * them.
    */
   rowsFailed: number;
 }
@@ -696,16 +697,17 @@ type SuggestionRow = Suggestion;
 // longer guesses: this idempotent one-time migration (gated by
 // user_version < 5) makes the coordinate convention explicit.
 //
-// Provenance: chapter-local writes predate version stamping, and schema-v2
-// rows were already written chapter-local, so out-of-range rows in a v2+
-// database are chapter-local rows stranded by chapter bound edits — they are
-// clamped back into the chapter range. Only databases older than version 2
-// may hold legacy global-source rows; for those, values that cannot be
-// chapter-local (beyond the chapter duration or negative, past a negligible
-// floating-point epsilon) are rewritten into chapter-local coordinates. Rows
-// that already fit the chapter range are left untouched, fixing the
-// convention that all stored suggestion ranges are chapter-local from
-// version 5 onward.
+// Provenance: chapter-local writes predate version stamping, and schema
+// version 1 was already stamped after chapter-local suggestion writes
+// existed, so out-of-range rows in a versioned database are chapter-local
+// rows stranded by chapter bound edits — they are clamped back into the
+// chapter range. Only databases older than version 1 (no stamped
+// user_version) may hold legacy global-source rows; for those, values that
+// cannot be chapter-local (beyond the chapter duration or negative, past a
+// negligible floating-point epsilon) are rewritten into chapter-local
+// coordinates. Rows that already fit the chapter range are left untouched,
+// fixing the convention that all stored suggestion ranges are chapter-local
+// from version 5 onward.
 // ============================================================================
 
 export interface SuggestionRangeNormalizationStats {
@@ -719,7 +721,8 @@ export interface SuggestionRangeNormalizationStats {
   orphanedSkipped: number;
   /**
    * Rows whose conversion threw and were left untouched. When non-zero,
-   * bootstrap must keep user_version below 5 so a later startup retries them.
+   * bootstrap keeps the original user_version so a later startup retries
+   * them with the same provenance.
    */
   rowsFailed: number;
 }
@@ -745,11 +748,12 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
     return stats;
   }
 
-  // Schema-v2 rows were already written chapter-local, so only databases
-  // older than version 2 can contain legacy global-source ranges. In newer
-  // databases an out-of-range row is a chapter-local row stranded by a
-  // chapter bound edit and must be clamped, not shifted.
-  const treatOutOfRangeAsLegacyGlobal = currentVersion < 2;
+  // Only databases without a stamped schema version can contain legacy
+  // global-source ranges: version 1 was already stamped after chapter-local
+  // suggestion writes existed, and chapter bound edits could strand those
+  // local rows out of range. In versioned databases an out-of-range row is
+  // therefore a chapter-local row and must be clamped, not shifted.
+  const treatOutOfRangeAsLegacyGlobal = currentVersion < 1;
 
   const selectRows = database.prepare(
     `SELECT s.id AS suggestion_id, s.in_point AS in_point, s.out_point AS out_point,

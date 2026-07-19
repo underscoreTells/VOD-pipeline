@@ -4,6 +4,7 @@ import type {
   CreateChapterInput,
 } from '../../../shared/types/database.js';
 import { getDatabase } from '../client.js';
+import { parseSuggestionPreviewSnapshotJson } from './suggestion-helpers.js';
 
 export { getChapterProxyByChapterAsset } from './proxies.js';
 
@@ -120,6 +121,10 @@ export async function updateChapter(
     ).run(...values);
 
     if (result.changes > 0 && boundsChanged) {
+      // Materialized previews reference global source times derived from the
+      // old bounds, so cancel them before re-clamping the stored ranges;
+      // apply would otherwise commit a stale or out-of-chapter clip.
+      cancelChapterSuggestionPreviews(database, id);
       // Stored suggestion ranges are chapter-local, so keep them inside the
       // new bounds instead of stranding them out of range.
       clampChapterSuggestionRanges(database, id, newStart, newEnd);
@@ -129,6 +134,54 @@ export async function updateChapter(
   });
 
   return applyUpdates();
+}
+
+function cancelChapterSuggestionPreviews(
+  database: Database.Database,
+  chapterId: number
+): void {
+  const rows = database.prepare(
+    `SELECT id, action_type, target_clip_id, clip_id, preview_snapshot_json
+     FROM suggestions
+     WHERE chapter_id = ? AND status = 'pending'
+       AND (clip_id IS NOT NULL OR preview_snapshot_json IS NOT NULL)`
+  ).all(chapterId) as Array<{
+    id: number;
+    action_type: string | null;
+    target_clip_id: number | null;
+    clip_id: number | null;
+    preview_snapshot_json: string | null;
+  }>;
+
+  if (rows.length === 0) return;
+
+  const restoreClip = database.prepare(
+    'UPDATE clips SET in_point = ?, out_point = ?, role = ?, description = ?, is_essential = ? WHERE id = ?'
+  );
+  const deletePreviewClip = database.prepare('DELETE FROM clips WHERE id = ?');
+  const unlinkSuggestion = database.prepare(
+    'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
+  );
+
+  for (const row of rows) {
+    if (row.action_type === 'update_clip') {
+      const snapshot = parseSuggestionPreviewSnapshotJson(row.preview_snapshot_json);
+      const targetClipId = row.target_clip_id ?? row.clip_id;
+      if (snapshot && targetClipId !== null) {
+        restoreClip.run(
+          snapshot.clip.in_point,
+          snapshot.clip.out_point,
+          snapshot.clip.role,
+          snapshot.clip.description,
+          snapshot.clip.is_essential ? 1 : 0,
+          targetClipId
+        );
+      }
+    } else if (row.clip_id !== null) {
+      deletePreviewClip.run(row.clip_id);
+    }
+    unlinkSuggestion.run(row.id);
+  }
 }
 
 function clampChapterSuggestionRanges(

@@ -722,8 +722,9 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       ids.chapterId,
       ids.conversationId,
       ids.chatMessageId,
-      120,
-      180,
+      // Chapter-local range matching the 120-180 clip in the 100-180 chapter.
+      20,
+      80,
       'preview create',
       'reason',
       'gemini',
@@ -933,9 +934,9 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       const ids = seedProjectGraph(builder);
       // Chapter spans 100-180, so a stored 120-150 range cannot be
       // chapter-local: it must be a legacy global source range. Only
-      // databases older than schema version 2 can hold legacy-global rows.
+      // databases without a stamped schema version can hold legacy rows.
       const suggestionId = insertSuggestion(builder, ids, 120, 150);
-      builder.pragma('user_version = 1');
+      expect(builder.pragma('user_version', { simple: true })).toBe(0);
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
@@ -998,26 +999,26 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
-  it('clamps out-of-range rows as chapter-local in schema-v2+ databases', () => {
+  it('clamps out-of-range rows as chapter-local in versioned databases', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');
 
     try {
       database.exec(readCurrentSchema());
       const ids = seedProjectGraph(database);
-      // Chapter-local 70.2-70.8 became out of range after the chapter bounds
-      // changed from 100-200 to 50-120; it must be clamped, not shifted.
-      database.prepare('UPDATE chapters SET start_time = 50, end_time = 120 WHERE id = ?').run(ids.chapterId);
-      const suggestionId = insertSuggestion(database, ids, 70.2, 70.8);
-      database.pragma('user_version = 2');
+      // Chapter-local 70-80 became out of range after the chapter bounds
+      // changed to 100-160; it must be clamped, not shifted. Schema v1 was
+      // stamped after chapter-local writes existed, so this applies to every
+      // versioned database.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 160 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 70, 80);
+      database.pragma('user_version = 1');
 
       const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
 
       expect(stats.converted).toBe(0);
       expect(stats.clampedOutOfRange).toBe(1);
-      const range = getSuggestionRange(database, suggestionId);
-      expect(range.in_point).toBeCloseTo(70, 5);
-      expect(range.out_point).toBeCloseTo(70, 5);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 60, out_point: 60 });
     } finally {
       closeSqliteDatabase(database);
     }
@@ -1046,6 +1047,97 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       const unaffectedId = insertSuggestion(database, ids, 10, 20);
       await updateChapter(ids.chapterId, { title: 'Renamed' });
       expect(getSuggestionRange(database, unaffectedId)).toEqual({ in_point: 10, out_point: 20 });
+    } finally {
+      setDatabaseForTesting(null);
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('cancels materialized suggestion previews when chapter bounds change', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+
+      const insertClipRow = (inPoint: number, outPoint: number, description: string) =>
+        database.prepare(
+          `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(ids.projectId, ids.assetId, 0, inPoint, outPoint, 'setup', description, 1, '2026-04-24T00:00:00.000Z')
+          .lastInsertRowid as number;
+
+      const insertSuggestionRow = (values: {
+        actionType: 'create_clip' | 'update_clip';
+        targetClipId: number | null;
+        clipId: number | null;
+        snapshot: string | null;
+      }) =>
+        database.prepare(
+          `INSERT INTO suggestions (
+            chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+            reasoning, provider, action_type, target_clip_id, action_payload_json,
+            preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ids.chapterId, ids.conversationId, ids.chatMessageId, 20, 50, 'preview', 'reason',
+          'gemini', values.actionType, values.targetClipId,
+          JSON.stringify({ create: { trackIndex: 0 } }), values.snapshot, 'pending', 0,
+          '2026-04-24T00:00:00.000Z', null, values.clipId
+        ).lastInsertRowid as number;
+
+      // create_clip preview: the materialized clip is linked from the suggestion.
+      const previewClipId = insertClipRow(120, 150, 'preview create');
+      const createSuggestionId = insertSuggestionRow({
+        actionType: 'create_clip',
+        targetClipId: null,
+        clipId: previewClipId,
+        snapshot: null,
+      });
+
+      // update_clip preview: the live clip holds speculative timing while the
+      // snapshot preserves the original range.
+      const targetClipId = insertClipRow(130, 160, 'speculative edit');
+      const snapshot = JSON.stringify({
+        clip: {
+          id: targetClipId,
+          in_point: 110,
+          out_point: 170,
+          role: 'setup',
+          description: 'original timing',
+          is_essential: true,
+        },
+      });
+      const updateSuggestionId = insertSuggestionRow({
+        actionType: 'update_clip',
+        targetClipId,
+        clipId: targetClipId,
+        snapshot,
+      });
+
+      const updated = await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+      expect(updated).toBe(true);
+
+      // The create preview clip is deleted and both suggestions are unlinked.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const createRow = database.prepare(
+        'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(createSuggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+      expect(createRow.clip_id).toBeNull();
+      expect(createRow.preview_snapshot_json).toBeNull();
+
+      // The update preview clip is restored from its snapshot and unlinked.
+      const restoredClip = database.prepare(
+        'SELECT in_point, out_point, description FROM clips WHERE id = ?'
+      ).get(targetClipId) as { in_point: number; out_point: number; description: string };
+      expect(restoredClip).toEqual({ in_point: 110, out_point: 170, description: 'original timing' });
+      const updateRow = database.prepare(
+        'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(updateSuggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+      expect(updateRow.clip_id).toBeNull();
+      expect(updateRow.preview_snapshot_json).toBeNull();
     } finally {
       setDatabaseForTesting(null);
       closeSqliteDatabase(database);
