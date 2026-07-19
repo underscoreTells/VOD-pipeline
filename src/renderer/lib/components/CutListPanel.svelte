@@ -7,6 +7,7 @@
   import { executeDeleteClip } from '../state/project-detail.svelte.js';
   import { selectClip, setPlayhead, timelineState } from '../state/timeline.svelte.js';
   import { cn } from '../utils/cn.js';
+  import ContextMenu from './ui/ContextMenu.svelte';
   import Icon from './ui/Icon.svelte';
 
   interface Props {
@@ -21,6 +22,11 @@
     chapterStartTime = 0,
   }: Props = $props();
   let roleFilter = $state<ClipRole | 'all'>('all');
+  let cutContextMenu = $state({
+    clipId: null as number | null,
+    x: 0,
+    y: 0,
+  });
 
   const sortedCuts = $derived.by(() => [...clips]
     .filter((clip) => roleFilter === 'all' || (clip.role || 'unassigned') === roleFilter)
@@ -37,6 +43,20 @@
   function selectCut(clip: Clip): void {
     selectClip(clip.id, false);
     setPlayhead(clip.in_point);
+  }
+
+  function openCutContextMenu(event: MouseEvent, clip: Clip): void {
+    event.preventDefault();
+    selectCut(clip);
+    cutContextMenu = { clipId: clip.id, x: event.clientX, y: event.clientY };
+  }
+
+  function closeCutContextMenu(): void {
+    cutContextMenu.clipId = null;
+  }
+
+  function deleteContextCut(): void {
+    if (cutContextMenu.clipId !== null) void executeDeleteClip(cutContextMenu.clipId);
   }
 </script>
 
@@ -77,41 +97,41 @@
           {@const role = (clip.role || 'unassigned') as ClipRole}
           {@const config = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned}
           <li>
-            <div
-              class="group/cut relative w-full rounded-md border border-transparent px-3 py-2 text-left transition-colors hover:border-border-default hover:bg-surface-hover"
+            <button
+              type="button"
+              class="relative w-full rounded-md border border-transparent px-3 py-2 text-left transition-colors hover:border-border-default hover:bg-surface-hover"
               class:border-accent-primary={selected}
               class:bg-accent-primary-subtle={selected}
               onclick={() => selectCut(clip)}
-              onkeydown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  selectCut(clip);
-                }
-              }}
-              role="button"
-              tabindex="0"
+              oncontextmenu={(event) => openCutContextMenu(event, clip)}
             >
               <span class="absolute inset-y-2 left-0 w-[3px] rounded-r-full" style={`background:${config.cssVar}`}></span>
               <span class="flex items-center gap-2">
                 <span class="w-5 shrink-0 font-mono text-[10px] tabular-nums text-text-disabled">{String(index + 1).padStart(2, '0')}</span>
                 <span class="min-w-0 flex-1 truncate text-app-sm font-medium text-text-primary">{clip.description || 'Untitled cut'}</span>
-                {#if clip.is_essential}<span class="text-accent-warning" title="Essential"><Icon icon={Star} size={11} /></span>{/if}
+                {#if clip.is_essential}<span class="shrink-0 text-accent-warning" title="Essential"><Icon icon={Star} size={11} /></span>{/if}
               </span>
               <span class="mt-1 flex items-center gap-2 pl-7 font-mono text-[10px] tabular-nums text-text-tertiary">
                 <span>{formatTime(clip.in_point)}</span><span>→</span><span>{formatTime(clip.out_point)}</span>
                 <span class="ml-auto font-sans uppercase tracking-[0.05em]" style={`color:${config.cssVar}`}>{config.label}</span>
               </span>
-              <span class="pointer-events-none absolute right-2 top-2 opacity-0 transition-opacity group-hover/cut:pointer-events-auto group-hover/cut:opacity-100 group-focus-within/cut:pointer-events-auto group-focus-within/cut:opacity-100">
-                <button
-                  type="button"
-                  class="pointer-events-auto rounded-sm px-1.5 py-1 text-[10px] text-accent-destructive hover:bg-accent-destructive hover:text-white"
-                  onclick={(event) => { event.stopPropagation(); void executeDeleteClip(clip.id); }}
-                >Delete</button>
-              </span>
-            </div>
+            </button>
           </li>
         {/each}
       </ol>
     {/if}
   </div>
+
+  {#if cutContextMenu.clipId !== null}
+    <ContextMenu
+      x={cutContextMenu.x}
+      y={cutContextMenu.y}
+      onclose={closeCutContextMenu}
+      items={[{
+        label: 'Delete cut',
+        action: deleteContextCut,
+        destructive: true,
+      }]}
+    />
+  {/if}
 </aside>

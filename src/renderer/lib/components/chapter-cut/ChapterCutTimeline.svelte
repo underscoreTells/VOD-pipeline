@@ -5,11 +5,13 @@
   import { getWaveform, onWaveformProgress } from '../../api/waveforms.js';
   import {
     createProjectClip,
+    executeDeleteClip,
     executeSlideClipWindow,
     executeUpdateClipTiming,
   } from '../../state/project-detail.svelte.js';
   import {
     clearSelection,
+    selectClip,
     setExcludeCutContent,
     setMinZoom,
     setPlayhead,
@@ -33,6 +35,7 @@
     snapTimeToFrame,
   } from '../../utils/timeline-geometry.js';
   import { ROLE_CONFIG } from '../../constants.js';
+  import ContextMenu from '../ui/ContextMenu.svelte';
   import Icon from '../ui/Icon.svelte';
   import { Minus, Pause, Play } from '../../constants.js';
   import { cn } from '../../utils/cn.js';
@@ -52,6 +55,7 @@
   type DragState = {
     mode: 'scrub' | 'create' | 'resize' | 'move' | 'overview';
     pointerId: number;
+    startClientX?: number;
     assetId?: number;
     clipId?: number;
     edge?: 'start' | 'end';
@@ -75,6 +79,14 @@
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
   let fittedChapterId: number | null = null;
+  let clipContextMenu = $state({
+    clipId: null as number | null,
+    x: 0,
+    y: 0,
+  });
+
+  const CREATE_DRAG_THRESHOLD_PX = 4;
+  const WAVEFORM_HEIGHT = 104;
 
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
   const primaryAsset = $derived(assets.find((asset) => asset.availability.exists !== false) ?? assets[0] ?? null);
@@ -192,7 +204,7 @@
     );
   }
 
-  function handleLanePointerDown(event: PointerEvent, assetId: number): void {
+  function handleTimelinePointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
     const suggestionElement = target.closest<HTMLElement>('[data-suggestion-id]');
@@ -221,17 +233,21 @@
         beginDrag(event, {
           mode: 'resize',
           pointerId: event.pointerId,
-          assetId,
+          assetId: clip.asset_id,
           clipId,
           edge: handleElement.dataset.handle === 'start' ? 'start' : 'end',
           originalStart: start,
           originalEnd: end,
         });
       } else {
+        if (!event.ctrlKey && !event.metaKey) {
+          dragPreview = null;
+          return;
+        }
         beginDrag(event, {
           mode: 'move',
           pointerId: event.pointerId,
-          assetId,
+          assetId: clip.asset_id,
           clipId,
           offset: clampNumber(time - start, 0, end - start),
           originalStart: start,
@@ -244,13 +260,34 @@
     event.preventDefault();
     clearSelection();
     agentState.selectedSuggestionId = null;
+    const assetId = primaryAsset?.id;
+    if (!assetId) {
+      scrubTo(time);
+      return;
+    }
     dragPreview = { start: time, end: time };
     beginDrag(event, {
       mode: 'create',
       pointerId: event.pointerId,
+      startClientX: event.clientX,
       assetId,
       anchor: time,
     });
+  }
+
+  function openClipContextMenu(event: MouseEvent, clip: Clip): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectClip(clip.id, false);
+    clipContextMenu = { clipId: clip.id, x: event.clientX, y: event.clientY };
+  }
+
+  function closeClipContextMenu(): void {
+    clipContextMenu.clipId = null;
+  }
+
+  function deleteContextClip(): void {
+    if (clipContextMenu.clipId !== null) void executeDeleteClip(clipContextMenu.clipId);
   }
 
   function clampAgainstLane(
@@ -270,7 +307,6 @@
 
   function handleWindowPointerMove(event: PointerEvent): void {
     if (!drag || drag.pointerId !== event.pointerId) return;
-    dragMoved = true;
     const time = pointerTime(event);
     if (drag.mode === 'scrub') {
       scrubTo(time);
@@ -281,9 +317,12 @@
       return;
     }
     if (drag.mode === 'create') {
+      if (!dragMoved && Math.abs(event.clientX - (drag.startClientX ?? event.clientX)) < CREATE_DRAG_THRESHOLD_PX) return;
+      dragMoved = true;
       dragPreview = { start: drag.anchor ?? time, end: time };
       return;
     }
+    dragMoved = true;
     if (!dragPreview || !drag.assetId || !drag.clipId) return;
     if (drag.mode === 'resize') {
       const minDuration = 1 / fps;
@@ -310,6 +349,10 @@
       return;
     }
     if (activeDrag.mode === 'create' && preview && activeDrag.assetId) {
+      if (!dragMoved) {
+        scrubTo(pointerTime(event));
+        return;
+      }
       const range = clampAgainstLane(activeDrag.assetId, preview.start, preview.end);
       if (!range) return;
       await createProjectClip(
@@ -431,7 +474,7 @@
   function drawWaveform(): void {
     if (!waveformCanvas || !viewportRef || waveformPeaks.length === 0) return;
     const width = Math.max(1, viewportRef.clientWidth);
-    const height = 76;
+    const height = WAVEFORM_HEIGHT;
     const dpr = window.devicePixelRatio || 1;
     waveformCanvas.width = Math.round(width * dpr);
     waveformCanvas.height = Math.round(height * dpr);
@@ -592,7 +635,8 @@
         class:text-text-secondary={!timelineState.excludeCutContent}
         onclick={() => setExcludeCutContent(!timelineState.excludeCutContent)}
         aria-pressed={timelineState.excludeCutContent}
-      >Review cut
+        title="Exclude cut content (\)"
+      >Exclude cut content
       </button>
     </div>
   </div>
@@ -612,69 +656,67 @@
         {/each}
       </div>
 
-      <div class="relative h-[76px] cursor-ew-resize border-b border-border-subtle bg-surface-page text-text-tertiary" onpointerdown={handleScrubPointerDown} role="slider" tabindex="0" aria-label="Chapter waveform" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} onkeydown={handlePlayheadKeydown}>
-        {#if waveformStatus === 'loading'}
-          <div class="absolute inset-0 flex items-center justify-center text-app-xs text-text-disabled">Preparing waveform...</div>
-        {:else if waveformStatus === 'unavailable'}
-          <div class="absolute inset-0 flex items-center justify-center text-app-xs text-text-disabled">Waveform unavailable · timeline editing still works</div>
+      <div class="chapter-waveform-track relative h-[104px] cursor-crosshair overflow-hidden border-b border-border-subtle bg-surface-page text-text-tertiary" onpointerdown={handleTimelinePointerDown} role="slider" tabindex="0" aria-label="Chapter waveform and retained ranges" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
+        {#if primaryAsset}
+          <div class="pointer-events-none sticky left-0 z-10 flex h-6 w-fit max-w-56 items-center gap-2 rounded-br-md border-r border-b border-border-subtle bg-surface-raised/95 px-2 text-app-xs text-text-tertiary">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary"></span>
+            <span class="truncate">{primaryAsset.file_path.split(/[/\\]/).pop() || `Source ${primaryAsset.id}`}</span>
+          </div>
         {/if}
-        <canvas class="absolute top-0 h-[76px] text-text-tertiary" bind:this={waveformCanvas}></canvas>
-      </div>
+        {#if waveformStatus === 'loading'}
+          <div class="pointer-events-none absolute right-3 top-2 z-[1] text-app-xs text-text-disabled">Preparing waveform...</div>
+        {:else if waveformStatus === 'unavailable'}
+          <div class="pointer-events-none absolute right-3 top-2 z-[1] text-app-xs text-text-disabled">Waveform unavailable · timeline editing still works</div>
+        {/if}
+        <canvas class="pointer-events-none absolute top-0 z-0 h-[104px] text-text-tertiary" bind:this={waveformCanvas}></canvas>
 
-      <div class="relative flex min-h-[104px] flex-col">
-        {#each assets as asset (asset.id)}
-          {@const laneClips = clipsForAsset(asset.id)}
-          <div class="relative min-h-[72px] border-b border-border-subtle bg-surface-base" onpointerdown={(event) => handleLanePointerDown(event, asset.id)} role="region" aria-label={`Cuts for ${asset.file_path.split(/[/\\]/).pop() || `source ${asset.id}`}`}>
-            <div class="sticky left-0 z-10 flex h-6 w-fit max-w-48 items-center gap-2 rounded-br-md border-r border-b border-border-subtle bg-surface-raised/95 px-2 text-app-xs text-text-tertiary">
-              <span class="h-1.5 w-1.5 rounded-full" class:bg-accent-primary={asset.id === primaryAsset?.id} class:bg-text-disabled={asset.id !== primaryAsset?.id}></span>
-              <span class="truncate">{asset.file_path.split(/[/\\]/).pop() || `Source ${asset.id}`}</span>
-            </div>
-
-            {#each laneClips as clip (clip.id)}
-              {@const visual = drag?.clipId === clip.id && dragPreview ? dragPreview : { start: localTime(clip.in_point), end: localTime(clip.out_point) }}
-              {@const role = clip.role || 'unassigned'}
-              {@const roleConfig = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned}
-              <div
-                class="group/cut absolute top-7 h-9 cursor-grab overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)] active:cursor-grabbing"
-                class:ring-2={timelineState.selectedClipIds.has(clip.id)}
-                class:ring-accent-primary={timelineState.selectedClipIds.has(clip.id)}
-                data-clip-id={clip.id}
-                style={`left:${visual.start * timelineState.zoomLevel}px;width:${Math.max(3, (visual.end - visual.start) * timelineState.zoomLevel)}px;background:${roleConfig.subtleCssVar};border-color:${roleConfig.cssVar}`}
-                title={`${clip.description || 'Untitled cut'} · ${formatTimecode(visual.start)}–${formatTimecode(visual.end)}`}
-              >
-                <div class="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize rounded-l-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="start"></div>
-                <span class="pointer-events-none block truncate px-3 py-2 text-app-xs font-medium text-text-primary">{clip.description || 'Untitled cut'}</span>
-                <div class="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize rounded-r-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="end"></div>
-              </div>
-            {/each}
-
-            {#each pendingSuggestions.filter((suggestion) => resolveSuggestionAssetId(suggestion) === asset.id) as suggestion (suggestion.id)}
-              {@const conflict = suggestionHasConflict(suggestion)}
-              <button
-                type="button"
-                class={cn(
-                  'absolute top-7 z-[8] h-9 overflow-hidden rounded-md border-2 border-dashed px-2 text-left text-app-xs font-medium transition-[filter,opacity] hover:brightness-125',
-                  conflict
-                    ? 'border-accent-destructive bg-accent-destructive/10 text-accent-destructive'
-                    : 'border-accent-warning bg-accent-warning-subtle text-accent-warning'
-                )}
-                class:ring-2={agentState.selectedSuggestionId === suggestion.id}
-                class:ring-accent-primary={agentState.selectedSuggestionId === suggestion.id}
-                data-suggestion-id={suggestion.id}
-                style={`left:${suggestion.in_point * timelineState.zoomLevel}px;width:${Math.max(3, (suggestion.out_point - suggestion.in_point) * timelineState.zoomLevel)}px`}
-                title={conflict ? `Conflict: ${suggestion.description || 'Suggested cut'}` : suggestion.description || 'Suggested cut'}
-              >
-                <span class="block truncate">{conflict ? 'Conflict · ' : 'Suggested · '}{suggestion.description || 'Untitled'}</span>
-              </button>
-            {/each}
-
-            {#if drag?.mode === 'create' && drag.assetId === asset.id && dragPreview}
-              <div class="pointer-events-none absolute top-7 z-[9] h-9 rounded-md border-2 border-dashed border-accent-primary bg-accent-primary-subtle" style={`left:${Math.min(dragPreview.start, dragPreview.end) * timelineState.zoomLevel}px;width:${Math.max(3, Math.abs(dragPreview.end - dragPreview.start) * timelineState.zoomLevel)}px`}>
-                <span class="absolute -top-6 left-0 whitespace-nowrap rounded-sm bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-text-primary">{formatTimecode(Math.min(dragPreview.start, dragPreview.end))} · {formatTimecode(Math.abs(dragPreview.end - dragPreview.start))}</span>
-              </div>
-            {/if}
+        {#each clips as clip (clip.id)}
+          {@const visual = drag?.clipId === clip.id && dragPreview ? dragPreview : { start: localTime(clip.in_point), end: localTime(clip.out_point) }}
+          {@const role = clip.role || 'unassigned'}
+          {@const roleConfig = ROLE_CONFIG[role] || ROLE_CONFIG.unassigned}
+          <div
+            class="chapter-clip-overlay group/cut absolute bottom-3 top-7 z-[5] flex cursor-grab items-center overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)] active:cursor-grabbing"
+            class:ring-2={timelineState.selectedClipIds.has(clip.id)}
+            class:ring-accent-primary={timelineState.selectedClipIds.has(clip.id)}
+            data-clip-id={clip.id}
+            oncontextmenu={(event) => openClipContextMenu(event, clip)}
+            role="button"
+            tabindex="0"
+            aria-label={`${clip.description || 'Untitled cut'}, right-click for actions`}
+            style={`left:${visual.start * timelineState.zoomLevel}px;width:${Math.max(3, (visual.end - visual.start) * timelineState.zoomLevel)}px;background:${roleConfig.subtleCssVar};border-color:${roleConfig.cssVar}`}
+            title={`${clip.description || 'Untitled cut'} · ${formatTimecode(visual.start)}–${formatTimecode(visual.end)} · Ctrl/Cmd-drag to move`}
+          >
+            <div class="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize rounded-l-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="start"></div>
+            <span class="pointer-events-none block min-w-0 flex-1 truncate px-3 text-app-xs font-medium text-text-primary">{clip.description || 'Untitled cut'}</span>
+            <div class="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize rounded-r-md bg-white/35 opacity-70 group-hover/cut:opacity-100" data-handle="end"></div>
           </div>
         {/each}
+
+        {#each pendingSuggestions as suggestion (suggestion.id)}
+          {@const conflict = suggestionHasConflict(suggestion)}
+          <button
+            type="button"
+            class={cn(
+              'chapter-suggestion-overlay absolute bottom-3 top-7 z-[6] overflow-hidden rounded-md border-2 border-dashed px-2 text-left text-app-xs font-medium transition-[filter,opacity] hover:brightness-125',
+              conflict
+                ? 'border-accent-destructive bg-accent-destructive/10 text-accent-destructive'
+                : 'border-accent-warning bg-accent-warning-subtle text-accent-warning'
+            )}
+            class:ring-2={agentState.selectedSuggestionId === suggestion.id}
+            class:ring-accent-primary={agentState.selectedSuggestionId === suggestion.id}
+            data-suggestion-id={suggestion.id}
+            style={`left:${suggestion.in_point * timelineState.zoomLevel}px;width:${Math.max(3, (suggestion.out_point - suggestion.in_point) * timelineState.zoomLevel)}px`}
+            title={conflict ? `Conflict: ${suggestion.description || 'Suggested cut'}` : suggestion.description || 'Suggested cut'}
+          >
+            <span class="block truncate">{conflict ? 'Conflict · ' : 'Suggested · '}{suggestion.description || 'Untitled'}</span>
+          </button>
+        {/each}
+
+        {#if drag?.mode === 'create' && dragPreview}
+          <div class="chapter-create-overlay pointer-events-none absolute bottom-3 top-7 z-[7] rounded-md border-2 border-dashed border-accent-primary bg-accent-primary-subtle" style={`left:${Math.min(dragPreview.start, dragPreview.end) * timelineState.zoomLevel}px;width:${Math.max(3, Math.abs(dragPreview.end - dragPreview.start) * timelineState.zoomLevel)}px`}>
+            <span class="absolute -top-6 left-0 whitespace-nowrap rounded-sm bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-text-primary">{formatTimecode(Math.min(dragPreview.start, dragPreview.end))} · {formatTimecode(Math.abs(dragPreview.end - dragPreview.start))}</span>
+          </div>
+        {/if}
       </div>
 
       <div class="pointer-events-none absolute inset-y-0 z-[15] w-px bg-accent-destructive" style={`left:${localTime(timelineState.playheadTime) * timelineState.zoomLevel}px`}>
@@ -695,4 +737,17 @@
       <div class="absolute inset-y-0 w-px bg-accent-destructive" style={`left:${localTime(timelineState.playheadTime) / duration * 100}%`}></div>
     </div>
   </div>
+
+  {#if clipContextMenu.clipId !== null}
+    <ContextMenu
+      x={clipContextMenu.x}
+      y={clipContextMenu.y}
+      onclose={closeClipContextMenu}
+      items={[{
+        label: 'Delete cut',
+        action: deleteContextClip,
+        destructive: true,
+      }]}
+    />
+  {/if}
 </section>

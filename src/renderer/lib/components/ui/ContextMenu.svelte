@@ -56,10 +56,10 @@
     class="fixed z-[var(--z-context-menu)] min-w-[140px] rounded-md border border-border-default bg-surface-raised py-1"
     style="left: {adjustPosition().left}; top: {adjustPosition().top}"
   >
-    {#each items as item}
+    {#each items as item (item)}
       <button
         class={cn(
-          'block w-full px-3 py-2 text-left text-app-base transition-colors disabled:pointer-events-none',
+          'block w-full px-3 py-2 text-left text-app-sm transition-colors disabled:pointer-events-none',
           item.destructive
             ? 'text-accent-destructive hover:bg-accent-destructive hover:text-white'
             : 'text-text-primary hover:bg-surface-elevated',
