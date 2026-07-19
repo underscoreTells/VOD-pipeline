@@ -637,14 +637,13 @@ function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
     return true;
   }
 
-  const inputFailurePatterns = [
-    /error opening input (?:file|files)/i,
-    /invalid data found when processing input/i,
-    /no such file or directory/i,
-    /permission denied/i,
-    /moov atom not found/i,
+  const gpuPipelineFailurePatterns = [
+    /error reinitializing filters/i,
+    /failed to inject frame into filter network/i,
+    /cuda out of memory/i,
+    /hwaccel.*(?:failed|unavailable|unsupported)/i,
   ];
-  return !inputFailurePatterns.some((pattern) => pattern.test(stderr));
+  return gpuPipelineFailurePatterns.some((pattern) => pattern.test(stderr));
 }
 
 /**

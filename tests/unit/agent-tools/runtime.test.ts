@@ -113,4 +113,24 @@ describe("agent tool runtime validation", () => {
       })
     ).rejects.toThrow();
   });
+
+  it("forwards the cancellation signal to tool execution", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const tool = defineAgentTool({
+      name: "signalTool",
+      description: "Capture the tool execution signal.",
+      schema: s.object({}),
+      execute: async (_input, options) => {
+        receivedSignal = options?.signal;
+        return "ok";
+      },
+    });
+    const executable = bindAgentToolsForProvider("openai", [tool])
+      .executableToolMap.get("signalTool");
+
+    await executable!.execute({}, { signal: controller.signal });
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
 });

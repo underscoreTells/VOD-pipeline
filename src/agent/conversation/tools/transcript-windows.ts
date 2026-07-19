@@ -17,7 +17,8 @@ import type { LoadDetailedTranscriptWindowsInput } from "./schemas.js";
 
 export async function loadDetailedTranscriptToolEvidence(
   input: ConversationTurnInput,
-  requests: TranscriptDetailRequest[]
+  requests: TranscriptDetailRequest[],
+  options?: { signal?: AbortSignal }
 ): Promise<DetailedTranscriptWindow[]> {
   const chapter = input.context.chapter;
   if (!chapter) {
@@ -31,7 +32,8 @@ export async function loadDetailedTranscriptToolEvidence(
       end_time: chapter.endTime,
     },
     input.context.chapterAssetIds,
-    requests
+    requests,
+    options
   );
 }
 
@@ -58,7 +60,8 @@ export function createLoadDetailedTranscriptWindowsTool(
   accumulator: ConversationToolAccumulator,
   loadDetailedTranscriptWindowsImpl: (
     input: ConversationTurnInput,
-    requests: TranscriptDetailRequest[]
+    requests: TranscriptDetailRequest[],
+    options?: { signal?: AbortSignal }
   ) => Promise<DetailedTranscriptWindow[]>
 ): AgentToolDefinition {
   return defineAgentTool<LoadDetailedTranscriptWindowsInput>({
@@ -66,7 +69,7 @@ export function createLoadDetailedTranscriptWindowsTool(
     description:
       "Load precise transcript windows for the current chapter when the overview transcript is insufficient for exact timing. This tool only provides evidence and never creates recommendations by itself.",
     schema: loadDetailedTranscriptWindowsSchema,
-    execute: async ({ requests }) => {
+    execute: async ({ requests }, options) => {
       writer?.writeStatus({
         status: "loading_detailed_transcript_context",
         message: "Fetching detailed transcript windows for exact timing...",
@@ -76,7 +79,7 @@ export function createLoadDetailedTranscriptWindowsTool(
 
       const normalizedRequests = normalizeDetailedTranscriptRequestsForInput(input, requests);
       accumulator.transcriptDetailRequests.push(...normalizedRequests);
-      const windows = await loadDetailedTranscriptWindowsImpl(input, normalizedRequests);
+      const windows = await loadDetailedTranscriptWindowsImpl(input, normalizedRequests, options);
       accumulator.loadedDetailedTranscripts.push(...windows);
 
       return JSON.stringify({

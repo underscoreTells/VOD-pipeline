@@ -438,9 +438,20 @@
     return segments[segments.length - 1] || `Asset ${asset.id}`;
   }
 
-  const chapterPreviewAsset = $derived.by(() =>
-    selectedChapterAssets.find((asset) => asset.availability.exists !== false) ?? selectedChapterAssets[0] ?? null
-  );
+  const chapterPreviewAsset = $derived.by(() => {
+    const selectedIds = timelineState.selectedClipIds;
+    const selectedClipId = selectedIds.size === 1 ? [...selectedIds][0] : null;
+    const selectedClip = selectedClipId === null
+      ? null
+      : timelineState.clips.find((clip) => clip.id === selectedClipId);
+    const selectedClipAsset = selectedClip
+      ? selectedChapterAssets.find((asset) => asset.id === selectedClip.asset_id)
+      : null;
+    return selectedClipAsset
+      ?? selectedChapterAssets.find((asset) => asset.availability.exists !== false)
+      ?? selectedChapterAssets[0]
+      ?? null;
+  });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );
@@ -704,6 +715,7 @@
                     class="h-full w-full border-l-0"
                     clips={selectedChapterClips}
                     chapterStartTime={selectedChapter?.start_time ?? 0}
+                    chapterEndTime={selectedChapter?.end_time}
                   />
                 </div>
               {:else}

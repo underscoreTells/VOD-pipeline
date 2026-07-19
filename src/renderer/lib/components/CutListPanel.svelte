@@ -14,12 +14,14 @@
     class?: string;
     clips?: Clip[];
     chapterStartTime?: number;
+    chapterEndTime?: number;
   }
 
   let {
     class: className = '',
     clips = timelineState.clips,
     chapterStartTime = 0,
+    chapterEndTime,
   }: Props = $props();
   let roleFilter = $state<ClipRole | 'all'>('all');
   let cutContextMenu = $state({
@@ -33,7 +35,10 @@
     .sort(compareClipsBySourceTime));
 
   function formatTime(seconds: number): string {
-    const local = Math.max(0, seconds - chapterStartTime);
+    const chapterDuration = chapterEndTime === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, chapterEndTime - chapterStartTime);
+    const local = Math.min(Math.max(0, seconds - chapterStartTime), chapterDuration);
     const minutes = Math.floor(local / 60);
     const secs = Math.floor(local % 60);
     const hundredths = Math.floor((local % 1) * 100);

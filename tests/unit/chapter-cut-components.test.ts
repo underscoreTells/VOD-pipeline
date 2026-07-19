@@ -13,6 +13,10 @@ const contextMenuSource = readFileSync(
   new URL('../../src/renderer/lib/components/ui/ContextMenu.svelte', import.meta.url),
   'utf8'
 );
+const projectDetailSource = readFileSync(
+  new URL('../../src/renderer/lib/components/ProjectDetail.svelte', import.meta.url),
+  'utf8'
+);
 
 describe('chapter cut workspace', () => {
   it('keeps cut rows full-width and moves deletion into a context menu', () => {
@@ -58,5 +62,16 @@ describe('chapter cut workspace', () => {
     expect(timelineSource).toContain('>Exclude cut content');
     expect(timelineSource).toContain('title="Exclude cut content (\\)"');
     expect(timelineSource).toContain('aria-pressed={timelineState.excludeCutContent}');
+  });
+
+  it('clears waveform data while loading a different asset', () => {
+    expect(timelineSource).toContain('waveformPeaks = [];');
+    expect(timelineSource).toContain('waveformDuration = 0;');
+  });
+
+  it('previews the selected cut asset and clamps displayed times to the chapter', () => {
+    expect(projectDetailSource).toContain('asset.id === selectedClip.asset_id');
+    expect(projectDetailSource).toContain('chapterEndTime={selectedChapter?.end_time}');
+    expect(cutListSource).toContain('Math.min(Math.max(0, seconds - chapterStartTime), chapterDuration)');
   });
 });

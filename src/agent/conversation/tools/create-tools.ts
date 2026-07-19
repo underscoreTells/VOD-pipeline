@@ -28,7 +28,8 @@ import { createLoadChapterCutMapTool } from "./chapter-cut-map.js";
 export interface ConversationToolDependencies {
   analyzeChapterVideo?: (
     input: ConversationTurnInput,
-    request: AnalyzeChapterVideoInput
+    request: AnalyzeChapterVideoInput,
+    options?: { signal?: AbortSignal }
   ) => Promise<{
     assetId?: number;
     summary: string;
@@ -40,7 +41,8 @@ export interface ConversationToolDependencies {
   }>;
   loadDetailedTranscriptWindows?: (
     input: ConversationTurnInput,
-    requests: TranscriptDetailRequest[]
+    requests: TranscriptDetailRequest[],
+    options?: { signal?: AbortSignal }
   ) => Promise<DetailedTranscriptWindow[]>;
 }
 

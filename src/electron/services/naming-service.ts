@@ -176,8 +176,10 @@ async function requestGeneratedName(input: {
   systemPrompt: string;
   userPrompt: string;
   maxTokens: number;
+  signal?: AbortSignal;
 }): Promise<string | null> {
   for (const attempt of buildNamingRequestAttempts(input)) {
+    input.signal?.throwIfAborted();
     try {
       // The provider factory strips unsupported temperature params for OpenAI GPT-5 models.
       const llm = createLLM({
@@ -191,13 +193,14 @@ async function requestGeneratedName(input: {
       const response = await llm.invoke([
         new SystemMessage(input.systemPrompt),
         new HumanMessage(input.userPrompt),
-      ]);
+      ], input.signal ? { signal: input.signal } : undefined);
 
       const generatedName = sanitizeGeneratedName(extractTextFromAIContent(response.content));
       if (generatedName) {
         return generatedName;
       }
     } catch (error) {
+      input.signal?.throwIfAborted();
       console.warn(
         `[NamingService] Failed to generate name with ${attempt.provider}:${attempt.model ?? 'default'}`,
         error
@@ -245,6 +248,7 @@ export async function suggestConversationTitle(input: {
   chapterTitle?: string | null;
   model: NamingModelId;
   providerConfig?: ProviderConfigPayload;
+  signal?: AbortSignal;
 }): Promise<string | null> {
   const normalizedMessage = input.message.replace(/\s+/g, ' ').trim();
   if (!normalizedMessage) {
@@ -255,6 +259,7 @@ export async function suggestConversationTitle(input: {
     model: input.model,
     providerConfig: input.providerConfig,
     maxTokens: 20,
+    signal: input.signal,
     systemPrompt:
       'You name editor chat threads. Return only one concise 2-6 word thread title. No quotes, no labels, no trailing punctuation.',
     userPrompt: [

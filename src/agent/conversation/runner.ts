@@ -248,7 +248,7 @@ export async function runConversationTurn(
           input: toolCall.args,
           stepIndex: step,
         });
-        content = await selectedTool.execute(toolCall.args);
+        content = await selectedTool.execute(toolCall.args, { signal: options.signal });
         assertNotAborted(options.signal);
         writer?.writeToolState({
           toolCallId: toolCall.id,

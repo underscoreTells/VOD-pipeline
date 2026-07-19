@@ -8,7 +8,7 @@ import { getProviderToolStrategy } from "./registry.js";
 
 export interface ExecutableTool<TParsed = unknown> {
   name: string;
-  execute(input: unknown): Promise<string>;
+  execute(input: unknown, options?: { signal?: AbortSignal }): Promise<string>;
   definition: AgentToolDefinition<TParsed>;
 }
 
@@ -45,9 +45,9 @@ function createExecutableTool<TParsed>(
   return {
     name: tool.name,
     definition: tool,
-    async execute(input: unknown): Promise<string> {
+    async execute(input: unknown, options?: { signal?: AbortSignal }): Promise<string> {
       const parsed = validateCanonicalSchema<TParsed>(tool.schema, input, tool.parse);
-      const result = await tool.execute(parsed);
+      const result = await tool.execute(parsed, options);
       return typeof result === "string" ? result : JSON.stringify(result);
     },
   };

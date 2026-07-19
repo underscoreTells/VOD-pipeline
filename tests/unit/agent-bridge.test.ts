@@ -202,6 +202,7 @@ describe("AgentBridge.cancelByClientRequestId", () => {
     const bridge = new AgentBridge();
     const writeAsync = attachStdinWriter(bridge);
     const clientRequestId = "client-req-123";
+    const signal = bridge.registerClientRequest(clientRequestId);
 
     const sendPromise = bridge.send(
       { type: "chat", messages: [{ role: "user", content: "hello" }] },
@@ -213,6 +214,7 @@ describe("AgentBridge.cancelByClientRequestId", () => {
           chapterId: "chap-1",
           conversationId: 1,
         },
+        signal,
       }
     );
     sendPromise.catch(() => undefined);
@@ -251,6 +253,30 @@ describe("AgentBridge.cancelByClientRequestId", () => {
     expect(settled.type).toBe("error");
     expect(settled.error).toBe("Cancelled by renderer");
     expect(pendingRequests.has(internalRequestId)).toBe(false);
+  });
+
+  it("retains cancellation before the worker request is registered", async () => {
+    const bridge = new AgentBridge();
+    const writeAsync = attachStdinWriter(bridge);
+    const clientRequestId = "client-early-cancel";
+    const signal = bridge.registerClientRequest(clientRequestId);
+
+    expect(bridge.cancelByClientRequestId(clientRequestId)).toBe(true);
+    expect(signal.aborted).toBe(true);
+
+    await expect(bridge.send(
+      { type: "chat", messages: [{ role: "user", content: "hello" }] },
+      {
+        streamContext: {
+          clientRequestId,
+          projectId: "proj-1",
+          chapterId: "chap-1",
+          conversationId: 1,
+        },
+        signal,
+      }
+    )).rejects.toMatchObject({ name: "AbortError" });
+    expect(writeAsync).not.toHaveBeenCalled();
   });
 
   it("returns false and sends no cancel when no pending request matches the clientRequestId", () => {
@@ -309,6 +335,8 @@ describe("AgentBridge.cancelByClientRequestId", () => {
   it("only cancels the matching request and leaves sibling in-flight requests untouched", () => {
     const bridge = new AgentBridge();
     const writeAsync = attachStdinWriter(bridge);
+    const signalA = bridge.registerClientRequest("client-A");
+    const signalB = bridge.registerClientRequest("client-B");
 
     const sendA = bridge.send(
       { type: "chat", messages: [{ role: "user", content: "a" }] },
@@ -320,6 +348,7 @@ describe("AgentBridge.cancelByClientRequestId", () => {
           chapterId: "c",
           conversationId: 1,
         },
+        signal: signalA,
       }
     );
     sendA.catch(() => undefined);
@@ -334,6 +363,7 @@ describe("AgentBridge.cancelByClientRequestId", () => {
           chapterId: "c",
           conversationId: 1,
         },
+        signal: signalB,
       }
     );
     sendB.catch(() => undefined);

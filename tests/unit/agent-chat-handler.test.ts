@@ -16,6 +16,8 @@ const electronMocks = vi.hoisted(() => ({
 const bridgeMocks = vi.hoisted(() => ({
   ensureStarted: vi.fn(),
   send: vi.fn(),
+  registerClientRequest: vi.fn(),
+  finishClientRequest: vi.fn(),
 }));
 
 const databaseMocks = vi.hoisted(() => ({
@@ -103,6 +105,8 @@ describe("agent chat handler", () => {
     });
 
     databaseMocks.getProject.mockResolvedValue({ id: 1 });
+    bridgeMocks.registerClientRequest.mockImplementation(() => new AbortController().signal);
+    bridgeMocks.ensureStarted.mockResolvedValue(undefined);
     databaseMocks.getChatConversation.mockResolvedValue({
       id: 2,
       project_id: 1,
@@ -495,6 +499,7 @@ describe("agent chat handler", () => {
           openai: "sk-openai",
         },
       },
+      signal: expect.anything(),
     });
     expect(databaseMocks.updateChatConversation).toHaveBeenCalledWith(2, {
       title: "Raid Plan",

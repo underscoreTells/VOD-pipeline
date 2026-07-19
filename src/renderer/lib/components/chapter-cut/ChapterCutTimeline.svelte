@@ -516,6 +516,10 @@
     waveformLoadsInFlight.add(assetId);
     waveformAssetId = assetId;
     waveformStatus = 'loading';
+    waveformPeaks = [];
+    waveformDuration = 0;
+    const context = waveformCanvas?.getContext('2d');
+    if (context && waveformCanvas) context.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
     try {
       let result = await getWaveform(assetId, -1, 1);
       if (!result.success || !result.data) {

@@ -768,7 +768,7 @@ describe("ffmpeg proxy argument generation", () => {
     }
   });
 
-  it("invalidates a GPU pipeline after an unexplained filter failure", async () => {
+  it("invalidates a GPU pipeline after a filter reinitialization failure", async () => {
     gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
       backend: "qsv",
       encoder: "h264_qsv",
@@ -811,6 +811,40 @@ describe("ffmpeg proxy argument generation", () => {
         { backend: "qsv", source: "/usr/bin/ffmpeg" },
         "Proxy failed with code 1"
       );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not invalidate the GPU encoder for an output storage failure", async () => {
+    gpuDetectorMocks.detectGPUEncoders.mockResolvedValue({
+      backend: "nvenc",
+      encoder: "h264_nvenc",
+      name: "NVIDIA NVENC",
+      priority: 1,
+      source: "/usr/bin/ffmpeg",
+    });
+    gpuDetectorMocks.getGPUFFmpegPath.mockReturnValue("/usr/bin/ffmpeg");
+    spawnState.failures.push({
+      command: "/usr/bin/ffmpeg",
+      code: 1,
+      stderr: "No space left on device",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { generateAIProxy } = await import("../../src/pipeline/ffmpeg.js");
+      await generateAIProxy(
+        inputPath,
+        outputPath,
+        undefined,
+        undefined,
+        "auto",
+        "balanced",
+        { startTime: 0, endTime: 10 }
+      );
+
+      expect(gpuDetectorMocks.recordGPUEncoderRuntimeFailure).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }

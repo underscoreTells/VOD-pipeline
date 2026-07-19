@@ -210,7 +210,8 @@ export async function generateConversationTitle(
   message: string,
   chapterTitle: string | undefined,
   threadNamingModel: ReturnType<typeof normalizeNamingModel>,
-  agentConfig: ProviderConfigPayload | undefined
+  agentConfig: ProviderConfigPayload | undefined,
+  signal?: AbortSignal
 ): Promise<string> {
   let generatedTitle: string | null = null;
 
@@ -220,8 +221,10 @@ export async function generateConversationTitle(
       chapterTitle,
       model: threadNamingModel,
       providerConfig: agentConfig,
+      signal,
     });
   } catch (error) {
+    signal?.throwIfAborted();
     logger.warn('agent:thread-title fallback', error);
   }
 
@@ -244,8 +247,10 @@ export async function runConversationTurn(
     threadId: string;
     userMessageId: number;
     userCreatedAt: string;
+    signal?: AbortSignal;
   }
 ): Promise<AgentChatData> {
+  options.signal?.throwIfAborted();
   const chapterAssetIds = await getAssetsForChapter(options.chapter.id);
   const chapterDuration = Math.max(0.01, options.chapter.end_time - options.chapter.start_time);
   const existingSuggestions = await getSuggestionsByConversation(
@@ -255,6 +260,7 @@ export async function runConversationTurn(
   const initialContext = await buildAgentChatContext(options.projectId, options.chapter.id, {
     ensureChapterProxyReady: false,
   });
+  options.signal?.throwIfAborted();
   const contextWithSuggestions = {
     ...initialContext,
     suggestionSummary: summarizeSuggestions(existingSuggestions),
@@ -275,7 +281,7 @@ export async function runConversationTurn(
     );
   }
 
-  await agentBridge.ensureStarted();
+  await waitForAbortable(agentBridge.ensureStarted(), options.signal);
   let executionTrace: ExecutionTraceEntry[] = [];
   const response = await agentBridge.send({
     type: 'chat',
@@ -324,6 +330,7 @@ export async function runConversationTurn(
         });
       }
     },
+    signal: options.signal,
   });
 
   if (response.type === 'error') {
@@ -365,6 +372,25 @@ export async function runConversationTurn(
     suggestions: persistedSuggestions,
     outcome: finalParsed.outcome,
   };
+}
+
+function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
 }
 
 function summarizeSuggestions(suggestions: Suggestion[]): string {

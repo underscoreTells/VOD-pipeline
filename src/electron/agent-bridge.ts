@@ -22,12 +22,14 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
   streamContext?: AgentStreamContext;
   onStreamEvent?: (message: AgentOutputMessage) => void;
+  cleanupAbortListener?: () => void;
 }
 
 interface SendOptions {
   timeoutMs?: number;
   streamContext?: AgentStreamContext;
   onStreamEvent?: (message: AgentOutputMessage) => void;
+  signal?: AbortSignal;
 }
 
 export class AgentBridge extends EventEmitter {
@@ -35,6 +37,7 @@ export class AgentBridge extends EventEmitter {
   private stdinWriter: JSONStdinWriter | null = null;
   private stdoutReader: JSONStdoutReader | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  private clientRequestControllers = new Map<string, AbortController>();
   private readyPromise: Promise<void> | null = null;
   private restartAttempts: number = 0;
   private maxRestartAttempts: number = 3;
@@ -64,6 +67,7 @@ export class AgentBridge extends EventEmitter {
   private rejectPendingRequests(reason: string): void {
     for (const [requestId, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
+      pending.cleanupAbortListener?.();
       pending.reject(new Error(reason));
       this.pendingRequests.delete(requestId);
     }
@@ -240,6 +244,7 @@ export class AgentBridge extends EventEmitter {
     }
 
     clearTimeout(pending.timeout);
+    pending.cleanupAbortListener?.();
     this.pendingRequests.delete(message.requestId);
 
     if (message.type === "turn_complete" || message.type === "error") {
@@ -258,7 +263,8 @@ export class AgentBridge extends EventEmitter {
       throw new Error("Agent process not started");
     }
 
-    const { timeoutMs = AGENT_REQUEST_TIMEOUT, streamContext, onStreamEvent } = options;
+    const { timeoutMs = AGENT_REQUEST_TIMEOUT, streamContext, onStreamEvent, signal } = options;
+    signal?.throwIfAborted();
 
     const requestId = uuidv4();
     const fullMessage = {
@@ -272,6 +278,7 @@ export class AgentBridge extends EventEmitter {
           return;
         }
         this.pendingRequests.delete(requestId);
+        signal?.removeEventListener("abort", abortRequest);
         this.sendCancelRequest(requestId);
         reject(
           new Error(`Agent request timeout: ${requestId} (${timeoutMs}ms)`)
@@ -286,10 +293,18 @@ export class AgentBridge extends EventEmitter {
         onStreamEvent,
       });
 
+      const abortRequest = () => this.sendCancelRequest(requestId);
+      signal?.addEventListener("abort", abortRequest, { once: true });
+      const pending = this.pendingRequests.get(requestId);
+      if (pending) {
+        pending.cleanupAbortListener = () => signal?.removeEventListener("abort", abortRequest);
+      }
+
       stdinWriter
         .writeAsync(fullMessage)
         .catch((error) => {
           clearTimeout(timeout);
+          signal?.removeEventListener("abort", abortRequest);
           this.pendingRequests.delete(requestId);
           const message =
             error instanceof Error ? error.message : String(error);
@@ -316,14 +331,23 @@ export class AgentBridge extends EventEmitter {
       return false;
     }
 
-    for (const [requestId, pending] of this.pendingRequests) {
-      if (pending.streamContext?.clientRequestId === clientRequestId) {
-        this.sendCancelRequest(requestId);
-        return true;
-      }
+    const controller = this.clientRequestControllers.get(clientRequestId);
+    if (!controller) {
+      return false;
     }
 
-    return false;
+    controller.abort();
+    return true;
+  }
+
+  registerClientRequest(clientRequestId: string): AbortSignal {
+    const controller = new AbortController();
+    this.clientRequestControllers.set(clientRequestId, controller);
+    return controller.signal;
+  }
+
+  finishClientRequest(clientRequestId: string): void {
+    this.clientRequestControllers.delete(clientRequestId);
   }
 
   async stop(): Promise<void> {
