@@ -6,6 +6,7 @@ import {
   compareClipsBySourceTime,
   compareClipsForExport,
   getClipVisibleRangeInChapter,
+  normalizeSuggestionWindowForChapter,
   splitClipAtSourceTime,
 } from '../../src/shared/utils/clip-timing.js';
 
@@ -61,6 +62,30 @@ describe('clip timing helpers', () => {
       start: 100,
       end: 150,
     });
+  });
+
+  it('normalizes chapter-local suggestion windows to global source times', () => {
+    const chapter = createChapter({ start_time: 3600, end_time: 4200 });
+
+    expect(
+      normalizeSuggestionWindowForChapter({ in_point: 50, out_point: 60 }, chapter)
+    ).toEqual({ start: 3650, end: 3660 });
+  });
+
+  it('normalizes legacy-global suggestion windows without double-shifting', () => {
+    const chapter = createChapter({ start_time: 3600, end_time: 4200 });
+
+    expect(
+      normalizeSuggestionWindowForChapter({ in_point: 3650, out_point: 3660 }, chapter)
+    ).toEqual({ start: 3650, end: 3660 });
+  });
+
+  it('clamps legacy-global suggestion windows to the chapter range', () => {
+    const chapter = createChapter({ start_time: 3600, end_time: 4200 });
+
+    expect(
+      normalizeSuggestionWindowForChapter({ in_point: 3500, out_point: 4300 }, chapter)
+    ).toEqual({ start: 3600, end: 4200 });
   });
 
   it('splits a clip from source time into left and right source windows', () => {

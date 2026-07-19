@@ -1,6 +1,7 @@
-import type { Chapter, Clip } from '../types/database.js';
+import type { Chapter, Clip, Suggestion } from '../types/database.js';
 
 type ClipWindow = Pick<Clip, 'in_point' | 'out_point'>;
+type SuggestionWindow = Pick<Suggestion, 'in_point' | 'out_point'>;
 type ExportSortableClip = Pick<Clip, 'id' | 'asset_id' | 'in_point'>;
 type SourceSortableClip = Pick<Clip, 'id' | 'in_point'>;
 type ExportSortableChapter = Pick<Chapter, 'id' | 'display_order' | 'start_time'>;
@@ -38,6 +39,41 @@ export function clipOverlapsChapterSourceRange(
   chapter: ChapterRange
 ): boolean {
   return clip.out_point > chapter.start_time && clip.in_point < chapter.end_time;
+}
+
+/**
+ * Normalize a suggestion's stored in/out points to global source times.
+ * Current builds persist chapter-local values; suggestions persisted by
+ * older builds may hold global source times. Values that cannot be
+ * chapter-local (beyond the chapter duration, or negative) are treated as
+ * legacy-global and shifted back before clamping to the chapter range.
+ */
+export function normalizeSuggestionWindowForChapter(
+  suggestion: SuggestionWindow,
+  chapter: ChapterRange
+): ClipSourceRange {
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+
+  const looksLikeLegacyGlobal =
+    suggestion.in_point > chapterDuration + 1 ||
+    suggestion.out_point > chapterDuration + 1 ||
+    suggestion.in_point < -0.5 ||
+    suggestion.out_point < -0.5;
+
+  const localInRaw = looksLikeLegacyGlobal
+    ? suggestion.in_point - chapter.start_time
+    : suggestion.in_point;
+  const localOutRaw = looksLikeLegacyGlobal
+    ? suggestion.out_point - chapter.start_time
+    : suggestion.out_point;
+
+  const localInPoint = clamp(localInRaw, 0, chapterDuration);
+  const localOutPoint = clamp(localOutRaw, localInPoint, chapterDuration);
+
+  return {
+    start: chapter.start_time + localInPoint,
+    end: chapter.start_time + localOutPoint,
+  };
 }
 
 export function getClipVisibleRangeInChapter(

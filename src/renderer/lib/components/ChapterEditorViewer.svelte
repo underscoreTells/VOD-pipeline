@@ -33,7 +33,10 @@
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
-  import { getClipVisibleRangeInChapter } from '../../../shared/utils/clip-timing.js';
+  import {
+    getClipVisibleRangeInChapter,
+    normalizeSuggestionWindowForChapter,
+  } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
     getReversePreviewFps,
@@ -100,9 +103,10 @@
   const viewerRange = $derived.by(() => {
     if (!chapter) return { start: 0, end: 0.01 };
     if (selectedSuggestion) {
+      const suggestionWindow = normalizeSuggestionWindowForChapter(selectedSuggestion, chapter);
       return {
-        start: clampToChapter(chapter, chapter.start_time + selectedSuggestion.in_point),
-        end: clampToChapter(chapter, chapter.start_time + selectedSuggestion.out_point),
+        start: clampToChapter(chapter, suggestionWindow.start),
+        end: clampToChapter(chapter, suggestionWindow.end),
       };
     }
     if (selectedClip) {

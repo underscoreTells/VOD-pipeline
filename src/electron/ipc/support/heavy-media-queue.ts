@@ -190,11 +190,24 @@ function tryAcquireHeavyMediaSlot(job: HeavyMediaJob<unknown>): boolean {
   }
 
   const isCpu = job.pool === 'cpuProxy';
-  if (
-    isCpu
-    && (activeTranscription > 0 || heavyMediaQueue.some((queuedJob) => queuedJob.pool === 'transcription'))
-  ) {
-    return false;
+  if (isCpu) {
+    // Whisper and software proxy encoding are both CPU-saturating workloads,
+    // so an active transcription excludes all CPU proxy work. A waiting
+    // transcription reserves freed CPU slots only against same-or-lower
+    // priority proxy jobs; an interactive proxy may jump ahead of a queued
+    // background transcription.
+    if (activeTranscription > 0) {
+      return false;
+    }
+    const jobPriorityRank = getHeavyMediaPriorityRank(job.priority);
+    const blockedByWaitingTranscription = heavyMediaQueue.some(
+      (queuedJob) =>
+        queuedJob.pool === 'transcription'
+        && getHeavyMediaPriorityRank(queuedJob.priority) <= jobPriorityRank
+    );
+    if (blockedByWaitingTranscription) {
+      return false;
+    }
   }
   const active = isCpu ? activeCpuProxy : activeGpuProxy;
   const limit = isCpu ? heavyMediaSchedulerLimits.cpuProxy : heavyMediaSchedulerLimits.gpuProxy;

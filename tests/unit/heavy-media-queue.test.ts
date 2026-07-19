@@ -345,6 +345,50 @@ describe("heavy media scheduler resource pools", () => {
     await queuedPromise;
   });
 
+  it("lets interactive CPU proxies outrank a waiting background transcription", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const activeCpu = trackedJob("shared-cpu:active-proxy", "active-proxy", []);
+    const transcription = trackedJob("shared-cpu:background-transcription", "transcription", []);
+    const interactiveCpu = trackedJob("shared-cpu:interactive-proxy", "interactive-proxy", []);
+    const backgroundCpu = trackedJob("shared-cpu:background-proxy", "background-proxy", []);
+
+    const activePromise = enqueueHeavyMediaJob(activeCpu.key, "chapterProxy", "background", activeCpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const interactivePromise = enqueueHeavyMediaJob(interactiveCpu.key, "chapterProxy", "interactive", interactiveCpu.run);
+    const backgroundPromise = enqueueHeavyMediaJob(backgroundCpu.key, "chapterProxy", "background", backgroundCpu.run);
+
+    expect(activeCpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(interactiveCpu.isStarted).toBe(true);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    activeCpu.finish();
+    await activePromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(false);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    interactiveCpu.finish();
+    await interactivePromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(true);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    transcription.finish();
+    await transcriptionPromise;
+    await flushPending();
+    expect(backgroundCpu.isStarted).toBe(true);
+
+    backgroundCpu.finish();
+    await backgroundPromise;
+  });
+
   it("repumps CPU proxies after cancelling a waiting transcription", async () => {
     configure({ cpuProxy: 2, transcription: 1 });
 

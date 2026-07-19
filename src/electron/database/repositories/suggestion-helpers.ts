@@ -3,6 +3,7 @@ import type {
   Clip,
   Suggestion,
 } from '../../../shared/types/database.js';
+import { normalizeSuggestionWindowForChapter } from '../../../shared/utils/clip-timing.js';
 
 /**
  * Pure helpers shared between the suggestion repository and the schema-v3
@@ -127,27 +128,10 @@ export function normalizeSuggestionClipWindow(
   suggestion: Suggestion,
   chapter: Chapter
 ): NormalizedSuggestionClipWindow {
-  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-
-  const looksLikeLegacyGlobal =
-    suggestion.in_point > chapterDuration + 1 ||
-    suggestion.out_point > chapterDuration + 1 ||
-    suggestion.in_point < -0.5 ||
-    suggestion.out_point < -0.5;
-
-  const localInRaw = looksLikeLegacyGlobal
-    ? suggestion.in_point - chapter.start_time
-    : suggestion.in_point;
-  const localOutRaw = looksLikeLegacyGlobal
-    ? suggestion.out_point - chapter.start_time
-    : suggestion.out_point;
-
-  const localInPoint = clampToRange(localInRaw, 0, chapterDuration);
-  const localOutPoint = clampToRange(localOutRaw, localInPoint, chapterDuration);
-
+  const window = normalizeSuggestionWindowForChapter(suggestion, chapter);
   return {
-    inPoint: chapter.start_time + localInPoint,
-    outPoint: chapter.start_time + localOutPoint,
+    inPoint: window.start,
+    outPoint: window.end,
   };
 }
 
