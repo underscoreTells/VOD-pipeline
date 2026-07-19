@@ -9,6 +9,7 @@ import {
   ensureClipsTableWithoutStartTime,
   getSchemaVersion,
   initializeDatabase,
+  normalizeStoredSuggestionRangesToChapterLocal,
   reconcilePendingSuggestionPreviews,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
@@ -756,7 +757,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(4);
+      expect(await getSchemaVersion(database)).toBe(5);
       expect(() => validateClipMigrationState(database)).not.toThrow();
 
       // The exact untouched create preview was deleted and the suggestion unlinked.
@@ -770,7 +771,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(4);
+      expect(await getSchemaVersion(reopened)).toBe(5);
       // Reopening must not re-reconcile and must not throw.
       expect(() => validateClipMigrationState(reopened)).not.toThrow();
       expect(
@@ -814,7 +815,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       database.exec('DROP TRIGGER fail_clip_delete');
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(4);
+      expect(await getSchemaVersion(reopened)).toBe(5);
       expect(reopened.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
       const reconciledRow = reopened.prepare(
         'SELECT clip_id FROM suggestions WHERE id = ?'
@@ -835,7 +836,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
     try {
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(4);
+      expect(await getSchemaVersion(database)).toBe(5);
       expect(() => validateClipMigrationState(database)).not.toThrow();
       expect(
         (database.prepare('SELECT COUNT(*) AS n FROM suggestions').get() as { n: number }).n
@@ -874,6 +875,124 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
     } finally {
       closeSqliteDatabase(database);
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeNative('schema-version-5 suggestion range normalization', () => {
+  function insertSuggestion(
+    database: Database.Database,
+    ids: SeededIds,
+    inPoint: number,
+    outPoint: number
+  ): number {
+    return database.prepare(
+      `INSERT INTO suggestions (
+        chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+        reasoning, provider, action_type, target_clip_id, action_payload_json,
+        preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      ids.chapterId,
+      ids.conversationId,
+      ids.chatMessageId,
+      inPoint,
+      outPoint,
+      'cut',
+      'reason',
+      'gemini',
+      'create_clip',
+      null,
+      JSON.stringify({ create: { trackIndex: 0 } }),
+      null,
+      'pending',
+      0,
+      '2026-04-24T00:00:00.000Z',
+      null,
+      null
+    ).lastInsertRowid as number;
+  }
+
+  function getSuggestionRange(database: Database.Database, id: number) {
+    return database.prepare(
+      'SELECT in_point, out_point FROM suggestions WHERE id = ?'
+    ).get(id) as { in_point: number; out_point: number };
+  }
+
+  it('converts unambiguous legacy-global ranges to chapter-local during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v5-');
+    const dbPath = path.join(tempDir, 'v5.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Chapter spans 100-180, so a stored 120-150 range cannot be
+      // chapter-local: it must be a legacy global source range.
+      const suggestionId = insertSuggestion(builder, ids, 120, 150);
+      builder.pragma('user_version = 4');
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(5);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+
+      // A second bootstrap must not shift the range again.
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(5);
+      expect(getSuggestionRange(reopened, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves ranges that fit the chapter duration under the chapter-local convention', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160);
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(stats.rowsFailed).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 150, out_point: 160 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('skips suggestions whose chapter is missing without failing the migration', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      const suggestionId = insertSuggestion(database, ids, 5000, 5100);
+      database.pragma('foreign_keys = OFF');
+      database.prepare('DELETE FROM chapters WHERE id = ?').run(ids.chapterId);
+      database.pragma('foreign_keys = ON');
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.orphanedSkipped).toBe(1);
+      expect(stats.rowsFailed).toBe(0);
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 5000, out_point: 5100 });
+    } finally {
+      closeSqliteDatabase(database);
     }
   });
 });

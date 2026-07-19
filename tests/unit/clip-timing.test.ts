@@ -72,20 +72,20 @@ describe('clip timing helpers', () => {
     ).toEqual({ start: 3650, end: 3660 });
   });
 
-  it('normalizes legacy-global suggestion windows without double-shifting', () => {
+  it('clamps suggestion windows to the chapter range', () => {
     const chapter = createChapter({ start_time: 3600, end_time: 4200 });
 
     expect(
-      normalizeSuggestionWindowForChapter({ in_point: 3650, out_point: 3660 }, chapter)
-    ).toEqual({ start: 3650, end: 3660 });
+      normalizeSuggestionWindowForChapter({ in_point: -5, out_point: 700 }, chapter)
+    ).toEqual({ start: 3600, end: 4200 });
   });
 
-  it('clamps legacy-global suggestion windows to the chapter range', () => {
+  it('keeps the out point at or after the clamped in point', () => {
     const chapter = createChapter({ start_time: 3600, end_time: 4200 });
 
     expect(
-      normalizeSuggestionWindowForChapter({ in_point: 3500, out_point: 4300 }, chapter)
-    ).toEqual({ start: 3600, end: 4200 });
+      normalizeSuggestionWindowForChapter({ in_point: 500, out_point: 100 }, chapter)
+    ).toEqual({ start: 4100, end: 4100 });
   });
 
   it('splits a clip from source time into left and right source windows', () => {

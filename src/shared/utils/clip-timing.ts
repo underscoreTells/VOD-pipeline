@@ -43,32 +43,17 @@ export function clipOverlapsChapterSourceRange(
 
 /**
  * Normalize a suggestion's stored in/out points to global source times.
- * Current builds persist chapter-local values; suggestions persisted by
- * older builds may hold global source times. Values that cannot be
- * chapter-local (beyond the chapter duration, or negative) are treated as
- * legacy-global and shifted back before clamping to the chapter range.
+ * Since schema version 5 all stored suggestion ranges are chapter-local
+ * (legacy global-source rows are converted by a one-time migration), so this
+ * only clamps to the chapter range before shifting to global source time.
  */
 export function normalizeSuggestionWindowForChapter(
   suggestion: SuggestionWindow,
   chapter: ChapterRange
 ): ClipSourceRange {
   const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-
-  const looksLikeLegacyGlobal =
-    suggestion.in_point > chapterDuration + 1 ||
-    suggestion.out_point > chapterDuration + 1 ||
-    suggestion.in_point < -0.5 ||
-    suggestion.out_point < -0.5;
-
-  const localInRaw = looksLikeLegacyGlobal
-    ? suggestion.in_point - chapter.start_time
-    : suggestion.in_point;
-  const localOutRaw = looksLikeLegacyGlobal
-    ? suggestion.out_point - chapter.start_time
-    : suggestion.out_point;
-
-  const localInPoint = clamp(localInRaw, 0, chapterDuration);
-  const localOutPoint = clamp(localOutRaw, localInPoint, chapterDuration);
+  const localInPoint = clamp(suggestion.in_point, 0, chapterDuration);
+  const localOutPoint = clamp(suggestion.out_point, localInPoint, chapterDuration);
 
   return {
     start: chapter.start_time + localInPoint,

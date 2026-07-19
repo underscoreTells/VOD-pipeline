@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { Chapter, Clip, Suggestion } from '../../shared/types/database.js';
 import { getDatabase } from './client.js';
 import {
+  clampToRange,
   clipMatchesExpectedCreate,
   clipMatchesExpectedUpdate,
   computeExpectedCreatedClipFields,
@@ -190,7 +191,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -684,6 +685,124 @@ export interface SuggestionPreviewReconciliationStats {
 }
 
 type SuggestionRow = Suggestion;
+
+// ============================================================================
+// Schema-version-5 suggestion range normalization
+//
+// Older builds persisted suggestion in/out points as global source times while
+// current builds persist chapter-local values. A heuristic cannot always tell
+// the two apart (a legacy global range that happens to fit inside the chapter
+// duration is indistinguishable from a chapter-local one), so the runtime no
+// longer guesses: this idempotent one-time migration (gated by
+// user_version < 5) rewrites every row that is unambiguously legacy-global —
+// values that cannot be chapter-local because they exceed the chapter
+// duration or are negative — into chapter-local coordinates. Rows that
+// already fit the chapter range are left untouched, fixing the convention
+// that all stored suggestion ranges are chapter-local from version 5 onward.
+// ============================================================================
+
+export interface SuggestionRangeNormalizationStats {
+  /** True when the migration skipped because user_version is already >= 5. */
+  skipped: boolean;
+  /** Rows rewritten from legacy global source times to chapter-local. */
+  converted: number;
+  /** Rows skipped because their chapter no longer exists. */
+  orphanedSkipped: number;
+  /**
+   * Rows whose conversion threw and were left untouched. When non-zero,
+   * bootstrap must keep user_version below 5 so a later startup retries them.
+   */
+  rowsFailed: number;
+}
+
+export function normalizeStoredSuggestionRangesToChapterLocal(
+  database: Database.Database
+): SuggestionRangeNormalizationStats {
+  const stats: SuggestionRangeNormalizationStats = {
+    skipped: false,
+    converted: 0,
+    orphanedSkipped: 0,
+    rowsFailed: 0,
+  };
+
+  if (readSchemaVersion(database) >= 5) {
+    stats.skipped = true;
+    return stats;
+  }
+
+  if (!tableExists(database, 'suggestions') || !tableExists(database, 'chapters')) {
+    return stats;
+  }
+
+  const selectRows = database.prepare(
+    `SELECT s.id AS suggestion_id, s.in_point AS in_point, s.out_point AS out_point,
+            c.start_time AS chapter_start, c.end_time AS chapter_end
+     FROM suggestions s
+     LEFT JOIN chapters c ON c.id = s.chapter_id`
+  );
+  const updateRange = database.prepare(
+    'UPDATE suggestions SET in_point = ?, out_point = ? WHERE id = ?'
+  );
+
+  interface SuggestionRangeRow {
+    suggestion_id: number;
+    in_point: number;
+    out_point: number;
+    chapter_start: number | null;
+    chapter_end: number | null;
+  }
+
+  const migrate = database.transaction(() => {
+    const rows = selectRows.all() as SuggestionRangeRow[];
+    for (const row of rows) {
+      try {
+        if (
+          typeof row.chapter_start !== 'number' ||
+          typeof row.chapter_end !== 'number' ||
+          !Number.isFinite(row.chapter_start) ||
+          !Number.isFinite(row.chapter_end)
+        ) {
+          stats.orphanedSkipped += 1;
+          continue;
+        }
+
+        const chapterDuration = Math.max(0.01, row.chapter_end - row.chapter_start);
+        const looksLikeLegacyGlobal =
+          row.in_point > chapterDuration + 1 ||
+          row.out_point > chapterDuration + 1 ||
+          row.in_point < -0.5 ||
+          row.out_point < -0.5;
+        if (!looksLikeLegacyGlobal) {
+          continue;
+        }
+
+        const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
+        const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
+        updateRange.run(localIn, localOut, row.suggestion_id);
+        stats.converted += 1;
+      } catch (error) {
+        // Leave the row untouched; bootstrap keeps user_version below 5 while
+        // rowsFailed is non-zero so a later startup retries the conversion.
+        stats.rowsFailed += 1;
+        console.error(
+          `Database migration: skipped range normalization of suggestion ${row.suggestion_id}:`,
+          error
+        );
+      }
+    }
+  });
+
+  migrate();
+
+  if (stats.converted > 0 || stats.rowsFailed > 0 || stats.orphanedSkipped > 0) {
+    console.log(
+      `Database migrated: normalized suggestion ranges to chapter-local ` +
+      `(converted ${stats.converted}, orphaned skipped ${stats.orphanedSkipped}, failed ${stats.rowsFailed})`
+    );
+  }
+
+  return stats;
+}
 
 interface ClipRow {
   id: number;
