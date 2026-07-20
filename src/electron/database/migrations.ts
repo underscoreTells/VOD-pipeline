@@ -1401,6 +1401,10 @@ function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
       walkOverflow = true;
       return null;
     }
+    // Reserve the state before descending so the cap also bounds recursion
+    // depth on long straight chains; remaining counts strictly decrease per
+    // level, so this in-progress placeholder is never re-read on the stack.
+    walkMemo.set(key, null);
     let base: string | null = null;
     for (let i = 0; i < classes.length; i++) {
       if (remaining[i] === 0) continue;

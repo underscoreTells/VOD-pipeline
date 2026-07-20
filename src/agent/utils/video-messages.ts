@@ -26,6 +26,7 @@ export interface VideoMessageOptions {
   textPrompt: string;
   transcriptContext?: string;
   mimeType?: string;
+  signal?: AbortSignal;
 }
 
 function buildTranscriptContextBlock(transcriptContext?: string): string | null {
@@ -52,14 +53,15 @@ function buildTranscriptContextBlock(transcriptContext?: string): string | null 
 export async function createVideoMessage(
   options: VideoMessageOptions
 ): Promise<HumanMessage> {
-  const { provider, videoPath, textPrompt, transcriptContext, mimeType = "video/mp4" } = options;
+  const { provider, videoPath, textPrompt, transcriptContext, mimeType = "video/mp4", signal } = options;
 
   try {
+    signal?.throwIfAborted();
     switch (provider) {
       case "gemini":
-        return await createGeminiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType);
+        return await createGeminiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType, signal);
       case "kimi":
-        return await createKimiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType);
+        return await createKimiVideoMessage(videoPath, textPrompt, transcriptContext, mimeType, signal);
       default:
         throw new Error(`Unsupported video provider: ${provider}`);
     }
@@ -79,8 +81,10 @@ async function createGeminiVideoMessage(
   videoPath: string,
   textPrompt: string,
   transcriptContext: string | undefined,
-  mimeType: string
+  mimeType: string,
+  signal?: AbortSignal
 ): Promise<HumanMessage> {
+  signal?.throwIfAborted();
   // Check file size before encoding to avoid memory issues
   const fs = await import("fs");
   
@@ -109,7 +113,7 @@ async function createGeminiVideoMessage(
 
   let base64Video;
   try {
-    base64Video = await readFileAsBase64(videoPath);
+    base64Video = await readFileAsBase64(videoPath, signal);
   } catch (error) {
     console.error(`[VideoMessages] Failed to encode video to base64: ${videoPath}`, error);
     throw new Error(
@@ -153,8 +157,10 @@ async function createKimiVideoMessage(
   videoPath: string,
   textPrompt: string,
   transcriptContext: string | undefined,
-  mimeType: string
+  mimeType: string,
+  signal?: AbortSignal
 ): Promise<HumanMessage> {
+  signal?.throwIfAborted();
   // Check file size before encoding to avoid memory issues
   const fs = await import("fs");
   
@@ -183,7 +189,7 @@ async function createKimiVideoMessage(
 
   let base64Video;
   try {
-    base64Video = await readFileAsBase64(videoPath);
+    base64Video = await readFileAsBase64(videoPath, signal);
   } catch (error) {
     console.error(`[VideoMessages] Failed to encode video to base64: ${videoPath}`, error);
     throw new Error(

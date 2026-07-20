@@ -3,6 +3,7 @@
   import { compareClipsBySourceTime } from '$shared/utils/clip-timing.js';
   import { ROLE_CONFIG, ROLE_KEYS, Star } from '../constants.js';
   import type { ClipRole } from '../constants.js';
+  import { agentState } from '../state/agent.svelte.js';
   import { collapseBeat } from '../state/layout.svelte.js';
   import { executeDeleteClip } from '../state/project-detail.svelte.js';
   import { selectClip, setPlayhead, timelineState } from '../state/timeline.svelte.js';
@@ -46,6 +47,9 @@
   }
 
   function selectCut(clip: Clip): void {
+    // Keep cut and suggestion selections mutually exclusive so the viewer
+    // does not keep previewing a suggestion over the cut the user clicked.
+    agentState.selectedSuggestionId = null;
     selectClip(clip.id, false);
     setPlayhead(clip.in_point);
   }

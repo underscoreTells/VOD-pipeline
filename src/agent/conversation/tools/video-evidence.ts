@@ -46,6 +46,7 @@ export async function analyzeChapterVideoEvidence(
     videoPath: groundedAsset.proxyPath,
     textPrompt: prompt,
     transcriptContext: input.context.transcript,
+    signal: options?.signal,
   });
 
   const response = await llm.invoke([videoMessage], options?.signal ? { signal: options.signal } : undefined);
