@@ -1364,29 +1364,71 @@ function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
   // can make the live clip match several expected outputs, so reconstruct
   // each candidate chain via snapshot -> expected links: a tip is only valid
   // when walking backwards from it consumes every preview in the group.
-  const findChainBase = (tip: (typeof links)[number]): (typeof links)[number] | null => {
-    const walk = (
-      current: (typeof links)[number],
-      rest: Array<(typeof links)[number]>
-    ): (typeof links)[number] | null => {
-      if (rest.length === 0) return current;
-      for (const link of rest) {
-        if (!expectedMatchesSnapshot(link.expected, current.snapshot)) continue;
-        const chainBase = walk(link, rest.filter((item) => item !== link));
-        if (chainBase) return chainBase;
-      }
-      return null;
-    };
-    return walk(tip, links.filter((link) => link !== tip));
-  };
+  // Links with identical snapshot and expected states are interchangeable,
+  // so they are collapsed into counted classes and the walk memoizes on
+  // (current class, remaining counts). Duplicate-heavy legacy groups then
+  // resolve in polynomial time instead of exploring every permutation, and
+  // a hard cap on explored states keeps even adversarial groups bounded; on
+  // overflow the safe fallback is to preserve the clip.
+  const MAX_CHAIN_WALK_STATES = 4096;
 
-  const basesByState = new Map<string, (typeof links)[number]>();
-  for (const tip of tipCandidates) {
-    const chainBase = findChainBase(tip);
-    if (chainBase) basesByState.set(JSON.stringify(chainBase.snapshot.clip), chainBase);
+  const classes: Array<{
+    snapshot: SuggestionPreviewSnapshot;
+    expected: ExpectedClipFields;
+    count: number;
+  }> = [];
+  const classIndexByKey = new Map<string, number>();
+  for (const link of links) {
+    const key = JSON.stringify([link.snapshot.clip, link.expected]);
+    const existing = classIndexByKey.get(key);
+    if (existing === undefined) {
+      classIndexByKey.set(key, classes.length);
+      classes.push({ snapshot: link.snapshot, expected: link.expected, count: 1 });
+    } else {
+      classes[existing].count += 1;
+    }
   }
 
-  if (basesByState.size !== 1) {
+  const walkMemo = new Map<string, string | null>();
+  let walkOverflow = false;
+  const walk = (currentIdx: number, remaining: number[]): string | null => {
+    if (remaining.every((count) => count === 0)) {
+      return JSON.stringify(classes[currentIdx].snapshot.clip);
+    }
+    const key = `${currentIdx}|${remaining.join(',')}`;
+    if (walkMemo.has(key)) return walkMemo.get(key) ?? null;
+    if (walkMemo.size >= MAX_CHAIN_WALK_STATES) {
+      walkOverflow = true;
+      return null;
+    }
+    let base: string | null = null;
+    for (let i = 0; i < classes.length; i++) {
+      if (remaining[i] === 0) continue;
+      if (!expectedMatchesSnapshot(classes[i].expected, classes[currentIdx].snapshot)) continue;
+      remaining[i] -= 1;
+      base = walk(i, remaining);
+      remaining[i] += 1;
+      if (base !== null || walkOverflow) break;
+    }
+    walkMemo.set(key, base);
+    return base;
+  };
+
+  const findChainBase = (tipIdx: number): string | null => {
+    const remaining = classes.map((linkClass) => linkClass.count);
+    remaining[tipIdx] -= 1;
+    return walk(tipIdx, remaining);
+  };
+
+  const baseStates = new Set<string>();
+  for (let i = 0; i < classes.length; i++) {
+    if (!clipMatchesExpectedUpdate(clip, classes[i].expected)) continue;
+    const base = findChainBase(i);
+    if (base !== null) baseStates.add(base);
+    if (walkOverflow) break;
+  }
+
+  if (walkOverflow || baseStates.size !== 1) {
     // No candidate tip reconstructs a chain that consumes every preview, or
     // reconstructions disagree on the base state: a user edit diverged the
     // chain, so restoring would erase it.
@@ -1394,7 +1436,10 @@ function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
     return;
   }
 
-  const base = [...basesByState.values()][0];
+  const baseStateKey = [...baseStates][0];
+  const base = classes.find(
+    (linkClass) => JSON.stringify(linkClass.snapshot.clip) === baseStateKey
+  )!;
 
   restoreClipFromSnapshot.run(
     base.snapshot.clip.in_point,
