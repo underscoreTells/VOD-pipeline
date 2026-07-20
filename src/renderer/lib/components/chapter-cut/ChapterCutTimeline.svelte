@@ -311,6 +311,7 @@
   function openClipContextMenu(event: MouseEvent, clip: Clip): void {
     event.preventDefault();
     event.stopPropagation();
+    agentState.selectedSuggestionId = null;
     selectClip(clip.id, false);
     clipContextMenu = { clipId: clip.id, x: event.clientX, y: event.clientY };
   }

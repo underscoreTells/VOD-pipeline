@@ -151,6 +151,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
             "Authorization": `Bearer ${this.apiKey}`,
           },
           body: JSON.stringify(requestBody),
+          signal: _options.signal,
         });
       } catch (fetchError) {
         throw new Error(
