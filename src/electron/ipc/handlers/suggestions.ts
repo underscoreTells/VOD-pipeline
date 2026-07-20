@@ -40,14 +40,25 @@ export function registerSuggestionHandlers(): void {
     );
   };
 
-  const toBatchResponse = (result: Awaited<ReturnType<typeof applySuggestionsBatch>>) =>
-    result.success
-      ? createSuccessResponse({
-          appliedCount: result.appliedCount,
-          total: result.total,
-          results: result.results,
-        })
-      : createErrorResponse(result.error || 'Suggestion batch failed', IPC_ERROR_CODES.DATABASE_ERROR);
+  const toBatchResponse = (result: Awaited<ReturnType<typeof applySuggestionsBatch>>) => {
+    if (result.success) {
+      return createSuccessResponse({
+        appliedCount: result.appliedCount,
+        total: result.total,
+        results: result.results,
+      });
+    }
+    // Surface auto-rejections persisted alongside a failed batch so the
+    // renderer can reconcile local suggestion status instead of leaving
+    // them displayed as pending.
+    const autoRejectedIds = result.results
+      .filter((item) => item.autoRejected)
+      .map((item) => item.suggestionId);
+    return {
+      ...createErrorResponse(result.error || 'Suggestion batch failed', IPC_ERROR_CODES.DATABASE_ERROR),
+      ...(autoRejectedIds.length > 0 ? { autoRejectedIds } : {}),
+    };
+  };
 
   ipcMain.handle(IPC_CHANNELS.SUGGESTION_CREATE, async (_, { chapterId, inPoint, outPoint, description, reasoning, provider }) => {
     logger.info('suggestion:create', chapterId, inPoint, outPoint);

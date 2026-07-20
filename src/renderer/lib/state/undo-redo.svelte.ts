@@ -501,37 +501,35 @@ export class SplitClipCommand implements Command {
     await persistClipUpdate(this.originalClip.id, {
       out_point: this.splitWindow.leftOutPoint,
     });
-    if (!shouldContinue(isCurrent)) return;
-    updateTimelineClip(this.originalClip.id, {
-      out_point: this.splitWindow.leftOutPoint,
-    });
 
+    // Complete every persistence step even if the history generation changes
+    // mid-flight; invalidation below only suppresses renderer reconciliation.
+    // Bailing out between the shorten and the create would permanently
+    // truncate the original clip.
+    let rightClip: Clip;
     try {
       if (this.rightClipSnapshot) {
         await persistClipRestore(this.rightClipSnapshot);
-        if (!shouldContinue(isCurrent)) return;
-        this.addRightClipToTimeline(this.rightClipSnapshot);
-        return;
+        rightClip = this.rightClipSnapshot;
+      } else {
+        const result = await ipcCreateClip({
+          projectId: this.originalClip.project_id,
+          assetId: this.originalClip.asset_id,
+          trackIndex: this.originalClip.track_index,
+          inPoint: this.splitWindow.rightInPoint,
+          outPoint: this.splitWindow.rightOutPoint,
+          role: this.originalClip.role ?? undefined,
+          description: this.originalClip.description ?? undefined,
+          isEssential: this.originalClip.is_essential,
+        });
+
+        if (!result.success || !result.data) {
+          throw new Error(result.error || `Failed to create split clip for clip ${this.originalClip.id}`);
+        }
+
+        rightClip = cloneClipForHistory(result.data);
+        this.rightClipSnapshot = rightClip;
       }
-
-      const result = await ipcCreateClip({
-        projectId: this.originalClip.project_id,
-        assetId: this.originalClip.asset_id,
-        trackIndex: this.originalClip.track_index,
-        inPoint: this.splitWindow.rightInPoint,
-        outPoint: this.splitWindow.rightOutPoint,
-        role: this.originalClip.role ?? undefined,
-        description: this.originalClip.description ?? undefined,
-        isEssential: this.originalClip.is_essential,
-      });
-
-      if (!result.success || !result.data) {
-        throw new Error(result.error || `Failed to create split clip for clip ${this.originalClip.id}`);
-      }
-
-      this.rightClipSnapshot = cloneClipForHistory(result.data);
-      if (!shouldContinue(isCurrent)) return;
-      this.addRightClipToTimeline(result.data);
     } catch (error) {
       await persistClipUpdate(this.originalClip.id, {
         out_point: this.originalClip.out_point,
@@ -543,6 +541,12 @@ export class SplitClipCommand implements Command {
       }
       throw error;
     }
+
+    if (!shouldContinue(isCurrent)) return;
+    updateTimelineClip(this.originalClip.id, {
+      out_point: this.splitWindow.leftOutPoint,
+    });
+    this.addRightClipToTimeline(rightClip);
   }
 
   async undo(isCurrent?: () => boolean) {
@@ -550,14 +554,16 @@ export class SplitClipCommand implements Command {
     await persistClipUpdate(this.originalClip.id, {
       out_point: this.originalClip.out_point,
     });
+    // Complete persistence before honoring invalidation: skipping the right
+    // clip's deletion would leave duplicate overlapping footage behind.
+    if (this.rightClipSnapshot) {
+      await persistClipDelete(this.rightClipSnapshot.id);
+    }
+
     if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.originalClip.id, {
       out_point: this.originalClip.out_point,
     });
-
-    if (!this.rightClipSnapshot) return;
-    await persistClipDelete(this.rightClipSnapshot.id);
-    if (!shouldContinue(isCurrent)) return;
     this.removeRightClipFromTimeline();
   }
 }

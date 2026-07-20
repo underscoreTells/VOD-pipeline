@@ -758,6 +758,8 @@ export interface SuggestionBatchItemResult {
   success: boolean;
   clip?: Clip;
   error?: string;
+  /** True when the failure itself marked the suggestion as rejected. */
+  autoRejected?: boolean;
 }
 
 export interface SuggestionBatchResult {
@@ -873,6 +875,7 @@ export async function applySuggestionsBatch(
         suggestionId: error.suggestionId,
         success: false,
         error: error.message,
+        ...(error.autoRejected ? { autoRejected: true } : {}),
       };
       return {
         success: false,

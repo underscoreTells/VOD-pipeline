@@ -75,38 +75,55 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
-function resolveProposedWindow(
+function mergeUpdateWindow(
   suggestion: Suggestion,
+  base: { start: number; end: number },
   chapter: { start_time: number; end_time: number }
 ): { start: number; end: number } {
+  // Mirror applyUpdateSuggestionToClip: merge the update payload onto the
+  // base window so overlap checks use the resulting window, not the
+  // synthetic fallback range stored on the suggestion row.
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const clampLocal = (value: number, min: number) => Math.min(Math.max(value, min), chapterDuration);
+  let inPoint = base.start;
+  let outPoint = base.end;
+  let updatePayload: { inPoint?: number; outPoint?: number } | undefined;
+  if (suggestion.action_payload_json) {
+    try {
+      updatePayload = (JSON.parse(suggestion.action_payload_json) as {
+        update?: { inPoint?: number; outPoint?: number };
+      }).update;
+    } catch {
+      // The repository will report malformed action payloads on apply.
+    }
+  }
+  if (typeof updatePayload?.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
+    inPoint = chapter.start_time + clampLocal(updatePayload.inPoint, 0);
+  }
+  if (typeof updatePayload?.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
+    const minLocalOut = clampLocal(inPoint - chapter.start_time, 0);
+    outPoint = chapter.start_time + clampLocal(updatePayload.outPoint, minLocalOut);
+  }
+  return { start: inPoint, end: outPoint };
+}
+
+function resolveProposedWindow(
+  suggestion: Suggestion,
+  chapter: { start_time: number; end_time: number },
+  simulatedTargets?: Map<number, { start: number; end: number }>
+): { start: number; end: number } {
   if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id) {
-    const target = timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
-    if (target) {
-      // Mirror applyUpdateSuggestionToClip: merge the update payload onto the
-      // target clip so overlap checks use the resulting window, not the
-      // synthetic fallback range stored on the suggestion row.
-      const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-      const clampLocal = (value: number, min: number) => Math.min(Math.max(value, min), chapterDuration);
-      let inPoint = target.in_point;
-      let outPoint = target.out_point;
-      let updatePayload: { inPoint?: number; outPoint?: number } | undefined;
-      if (suggestion.action_payload_json) {
-        try {
-          updatePayload = (JSON.parse(suggestion.action_payload_json) as {
-            update?: { inPoint?: number; outPoint?: number };
-          }).update;
-        } catch {
-          // The repository will report malformed action payloads on apply.
-        }
-      }
-      if (typeof updatePayload?.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
-        inPoint = chapter.start_time + clampLocal(updatePayload.inPoint, 0);
-      }
-      if (typeof updatePayload?.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
-        const minLocalOut = clampLocal(inPoint - chapter.start_time, 0);
-        outPoint = chapter.start_time + clampLocal(updatePayload.outPoint, minLocalOut);
-      }
-      return { start: inPoint, end: outPoint };
+    const simulated = simulatedTargets?.get(suggestion.target_clip_id);
+    const target = simulated
+      ? null
+      : timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
+    const base = simulated ?? (target ? { start: target.in_point, end: target.out_point } : null);
+    if (base) {
+      // Sequential updates to the same target merge onto the outcome of the
+      // previous update, matching the backend's sequential apply order.
+      const merged = mergeUpdateWindow(suggestion, base, chapter);
+      simulatedTargets?.set(suggestion.target_clip_id, merged);
+      return merged;
     }
   }
   return normalizeSuggestionWindowForChapter(suggestion, chapter);
@@ -115,14 +132,20 @@ function resolveProposedWindow(
 function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const chapter = getSelectedChapter();
   if (!chapter) return 'Select a chapter before applying suggested cuts.';
-  const proposedByAsset = new Map<number, Array<{ start: number; end: number }>>();
+  const proposedByAsset = new Map<number, Array<{ start: number; end: number; owner: string }>>();
+  const simulatedTargets = new Map<number, { start: number; end: number }>();
 
   for (const suggestionId of suggestionIds) {
     const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return 'A suggested cut has no unambiguous source asset.';
-    const proposed = resolveProposedWindow(suggestion, chapter);
+    const targetClipId = suggestion.action_type === 'update_clip' ? suggestion.target_clip_id : null;
+    // Repeated updates to the same target share an owner so they are checked
+    // against other proposed cuts rather than against each other; the
+    // backend applies them sequentially to that one clip.
+    const owner = targetClipId !== null ? `update:${targetClipId}` : `create:${suggestionId}`;
+    const proposed = resolveProposedWindow(suggestion, chapter, simulatedTargets);
     const conflictsWithCut = timelineState.clips.some((clip) =>
       clip.asset_id === assetId
       && clip.id !== suggestion.target_clip_id
@@ -130,10 +153,10 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     );
     if (conflictsWithCut) return 'Resolve the overlapping suggested cut before accepting it.';
     const proposedRanges = proposedByAsset.get(assetId) ?? [];
-    if (proposedRanges.some((range) => rangesOverlap(proposed, range, 0.001))) {
+    if (proposedRanges.some((range) => range.owner !== owner && rangesOverlap(proposed, range, 0.001))) {
       return 'Suggested cuts in this batch overlap each other.';
     }
-    proposedRanges.push(proposed);
+    proposedRanges.push({ ...proposed, owner });
     proposedByAsset.set(assetId, proposedRanges);
   }
   return null;
@@ -192,10 +215,23 @@ class ApplySuggestionBatchCommand implements Command {
     return snapshots;
   }
 
-  async execute(): Promise<void> {
+  async execute(isCurrent?: () => boolean): Promise<void> {
+    // A queued command whose history generation was cleared must not mutate
+    // the database at all; mid-flight invalidation is handled by the context
+    // checks below, which suppress only renderer reconciliation.
+    if (isCurrent && !isCurrent()) return;
     this.beforeSnapshots ??= this.captureBeforeSnapshots();
     const response = await applySuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success || !response.data) {
+      // The backend may have auto-rejected malformed suggestions while
+      // failing the batch; mirror that locally so they don't stay pending
+      // and fail every subsequent apply as "not pending".
+      if (this.isConversationCurrent() && response.autoRejectedIds?.length) {
+        setSuggestionStatus(response.autoRejectedIds, 'rejected');
+        if (response.autoRejectedIds.includes(agentState.selectedSuggestionId ?? -1)) {
+          agentState.selectedSuggestionId = null;
+        }
+      }
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
 
@@ -222,7 +258,8 @@ class ApplySuggestionBatchCommand implements Command {
     }
   }
 
-  async undo(): Promise<void> {
+  async undo(isCurrent?: () => boolean): Promise<void> {
+    if (isCurrent && !isCurrent()) return;
     const response = await revertSuggestionBatch({
       items: this.suggestionIds.map((suggestionId) => ({
         suggestionId,
@@ -288,7 +325,11 @@ class RejectSuggestionBatchCommand implements Command {
     return this.projectId !== null && projectDetail.projectId === this.projectId;
   }
 
-  async execute(): Promise<void> {
+  async execute(isCurrent?: () => boolean): Promise<void> {
+    // A queued command whose history generation was cleared must not mutate
+    // the database at all; mid-flight invalidation is handled by the context
+    // checks below, which suppress only renderer reconciliation.
+    if (isCurrent && !isCurrent()) return;
     const response = await rejectSuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to reject suggested cuts');
@@ -314,7 +355,8 @@ class RejectSuggestionBatchCommand implements Command {
     }
   }
 
-  async undo(): Promise<void> {
+  async undo(isCurrent?: () => boolean): Promise<void> {
+    if (isCurrent && !isCurrent()) return;
     const response = await restoreSuggestionBatch({ suggestionIds: this.suggestionIds });
     if (!response.success) {
       throw new Error(response.error || 'Failed to restore suggested cuts');

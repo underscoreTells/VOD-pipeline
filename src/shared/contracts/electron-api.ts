@@ -273,9 +273,12 @@ export interface SuggestionBatchMutationResult {
       success: boolean;
       clip?: Clip;
       error?: string;
+      autoRejected?: boolean;
     }>;
   };
   error?: string;
+  /** IDs of suggestions the backend automatically rejected while failing the batch. */
+  autoRejectedIds?: number[];
 }
 
 export interface GetAssetsResult {

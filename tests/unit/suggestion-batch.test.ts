@@ -569,5 +569,19 @@ describeBatch("suggestion batch transactions", () => {
       expect((db.prepare("SELECT status FROM suggestions WHERE id = ?").get(id) as { status: string }).status).toBe("applied");
       expect(db.inTransaction).toBe(false);
     });
+
+    it("a failing nested batch rolls back its partial writes instead of committing them with the outer transaction", async () => {
+      const { chapterId } = insertFixtures();
+      const id = await insertPendingCreateSuggestion(chapterId, 10, 20, 0);
+
+      const result = await withTransaction(async () => {
+        return await applySuggestionsBatch([id, 999999]);
+      });
+
+      expect(result.success).toBe(false);
+      expect(db.inTransaction).toBe(false);
+      expect((db.prepare("SELECT status FROM suggestions WHERE id = ?").get(id) as { status: string }).status).toBe("pending");
+      expect((db.prepare("SELECT COUNT(*) AS count FROM clips").get() as { count: number }).count).toBe(0);
+    });
   });
 });
