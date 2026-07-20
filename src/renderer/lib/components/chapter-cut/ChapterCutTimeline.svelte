@@ -168,13 +168,13 @@
     dragMoved = false;
     window.addEventListener('pointermove', handleWindowPointerMove);
     window.addEventListener('pointerup', handleWindowPointerEnd);
-    window.addEventListener('pointercancel', handleWindowPointerEnd);
+    window.addEventListener('pointercancel', handleWindowPointerCancel);
   }
 
   function endDrag(): void {
     window.removeEventListener('pointermove', handleWindowPointerMove);
     window.removeEventListener('pointerup', handleWindowPointerEnd);
-    window.removeEventListener('pointercancel', handleWindowPointerEnd);
+    window.removeEventListener('pointercancel', handleWindowPointerCancel);
     drag = null;
     dragPreview = null;
     setPinnedDragAsset(null);
@@ -372,6 +372,11 @@
     }
   }
 
+  function handleWindowPointerCancel(event: PointerEvent): void {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    endDrag();
+  }
+
   async function handleWindowPointerEnd(event: PointerEvent): Promise<void> {
     if (!drag || drag.pointerId !== event.pointerId) return;
     const activeDrag = drag;
@@ -404,20 +409,30 @@
     const clip = clips.find((item) => item.id === activeDrag.clipId);
     if (!clip) return;
     if (activeDrag.mode === 'move') {
+      // The preview range is clamped to the chapter's visible window, so
+      // derive the persisted window by shifting the clip's absolute
+      // endpoints by the drag delta; this keeps the full clip duration and
+      // any out-of-chapter portions intact.
+      const delta = range.start - (activeDrag.originalStart ?? range.start);
       await executeSlideClipWindow(
         clip.id,
         clip.in_point,
         clip.out_point,
-        sourceTime(range.start),
-        sourceTime(range.end)
+        clip.in_point + delta,
+        clip.out_point + delta
       );
     } else if (activeDrag.mode === 'resize') {
+      // Preserve the untouched absolute endpoint: the preview endpoints are
+      // clamped to the chapter range, so reconstructing both from the
+      // preview would silently clamp clips that extend beyond the chapter.
+      const nextIn = activeDrag.edge === 'start' ? sourceTime(range.start) : clip.in_point;
+      const nextOut = activeDrag.edge === 'end' ? sourceTime(range.end) : clip.out_point;
       await executeUpdateClipTiming(
         clip.id,
         clip.in_point,
         clip.out_point,
-        sourceTime(range.start),
-        sourceTime(range.end)
+        nextIn,
+        nextOut
       );
     }
   }

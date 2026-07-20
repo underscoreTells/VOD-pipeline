@@ -51,6 +51,7 @@ interface PendingDraft {
 }
 
 const pendingDrafts = new SvelteMap<string, PendingDraft>();
+const locallySettledTurns = new Set<string>();
 let streamUnsubscribe: (() => void) | null = null;
 let errorUnsubscribe: (() => void) | null = null;
 
@@ -285,6 +286,9 @@ async function runStreamingMutation(options: {
 
   try {
     const response = await options.request(options.pendingDraft.clientRequestId);
+    if (locallySettledTurns.has(options.pendingDraft.clientRequestId)) {
+      return false;
+    }
     const isCurrentContext =
       agentState.currentProjectId === options.pendingDraft.projectId
       && agentState.currentChapterId === options.pendingDraft.chapterId
@@ -342,6 +346,7 @@ async function runStreamingMutation(options: {
     return false;
   } finally {
     pendingDrafts.delete(options.pendingDraft.clientRequestId);
+    locallySettledTurns.delete(options.pendingDraft.clientRequestId);
     agentState.isStreaming = false;
     if (agentState.activeTurn?.clientRequestId === options.pendingDraft.clientRequestId) {
       agentState.activeTurn = null;
@@ -628,6 +633,17 @@ export async function cancelActiveAgentTurn(): Promise<boolean> {
   }
 
   if (agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId) {
+    // The worker did not settle the turn within the cancellation window.
+    // Locally settle it so chat and chapter navigation are not locked until
+    // the request eventually resolves; the late response is discarded via
+    // the locallySettledTurns guard in runStreamingMutation.
+    locallySettledTurns.add(activeTurn.clientRequestId);
+    pendingDrafts.delete(activeTurn.clientRequestId);
+    agentState.messages = agentState.messages.filter(
+      (message) => message.requestId !== activeTurn.clientRequestId
+    );
+    agentState.activeTurn = null;
+    agentState.isStreaming = false;
     agentState.error = 'The agent did not stop in time. The chapter was not changed.';
     return false;
   }
