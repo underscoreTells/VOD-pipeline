@@ -486,6 +486,14 @@
         // Malformed action payloads are handled when the suggestion is applied.
       }
     }
+    // Mirror the sole-linked-video rule used by validation and
+    // createSuggestionTimelineClip so the reviewed footage matches the applied clip.
+    if (selectedSuggestionAssetId === null && selectedSuggestion) {
+      const chapterVideoAssets = selectedChapterAssets.filter((asset) => asset.file_type === 'video');
+      if (chapterVideoAssets.length === 1) {
+        selectedSuggestionAssetId = chapterVideoAssets[0]?.id ?? null;
+      }
+    }
     const selectedSuggestionAsset = selectedSuggestionAssetId === null
       ? null
       : selectedChapterAssets.find((asset) => asset.id === selectedSuggestionAssetId);

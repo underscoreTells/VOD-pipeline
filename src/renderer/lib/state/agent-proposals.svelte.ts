@@ -54,26 +54,6 @@ function setSuggestionStatus(ids: number[], status: Suggestion['status']): void 
   );
 }
 
-function captureBeforeSnapshots(suggestionIds: number[]): Map<number, SuggestionBeforeSnapshot> {
-  const snapshots = new Map<number, SuggestionBeforeSnapshot>();
-  for (const suggestionId of suggestionIds) {
-    const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
-    if (!suggestion || suggestion.action_type !== 'update_clip' || !suggestion.target_clip_id) continue;
-    const clip = timelineState.clips.find((item) => item.id === suggestion.target_clip_id);
-    if (!clip) continue;
-    snapshots.set(suggestionId, {
-      clip: {
-        in_point: clip.in_point,
-        out_point: clip.out_point,
-        role: clip.role,
-        description: clip.description,
-        is_essential: clip.is_essential,
-      },
-    });
-  }
-  return snapshots;
-}
-
 function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   if (suggestion.target_clip_id) {
     return timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id)?.asset_id ?? null;
@@ -126,30 +106,63 @@ class ApplySuggestionBatchCommand implements Command {
   private beforeSnapshots: Map<number, SuggestionBeforeSnapshot> | null = null;
   private appliedClips = new Map<number, Clip>();
   private readonly conversationId = agentState.selectedConversationId;
+  private readonly chapterId = getSelectedChapter()?.id ?? null;
+  private readonly updateTargets = new Map<number, number>();
 
   constructor(private readonly suggestionIds: number[]) {
     this.description = suggestionIds.length === 1
       ? 'Apply suggested cut'
       : `Apply ${suggestionIds.length} suggested cuts`;
+    // Retain update metadata now: agentState.suggestions may be replaced by a
+    // conversation switch before a queued command runs. Only the clip-state
+    // read is deferred to the first execute() so queued edits aren't erased.
+    for (const suggestionId of suggestionIds) {
+      const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
+      if (!suggestion || suggestion.action_type !== 'update_clip' || !suggestion.target_clip_id) continue;
+      this.updateTargets.set(suggestionId, suggestion.target_clip_id);
+    }
   }
 
   private isConversationCurrent(): boolean {
     return this.conversationId !== null && agentState.selectedConversationId === this.conversationId;
   }
 
+  private isChapterCurrent(): boolean {
+    return this.chapterId !== null && getSelectedChapter()?.id === this.chapterId;
+  }
+
+  private captureBeforeSnapshots(): Map<number, SuggestionBeforeSnapshot> {
+    const snapshots = new Map<number, SuggestionBeforeSnapshot>();
+    for (const [suggestionId, targetClipId] of this.updateTargets) {
+      const clip = timelineState.clips.find((item) => item.id === targetClipId);
+      if (!clip) continue;
+      snapshots.set(suggestionId, {
+        clip: {
+          in_point: clip.in_point,
+          out_point: clip.out_point,
+          role: clip.role,
+          description: clip.description,
+          is_essential: clip.is_essential,
+        },
+      });
+    }
+    return snapshots;
+  }
+
   async execute(): Promise<void> {
-    this.beforeSnapshots ??= captureBeforeSnapshots(this.suggestionIds);
+    this.beforeSnapshots ??= this.captureBeforeSnapshots();
     const response = await applySuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
 
     this.appliedClips.clear();
+    const isChapterCurrent = this.isChapterCurrent();
     const isConversationCurrent = this.isConversationCurrent();
     for (const result of response.data.results) {
       if (!result.success || !result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
-      upsertTimelineClip(result.clip);
+      if (isChapterCurrent) upsertTimelineClip(result.clip);
       if (!isConversationCurrent) continue;
       const suggestion = agentState.suggestions.find((item) => item.id === result.suggestionId);
       if (suggestion) suggestion.clip_id = result.clip.id;
@@ -157,10 +170,12 @@ class ApplySuggestionBatchCommand implements Command {
     if (isConversationCurrent) {
       setSuggestionStatus(this.suggestionIds, 'applied');
     }
-    focusTimelineClip(
-      this.appliedClips.get(this.suggestionIds[this.suggestionIds.length - 1]),
-      isConversationCurrent
-    );
+    if (isChapterCurrent) {
+      focusTimelineClip(
+        this.appliedClips.get(this.suggestionIds[this.suggestionIds.length - 1]),
+        isConversationCurrent
+      );
+    }
   }
 
   async undo(): Promise<void> {
@@ -174,13 +189,15 @@ class ApplySuggestionBatchCommand implements Command {
       throw new Error(response.error || 'Failed to undo suggested cuts');
     }
 
-    for (const suggestionId of this.suggestionIds) {
-      const appliedClip = this.appliedClips.get(suggestionId);
-      const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;
-      if (restored) {
-        upsertTimelineClip(restored);
-      } else if (appliedClip) {
-        deleteTimelineClip(appliedClip.id);
+    if (this.isChapterCurrent()) {
+      for (const suggestionId of this.suggestionIds) {
+        const appliedClip = this.appliedClips.get(suggestionId);
+        const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;
+        if (restored) {
+          upsertTimelineClip(restored);
+        } else if (appliedClip) {
+          deleteTimelineClip(appliedClip.id);
+        }
       }
     }
     if (!this.isConversationCurrent()) return;
