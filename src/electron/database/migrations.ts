@@ -1295,11 +1295,13 @@ function expectedMatchesSnapshot(
  * Reconcile every pending update preview targeting one clip as a chain.
  * Previews could be materialized in any order, so the chain is reconstructed
  * from snapshot -> expected links rather than suggestion order: the live
- * clip must match exactly one preview's expected output (the newest), and
- * walking backwards from it must link every preview's snapshot to the
- * preceding preview's expected output. Only then is the clip restored to
- * the chain's base snapshot; any broken or ambiguous link means a user edit
- * diverged the chain, so the live clip is kept instead.
+ * clip must match a preview's expected output (the chain tip), and walking
+ * backwards from it must link every preview's snapshot to the preceding
+ * preview's expected output. Duplicate states can make several tips match,
+ * so every candidate chain is walked and the clip is only restored when all
+ * reconstructions agree on a single base snapshot; any broken or ambiguous
+ * link means a user edit diverged the chain, so the live clip is kept
+ * instead.
  */
 function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
   const { group, stats, selectClip, selectChapter, unlinkUpdateSuggestion, restoreClipFromSnapshot } = ctx;
@@ -1351,31 +1353,48 @@ function reconcileUpdatePreviewGroup(ctx: ReconcileUpdateGroupContext): void {
   }
 
   const clip = mapClipRow(clipRow);
-  const newestCandidates = links.filter((link) => clipMatchesExpectedUpdate(clip, link.expected));
-  if (newestCandidates.length !== 1) {
-    // No preview produced the live state (diverged) or several did (ambiguous).
+  const tipCandidates = links.filter((link) => clipMatchesExpectedUpdate(clip, link.expected));
+  if (tipCandidates.length === 0) {
+    // No preview produced the live state: the user diverged the chain.
     preserveAll();
     return;
   }
 
-  const visited = new Set<number>();
-  let base = newestCandidates[0];
-  visited.add(base.row.id);
-  while (visited.size < links.length) {
-    const predecessor = links.find(
-      (link) => !visited.has(link.row.id) && expectedMatchesSnapshot(link.expected, base.snapshot)
-    );
-    if (!predecessor) break;
-    visited.add(predecessor.row.id);
-    base = predecessor;
+  // Duplicate states (e.g. two previews that both set the description to X)
+  // can make the live clip match several expected outputs, so reconstruct
+  // each candidate chain via snapshot -> expected links: a tip is only valid
+  // when walking backwards from it consumes every preview in the group.
+  const findChainBase = (tip: (typeof links)[number]): (typeof links)[number] | null => {
+    const walk = (
+      current: (typeof links)[number],
+      rest: Array<(typeof links)[number]>
+    ): (typeof links)[number] | null => {
+      if (rest.length === 0) return current;
+      for (const link of rest) {
+        if (!expectedMatchesSnapshot(link.expected, current.snapshot)) continue;
+        const chainBase = walk(link, rest.filter((item) => item !== link));
+        if (chainBase) return chainBase;
+      }
+      return null;
+    };
+    return walk(tip, links.filter((link) => link !== tip));
+  };
+
+  const basesByState = new Map<string, (typeof links)[number]>();
+  for (const tip of tipCandidates) {
+    const chainBase = findChainBase(tip);
+    if (chainBase) basesByState.set(JSON.stringify(chainBase.snapshot.clip), chainBase);
   }
 
-  if (visited.size !== links.length) {
-    // A snapshot does not match the preceding preview's expected output: a
-    // user edit broke the chain, so restoring the base would erase it.
+  if (basesByState.size !== 1) {
+    // No candidate tip reconstructs a chain that consumes every preview, or
+    // reconstructions disagree on the base state: a user edit diverged the
+    // chain, so restoring would erase it.
     preserveAll();
     return;
   }
+
+  const base = [...basesByState.values()][0];
 
   restoreClipFromSnapshot.run(
     base.snapshot.clip.in_point,

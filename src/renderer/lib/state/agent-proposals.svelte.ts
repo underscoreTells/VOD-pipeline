@@ -28,6 +28,25 @@ interface SuggestionBeforeSnapshot {
   clip: Pick<Clip, 'in_point' | 'out_point' | 'role' | 'description' | 'is_essential'>;
 }
 
+function parsePersistedPreviewClip(json: string | null | undefined): SuggestionBeforeSnapshot['clip'] | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as { clip?: Partial<Clip> };
+    const clip = parsed?.clip;
+    if (!clip || typeof clip !== 'object') return null;
+    if (typeof clip.in_point !== 'number' || typeof clip.out_point !== 'number') return null;
+    return {
+      in_point: clip.in_point,
+      out_point: clip.out_point,
+      role: clip.role ?? null,
+      description: clip.description ?? null,
+      is_essential: Boolean(clip.is_essential),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function upsertTimelineClip(clip: Clip | undefined): void {
   if (!clip) return;
   if (timelineState.clips.some((item) => item.id === clip.id)) {
@@ -169,7 +188,10 @@ class ApplySuggestionBatchCommand implements Command {
   private readonly conversationId = agentState.selectedConversationId;
   private readonly chapterId = getSelectedChapter()?.id ?? null;
   private readonly projectId = projectDetail.projectId;
-  private readonly updateTargets = new Map<number, number>();
+  private readonly updateTargets = new Map<
+    number,
+    { targetClipId: number; persistedPreview: SuggestionBeforeSnapshot['clip'] | null }
+  >();
 
   constructor(private readonly suggestionIds: number[]) {
     this.description = suggestionIds.length === 1
@@ -181,7 +203,13 @@ class ApplySuggestionBatchCommand implements Command {
     for (const suggestionId of suggestionIds) {
       const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
       if (!suggestion || suggestion.action_type !== 'update_clip' || !suggestion.target_clip_id) continue;
-      this.updateTargets.set(suggestionId, suggestion.target_clip_id);
+      this.updateTargets.set(suggestionId, {
+        targetClipId: suggestion.target_clip_id,
+        // A materialized preview means the live clip already holds the
+        // previewed edit, so the pre-preview snapshot persisted on the
+        // suggestion is the only correct before-state for undo.
+        persistedPreview: parsePersistedPreviewClip(suggestion.preview_snapshot_json),
+      });
     }
   }
 
@@ -199,8 +227,12 @@ class ApplySuggestionBatchCommand implements Command {
 
   private captureBeforeSnapshots(): Map<number, SuggestionBeforeSnapshot> {
     const snapshots = new Map<number, SuggestionBeforeSnapshot>();
-    for (const [suggestionId, targetClipId] of this.updateTargets) {
-      const clip = timelineState.clips.find((item) => item.id === targetClipId);
+    for (const [suggestionId, target] of this.updateTargets) {
+      if (target.persistedPreview) {
+        snapshots.set(suggestionId, { clip: { ...target.persistedPreview } });
+        continue;
+      }
+      const clip = timelineState.clips.find((item) => item.id === target.targetClipId);
       if (!clip) continue;
       snapshots.set(suggestionId, {
         clip: {
