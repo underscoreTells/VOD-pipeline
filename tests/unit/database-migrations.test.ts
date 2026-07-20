@@ -1312,6 +1312,52 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
+  it('preserves preview clip evidence for range normalization when both range readings fit', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v2v6-');
+    const dbPath = path.join(tempDir, 'v2v6.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Chapter spans 100-1000, so the stored post-cutoff 120-150 range fits
+      // both the chapter-local and the legacy-global reading; the untouched
+      // preview clip at the global 120-150 window is the only evidence that
+      // the intended chapter-local window is 20-50.
+      builder.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const previewClipId = builder.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'cut', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, { clipId: previewClipId });
+      builder.pragma('user_version = 2');
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT in_point, out_point, clip_id, range_space FROM suggestions WHERE id = ?'
+      ).get(suggestionId) as {
+        in_point: number;
+        out_point: number;
+        clip_id: number | null;
+        range_space: string | null;
+      };
+      expect(row.clip_id).toBeNull();
+      expect(row).toMatchObject({ in_point: 20, out_point: 50, range_space: 'chapter_local' });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('restores only the base snapshot when update previews share a target clip', async () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');

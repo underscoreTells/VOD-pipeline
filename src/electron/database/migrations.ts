@@ -710,7 +710,10 @@ type SuggestionRow = Suggestion;
 //       create preview records the exact global window the suggestion
 //       produced; derive the chapter-local window from it (applied
 //       suggestions are excluded: their committed clip stays editable, so
-//       its current bounds are not immutable evidence)
+//       its current bounds are not immutable evidence). On upgrades from
+//       user_version 2 the preview reconciliation runs first and stamps
+//       this derived window onto the suggestion before unlinking the
+//       preview, so those rows arrive here already marked.
 //   fits only the chapter's global bounds, written before chapter-local
 //       storage shipped -> legacy global source times; shift by the
 //       chapter start (a post-cutoff row in this state is a chapter-local
@@ -1063,6 +1066,15 @@ export function reconcilePendingSuggestionPreviews(
      WHERE ca.chapter_id = ?`
   );
   const deleteClip = database.prepare('DELETE FROM clips WHERE id = ?');
+  // When an untouched create preview is deleted, its clip bounds are the
+  // only ground truth for which interpretation of the stored range the
+  // preview materialized. Range normalization runs after reconciliation on
+  // upgrades from user_version 2, so stamp the derived chapter-local window
+  // (and its range_space marker) before the evidence is unlinked; the later
+  // pass then leaves the row alone.
+  const stampRangeFromPreviewClip = database.prepare(
+    `UPDATE suggestions SET in_point = ?, out_point = ?, range_space = 'chapter_local' WHERE id = ?`
+  );
   const unlinkCreateSuggestion = database.prepare(
     'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?'
   );
@@ -1125,6 +1137,7 @@ export function reconcilePendingSuggestionPreviews(
             selectChapter,
             selectChapterAssets,
             deleteClip,
+            stampRangeFromPreviewClip,
             unlinkCreateSuggestion,
           });
         }
@@ -1383,6 +1396,7 @@ interface ReconcileCreateContext {
   selectChapter: Database.Statement;
   selectChapterAssets: Database.Statement;
   deleteClip: Database.Statement;
+  stampRangeFromPreviewClip: Database.Statement;
   unlinkCreateSuggestion: Database.Statement;
 }
 
@@ -1394,6 +1408,7 @@ function reconcileCreateSuggestion(ctx: ReconcileCreateContext): void {
     selectChapter,
     selectChapterAssets,
     deleteClip,
+    stampRangeFromPreviewClip,
     unlinkCreateSuggestion,
   } = ctx;
 
@@ -1445,7 +1460,15 @@ function reconcileCreateSuggestion(ctx: ReconcileCreateContext): void {
 
   const clip = mapClipRow(clipRow);
   if (expectedCandidates.some((expected) => clipMatchesExpectedCreate(clip, expected))) {
-    // Exact untouched preview: delete the preview clip and unlink.
+    // Exact untouched preview: its bounds are ground truth for the
+    // chapter-local window the suggestion produced, so stamp that window
+    // before deleting the clip — otherwise the range normalization pass
+    // that runs after this reconciliation would lose the evidence and
+    // could misclassify the stored range.
+    const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+    const localIn = clampToRange(clip.in_point - chapter.start_time, 0, chapterDuration);
+    const localOut = clampToRange(clip.out_point - chapter.start_time, localIn, chapterDuration);
+    stampRangeFromPreviewClip.run(localIn, localOut, suggestion.id);
     deleteClip.run(previewClipId);
     unlinkCreateSuggestion.run(suggestion.id);
     stats.createClipsDeleted += 1;

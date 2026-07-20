@@ -98,9 +98,12 @@ export async function initializeDatabase(): Promise<Database.Database> {
     repairDanglingClipReferences(database);
     // Reconcile materialized previews before normalizing suggestion ranges:
     // preview recognition compares stored ranges against live clips, and
-    // mutating a stranded range first would destroy that evidence. The
-    // pre-migration version is captured so failed rows can be retried with
-    // the same provenance on the next startup.
+    // mutating a stranded range first would destroy that evidence. When
+    // reconciliation deletes an untouched create preview, it first stamps
+    // the chapter-local window derived from the clip onto the suggestion so
+    // the normalization pass keeps the evidence the unlink would otherwise
+    // erase. The pre-migration version is captured so failed rows can be
+    // retried with the same provenance on the next startup.
     const originalSchemaVersion = await getSchemaVersion(database);
     const previewStats = reconcilePendingSuggestionPreviews(database);
     const rangeStats = normalizeStoredSuggestionRangesToChapterLocal(database);
