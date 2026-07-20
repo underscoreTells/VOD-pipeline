@@ -105,8 +105,21 @@ describe('chapter cut workspace', () => {
     expect(timelineSource.indexOf('const dragAsset = activeAsset;')).toBeLessThan(
       timelineSource.indexOf('clearSelection();')
     );
-    expect(timelineSource).toContain('pinnedDragAsset = dragAsset;');
-    expect(timelineSource).toContain('pinnedDragAsset = null;');
+    expect(timelineSource).toContain('setPinnedDragAsset(dragAsset);');
+    expect(timelineSource).toContain('setPinnedDragAsset(null);');
+  });
+
+  it('propagates the pinned drag asset to the parent viewer state', () => {
+    expect(timelineSource).toContain('onPinnedAssetChange?.(asset);');
+    expect(projectDetailSource).toContain('let pinnedDragAsset = $state<ProjectAsset | null>(null);');
+    expect(projectDetailSource).toContain('return pinnedDragAsset');
+    expect(projectDetailSource.indexOf('return pinnedDragAsset')).toBeLessThan(
+      projectDetailSource.indexOf('?? selectedClipAsset')
+    );
+    expect(projectDetailSource).toContain('onPinnedAssetChange={(asset) => (pinnedDragAsset = asset)}');
+    expect(projectDetailSource.indexOf('clearTimelineSelection();')).toBeLessThan(
+      projectDetailSource.indexOf('pinnedDragAsset = null;')
+    );
   });
 
   it('keeps cuts from other assets selectable without stealing drag hit-testing', () => {

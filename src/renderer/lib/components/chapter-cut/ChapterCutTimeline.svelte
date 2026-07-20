@@ -55,6 +55,7 @@
     suggestions: Suggestion[];
     playbackAvailable: boolean;
     activeAsset: ProjectAsset | null;
+    onPinnedAssetChange?: (asset: ProjectAsset | null) => void;
   }
 
   type DragState = {
@@ -70,7 +71,7 @@
     originalEnd?: number;
   };
 
-  let { projectId, chapter, assets, clips, suggestions, playbackAvailable, activeAsset: viewedAsset }: Props = $props();
+  let { projectId, chapter, assets, clips, suggestions, playbackAvailable, activeAsset: viewedAsset, onPinnedAssetChange }: Props = $props();
   let viewportRef = $state<HTMLDivElement | null>(null);
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
@@ -84,6 +85,14 @@
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
   let pinnedDragAsset = $state<ProjectAsset | null>(null);
+
+  function setPinnedDragAsset(asset: ProjectAsset | null): void {
+    pinnedDragAsset = asset;
+    // The parent derives the editor viewer asset from clip/suggestion
+    // selection, which create drags clear; propagate the pin so the viewer
+    // keeps showing the drag's target asset for the drag's duration.
+    onPinnedAssetChange?.(asset);
+  }
   let fittedChapterId: number | null = null;
   let clipContextMenu = $state({
     clipId: null as number | null,
@@ -168,7 +177,7 @@
     window.removeEventListener('pointercancel', handleWindowPointerEnd);
     drag = null;
     dragPreview = null;
-    pinnedDragAsset = null;
+    setPinnedDragAsset(null);
   }
 
   function scrubTo(local: number): void {
@@ -288,7 +297,7 @@
       scrubTo(time);
       return;
     }
-    pinnedDragAsset = dragAsset;
+    setPinnedDragAsset(dragAsset);
     dragPreview = { start: time, end: time };
     beginDrag(event, {
       mode: 'create',

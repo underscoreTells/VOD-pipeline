@@ -122,6 +122,7 @@
   let pendingChapterCompletion = $state<number | null>(null);
   let pendingNavigationBack = $state(false);
   let isCancellingAgentTurn = $state(false);
+  let pinnedDragAsset = $state<ProjectAsset | null>(null);
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -418,6 +419,7 @@
     const chapterId = selectedChapter?.id ?? null;
     if (chapterId === previousSelectedChapterId) return;
     clearTimelineSelection();
+    pinnedDragAsset = null;
     previousSelectedChapterId = chapterId;
   });
 
@@ -487,7 +489,10 @@
     const selectedSuggestionAsset = selectedSuggestionAssetId === null
       ? null
       : selectedChapterAssets.find((asset) => asset.id === selectedSuggestionAssetId);
-    return selectedClipAsset
+    // An active create drag pins the viewed asset before clearing selection;
+    // keep the viewer on it for the drag's duration.
+    return pinnedDragAsset
+      ?? selectedClipAsset
       ?? selectedSuggestionAsset
       ?? selectedChapterAssets.find((asset) => asset.availability.exists !== false)
       ?? selectedChapterAssets[0]
@@ -879,6 +884,7 @@
                         suggestions={agentState.suggestions}
                         playbackAvailable={chapterPreviewAsset !== null && chapterPreviewAsset.availability.exists !== false}
                         activeAsset={chapterPreviewAsset}
+                        onPinnedAssetChange={(asset) => (pinnedDragAsset = asset)}
                       />
                     {/if}
                   </div>
