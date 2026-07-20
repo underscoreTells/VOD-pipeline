@@ -29,6 +29,8 @@ export interface ApplySuggestionResult {
   success: boolean;
   clip?: Clip;
   error?: string;
+  /** True when the failure itself marked the suggestion as rejected. */
+  autoRejected?: boolean;
 }
 
 export interface CancelSuggestionPreviewResult {
@@ -223,6 +225,7 @@ async function createSuggestionTimelineClip(
     return {
       success: false,
       error: `Suggestion would have non-positive duration after collision detection (in_point: ${inPoint}, out_point: ${outPoint}). Marked as rejected.`,
+      autoRejected: true,
     };
   }
 
@@ -793,7 +796,8 @@ class SuggestionBatchAbort extends Error {
   constructor(
     public readonly suggestionId: number,
     message: string,
-    public readonly clip?: Clip
+    public readonly clip?: Clip,
+    public readonly autoRejected: boolean = false
   ) {
     super(message);
     this.name = 'SuggestionBatchAbort';
@@ -832,7 +836,9 @@ export async function applySuggestionsBatch(
         if (!result.success || !result.clip) {
           throw new SuggestionBatchAbort(
             id,
-            result.error ?? 'Suggestion operation failed'
+            result.error ?? 'Suggestion operation failed',
+            undefined,
+            result.autoRejected === true
           );
         }
         collected.push({
@@ -850,6 +856,19 @@ export async function applySuggestionsBatch(
     });
   } catch (error) {
     if (error instanceof SuggestionBatchAbort) {
+      // The rollback above also undid the automatic rejection write that
+      // accompanied this failure; re-persist it outside the transaction so
+      // the malformed suggestion does not stay pending and fail every apply.
+      if (error.autoRejected) {
+        try {
+          const database = await getDatabase();
+          database.prepare(
+            "UPDATE suggestions SET status = 'rejected', clip_id = NULL, applied_at = NULL WHERE id = ?"
+          ).run(error.suggestionId);
+        } catch (persistError) {
+          console.error('[applySuggestionsBatch] Failed to persist automatic rejection:', persistError);
+        }
+      }
       const abortResult: SuggestionBatchItemResult = {
         suggestionId: error.suggestionId,
         success: false,

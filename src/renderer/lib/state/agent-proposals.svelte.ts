@@ -75,6 +75,43 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
+function resolveProposedWindow(
+  suggestion: Suggestion,
+  chapter: { start_time: number; end_time: number }
+): { start: number; end: number } {
+  if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id) {
+    const target = timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
+    if (target) {
+      // Mirror applyUpdateSuggestionToClip: merge the update payload onto the
+      // target clip so overlap checks use the resulting window, not the
+      // synthetic fallback range stored on the suggestion row.
+      const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+      const clampLocal = (value: number, min: number) => Math.min(Math.max(value, min), chapterDuration);
+      let inPoint = target.in_point;
+      let outPoint = target.out_point;
+      let updatePayload: { inPoint?: number; outPoint?: number } | undefined;
+      if (suggestion.action_payload_json) {
+        try {
+          updatePayload = (JSON.parse(suggestion.action_payload_json) as {
+            update?: { inPoint?: number; outPoint?: number };
+          }).update;
+        } catch {
+          // The repository will report malformed action payloads on apply.
+        }
+      }
+      if (typeof updatePayload?.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
+        inPoint = chapter.start_time + clampLocal(updatePayload.inPoint, 0);
+      }
+      if (typeof updatePayload?.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
+        const minLocalOut = clampLocal(inPoint - chapter.start_time, 0);
+        outPoint = chapter.start_time + clampLocal(updatePayload.outPoint, minLocalOut);
+      }
+      return { start: inPoint, end: outPoint };
+    }
+  }
+  return normalizeSuggestionWindowForChapter(suggestion, chapter);
+}
+
 function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const chapter = getSelectedChapter();
   if (!chapter) return 'Select a chapter before applying suggested cuts.';
@@ -85,7 +122,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return 'A suggested cut has no unambiguous source asset.';
-    const proposed = normalizeSuggestionWindowForChapter(suggestion, chapter);
+    const proposed = resolveProposedWindow(suggestion, chapter);
     const conflictsWithCut = timelineState.clips.some((clip) =>
       clip.asset_id === assetId
       && clip.id !== suggestion.target_clip_id
@@ -220,21 +257,55 @@ class ApplySuggestionBatchCommand implements Command {
 class RejectSuggestionBatchCommand implements Command {
   description: string;
   private readonly conversationId = agentState.selectedConversationId;
+  private readonly projectId = projectDetail.projectId;
+  private readonly suggestionMeta = new Map<
+    number,
+    { actionType: Suggestion['action_type']; previewClipId: number | null }
+  >();
 
   constructor(private readonly suggestionIds: number[]) {
     this.description = suggestionIds.length === 1
       ? 'Reject suggested cut'
       : `Reject ${suggestionIds.length} suggested cuts`;
+    // Retain preview metadata now: agentState.suggestions may be replaced by
+    // a conversation switch before a queued command runs, and the reject
+    // response alone cannot identify deleted create-preview clips.
+    for (const suggestionId of suggestionIds) {
+      const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
+      if (!suggestion) continue;
+      this.suggestionMeta.set(suggestionId, {
+        actionType: suggestion.action_type,
+        previewClipId: suggestion.clip_id,
+      });
+    }
   }
 
   private isConversationCurrent(): boolean {
     return this.conversationId !== null && agentState.selectedConversationId === this.conversationId;
   }
 
+  private isProjectCurrent(): boolean {
+    return this.projectId !== null && projectDetail.projectId === this.projectId;
+  }
+
   async execute(): Promise<void> {
     const response = await rejectSuggestionBatchApi({ suggestionIds: this.suggestionIds });
-    if (!response.success) {
+    if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to reject suggested cuts');
+    }
+    // Reconcile preview artifacts: rejected create previews were deleted and
+    // rejected update previews were restored to their original clip state.
+    if (this.isProjectCurrent()) {
+      for (const result of response.data.results) {
+        if (!result.success) continue;
+        const meta = this.suggestionMeta.get(result.suggestionId);
+        if (!meta) continue;
+        if (meta.actionType === 'update_clip') {
+          upsertTimelineClip(result.clip);
+        } else if (meta.previewClipId !== null) {
+          deleteTimelineClip(meta.previewClipId);
+        }
+      }
     }
     if (!this.isConversationCurrent()) return;
     setSuggestionStatus(this.suggestionIds, 'rejected');

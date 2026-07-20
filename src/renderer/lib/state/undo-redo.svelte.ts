@@ -20,8 +20,12 @@ import type { CreateClipInput } from '../../../shared/contracts/electron-api.js'
 // Command pattern for undo/redo
 export interface Command {
   description: string;
-  execute(): void | Promise<void>;
-  undo(): void | Promise<void>;
+  execute(isCurrent?: () => boolean): void | Promise<void>;
+  undo(isCurrent?: () => boolean): void | Promise<void>;
+}
+
+function shouldContinue(isCurrent?: () => boolean): boolean {
+  return !isCurrent || isCurrent();
 }
 
 const MAX_HISTORY = 50;
@@ -63,11 +67,12 @@ export function getNextRedoDescription(): string | null {
 
 export function executeCommand(command: Command): Promise<boolean> {
   const generation = historyGeneration;
+  const isCurrent = () => generation === historyGeneration;
   return enqueueHistoryOperation(async () => {
     try {
-      await command.execute();
+      await command.execute(isCurrent);
 
-      if (generation !== historyGeneration) {
+      if (!isCurrent()) {
         return true;
       }
 
@@ -87,19 +92,20 @@ export function executeCommand(command: Command): Promise<boolean> {
 
 export function undo(): Promise<boolean> {
   const generation = historyGeneration;
+  const isCurrent = () => generation === historyGeneration;
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.undoStack.length === 0) return false;
 
     const command = undoRedoState.undoStack.pop()!;
     try {
-      await command.undo();
-      if (generation !== historyGeneration) {
+      await command.undo(isCurrent);
+      if (!isCurrent()) {
         return true;
       }
       undoRedoState.redoStack.push(command);
       return true;
     } catch (error) {
-      if (generation === historyGeneration) {
+      if (isCurrent()) {
         undoRedoState.undoStack.push(command);
       }
       console.error('Undo failed:', error);
@@ -110,19 +116,20 @@ export function undo(): Promise<boolean> {
 
 export function redo(): Promise<boolean> {
   const generation = historyGeneration;
+  const isCurrent = () => generation === historyGeneration;
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.redoStack.length === 0) return false;
 
     const command = undoRedoState.redoStack.pop()!;
     try {
-      await command.execute();
-      if (generation !== historyGeneration) {
+      await command.execute(isCurrent);
+      if (!isCurrent()) {
         return true;
       }
       undoRedoState.undoStack.push(command);
       return true;
     } catch (error) {
-      if (generation === historyGeneration) {
+      if (isCurrent()) {
         undoRedoState.redoStack.push(command);
       }
       console.error('Redo failed:', error);
@@ -251,22 +258,26 @@ export class ResizeClipCommand implements Command {
     private newOutPoint: number
   ) {}
 
-  async execute() {
+  async execute(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.clipId, {
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.clipId, {
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
   }
 
-  async undo() {
+  async undo(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.clipId, {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.clipId, {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
@@ -286,9 +297,11 @@ export class CreateClipCommand implements Command {
     return this.clip;
   }
 
-  async execute() {
+  async execute(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     if (this.clip) {
       await persistClipRestore(this.clip);
+      if (!shouldContinue(isCurrent)) return;
       createTimelineClip(this.clip);
       if (!hasClipDescription(this.clip)) {
         enqueueClipAutoName(this.clip.id);
@@ -302,17 +315,19 @@ export class CreateClipCommand implements Command {
       throw new Error(result.error || 'Failed to create clip');
     }
     this.clip = cloneClipForHistory(result.data);
+    if (!shouldContinue(isCurrent)) return;
     createTimelineClip(result.data);
   }
 
-  async undo() {
-    if (!this.clip) return;
+  async undo(isCurrent?: () => boolean) {
+    if (!this.clip || !shouldContinue(isCurrent)) return;
     const clipId = this.clip.id;
     const latest = timelineState.clips.find((clip) => clip.id === clipId);
     if (latest) {
       this.clip = cloneClipForHistory(latest);
     }
     await persistClipDelete(clipId);
+    if (!shouldContinue(isCurrent)) return;
     timelineState.clips = timelineState.clips.filter((clip) => clip.id !== clipId);
     const nextSelectedIds = new Set(timelineState.selectedClipIds);
     nextSelectedIds.delete(clipId);
@@ -330,22 +345,26 @@ export class UpdateClipTimingCommand implements Command {
     private newOutPoint: number
   ) {}
 
-  async execute() {
+  async execute(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.clipId, {
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.clipId, {
       in_point: this.newInPoint,
       out_point: this.newOutPoint,
     });
   }
 
-  async undo() {
+  async undo(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.clipId, {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.clipId, {
       in_point: this.oldInPoint,
       out_point: this.oldOutPoint,
@@ -398,7 +417,8 @@ export class DeleteClipCommand implements Command {
     }
   }
 
-  async execute() {
+  async execute(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     const currentIndex = timelineState.clips.findIndex((clip) => clip.id === this.clipId);
     if (currentIndex !== -1) {
       this.clipData = {
@@ -420,14 +440,17 @@ export class DeleteClipCommand implements Command {
       if (isAlreadyMissingDeleteError(error)) {
         return;
       }
-      this.restoreToTimelineState();
+      if (shouldContinue(isCurrent)) {
+        this.restoreToTimelineState();
+      }
       throw error;
     }
   }
 
-  async undo() {
-    if (this.clipData) {
+  async undo(isCurrent?: () => boolean) {
+    if (this.clipData && shouldContinue(isCurrent)) {
       await persistClipRestore(this.clipData.clip);
+      if (!shouldContinue(isCurrent)) return;
       this.restoreToTimelineState();
     }
   }
@@ -473,10 +496,12 @@ export class SplitClipCommand implements Command {
     createTimelineClip(clip);
   }
 
-  async execute() {
+  async execute(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.originalClip.id, {
       out_point: this.splitWindow.leftOutPoint,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.originalClip.id, {
       out_point: this.splitWindow.leftOutPoint,
     });
@@ -484,6 +509,7 @@ export class SplitClipCommand implements Command {
     try {
       if (this.rightClipSnapshot) {
         await persistClipRestore(this.rightClipSnapshot);
+        if (!shouldContinue(isCurrent)) return;
         this.addRightClipToTimeline(this.rightClipSnapshot);
         return;
       }
@@ -504,28 +530,34 @@ export class SplitClipCommand implements Command {
       }
 
       this.rightClipSnapshot = cloneClipForHistory(result.data);
+      if (!shouldContinue(isCurrent)) return;
       this.addRightClipToTimeline(result.data);
     } catch (error) {
       await persistClipUpdate(this.originalClip.id, {
         out_point: this.originalClip.out_point,
       });
-      updateTimelineClip(this.originalClip.id, {
-        out_point: this.originalClip.out_point,
-      });
+      if (shouldContinue(isCurrent)) {
+        updateTimelineClip(this.originalClip.id, {
+          out_point: this.originalClip.out_point,
+        });
+      }
       throw error;
     }
   }
 
-  async undo() {
+  async undo(isCurrent?: () => boolean) {
+    if (!shouldContinue(isCurrent)) return;
     await persistClipUpdate(this.originalClip.id, {
       out_point: this.originalClip.out_point,
     });
+    if (!shouldContinue(isCurrent)) return;
     updateTimelineClip(this.originalClip.id, {
       out_point: this.originalClip.out_point,
     });
 
     if (!this.rightClipSnapshot) return;
     await persistClipDelete(this.rightClipSnapshot.id);
+    if (!shouldContinue(isCurrent)) return;
     this.removeRightClipFromTimeline();
   }
 }
