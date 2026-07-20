@@ -86,16 +86,22 @@ export function executeCommand(command: Command): Promise<boolean> {
 }
 
 export function undo(): Promise<boolean> {
+  const generation = historyGeneration;
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.undoStack.length === 0) return false;
 
     const command = undoRedoState.undoStack.pop()!;
     try {
       await command.undo();
+      if (generation !== historyGeneration) {
+        return true;
+      }
       undoRedoState.redoStack.push(command);
       return true;
     } catch (error) {
-      undoRedoState.undoStack.push(command);
+      if (generation === historyGeneration) {
+        undoRedoState.undoStack.push(command);
+      }
       console.error('Undo failed:', error);
       return false;
     }
@@ -103,16 +109,22 @@ export function undo(): Promise<boolean> {
 }
 
 export function redo(): Promise<boolean> {
+  const generation = historyGeneration;
   return enqueueHistoryOperation(async () => {
     if (undoRedoState.redoStack.length === 0) return false;
 
     const command = undoRedoState.redoStack.pop()!;
     try {
       await command.execute();
+      if (generation !== historyGeneration) {
+        return true;
+      }
       undoRedoState.undoStack.push(command);
       return true;
     } catch (error) {
-      undoRedoState.redoStack.push(command);
+      if (generation === historyGeneration) {
+        undoRedoState.redoStack.push(command);
+      }
       console.error('Redo failed:', error);
       return false;
     }
