@@ -66,6 +66,7 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
       // The repository will report malformed action payloads on apply.
     }
   }
+  if (suggestion.action_type !== 'create_clip') return null;
   const chapter = getSelectedChapter();
   if (!chapter) return null;
   const videoAssetIds = getAssetsForChapter(chapter.id).filter(
@@ -107,6 +108,7 @@ class ApplySuggestionBatchCommand implements Command {
   private appliedClips = new Map<number, Clip>();
   private readonly conversationId = agentState.selectedConversationId;
   private readonly chapterId = getSelectedChapter()?.id ?? null;
+  private readonly projectId = projectDetail.projectId;
   private readonly updateTargets = new Map<number, number>();
 
   constructor(private readonly suggestionIds: number[]) {
@@ -129,6 +131,10 @@ class ApplySuggestionBatchCommand implements Command {
 
   private isChapterCurrent(): boolean {
     return this.chapterId !== null && getSelectedChapter()?.id === this.chapterId;
+  }
+
+  private isProjectCurrent(): boolean {
+    return this.projectId !== null && projectDetail.projectId === this.projectId;
   }
 
   private captureBeforeSnapshots(): Map<number, SuggestionBeforeSnapshot> {
@@ -157,12 +163,13 @@ class ApplySuggestionBatchCommand implements Command {
     }
 
     this.appliedClips.clear();
+    const isProjectCurrent = this.isProjectCurrent();
     const isChapterCurrent = this.isChapterCurrent();
     const isConversationCurrent = this.isConversationCurrent();
     for (const result of response.data.results) {
       if (!result.success || !result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
-      if (isChapterCurrent) upsertTimelineClip(result.clip);
+      if (isProjectCurrent) upsertTimelineClip(result.clip);
       if (!isConversationCurrent) continue;
       const suggestion = agentState.suggestions.find((item) => item.id === result.suggestionId);
       if (suggestion) suggestion.clip_id = result.clip.id;
@@ -189,7 +196,7 @@ class ApplySuggestionBatchCommand implements Command {
       throw new Error(response.error || 'Failed to undo suggested cuts');
     }
 
-    if (this.isChapterCurrent()) {
+    if (this.isProjectCurrent()) {
       for (const suggestionId of this.suggestionIds) {
         const appliedClip = this.appliedClips.get(suggestionId);
         const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;

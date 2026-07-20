@@ -32,6 +32,7 @@ const undoRedoState = $state({
 });
 
 let historyQueue: Promise<void> = Promise.resolve();
+let historyGeneration = 0;
 
 function enqueueHistoryOperation<T>(operation: () => Promise<T>): Promise<T> {
   const result = historyQueue.then(operation, operation);
@@ -61,9 +62,14 @@ export function getNextRedoDescription(): string | null {
 }
 
 export function executeCommand(command: Command): Promise<boolean> {
+  const generation = historyGeneration;
   return enqueueHistoryOperation(async () => {
     try {
       await command.execute();
+
+      if (generation !== historyGeneration) {
+        return true;
+      }
 
       undoRedoState.undoStack.push(command);
       if (undoRedoState.undoStack.length > MAX_HISTORY) {
@@ -114,6 +120,7 @@ export function redo(): Promise<boolean> {
 }
 
 export function clearHistory() {
+  historyGeneration += 1;
   undoRedoState.undoStack = [];
   undoRedoState.redoStack = [];
 }
