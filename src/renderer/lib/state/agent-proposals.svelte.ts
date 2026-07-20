@@ -7,6 +7,7 @@ import {
   revertSuggestionBatch,
 } from '../api/agent.js';
 import { getAssetsForChapter, getSelectedChapter } from './chapters.svelte.js';
+import { projectDetail } from './project-media.svelte.js';
 import { rangesOverlap } from '../utils/timeline-geometry.js';
 import { normalizeSuggestionWindowForChapter } from '../../../shared/utils/clip-timing.js';
 import {
@@ -36,11 +37,11 @@ function upsertTimelineClip(clip: Clip | undefined): void {
   }
 }
 
-function focusTimelineClip(clip: Clip | undefined): void {
+function focusTimelineClip(clip: Clip | undefined, clearSuggestionSelection = true): void {
   if (!clip) return;
   upsertTimelineClip(clip);
   selectClip(clip.id, false);
-  agentState.selectedSuggestionId = null;
+  if (clearSuggestionSelection) agentState.selectedSuggestionId = null;
   setPlayhead(clip.in_point);
 }
 
@@ -86,7 +87,11 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
     }
   }
   const chapter = getSelectedChapter();
-  return chapter ? getAssetsForChapter(chapter.id)[0] ?? null : null;
+  if (!chapter) return null;
+  const videoAssetIds = getAssetsForChapter(chapter.id).filter(
+    (assetId) => projectDetail.assets.find((asset) => asset.id === assetId)?.file_type === 'video'
+  );
+  return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
 function validateSuggestionBatch(suggestionIds: number[]): string | null {
@@ -118,39 +123,51 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
 
 class ApplySuggestionBatchCommand implements Command {
   description: string;
-  private readonly beforeSnapshots: Map<number, SuggestionBeforeSnapshot>;
+  private beforeSnapshots: Map<number, SuggestionBeforeSnapshot> | null = null;
   private appliedClips = new Map<number, Clip>();
+  private readonly conversationId = agentState.selectedConversationId;
 
   constructor(private readonly suggestionIds: number[]) {
     this.description = suggestionIds.length === 1
       ? 'Apply suggested cut'
       : `Apply ${suggestionIds.length} suggested cuts`;
-    this.beforeSnapshots = captureBeforeSnapshots(suggestionIds);
+  }
+
+  private isConversationCurrent(): boolean {
+    return this.conversationId !== null && agentState.selectedConversationId === this.conversationId;
   }
 
   async execute(): Promise<void> {
+    this.beforeSnapshots ??= captureBeforeSnapshots(this.suggestionIds);
     const response = await applySuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
 
     this.appliedClips.clear();
+    const isConversationCurrent = this.isConversationCurrent();
     for (const result of response.data.results) {
       if (!result.success || !result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
       upsertTimelineClip(result.clip);
+      if (!isConversationCurrent) continue;
       const suggestion = agentState.suggestions.find((item) => item.id === result.suggestionId);
       if (suggestion) suggestion.clip_id = result.clip.id;
     }
-    setSuggestionStatus(this.suggestionIds, 'applied');
-    focusTimelineClip(this.appliedClips.get(this.suggestionIds[this.suggestionIds.length - 1]));
+    if (isConversationCurrent) {
+      setSuggestionStatus(this.suggestionIds, 'applied');
+    }
+    focusTimelineClip(
+      this.appliedClips.get(this.suggestionIds[this.suggestionIds.length - 1]),
+      isConversationCurrent
+    );
   }
 
   async undo(): Promise<void> {
     const response = await revertSuggestionBatch({
       items: this.suggestionIds.map((suggestionId) => ({
         suggestionId,
-        beforeSnapshot: this.beforeSnapshots.get(suggestionId) ?? null,
+        beforeSnapshot: this.beforeSnapshots?.get(suggestionId) ?? null,
       })),
     });
     if (!response.success || !response.data) {
@@ -165,6 +182,9 @@ class ApplySuggestionBatchCommand implements Command {
       } else if (appliedClip) {
         deleteTimelineClip(appliedClip.id);
       }
+    }
+    if (!this.isConversationCurrent()) return;
+    for (const suggestionId of this.suggestionIds) {
       const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
       if (suggestion) suggestion.clip_id = null;
     }
@@ -175,6 +195,7 @@ class ApplySuggestionBatchCommand implements Command {
 
 class RejectSuggestionBatchCommand implements Command {
   description: string;
+  private readonly conversationId = agentState.selectedConversationId;
 
   constructor(private readonly suggestionIds: number[]) {
     this.description = suggestionIds.length === 1
@@ -182,11 +203,16 @@ class RejectSuggestionBatchCommand implements Command {
       : `Reject ${suggestionIds.length} suggested cuts`;
   }
 
+  private isConversationCurrent(): boolean {
+    return this.conversationId !== null && agentState.selectedConversationId === this.conversationId;
+  }
+
   async execute(): Promise<void> {
     const response = await rejectSuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success) {
       throw new Error(response.error || 'Failed to reject suggested cuts');
     }
+    if (!this.isConversationCurrent()) return;
     setSuggestionStatus(this.suggestionIds, 'rejected');
     if (this.suggestionIds.includes(agentState.selectedSuggestionId ?? -1)) {
       agentState.selectedSuggestionId = null;
@@ -198,6 +224,7 @@ class RejectSuggestionBatchCommand implements Command {
     if (!response.success) {
       throw new Error(response.error || 'Failed to restore suggested cuts');
     }
+    if (!this.isConversationCurrent()) return;
     setSuggestionStatus(this.suggestionIds, 'pending');
     agentState.selectedSuggestionId = this.suggestionIds[0] ?? null;
   }
