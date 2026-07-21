@@ -201,6 +201,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
 
 class ApplySuggestionBatchCommand implements Command {
   description: string;
+  failureReason: string | null = null;
   private beforeSnapshots: Map<number, SuggestionBeforeSnapshot> | null = null;
   private appliedClips = new Map<number, Clip>();
   private readonly conversationId = agentState.selectedConversationId;
@@ -270,6 +271,20 @@ class ApplySuggestionBatchCommand implements Command {
     // the database at all; mid-flight invalidation is handled by the context
     // checks below, which suppress only renderer reconciliation.
     if (isCurrent && !isCurrent()) return;
+    this.failureReason = null;
+    // Revalidate now that this command has reached the front of the
+    // serialized history queue: edits enqueued ahead of it (resizes, moves)
+    // may have settled and changed the timeline since the pre-enqueue check,
+    // and the backend does not enforce clip-overlap constraints. Skip when
+    // the context changed, since timelineState and agentState.suggestions no
+    // longer describe this batch.
+    if (this.isProjectCurrent() && this.isChapterCurrent() && this.isConversationCurrent()) {
+      const validationError = validateSuggestionBatch(this.suggestionIds);
+      if (validationError) {
+        this.failureReason = validationError;
+        throw new Error(validationError);
+      }
+    }
     this.beforeSnapshots ??= this.captureBeforeSnapshots();
     const response = await applySuggestionBatchApi({ suggestionIds: this.suggestionIds });
     if (!response.success || !response.data) {
@@ -455,8 +470,9 @@ export async function applySuggestion(suggestionId: number) {
     agentState.error = validationError;
     return { success: false, error: validationError };
   }
-  const success = await executeCommand(new ApplySuggestionBatchCommand([suggestionId]));
-  if (!success) agentState.error = 'Failed to apply the suggested cut.';
+  const command = new ApplySuggestionBatchCommand([suggestionId]);
+  const success = await executeCommand(command);
+  if (!success) agentState.error = command.failureReason ?? 'Failed to apply the suggested cut.';
   return { success };
 }
 
@@ -470,8 +486,9 @@ export async function applyAllSuggestions() {
     agentState.error = validationError;
     return { success: false, appliedCount: 0, total: ids.length, error: validationError };
   }
-  const success = await executeCommand(new ApplySuggestionBatchCommand(ids));
-  if (!success) agentState.error = 'No suggested cuts were applied.';
+  const command = new ApplySuggestionBatchCommand(ids);
+  const success = await executeCommand(command);
+  if (!success) agentState.error = command.failureReason ?? 'No suggested cuts were applied.';
   return { success, appliedCount: success ? ids.length : 0, total: ids.length };
 }
 
