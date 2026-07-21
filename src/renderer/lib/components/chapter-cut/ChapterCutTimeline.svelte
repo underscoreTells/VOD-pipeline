@@ -67,8 +67,9 @@
     edge?: 'start' | 'end';
     anchor?: number;
     offset?: number;
-    originalStart?: number;
-    originalEnd?: number;
+    fullStart?: number;
+    fullEnd?: number;
+    assetDuration?: number | null;
   };
 
   let { projectId, chapter, assets, clips, suggestions, playbackAvailable, activeAsset: viewedAsset, onPinnedAssetChange }: Props = $props();
@@ -265,22 +266,32 @@
           assetId: clip.asset_id,
           clipId,
           edge: handleElement.dataset.handle === 'start' ? 'start' : 'end',
-          originalStart: start,
-          originalEnd: end,
         });
       } else {
         if (!event.ctrlKey && !event.metaKey) {
           dragPreview = null;
           return;
         }
+        // Preview the clip's full source range (which may extend beyond the
+        // chapter) and measure the grab offset from its true in-point, so the
+        // committed window always matches what the preview shows.
+        dragPreview = {
+          start: clip.in_point - chapter.start_time,
+          end: clip.out_point - chapter.start_time,
+        };
         beginDrag(event, {
           mode: 'move',
           pointerId: event.pointerId,
           assetId: clip.asset_id,
           clipId,
-          offset: clampNumber(time - start, 0, end - start),
-          originalStart: start,
-          originalEnd: end,
+          offset: clampNumber(
+            time - (clip.in_point - chapter.start_time),
+            0,
+            clip.out_point - clip.in_point
+          ),
+          fullStart: clip.in_point,
+          fullEnd: clip.out_point,
+          assetDuration: assets.find((asset) => asset.id === clip.asset_id)?.duration ?? null,
         });
       }
       return;
@@ -366,8 +377,20 @@
       return;
     }
     if (drag.mode === 'move') {
-      const clipDuration = (drag.originalEnd ?? 0) - (drag.originalStart ?? 0);
-      const start = clampNumber(time - (drag.offset ?? 0), 0, duration - clipDuration);
+      // The preview spans the clip's full source range, not just its
+      // chapter-visible portion; bound it so the full range stays inside the
+      // asset and keeps a visible sliver inside the chapter window.
+      const clipDuration = (drag.fullEnd ?? 0) - (drag.fullStart ?? 0);
+      const assetDuration = typeof drag.assetDuration === 'number' && Number.isFinite(drag.assetDuration)
+        ? drag.assetDuration
+        : null;
+      const minVisible = 1 / fps;
+      const maxAssetStart = assetDuration !== null
+        ? assetDuration - chapter.start_time - clipDuration
+        : Number.POSITIVE_INFINITY;
+      const lowerBound = Math.max(-chapter.start_time, minVisible - clipDuration);
+      const upperBound = Math.max(lowerBound, Math.min(duration - minVisible, maxAssetStart));
+      const start = clampNumber(time - (drag.offset ?? 0), lowerBound, upperBound);
       dragPreview = { start, end: start + clipDuration };
     }
   }
@@ -407,17 +430,21 @@
     const clip = clips.find((item) => item.id === activeDrag.clipId);
     if (!clip) return;
     if (activeDrag.mode === 'move') {
-      // The preview range is clamped to the chapter's visible window, so
-      // derive the persisted window by shifting the clip's absolute
-      // endpoints; the hidden prefix (the portion of the clip before the
-      // chapter start) must be added back so the persisted clip's visible
-      // range lands exactly where the preview showed it. Validate the
-      // resulting full visible window rather than the clamped preview, which
-      // would miss neighbors covered by the unclamped portion of the clip.
-      const hiddenPrefix = Math.max(0, chapter.start_time - clip.in_point);
-      const delta = preview.start - (activeDrag.originalStart ?? preview.start) + hiddenPrefix;
-      const nextIn = clip.in_point + delta;
-      const nextOut = clip.out_point + delta;
+      // The preview spans the clip's full source range in chapter-local
+      // coordinates (it may start before the chapter start), so map it
+      // straight back to source time; the committed visible window then
+      // matches what the preview showed. The drag bounds kept the range
+      // inside the asset, but frame snapping can nudge it past an exact
+      // boundary, so clamp against the asset once more here.
+      const clipDuration = clip.out_point - clip.in_point;
+      const assetDuration = typeof activeDrag.assetDuration === 'number' && Number.isFinite(activeDrag.assetDuration)
+        ? activeDrag.assetDuration
+        : null;
+      const maxInPoint = assetDuration !== null
+        ? Math.max(0, assetDuration - clipDuration)
+        : Number.POSITIVE_INFINITY;
+      const nextIn = clampNumber(chapter.start_time + preview.start, 0, maxInPoint);
+      const nextOut = nextIn + clipDuration;
       const range = clampAgainstLane(activeDrag.assetId, localTime(nextIn), localTime(nextOut), clip.id);
       if (!range) return;
       await executeSlideClipWindow(

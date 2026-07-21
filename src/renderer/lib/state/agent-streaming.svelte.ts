@@ -363,7 +363,16 @@ async function runStreamingMutation(options: {
 
     if (!wasLocallySettled && shouldReloadConversation) {
       try {
-        await selectConversation(options.conversationId);
+        // The turn lock was released above, so a replacement turn or a
+        // chapter change may have installed new chat state while this reload
+        // is in flight; only apply it when nothing newer took over.
+        await selectConversation(options.conversationId, {
+          isStillValid: () =>
+            agentState.activeTurn === null
+            && agentState.currentProjectId === options.pendingDraft.projectId
+            && agentState.currentChapterId === options.pendingDraft.chapterId
+            && agentState.selectedConversationId === options.conversationId,
+        });
       } catch (error) {
         console.error("[AgentStreaming] Failed to reload conversation after mutation error:", error);
       }
@@ -651,18 +660,38 @@ export async function cancelActiveAgentTurn(): Promise<boolean> {
     agentState.messages = agentState.messages.filter(
       (message) => message.requestId !== activeTurn.clientRequestId
     );
-    agentState.activeTurn = null;
-    agentState.isStreaming = false;
     agentState.error = 'The agent did not stop in time. The chapter was not changed.';
     // The main process may already have persisted the send/edit, so reconcile
     // the local history with the database instead of leaving optimistic rows
     // (e.g. a user message with databaseId: null) that cannot be edited or
-    // rerolled until a manual reload.
-    if (agentState.selectedConversationId === activeTurn.conversationId) {
-      try {
-        await selectConversation(activeTurn.conversationId);
-      } catch (error) {
-        console.error("[AgentStreaming] Failed to reload conversation after local settlement:", error);
+    // rerolled until a manual reload. Keep the turn locked through the reload
+    // so cancellation is not reported complete while it is still pending and
+    // a queued chapter change or replacement send cannot install state that
+    // this reload would then overwrite. isStillValid re-checks the original
+    // context once the IPC resolves, in case the request settled or another
+    // turn took over while the reload was in flight.
+    try {
+      if (
+        agentState.currentProjectId === activeTurn.projectId
+        && agentState.currentChapterId === activeTurn.chapterId
+        && agentState.selectedConversationId === activeTurn.conversationId
+      ) {
+        await selectConversation(activeTurn.conversationId, {
+          allowWhileStreaming: true,
+          isStillValid: () =>
+            (agentState.activeTurn === null
+              || agentState.activeTurn.clientRequestId === activeTurn.clientRequestId)
+            && agentState.currentProjectId === activeTurn.projectId
+            && agentState.currentChapterId === activeTurn.chapterId
+            && agentState.selectedConversationId === activeTurn.conversationId,
+        });
+      }
+    } catch (error) {
+      console.error("[AgentStreaming] Failed to reload conversation after local settlement:", error);
+    } finally {
+      if (agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId) {
+        agentState.activeTurn = null;
+        agentState.isStreaming = false;
       }
     }
     // Local settlement is a completed cancellation: let callers proceed with
