@@ -635,11 +635,22 @@ export async function cancelActiveAgentTurn(): Promise<boolean> {
   agentState.activeTurn = { ...activeTurn, status: 'cancelling' };
   const response = await cancelAgentTurn(activeTurn.clientRequestId);
   if (!response.success) {
-    if (agentState.activeTurn?.clientRequestId === activeTurn.clientRequestId) {
-      agentState.activeTurn = { ...activeTurn, status: 'running' };
+    // The turn may have finished after being marked cancelling but before the
+    // main process handled the cancel request, in which case it no longer has
+    // a controller for it. If the matching activeTurn has already been settled
+    // by runStreamingMutation there is nothing left to cancel, so report
+    // success instead of blocking the caller's queued navigation. When the
+    // turn is still present, fall through to the same wait/settlement path as
+    // a successful cancel so the in-flight completion event (or the
+    // local-settlement timeout below) resolves it.
+    if (agentState.activeTurn?.clientRequestId !== activeTurn.clientRequestId) {
+      return true;
     }
-    agentState.error = response.error || 'Failed to cancel the agent response.';
-    return false;
+    if (response.code !== 'NOT_FOUND') {
+      agentState.activeTurn = { ...activeTurn, status: 'running' };
+      agentState.error = response.error || 'Failed to cancel the agent response.';
+      return false;
+    }
   }
 
   const deadline = Date.now() + 5000;

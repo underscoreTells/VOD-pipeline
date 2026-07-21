@@ -395,4 +395,97 @@ describe("agent streaming message actions", () => {
     expect(agentState.isStreaming).toBe(false);
     expect(agentState.error).toBeNull();
   });
+
+  it("proceeds when the turn settles before the cancel request is handled", async () => {
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const {
+      cancelActiveAgentTurn,
+      sendChatMessage,
+    } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+
+    agentState.currentProjectId = "1";
+    agentState.currentChapterId = "3";
+    agentState.selectedConversationId = 2;
+    agentState.conversations = [createConversation()];
+    agentState.messages = [];
+    agentState.isStreaming = false;
+
+    let settleTurn: ((value: { success: true; data: unknown }) => void) | null = null;
+    agentApiMocks.agentChat.mockReturnValue(new Promise((resolve) => {
+      settleTurn = resolve;
+    }));
+    agentApiMocks.cancelAgentTurn.mockImplementation(async () => {
+      settleTurn?.({
+        success: true,
+        data: {
+          message: "Completed before cancellation",
+          userMessageId: 100,
+          assistantMessageId: 101,
+          userCreatedAt: "2026-04-18T12:04:00.000Z",
+          assistantCreatedAt: "2026-04-18T12:04:05.000Z",
+          suggestions: [],
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { success: false, error: "The agent turn is no longer running", code: "NOT_FOUND" };
+    });
+
+    const sendResult = sendChatMessage("Try a new cut");
+    await vi.waitFor(() => expect(agentState.activeTurn?.status).toBe("running"));
+    const cancelResult = await cancelActiveAgentTurn();
+
+    expect(cancelResult).toBe(true);
+    expect(await sendResult).toBe(true);
+    expect(agentState.activeTurn).toBeNull();
+    expect(agentState.isStreaming).toBe(false);
+    expect(agentState.error).toBeNull();
+  });
+
+  it("waits for the in-flight completion when the cancel request reports the turn missing", async () => {
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const {
+      cancelActiveAgentTurn,
+      sendChatMessage,
+    } = await import("../../src/renderer/lib/state/agent-streaming.svelte.js");
+
+    agentState.currentProjectId = "1";
+    agentState.currentChapterId = "3";
+    agentState.selectedConversationId = 2;
+    agentState.conversations = [createConversation()];
+    agentState.messages = [];
+    agentState.isStreaming = false;
+
+    let settleTurn: ((value: { success: true; data: unknown }) => void) | null = null;
+    agentApiMocks.agentChat.mockReturnValue(new Promise((resolve) => {
+      settleTurn = resolve;
+    }));
+    agentApiMocks.cancelAgentTurn.mockImplementation(async () => {
+      queueMicrotask(() => settleTurn?.({
+        success: true,
+        data: {
+          message: "Completed during cancellation",
+          userMessageId: 100,
+          assistantMessageId: 101,
+          userCreatedAt: "2026-04-18T12:04:00.000Z",
+          assistantCreatedAt: "2026-04-18T12:04:05.000Z",
+          suggestions: [],
+        },
+      }));
+      return { success: false, error: "The agent turn is no longer running", code: "NOT_FOUND" };
+    });
+
+    const sendResult = sendChatMessage("Try a new cut");
+    await vi.waitFor(() => expect(agentState.activeTurn?.status).toBe("running"));
+    const cancelResult = await cancelActiveAgentTurn();
+
+    expect(cancelResult).toBe(true);
+    expect(await sendResult).toBe(true);
+    expect(agentState.messages).toEqual([
+      expect.objectContaining({ databaseId: 100, content: "Try a new cut" }),
+      expect.objectContaining({ databaseId: 101, content: "Completed during cancellation" }),
+    ]);
+    expect(agentState.activeTurn).toBeNull();
+    expect(agentState.isStreaming).toBe(false);
+    expect(agentState.error).toBeNull();
+  });
 });
