@@ -137,11 +137,21 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     // backend applies them sequentially to that one clip.
     const owner = targetClipId !== null ? `update:${targetClipId}` : `create:${suggestionId}`;
     const proposed = resolveProposedWindow(suggestion, chapter, simulatedTargets);
-    const conflictsWithCut = timelineState.clips.some((clip) =>
-      clip.asset_id === assetId
-      && clip.id !== suggestion.target_clip_id
-      && rangesOverlap(proposed, { start: clip.in_point, end: clip.out_point }, 0.001)
-    );
+    // One-edge updates can clamp to a zero-duration window; the backend's
+    // updateClip rejects newOutPoint <= newInPoint and aborts the whole
+    // batch, so refuse to enqueue those.
+    if (targetClipId !== null && proposed.end <= proposed.start) {
+      return 'A suggested update would leave its clip with no duration.';
+    }
+    const conflictsWithCut = timelineState.clips.some((clip) => {
+      if (clip.asset_id !== assetId || clip.id === suggestion.target_clip_id) return false;
+      // Clips moved by an earlier update in this batch are checked at their
+      // simulated position; the backend applies sequentially, so a range the
+      // target vacated mid-batch is free for later proposals.
+      const simulated = simulatedTargets.get(clip.id);
+      const current = simulated ?? { start: clip.in_point, end: clip.out_point };
+      return rangesOverlap(proposed, current, 0.001);
+    });
     if (conflictsWithCut) return 'Resolve the overlapping suggested cut before accepting it.';
     const proposedRanges = proposedByAsset.get(assetId) ?? [];
     if (proposedRanges.some((range) => range.owner !== owner && rangesOverlap(proposed, range, 0.001))) {
