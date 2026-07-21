@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Chapter, Asset } from "$shared/types/database";
   import { chaptersState, selectChapter, deleteChapter, updateChapter, getAssetsForChapter } from "../state/chapters.svelte";
+  import { agentState, cancelActiveAgentTurn } from "../state/agent.svelte";
   import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
   import { formatChapterRange } from "./chapter-panel-helpers.js";
@@ -95,10 +96,18 @@
     selectChapter(chapterId);
   }
 
-  function handleDeleteChapter(chapterId: number) {
-    if (confirm("Are you sure you want to delete this chapter?")) {
-      deleteChapter(chapterId);
+  async function handleDeleteChapter(chapterId: number) {
+    if (!confirm("Are you sure you want to delete this chapter?")) return;
+    // Deleting the chapter clears the selection and transitions the agent
+    // context; an in-flight turn for this chapter would otherwise keep the
+    // worker request running against deleted conversations and lock the
+    // composer until it settles, so cancel it before deleting.
+    const activeTurn = agentState.activeTurn;
+    if (activeTurn && activeTurn.chapterId === String(chapterId)) {
+      const cancelled = await cancelActiveAgentTurn();
+      if (!cancelled) return;
     }
+    await deleteChapter(chapterId);
   }
 
   function startEditing(chapter: Chapter) {
