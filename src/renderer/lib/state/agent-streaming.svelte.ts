@@ -335,6 +335,12 @@ async function runStreamingMutation(options: {
     shouldReloadConversation = options.kind !== "send";
     return false;
   } catch (error) {
+    if (locallySettledTurns.has(options.pendingDraft.clientRequestId)) {
+      // The turn was locally settled while the request was in flight; a
+      // replacement turn may already be running, so leave global chat state
+      // untouched and let the finally block run the scoped cleanup only.
+      return false;
+    }
     const errorMessage = error instanceof Error ? error.message : String(error);
     agentState.error = errorMessage;
     agentState.messages = failDraftMessage(
@@ -346,13 +352,16 @@ async function runStreamingMutation(options: {
     return false;
   } finally {
     pendingDrafts.delete(options.pendingDraft.clientRequestId);
-    locallySettledTurns.delete(options.pendingDraft.clientRequestId);
-    agentState.isStreaming = false;
+    const wasLocallySettled = locallySettledTurns.delete(options.pendingDraft.clientRequestId);
+    // Only clear streaming state when this request still owns the turn; after
+    // a local settlement a replacement turn may be active and must not be
+    // unlocked by the old request's late cleanup.
     if (agentState.activeTurn?.clientRequestId === options.pendingDraft.clientRequestId) {
       agentState.activeTurn = null;
+      agentState.isStreaming = false;
     }
 
-    if (shouldReloadConversation) {
+    if (!wasLocallySettled && shouldReloadConversation) {
       try {
         await selectConversation(options.conversationId);
       } catch (error) {
@@ -645,7 +654,20 @@ export async function cancelActiveAgentTurn(): Promise<boolean> {
     agentState.activeTurn = null;
     agentState.isStreaming = false;
     agentState.error = 'The agent did not stop in time. The chapter was not changed.';
-    return false;
+    // The main process may already have persisted the send/edit, so reconcile
+    // the local history with the database instead of leaving optimistic rows
+    // (e.g. a user message with databaseId: null) that cannot be edited or
+    // rerolled until a manual reload.
+    if (agentState.selectedConversationId === activeTurn.conversationId) {
+      try {
+        await selectConversation(activeTurn.conversationId);
+      } catch (error) {
+        console.error("[AgentStreaming] Failed to reload conversation after local settlement:", error);
+      }
+    }
+    // Local settlement is a completed cancellation: let callers proceed with
+    // any queued chapter selection, completion, or back navigation.
+    return true;
   }
 
   return true;

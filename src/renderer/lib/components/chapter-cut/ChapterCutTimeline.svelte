@@ -404,24 +404,34 @@
       return;
     }
     if (!preview || !activeDrag.assetId || !activeDrag.clipId || !dragMoved) return;
-    const range = clampAgainstLane(activeDrag.assetId, preview.start, preview.end, activeDrag.clipId);
-    if (!range) return;
     const clip = clips.find((item) => item.id === activeDrag.clipId);
     if (!clip) return;
     if (activeDrag.mode === 'move') {
       // The preview range is clamped to the chapter's visible window, so
       // derive the persisted window by shifting the clip's absolute
-      // endpoints by the drag delta; this keeps the full clip duration and
-      // any out-of-chapter portions intact.
-      const delta = range.start - (activeDrag.originalStart ?? range.start);
+      // endpoints; the hidden prefix (the portion of the clip before the
+      // chapter start) must be added back so the persisted clip's visible
+      // range lands exactly where the preview showed it. Validate the
+      // resulting full visible window rather than the clamped preview, which
+      // would miss neighbors covered by the unclamped portion of the clip.
+      const hiddenPrefix = Math.max(0, chapter.start_time - clip.in_point);
+      const delta = preview.start - (activeDrag.originalStart ?? preview.start) + hiddenPrefix;
+      const nextIn = clip.in_point + delta;
+      const nextOut = clip.out_point + delta;
+      const range = clampAgainstLane(activeDrag.assetId, localTime(nextIn), localTime(nextOut), clip.id);
+      if (!range) return;
       await executeSlideClipWindow(
         clip.id,
         clip.in_point,
         clip.out_point,
-        clip.in_point + delta,
-        clip.out_point + delta
+        nextIn,
+        nextOut
       );
-    } else if (activeDrag.mode === 'resize') {
+      return;
+    }
+    const range = clampAgainstLane(activeDrag.assetId, preview.start, preview.end, activeDrag.clipId);
+    if (!range) return;
+    if (activeDrag.mode === 'resize') {
       // Preserve the untouched absolute endpoint: the preview endpoints are
       // clamped to the chapter range, so reconstructing both from the
       // preview would silently clamp clips that extend beyond the chapter.
