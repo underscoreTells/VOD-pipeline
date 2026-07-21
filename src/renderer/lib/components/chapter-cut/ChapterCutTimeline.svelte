@@ -46,7 +46,7 @@
     shouldRequestChapterWaveform,
     type ChapterWaveformStatus,
   } from './chapter-cut-waveform.js';
-  import { normalizeSuggestionWindowForChapter } from '../../../../shared/utils/clip-timing.js';
+  import { resolveSuggestionWindowForChapter } from '../../../../shared/utils/clip-timing.js';
 
   interface Props {
     projectId: number;
@@ -218,7 +218,17 @@
   }
 
   function suggestionLocalRange(suggestion: Suggestion): { start: number; end: number } {
-    const range = normalizeSuggestionWindowForChapter(suggestion, chapter);
+    // Update suggestions resolve against the target's live window: acceptance
+    // merges the payload onto the clip's current range, so the proposal-time
+    // stored range can disagree with what applying would retain.
+    const liveTarget = suggestion.target_clip_id
+      ? timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id)
+      : null;
+    const range = resolveSuggestionWindowForChapter(
+      suggestion,
+      chapter,
+      liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
+    );
     return {
       start: clampNumber(range.start - chapter.start_time, 0, duration),
       end: clampNumber(range.end - chapter.start_time, 0, duration),

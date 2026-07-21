@@ -35,7 +35,7 @@
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
   import {
     getClipVisibleRangeInChapter,
-    normalizeSuggestionWindowForChapter,
+    resolveSuggestionWindowForChapter,
   } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
@@ -103,7 +103,17 @@
   const viewerRange = $derived.by(() => {
     if (!chapter) return { start: 0, end: 0.01 };
     if (selectedSuggestion) {
-      const suggestionWindow = normalizeSuggestionWindowForChapter(selectedSuggestion, chapter);
+      // Update suggestions merge onto the target's live window at acceptance
+      // time, so preview the payload applied to the clip's current range
+      // rather than the proposal-time stored range.
+      const liveTarget = selectedSuggestion.target_clip_id
+        ? clips.find((clip) => clip.id === selectedSuggestion.target_clip_id)
+        : null;
+      const suggestionWindow = resolveSuggestionWindowForChapter(
+        selectedSuggestion,
+        chapter,
+        liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
+      );
       return {
         start: clampToChapter(chapter, suggestionWindow.start),
         end: clampToChapter(chapter, suggestionWindow.end),

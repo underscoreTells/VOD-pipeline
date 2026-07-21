@@ -6,7 +6,9 @@ import {
   compareClipsBySourceTime,
   compareClipsForExport,
   getClipVisibleRangeInChapter,
+  mergeSuggestionUpdateWindow,
   normalizeSuggestionWindowForChapter,
+  resolveSuggestionWindowForChapter,
   splitClipAtSourceTime,
 } from '../../src/shared/utils/clip-timing.js';
 
@@ -86,6 +88,62 @@ describe('clip timing helpers', () => {
     expect(
       normalizeSuggestionWindowForChapter({ in_point: 500, out_point: 100 }, chapter)
     ).toEqual({ start: 4100, end: 4100 });
+  });
+
+  it('merges update payloads onto the live target window', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const payload = JSON.stringify({ update: { inPoint: 20 } });
+
+    expect(
+      mergeSuggestionUpdateWindow(
+        { action_payload_json: payload },
+        { start: 140, end: 150 },
+        chapter
+      )
+    ).toEqual({ start: 120, end: 150 });
+  });
+
+  it('clamps merged update windows like the backend apply path', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+
+    expect(
+      mergeSuggestionUpdateWindow(
+        { action_payload_json: JSON.stringify({ update: { inPoint: -10, outPoint: 500 } }) },
+        { start: 140, end: 150 },
+        chapter
+      )
+    ).toEqual({ start: 100, end: 200 });
+  });
+
+  it('resolves update suggestions against the live target window', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const suggestion = {
+      in_point: 20,
+      out_point: 21,
+      action_type: 'update_clip' as const,
+      target_clip_id: 7,
+      action_payload_json: JSON.stringify({ update: { description: 'metadata only' } }),
+    };
+
+    expect(
+      resolveSuggestionWindowForChapter(suggestion, chapter, { start: 140, end: 150 })
+    ).toEqual({ start: 140, end: 150 });
+  });
+
+  it('falls back to the stored range when the update target is gone', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const suggestion = {
+      in_point: 20,
+      out_point: 30,
+      action_type: 'update_clip' as const,
+      target_clip_id: 7,
+      action_payload_json: null,
+    };
+
+    expect(resolveSuggestionWindowForChapter(suggestion, chapter, null)).toEqual({
+      start: 120,
+      end: 130,
+    });
   });
 
   it('splits a clip from source time into left and right source windows', () => {

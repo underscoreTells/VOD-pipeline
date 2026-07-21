@@ -9,7 +9,11 @@ import {
 import { getAssetsForChapter, getSelectedChapter } from './chapters.svelte.js';
 import { projectDetail } from './project-media.svelte.js';
 import { rangesOverlap } from '../utils/timeline-geometry.js';
-import { normalizeSuggestionWindowForChapter } from '../../../shared/utils/clip-timing.js';
+import {
+  mergeSuggestionUpdateWindow,
+  normalizeSuggestionWindowForChapter,
+  resolveSuggestionWindowForChapter,
+} from '../../../shared/utils/clip-timing.js';
 import {
   createClip as createTimelineClip,
   deleteClip as deleteTimelineClip,
@@ -94,38 +98,6 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
-function mergeUpdateWindow(
-  suggestion: Suggestion,
-  base: { start: number; end: number },
-  chapter: { start_time: number; end_time: number }
-): { start: number; end: number } {
-  // Mirror applyUpdateSuggestionToClip: merge the update payload onto the
-  // base window so overlap checks use the resulting window, not the
-  // synthetic fallback range stored on the suggestion row.
-  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
-  const clampLocal = (value: number, min: number) => Math.min(Math.max(value, min), chapterDuration);
-  let inPoint = base.start;
-  let outPoint = base.end;
-  let updatePayload: { inPoint?: number; outPoint?: number } | undefined;
-  if (suggestion.action_payload_json) {
-    try {
-      updatePayload = (JSON.parse(suggestion.action_payload_json) as {
-        update?: { inPoint?: number; outPoint?: number };
-      }).update;
-    } catch {
-      // The repository will report malformed action payloads on apply.
-    }
-  }
-  if (typeof updatePayload?.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
-    inPoint = chapter.start_time + clampLocal(updatePayload.inPoint, 0);
-  }
-  if (typeof updatePayload?.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
-    const minLocalOut = clampLocal(inPoint - chapter.start_time, 0);
-    outPoint = chapter.start_time + clampLocal(updatePayload.outPoint, minLocalOut);
-  }
-  return { start: inPoint, end: outPoint };
-}
-
 function resolveProposedWindow(
   suggestion: Suggestion,
   chapter: { start_time: number; end_time: number },
@@ -140,7 +112,7 @@ function resolveProposedWindow(
     if (base) {
       // Sequential updates to the same target merge onto the outcome of the
       // previous update, matching the backend's sequential apply order.
-      const merged = mergeUpdateWindow(suggestion, base, chapter);
+      const merged = mergeSuggestionUpdateWindow(suggestion, base, chapter);
       simulatedTargets?.set(suggestion.target_clip_id, merged);
       return merged;
     }
@@ -175,7 +147,15 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     if (proposedRanges.some((range) => range.owner !== owner && rangesOverlap(proposed, range, 0.001))) {
       return 'Suggested cuts in this batch overlap each other.';
     }
-    proposedRanges.push({ ...proposed, owner });
+    // Only the final sequential state of a repeated-update target exists once
+    // the batch applies, so replace its prior intermediate range instead of
+    // retaining every step.
+    const existingIndex = proposedRanges.findIndex((range) => range.owner === owner);
+    if (existingIndex >= 0) {
+      proposedRanges[existingIndex] = { ...proposed, owner };
+    } else {
+      proposedRanges.push({ ...proposed, owner });
+    }
     proposedByAsset.set(assetId, proposedRanges);
   }
   return null;
@@ -419,7 +399,15 @@ export function focusSuggestion(suggestionId: number): boolean {
   if (!suggestion || !chapter) return false;
   agentState.selectedSuggestionId = suggestionId;
   timelineState.selectedClipIds = new Set();
-  setPlayhead(normalizeSuggestionWindowForChapter(suggestion, chapter).start);
+  const liveTarget = suggestion.target_clip_id
+    ? timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id)
+    : null;
+  const window = resolveSuggestionWindowForChapter(
+    suggestion,
+    chapter,
+    liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
+  );
+  setPlayhead(window.start);
   return true;
 }
 
