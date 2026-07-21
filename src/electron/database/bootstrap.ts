@@ -12,6 +12,9 @@ import {
   ensureDetailedTranscriptTable,
   ensureSchemaColumns,
   ensureVodCutDraftTable,
+  getSchemaVersion,
+  normalizeStoredSuggestionRangesToChapterLocal,
+  reconcilePendingSuggestionPreviews,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setSchemaVersion,
@@ -93,12 +96,36 @@ export async function initializeDatabase(): Promise<Database.Database> {
     dropProxiesTable(database);
     ensureSchemaColumns(database);
     repairDanglingClipReferences(database);
+    // Reconcile materialized previews before normalizing suggestion ranges:
+    // preview recognition compares stored ranges against live clips, and
+    // mutating a stranded range first would destroy that evidence. When
+    // reconciliation deletes an untouched create preview, it first stamps
+    // the chapter-local window derived from the clip onto the suggestion so
+    // the normalization pass keeps the evidence the unlink would otherwise
+    // erase. The pre-migration version is captured so failed rows can be
+    // retried with the same provenance on the next startup.
+    const originalSchemaVersion = await getSchemaVersion(database);
+    const previewStats = reconcilePendingSuggestionPreviews(database);
+    const rangeStats = normalizeStoredSuggestionRangesToChapterLocal(database);
     applySchemaStatements(database, schema, 'index');
     validateClipMigrationState(database);
     // Record the schema revision this build expects; the imperative
     // ensure* helpers above are idempotent, so the version is primarily a
-    // marker for future migration tooling and diagnostics.
-    await setSchemaVersion(CURRENT_SCHEMA_VERSION, database);
+    // marker for future migration tooling and diagnostics. When rows could
+    // not be migrated, keep the original version so the next startup retries
+    // them with the same provenance instead of permanently skipping the data
+    // or misclassifying it under a newer version's rules.
+    const failedRowCount = previewStats.rowsFailed + rangeStats.rowsFailed;
+    const targetSchemaVersion = failedRowCount > 0
+      ? originalSchemaVersion
+      : CURRENT_SCHEMA_VERSION;
+    if (targetSchemaVersion !== CURRENT_SCHEMA_VERSION) {
+      console.warn(
+        `Database schema version held at ${targetSchemaVersion}: ` +
+        `${failedRowCount} row(s) still need migration`
+      );
+    }
+    await setSchemaVersion(targetSchemaVersion, database);
     console.log('Database schema initialized successfully');
 
     return database;

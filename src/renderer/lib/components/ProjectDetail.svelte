@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import Timeline from './Timeline.svelte';
-  import TimelineToolbar from './TimelineToolbar.svelte';
-  import BeatPanel from './BeatPanel.svelte';
+  import ChapterCutTimeline from './chapter-cut/ChapterCutTimeline.svelte';
+  import CutListPanel from './CutListPanel.svelte';
   import ImportChoice from './ImportChoice.svelte';
   import ChapterDefinition from './ChapterDefinition.svelte';
   import ChapterPanel from './ChapterPanel.svelte';
   import ChatPanel from './ChatPanel.svelte';
-  import ClipPreview from './ClipPreview.svelte';
-  import ChapterPreview from './ChapterPreview.svelte';
+  import ChapterEditorViewer from './ChapterEditorViewer.svelte';
   import { prewarmProjectProxies } from '../api/projects.js';
   import { 
     projectDetail, 
@@ -18,8 +16,6 @@
     clearProjectDetail,
     saveProjectTimelineState,
     exportProjectToFile,
-    generateAssetWaveform,
-    getAssetWaveform,
     getMissingProjectAssets
   } from '../state/project-detail.svelte';
   import { 
@@ -30,6 +26,7 @@
     setImportChoice,
     setIsImporting,
     selectChapter,
+    updateChapter,
     loadAssetsForChapter,
     getSelectedChapter,
     getAssetsForChapter
@@ -56,7 +53,7 @@
     expandChat,
     expandBeat,
   } from '../state/layout.svelte';
-  import { buildPlayableAssetUrl, looksLikeExternalStoragePath } from '../utils/media';
+  import { looksLikeExternalStoragePath } from '../utils/media';
   import {
     onTranscriptionProgress,
     transcribeChapter as startChapterTranscription,
@@ -64,7 +61,16 @@
   } from '../api/transcription.js';
   import { getPathForFile, showSaveDialog } from '../api/system.js';
   import { setTranscriptionProgress, setTranscriptionError } from '../state/transcription.svelte';
-  import { syncAgentContext } from '../state/agent.svelte';
+  import {
+    agentState,
+    applyAllSuggestions,
+    applySuggestion,
+    cancelActiveAgentTurn,
+    focusSuggestion,
+    rejectAllSuggestions,
+    rejectSuggestion,
+    syncAgentContext,
+  } from '../state/agent.svelte';
   import { toAgentChapterId } from './project-detail-helpers.js';
   import {
     importProjectFiles,
@@ -81,15 +87,12 @@
     transcribeMissingChaptersOnReopen,
   } from './project-detail-transcription.js';
   import {
-    createChapterWaveformScheduler,
-  } from './project-detail-waveforms.js';
-  import {
     clipOverlapsChapterSourceRange,
     compareClipsBySourceTime,
   } from '../../../shared/utils/clip-timing.js';
   import ProjectEditorHeader from './ProjectEditorHeader.svelte';
   import Icon from './ui/Icon.svelte';
-  import { BookOpen, X, ChevronLeft, ChevronRight } from '../constants';
+  import { BookOpen, Check, X, ChevronLeft, ChevronRight } from '../constants';
   import type { Project, Asset, VodCutRange } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
   
@@ -98,24 +101,11 @@
     onBack: () => void;
   }
 
-  interface TimelineLane {
-    id: string;
-    label: string;
-    audioUrl: string;
-    missing: boolean;
-    assetId: number | null;
-    editable: boolean;
-    clipTrackIndex: number;
-    waveformTrackIndex: number;
-    createTrackIndex?: number;
-  }
-  
   let { project, onBack }: Props = $props();
   
   let isDragging = $state(false);
   let showExportDialog = $state(false);
   let selectedExportFormat = $state('fcpxml');
-  let showClipPreviewPanel = $state(true);
   let cleanupKeyboard: (() => void) | null = null;
   let showChapterDefinition = $state(false);
   let vodAssetForDefinition = $state<Asset | null>(null);
@@ -128,6 +118,11 @@
   let initialChapterLoadEvaluated = $state(false);
   let scheduledMissingChapterTranscription = $state(false);
   let vodResumeEvaluated = $state(false);
+  let pendingChapterSelection = $state<number | null>(null);
+  let pendingChapterCompletion = $state<number | null>(null);
+  let pendingNavigationBack = $state(false);
+  let isCancellingAgentTurn = $state(false);
+  let pinnedDragAsset = $state<ProjectAsset | null>(null);
 
   const RESIZE_HANDLE_SIZE = 6;
   const MIN_LEFT_WIDTH = 220;
@@ -139,21 +134,12 @@
   const MIN_LEFT_SIDEBAR_SECTION_HEIGHT = 220;
   const MIN_CLIP_PREVIEW_WIDTH = 240;
   const MIN_CHAPTER_PREVIEW_WIDTH = 360;
-  const MIX_TRACK_INDEX = 0;
-  const MIX_WAVEFORM_TRACK_INDEX = -1;
 
   const transcriptionDeps = {
     getTranscriptionStatus,
     startChapterTranscription,
     setTranscriptionError,
   };
-
-  const waveformScheduler = createChapterWaveformScheduler({
-    resolveAsset: (assetId) => projectDetail.assets.find((item) => item.id === assetId) ?? null,
-    getAssetWaveform,
-    generateAssetWaveform,
-    isPlaybackActive: () => timelineState.isPlaying,
-  });
 
   const layoutController = createProjectDetailLayoutController({
     getLeftWidth: () => layoutState.leftWidth,
@@ -216,6 +202,7 @@
   onDestroy(() => {
     if (cleanupKeyboard) cleanupKeyboard();
     if (cleanupTranscription) cleanupTranscription();
+    if (agentState.activeTurn) void cancelActiveAgentTurn();
     saveProjectTimelineState();
     clearProjectDetail();
     clearChaptersState();
@@ -248,7 +235,7 @@
       await importProjectFiles(project.id, filePaths, {
         addAssetToProject,
         autoCreateChaptersFromFiles,
-        selectChapter,
+        selectChapter: requestChapterSelection,
         autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
         ...transcriptionDeps,
       }, getChapterImportProxyOptions());
@@ -281,7 +268,7 @@
       }
 
       await loadChapters(project.id);
-      selectChapter(result.data[0].id);
+      requestChapterSelection(result.data[0].id);
       if (settingsState.settings.autoTranscribeOnImport) {
         await autoTranscribeChapters(
           result.data.map((chapter) => chapter.id),
@@ -316,6 +303,110 @@
   }
 
   const selectedChapter = $derived.by(() => getSelectedChapter());
+  const completedChapterCount = $derived(
+    chaptersState.chapters.filter((chapter) => Boolean(chapter.rough_cut_completed_at)).length
+  );
+  const pendingAgentSuggestions = $derived(
+    agentState.suggestions.filter((suggestion) => suggestion.status === 'pending')
+  );
+  const selectedSuggestionIndex = $derived(
+    pendingAgentSuggestions.findIndex((suggestion) => suggestion.id === agentState.selectedSuggestionId)
+  );
+
+  function reviewAdjacentSuggestion(direction: -1 | 1) {
+    if (pendingAgentSuggestions.length === 0) return;
+    const current = selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0;
+    const next = (current + direction + pendingAgentSuggestions.length) % pendingAgentSuggestions.length;
+    focusSuggestion(pendingAgentSuggestions[next].id);
+  }
+
+  async function persistChapterCompletion(chapterId: number, isComplete: boolean) {
+    const updated = await updateChapter(chapterId, {
+      roughCutCompletedAt: isComplete ? null : new Date().toISOString(),
+    });
+    if (!updated || isComplete) return;
+
+    const ordered = [...chaptersState.chapters].sort(
+      (left, right) => left.display_order - right.display_order || left.start_time - right.start_time
+    );
+    const index = ordered.findIndex((chapter) => chapter.id === chapterId);
+    const next = ordered[index + 1];
+    if (next) requestChapterSelection(next.id);
+  }
+
+  async function toggleSelectedChapterCompletion() {
+    if (!selectedChapter) return;
+    const chapterId = selectedChapter.id;
+    const isComplete = Boolean(selectedChapter.rough_cut_completed_at);
+    if (!isComplete && agentState.suggestions.some((suggestion) => suggestion.status === 'pending')) {
+      const proceed = window.confirm('This chapter still has pending suggested cuts. Mark it complete anyway?');
+      if (!proceed) return;
+    }
+    if (!isComplete && agentState.activeTurn) {
+      pendingChapterCompletion = chapterId;
+      pendingChapterSelection = null;
+      pendingNavigationBack = false;
+      return;
+    }
+    await persistChapterCompletion(chapterId, isComplete);
+  }
+
+  function finishChapterSelection(chapterId: number) {
+    clearTimelineSelection();
+    selectChapter(chapterId);
+  }
+
+  function requestChapterSelection(chapterId: number) {
+    if (chaptersState.selectedChapterId === chapterId) return;
+    if (agentState.activeTurn) {
+      pendingChapterSelection = chapterId;
+      pendingNavigationBack = false;
+      return;
+    }
+    finishChapterSelection(chapterId);
+  }
+
+  function requestBackNavigation() {
+    if (agentState.activeTurn) {
+      pendingChapterSelection = null;
+      pendingNavigationBack = true;
+      return;
+    }
+    void onBack();
+  }
+
+  function dismissAgentCancelDialog() {
+    if (isCancellingAgentTurn) return;
+    pendingChapterSelection = null;
+    pendingChapterCompletion = null;
+    pendingNavigationBack = false;
+  }
+
+  async function confirmAgentCancellation() {
+    if (isCancellingAgentTurn) return;
+    isCancellingAgentTurn = true;
+    try {
+      const cancelled = await cancelActiveAgentTurn();
+      if (!cancelled) return;
+
+      const chapterId = pendingChapterSelection;
+      const completionChapterId = pendingChapterCompletion;
+      const shouldNavigateBack = pendingNavigationBack;
+      pendingChapterSelection = null;
+      pendingChapterCompletion = null;
+      pendingNavigationBack = false;
+
+      if (completionChapterId !== null) {
+        await persistChapterCompletion(completionChapterId, false);
+      } else if (chapterId !== null) {
+        finishChapterSelection(chapterId);
+      } else if (shouldNavigateBack) {
+        await onBack();
+      }
+    } finally {
+      isCancellingAgentTurn = false;
+    }
+  }
 
   function getChapterImportProxyOptions() {
     return {
@@ -328,6 +419,7 @@
     const chapterId = selectedChapter?.id ?? null;
     if (chapterId === previousSelectedChapterId) return;
     clearTimelineSelection();
+    pinnedDragAsset = null;
     previousSelectedChapterId = chapterId;
   });
 
@@ -365,13 +457,54 @@
     return segments[segments.length - 1] || `Asset ${asset.id}`;
   }
 
-  const chapterPreviewAsset = $derived.by(() =>
-    selectedChapterAssets.find((asset) => asset.availability.exists !== false) ?? selectedChapterAssets[0] ?? null
-  );
-  const timelineWaveformAssetIds = $derived.by(() => {
-    return selectedChapterAssets
-      .filter((asset) => asset.availability.exists !== false)
-      .map((asset) => asset.id);
+  const chapterPreviewAsset = $derived.by(() => {
+    const selectedIds = timelineState.selectedClipIds;
+    const selectedClipId = selectedIds.size === 1 ? [...selectedIds][0] : null;
+    const selectedClip = selectedClipId === null
+      ? null
+      : timelineState.clips.find((clip) => clip.id === selectedClipId);
+    const selectedClipAsset = selectedClip
+      ? selectedChapterAssets.find((asset) => asset.id === selectedClip.asset_id)
+      : null;
+    const selectedSuggestion = agentState.suggestions.find(
+      (suggestion) => suggestion.id === agentState.selectedSuggestionId
+    );
+    let selectedSuggestionAssetId: number | null = null;
+    if (selectedSuggestion?.target_clip_id) {
+      selectedSuggestionAssetId = timelineState.clips.find(
+        (clip) => clip.id === selectedSuggestion.target_clip_id
+      )?.asset_id ?? null;
+    } else if (selectedSuggestion?.action_payload_json) {
+      try {
+        const payload = JSON.parse(selectedSuggestion.action_payload_json) as {
+          create?: { assetId?: number };
+        };
+        if (typeof payload.create?.assetId === 'number') {
+          selectedSuggestionAssetId = payload.create.assetId;
+        }
+      } catch {
+        // Malformed action payloads are handled when the suggestion is applied.
+      }
+    }
+    // Mirror the sole-linked-video rule used by validation and
+    // createSuggestionTimelineClip so the reviewed footage matches the applied clip.
+    if (selectedSuggestionAssetId === null && selectedSuggestion) {
+      const chapterVideoAssets = selectedChapterAssets.filter((asset) => asset.file_type === 'video');
+      if (chapterVideoAssets.length === 1) {
+        selectedSuggestionAssetId = chapterVideoAssets[0]?.id ?? null;
+      }
+    }
+    const selectedSuggestionAsset = selectedSuggestionAssetId === null
+      ? null
+      : selectedChapterAssets.find((asset) => asset.id === selectedSuggestionAssetId);
+    // An active create drag pins the viewed asset before clearing selection;
+    // keep the viewer on it for the drag's duration.
+    return pinnedDragAsset
+      ?? selectedClipAsset
+      ?? selectedSuggestionAsset
+      ?? selectedChapterAssets.find((asset) => asset.availability.exists !== false)
+      ?? selectedChapterAssets[0]
+      ?? null;
   });
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
@@ -416,15 +549,6 @@
     void syncAgentContext(projectId, chapterId);
   });
 
-  $effect(() => {
-    if (timelineWaveformAssetIds.length > 0) {
-      void waveformScheduler.ensureChapterWaveforms(
-        [...timelineWaveformAssetIds],
-        MIX_WAVEFORM_TRACK_INDEX
-      );
-    }
-  });
-  
   // Handle drag and drop for additional imports
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
@@ -457,7 +581,7 @@
                 getChapterImportProxyOptions()
               );
               if (created.length > 0) {
-                selectChapter(created[0].id);
+                requestChapterSelection(created[0].id);
               }
             }
           }
@@ -494,23 +618,6 @@
   }
 
   $effect(() => {
-    if (!showClipPreviewPanel || !previewTopLayoutRef) return;
-
-    layoutController.clampClipPreviewWidth();
-
-    const observer = new ResizeObserver(() => {
-      if (!showClipPreviewPanel) return;
-      layoutController.clampClipPreviewWidth();
-    });
-
-    observer.observe(previewTopLayoutRef);
-
-    return () => {
-      observer.disconnect();
-    };
-  });
-
-  $effect(() => {
     if (showLeftDock || showClipsDock || !leftSidebarStackRef) return;
 
     layoutController.clampLeftBottomHeight();
@@ -527,33 +634,6 @@
     };
   });
   
-  const timelineLanes = $derived.by(() => {
-    if (selectedChapterAssets.length === 0) {
-      return [] as TimelineLane[];
-    }
-
-    const includeAssetNames = selectedChapterAssets.length > 1;
-    const lanes: TimelineLane[] = [];
-
-    for (const asset of selectedChapterAssets) {
-      const assetLabelSuffix = includeAssetNames ? ` - ${getAssetDisplayName(asset)}` : '';
-
-      lanes.push({
-        id: `mix-${asset.id}`,
-        label: `Mix${assetLabelSuffix}`,
-        audioUrl: buildPlayableAssetUrl(asset),
-        missing: asset.availability.exists === false,
-        assetId: asset.id,
-        editable: true,
-        clipTrackIndex: -1,
-        waveformTrackIndex: MIX_WAVEFORM_TRACK_INDEX,
-        createTrackIndex: MIX_TRACK_INDEX,
-      });
-    }
-
-    return lanes;
-  });
-
   const selectedChapterClips = $derived.by(() => {
     if (!selectedChapter) return [];
     if (selectedChapterAssetIds.length === 0) return [];
@@ -582,7 +662,7 @@
   <ProjectEditorHeader
     projectName={project.name}
     showImportMore={hasContent()}
-    onBack={onBack}
+    onBack={requestBackNavigation}
     onImportMore={() => setIsImporting(true)}
     onExport={() => showExportDialog = true}
   />
@@ -669,6 +749,7 @@
                   class="h-full border-r-0"
                   projectAssets={projectDetail.assets}
                   onImportClick={() => setIsImporting(true)}
+                  onChapterSelect={requestChapterSelection}
                 />
               </div>
 
@@ -684,11 +765,11 @@
                   class="left-sidebar-clips min-h-0 shrink-0 overflow-hidden border-t border-border-default"
                   style="height: {layoutState.leftBottomHeight}px; min-height: {MIN_LEFT_SIDEBAR_SECTION_HEIGHT}px"
                 >
-                  <BeatPanel
+                  <CutListPanel
                     class="h-full w-full border-l-0"
                     clips={selectedChapterClips}
                     chapterStartTime={selectedChapter?.start_time ?? 0}
-                    chapterDuration={selectedChapterDuration}
+                    chapterEndTime={selectedChapter?.end_time}
                   />
                 </div>
               {:else}
@@ -738,26 +819,32 @@
                 class="editor-top-fixed box-border flex shrink-0 flex-col gap-2 overflow-hidden border-b border-border-subtle px-4 pt-4 pb-2"
                 style="height: {layoutState.previewHeight}px"
               >
-                <div class="preview-top-toolbar flex shrink-0 items-center justify-end">
-                  <button
-                    class="preview-toggle-btn rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-sm text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
-                    onclick={() => showClipPreviewPanel = !showClipPreviewPanel}
-                  >
-                    {showClipPreviewPanel ? 'Hide Clip Player' : 'Show Clip Player'}
-                  </button>
+                <div class="flex shrink-0 items-center justify-between gap-4">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <h2 class="m-0 truncate text-app-base font-semibold text-text-primary">{selectedChapter?.title || 'Select a chapter'}</h2>
+                      {#if selectedChapter?.rough_cut_completed_at}
+                        <span class="inline-flex items-center gap-1 rounded-sm border border-accent-primary bg-accent-primary-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-accent-primary"><Icon icon={Check} size={11} /> Complete</span>
+                      {/if}
+                    </div>
+                    <p class="m-0 mt-0.5 text-app-xs text-text-tertiary">{completedChapterCount} of {chaptersState.chapters.length} chapters complete</p>
+                  </div>
+                  {#if selectedChapter}
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-md border border-border-default bg-surface-raised px-3 py-1.5 text-app-xs font-semibold text-text-secondary transition-colors hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
+                      onclick={toggleSelectedChapterCompletion}
+                    >
+                      {selectedChapter.rough_cut_completed_at ? 'Reopen rough cut' : 'Complete & next'}
+                    </button>
+                  {/if}
                 </div>
                 <div
-                  class="preview-top-layout flex flex-1 min-h-0 items-stretch gap-3 max-[980px]:flex-col"
+                  class="preview-top-layout flex flex-1 min-h-0 items-stretch"
                   bind:this={previewTopLayoutRef}
                 >
-                  {#if showClipPreviewPanel}
-                    <div class="clip-preview-pane min-h-0 min-w-0 flex-1 basis-0 overflow-hidden max-[980px]:flex-auto">
-                      <ClipPreview class="h-full min-h-0" />
-                    </div>
-                  {/if}
-
-                  <div class="chapter-preview-pane min-h-0 min-w-0 flex-1 basis-0 max-[980px]:flex-auto">
-                    <ChapterPreview
+                  <div class="chapter-preview-pane min-h-0 min-w-0 flex-1 overflow-hidden">
+                    <ChapterEditorViewer
                       class="h-full min-h-0"
                       chapter={selectedChapter}
                       asset={chapterPreviewAsset}
@@ -775,21 +862,39 @@
 
               {#if chaptersState.selectedChapterId}
                 <div class="editor-bottom-scrollable scrollbar-thin flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto overflow-x-hidden px-4 pt-2 pb-4">
-                  <div class="timeline-wrapper flex min-h-[220px] flex-1 flex-col overflow-hidden">
-                    <div class="timeline-toolbar-row flex items-center gap-3">
-                      <div class="timeline-toolbar-main min-w-0 flex-1">
-                        <TimelineToolbar />
+                  <div class="timeline-wrapper flex min-h-[260px] flex-1 flex-col overflow-hidden">
+                    {#if pendingAgentSuggestions.length > 0}
+                      <div class="mb-2 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-accent-warning/40 bg-accent-warning-subtle px-3 py-2">
+                        <div class="min-w-0">
+                          <p class="m-0 text-app-xs font-semibold text-accent-warning">Suggested cuts · {pendingAgentSuggestions.length} pending</p>
+                          <p class="m-0 mt-0.5 truncate text-app-xs text-text-secondary">
+                            {pendingAgentSuggestions[selectedSuggestionIndex >= 0 ? selectedSuggestionIndex : 0]?.description || 'Select a dashed range to review it'}
+                          </p>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-1">
+                          <button type="button" class="rounded-sm border border-border-default bg-surface-base px-2 py-1 text-app-xs text-text-secondary hover:bg-surface-hover" onclick={() => reviewAdjacentSuggestion(-1)}>Previous</button>
+                          <button type="button" class="rounded-sm border border-border-default bg-surface-base px-2 py-1 text-app-xs text-text-secondary hover:bg-surface-hover" onclick={() => reviewAdjacentSuggestion(1)}>Next</button>
+                          {#if agentState.selectedSuggestionId !== null}
+                            <button type="button" class="rounded-sm border border-accent-destructive px-2 py-1 text-app-xs text-accent-destructive hover:bg-accent-destructive hover:text-white" onclick={() => rejectSuggestion(agentState.selectedSuggestionId!)}>Reject</button>
+                            <button type="button" class="rounded-sm border border-accent-primary bg-accent-primary px-2 py-1 text-app-xs font-semibold text-white hover:bg-accent-primary-hover" onclick={() => applySuggestion(agentState.selectedSuggestionId!)}>Accept</button>
+                          {/if}
+                          <button type="button" class="rounded-sm px-2 py-1 text-app-xs text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={rejectAllSuggestions}>Reject all</button>
+                          <button type="button" class="rounded-sm px-2 py-1 text-app-xs font-semibold text-accent-primary hover:bg-accent-primary-subtle" onclick={applyAllSuggestions}>Accept all</button>
+                        </div>
                       </div>
-                    </div>
-                    <div class="timeline-container scrollbar-thin flex-1 overflow-auto">
-                      <Timeline 
+                    {/if}
+                    {#if selectedChapter}
+                      <ChapterCutTimeline
                         projectId={project.id}
-                        lanes={timelineLanes}
-                        clips={timelineState.clips}
-                        displayClips={selectedChapterClips}
-                        chapterDuration={selectedChapterDuration}
+                        chapter={selectedChapter}
+                        assets={selectedChapterAssets}
+                        clips={selectedChapterClips}
+                        suggestions={agentState.suggestions}
+                        playbackAvailable={chapterPreviewAsset !== null && chapterPreviewAsset.availability.exists !== false}
+                        activeAsset={chapterPreviewAsset}
+                        onPinnedAssetChange={(asset) => (pinnedDragAsset = asset)}
                       />
-                    </div>
+                    {/if}
                   </div>
                 </div>
               {:else}
@@ -857,6 +962,50 @@
   {/if}
   
   <!-- Export Dialog -->
+  {#if pendingChapterSelection !== null || pendingChapterCompletion !== null || pendingNavigationBack}
+    <div
+      class="dialog-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60 px-4"
+      role="presentation"
+      onclick={dismissAgentCancelDialog}
+    >
+      <div
+        class="w-full max-w-[460px] rounded-lg border border-border-default bg-surface-base p-6 shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cancel-agent-turn-title"
+        tabindex="-1"
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => event.stopPropagation()}
+      >
+        <p class="mb-2 text-app-xs font-semibold uppercase tracking-[0.08em] text-accent-warning">Agent response in progress</p>
+        <h2 id="cancel-agent-turn-title" class="m-0 text-app-lg font-semibold text-text-primary">
+          {pendingChapterCompletion !== null ? 'Cancel this response before completing?' : 'Cancel this response before leaving?'}
+        </h2>
+        <p class="mb-0 mt-3 text-app-sm leading-[1.6] text-text-secondary">
+          The response belongs to {selectedChapter?.title || 'this chapter'}. Cancelling keeps your message in the conversation so you can reroll it later.
+        </p>
+        <div class="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-md border border-border-default bg-transparent px-4 py-2 text-app-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+            onclick={dismissAgentCancelDialog}
+            disabled={isCancellingAgentTurn}
+          >
+            Stay here
+          </button>
+          <button
+            type="button"
+            class="rounded-md border border-accent-destructive bg-accent-destructive px-4 py-2 text-app-sm font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+            onclick={confirmAgentCancellation}
+            disabled={isCancellingAgentTurn}
+          >
+            {isCancellingAgentTurn ? 'Cancelling...' : pendingChapterCompletion !== null ? 'Cancel response & complete' : 'Cancel response & leave'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if showExportDialog}
     <div
       class="dialog-overlay fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center bg-black/60"

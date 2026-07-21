@@ -1,8 +1,10 @@
+import type Database from 'better-sqlite3';
 import type {
   Chapter,
   CreateChapterInput,
 } from '../../../shared/types/database.js';
 import { getDatabase } from '../client.js';
+import { parseSuggestionPreviewSnapshotJson } from './suggestion-helpers.js';
 
 export { getChapterProxyByChapterAsset } from './proxies.js';
 
@@ -41,6 +43,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
     start_time: chapter.start_time,
     end_time: chapter.end_time,
     display_order: displayOrder,
+    rough_cut_completed_at: null,
     created_at: now,
   };
 }
@@ -48,7 +51,7 @@ export async function createChapter(chapter: CreateChapterInput): Promise<Chapte
 export async function getChapter(id: number): Promise<Chapter | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE id = ?'
+    'SELECT id, project_id, title, start_time, end_time, display_order, rough_cut_completed_at, created_at FROM chapters WHERE id = ?'
   ).get(id) as Chapter | undefined;
 
   return result || null;
@@ -57,13 +60,13 @@ export async function getChapter(id: number): Promise<Chapter | null> {
 export async function getChaptersByProject(projectId: number): Promise<Chapter[]> {
   const database = await getDatabase();
   return database.prepare(
-    'SELECT id, project_id, title, start_time, end_time, display_order, created_at FROM chapters WHERE project_id = ? ORDER BY display_order ASC, start_time ASC'
+    'SELECT id, project_id, title, start_time, end_time, display_order, rough_cut_completed_at, created_at FROM chapters WHERE project_id = ? ORDER BY display_order ASC, start_time ASC'
   ).all(projectId) as Chapter[];
 }
 
 export async function updateChapter(
   id: number,
-  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time' | 'display_order'>>
+  updates: Partial<Pick<Chapter, 'title' | 'start_time' | 'end_time' | 'display_order' | 'rough_cut_completed_at'>>
 ): Promise<boolean> {
   const database = await getDatabase();
   const current = await getChapter(id);
@@ -99,17 +102,115 @@ export async function updateChapter(
     fields.push('display_order = ?');
     values.push(updates.display_order);
   }
+  if (updates.rough_cut_completed_at !== undefined) {
+    fields.push('rough_cut_completed_at = ?');
+    values.push(updates.rough_cut_completed_at);
+  }
 
   if (fields.length === 0) {
     return true;
   }
 
-  values.push(id);
-  const result = database.prepare(
-    `UPDATE chapters SET ${fields.join(', ')} WHERE id = ?`
-  ).run(...values);
+  const boundsChanged =
+    updates.start_time !== undefined || updates.end_time !== undefined;
 
-  return result.changes > 0;
+  const applyUpdates = database.transaction(() => {
+    values.push(id);
+    const result = database.prepare(
+      `UPDATE chapters SET ${fields.join(', ')} WHERE id = ?`
+    ).run(...values);
+
+    if (result.changes > 0 && boundsChanged) {
+      // Materialized previews reference global source times derived from the
+      // old bounds, so cancel them before re-clamping the stored ranges;
+      // apply would otherwise commit a stale or out-of-chapter clip.
+      cancelChapterSuggestionPreviews(database, id);
+      // Stored suggestion ranges are chapter-local, so keep them inside the
+      // new bounds instead of stranding them out of range.
+      clampChapterSuggestionRanges(database, id, newStart, newEnd);
+    }
+
+    return result.changes > 0;
+  });
+
+  return applyUpdates();
+}
+
+function cancelChapterSuggestionPreviews(
+  database: Database.Database,
+  chapterId: number
+): void {
+  // Oldest first: when several pending update previews target the same clip,
+  // the oldest snapshot holds the clip's base state; restoring any later
+  // snapshot would leave stale preview state materialized.
+  const rows = database.prepare(
+    `SELECT id, action_type, target_clip_id, clip_id, preview_snapshot_json
+     FROM suggestions
+     WHERE chapter_id = ? AND status = 'pending'
+       AND (clip_id IS NOT NULL OR preview_snapshot_json IS NOT NULL)
+     ORDER BY id ASC`
+  ).all(chapterId) as Array<{
+    id: number;
+    action_type: string | null;
+    target_clip_id: number | null;
+    clip_id: number | null;
+    preview_snapshot_json: string | null;
+  }>;
+
+  if (rows.length === 0) return;
+
+  const restoreClip = database.prepare(
+    'UPDATE clips SET in_point = ?, out_point = ?, role = ?, description = ?, is_essential = ? WHERE id = ?'
+  );
+  const deletePreviewClip = database.prepare('DELETE FROM clips WHERE id = ?');
+  const unlinkSuggestion = database.prepare(
+    'UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?'
+  );
+
+  const restoredTargetClipIds = new Set<number>();
+  for (const row of rows) {
+    if (row.action_type === 'update_clip') {
+      const snapshot = parseSuggestionPreviewSnapshotJson(row.preview_snapshot_json);
+      const targetClipId = row.target_clip_id ?? row.clip_id;
+      if (snapshot && targetClipId !== null && !restoredTargetClipIds.has(targetClipId)) {
+        restoreClip.run(
+          snapshot.clip.in_point,
+          snapshot.clip.out_point,
+          snapshot.clip.role,
+          snapshot.clip.description,
+          snapshot.clip.is_essential ? 1 : 0,
+          targetClipId
+        );
+        restoredTargetClipIds.add(targetClipId);
+      }
+    } else if (row.clip_id !== null) {
+      deletePreviewClip.run(row.clip_id);
+    }
+    unlinkSuggestion.run(row.id);
+  }
+}
+
+function clampChapterSuggestionRanges(
+  database: Database.Database,
+  chapterId: number,
+  chapterStart: number,
+  chapterEnd: number
+): void {
+  const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
+  const rows = database.prepare(
+    'SELECT id, in_point, out_point FROM suggestions WHERE chapter_id = ?'
+  ).all(chapterId) as Array<{ id: number; in_point: number; out_point: number }>;
+  const updateRange = database.prepare(
+    `UPDATE suggestions SET in_point = ?, out_point = ?, range_space = 'chapter_local' WHERE id = ?`
+  );
+
+  for (const row of rows) {
+    const localIn = Math.min(Math.max(row.in_point, 0), chapterDuration);
+    const localOut = Math.min(Math.max(row.out_point, localIn), chapterDuration);
+    if (localIn !== row.in_point || localOut !== row.out_point) {
+      updateRange.run(localIn, localOut, row.id);
+    }
+  }
 }
 
 export async function deleteChapter(id: number): Promise<boolean> {

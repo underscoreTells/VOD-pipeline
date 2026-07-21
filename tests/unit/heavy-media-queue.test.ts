@@ -242,6 +242,187 @@ describe("heavy media scheduler resource pools", () => {
     t2.finish();
     await flushPending();
   });
+
+  it("does not overlap transcription with CPU proxy work", async () => {
+    configure({ cpuProxy: 2, gpuProxy: 1, transcription: 1 });
+
+    const cpu = trackedJob("shared-cpu:proxy", "proxy", []);
+    const transcription = trackedJob("shared-cpu:transcription", "transcription", []);
+    const gpu = trackedJob("shared-cpu:gpu", "gpu", []);
+
+    const cpuPromise = enqueueHeavyMediaJob(cpu.key, "chapterProxy", "background", cpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const gpuPromise = enqueueHeavyMediaJob(gpu.key, "chapterProxy", "background", gpu.run, {
+      resourceClass: "gpu",
+    });
+
+    expect(cpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(gpu.isStarted).toBe(true);
+
+    cpu.finish();
+    await cpuPromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(true);
+
+    transcription.finish();
+    gpu.finish();
+    await Promise.all([transcriptionPromise, gpuPromise]);
+  });
+
+  it("holds CPU proxies while transcription is active", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const transcription = trackedJob("shared-cpu:first-transcription", "transcription", []);
+    const cpu = trackedJob("shared-cpu:queued-proxy", "proxy", []);
+
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const cpuPromise = enqueueHeavyMediaJob(cpu.key, "chapterProxy", "background", cpu.run);
+
+    expect(transcription.isStarted).toBe(true);
+    expect(cpu.isStarted).toBe(false);
+
+    transcription.finish();
+    await transcriptionPromise;
+    await flushPending();
+    expect(cpu.isStarted).toBe(true);
+
+    cpu.finish();
+    await cpuPromise;
+  });
+
+  it("drains active CPU proxies before refilling when transcription is waiting", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const firstCpu = trackedJob("shared-cpu:first", "first", []);
+    const secondCpu = trackedJob("shared-cpu:second", "second", []);
+    const queuedCpu = trackedJob("shared-cpu:queued", "queued", []);
+    const transcription = trackedJob("shared-cpu:waiting-transcription", "transcription", []);
+
+    const firstPromise = enqueueHeavyMediaJob(firstCpu.key, "chapterProxy", "background", firstCpu.run);
+    const secondPromise = enqueueHeavyMediaJob(secondCpu.key, "chapterProxy", "background", secondCpu.run);
+    const queuedPromise = enqueueHeavyMediaJob(queuedCpu.key, "chapterProxy", "background", queuedCpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "interactive",
+      transcription.run
+    );
+
+    expect(firstCpu.isStarted).toBe(true);
+    expect(secondCpu.isStarted).toBe(true);
+    expect(queuedCpu.isStarted).toBe(false);
+    expect(transcription.isStarted).toBe(false);
+
+    firstCpu.finish();
+    await firstPromise;
+    await flushPending();
+    expect(queuedCpu.isStarted).toBe(false);
+    expect(transcription.isStarted).toBe(false);
+
+    secondCpu.finish();
+    await secondPromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(true);
+    expect(queuedCpu.isStarted).toBe(false);
+
+    transcription.finish();
+    await transcriptionPromise;
+    await flushPending();
+    expect(queuedCpu.isStarted).toBe(true);
+
+    queuedCpu.finish();
+    await queuedPromise;
+  });
+
+  it("lets interactive CPU proxies outrank a waiting background transcription", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const activeCpu = trackedJob("shared-cpu:active-proxy", "active-proxy", []);
+    const transcription = trackedJob("shared-cpu:background-transcription", "transcription", []);
+    const interactiveCpu = trackedJob("shared-cpu:interactive-proxy", "interactive-proxy", []);
+    const backgroundCpu = trackedJob("shared-cpu:background-proxy", "background-proxy", []);
+
+    const activePromise = enqueueHeavyMediaJob(activeCpu.key, "chapterProxy", "background", activeCpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "background",
+      transcription.run
+    );
+    const interactivePromise = enqueueHeavyMediaJob(interactiveCpu.key, "chapterProxy", "interactive", interactiveCpu.run);
+    const backgroundPromise = enqueueHeavyMediaJob(backgroundCpu.key, "chapterProxy", "background", backgroundCpu.run);
+
+    expect(activeCpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(interactiveCpu.isStarted).toBe(true);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    activeCpu.finish();
+    await activePromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(false);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    interactiveCpu.finish();
+    await interactivePromise;
+    await flushPending();
+    expect(transcription.isStarted).toBe(true);
+    expect(backgroundCpu.isStarted).toBe(false);
+
+    transcription.finish();
+    await transcriptionPromise;
+    await flushPending();
+    expect(backgroundCpu.isStarted).toBe(true);
+
+    backgroundCpu.finish();
+    await backgroundPromise;
+  });
+
+  it("repumps CPU proxies after cancelling a waiting transcription", async () => {
+    configure({ cpuProxy: 2, transcription: 1 });
+
+    const activeCpu = trackedJob("shared-cpu:active", "active", []);
+    const transcription = trackedJob("shared-cpu:cancelled-transcription", "transcription", []);
+    const queuedCpu = trackedJob("shared-cpu:blocked", "blocked", []);
+
+    const activePromise = enqueueHeavyMediaJob(activeCpu.key, "chapterProxy", "background", activeCpu.run);
+    const transcriptionPromise = enqueueHeavyMediaJob(
+      transcription.key,
+      "transcription",
+      "interactive",
+      transcription.run
+    );
+    const queuedPromise = enqueueHeavyMediaJob(
+      queuedCpu.key,
+      "chapterProxy",
+      "background",
+      queuedCpu.run
+    );
+
+    expect(activeCpu.isStarted).toBe(true);
+    expect(transcription.isStarted).toBe(false);
+    expect(queuedCpu.isStarted).toBe(false);
+
+    const cancelled = expect(transcriptionPromise).rejects.toBeInstanceOf(HeavyMediaCancellationError);
+    expect(cancelHeavyMediaJob(transcription.key)).toBe(true);
+    await cancelled;
+    expect(queuedCpu.isStarted).toBe(true);
+
+    activeCpu.finish();
+    queuedCpu.finish();
+    await Promise.all([activePromise, queuedPromise]);
+  });
 });
 
 describe("heavy media scheduler burst and ordering", () => {
@@ -668,12 +849,12 @@ describe("heavy media scheduler configuration", () => {
 
     resetHeavyMediaScheduler();
     const restored = getHeavyMediaSchedulerLimits();
-    expect(restored.gpuProxy).toBe(2);
+    expect(restored.gpuProxy).toBe(1);
     expect(restored.transcription).toBe(1);
     expect(restored.fullReverse).toBe(1);
     expect(restored.interactiveOverflow).toBe(1);
     expect(restored.cpuProxy).toBeGreaterThanOrEqual(1);
-    expect(restored.cpuProxy).toBeLessThanOrEqual(4);
+    expect(restored.cpuProxy).toBeLessThanOrEqual(2);
   });
 
   it("applyDefault via reset clears all running/queued state", async () => {

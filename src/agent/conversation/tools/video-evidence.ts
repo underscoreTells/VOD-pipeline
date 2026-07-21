@@ -14,7 +14,8 @@ import type { AnalyzeChapterVideoInput } from "./schemas.js";
 
 export async function analyzeChapterVideoEvidence(
   input: ConversationTurnInput,
-  request: AnalyzeChapterVideoInput
+  request: AnalyzeChapterVideoInput,
+  options?: { signal?: AbortSignal }
 ): Promise<z.infer<typeof videoEvidenceSchema>> {
   if (
     !input.selectedProvider ||
@@ -45,9 +46,10 @@ export async function analyzeChapterVideoEvidence(
     videoPath: groundedAsset.proxyPath,
     textPrompt: prompt,
     transcriptContext: input.context.transcript,
+    signal: options?.signal,
   });
 
-  const response = await llm.invoke([videoMessage]);
+  const response = await llm.invoke([videoMessage], options?.signal ? { signal: options.signal } : undefined);
   const parsed = parseVideoEvidenceResponse(getMessageText(response.content));
   return {
     ...parsed,
@@ -174,7 +176,8 @@ export function createAnalyzeChapterVideoTool(
   accumulator: ConversationToolAccumulator,
   analyzeChapterVideoImpl: (
     input: ConversationTurnInput,
-    request: AnalyzeChapterVideoInput
+    request: AnalyzeChapterVideoInput,
+    options?: { signal?: AbortSignal }
   ) => Promise<{
     assetId?: number;
     summary: string;
@@ -190,7 +193,7 @@ export function createAnalyzeChapterVideoTool(
     description:
       "Inspect the current chapter video for factual visual evidence only. Use this when you need to verify what happens on screen before answering. This tool never makes recommendations.",
     schema: analyzeChapterVideoSchema,
-    execute: async ({ focus, assetId }) => {
+    execute: async ({ focus, assetId }, options) => {
       writer?.writeStatus({
         status: "analyzing_video",
         message: "Gathering visual evidence from the chapter video...",
@@ -198,7 +201,7 @@ export function createAnalyzeChapterVideoTool(
         nodeName: "conversation_runner",
       });
 
-      const evidence = await analyzeChapterVideoImpl(input, { focus, assetId });
+      const evidence = await analyzeChapterVideoImpl(input, { focus, assetId }, options);
       if (
         typeof evidence.assetId === "number" &&
         Number.isFinite(evidence.assetId) &&

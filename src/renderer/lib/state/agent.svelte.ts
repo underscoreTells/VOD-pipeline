@@ -1,5 +1,6 @@
 export type {
   AgentState,
+  ActiveAgentTurn,
   ChatMessage,
   LLMProviderType,
   TimelineActionProposal,
@@ -18,6 +19,7 @@ export {
 } from './agent-session.svelte.js';
 export {
   branchMessage,
+  cancelActiveAgentTurn,
   editMessage,
   rerollMessage,
   sendChatMessage,
@@ -25,14 +27,11 @@ export {
 export {
   applyAllSuggestions,
   applySuggestion,
-  applyTimelineProposal,
-  cancelSuggestionPreviewAction,
   clearSuggestions,
   clearTimelineProposals,
   loadSuggestions,
   previewAllSuggestions,
-  previewSuggestion,
+  focusSuggestion,
   rejectAllSuggestions,
   rejectSuggestion,
-  rejectTimelineProposal,
 } from './agent-proposals.svelte.js';

@@ -61,6 +61,9 @@ export async function loadChapters(projectId: number): Promise<void> {
 
     if (result.success && result.data) {
       chaptersState.chapters = result.data;
+      if (!result.data.some((chapter) => chapter.id === chaptersState.selectedChapterId)) {
+        chaptersState.selectedChapterId = result.data[0]?.id ?? null;
+      }
       for (const chapter of result.data) {
         void loadAssetsForChapter(chapter.id);
       }
@@ -137,6 +140,9 @@ export async function updateChapter(
         }
         if (updates.display_order !== undefined) {
           stateUpdates.display_order = updates.display_order;
+        }
+        if (updates.roughCutCompletedAt !== undefined) {
+          stateUpdates.rough_cut_completed_at = updates.roughCutCompletedAt;
         }
 
         chaptersState.chapters = chaptersState.chapters.map((chapter) =>

@@ -11,13 +11,18 @@ import {
   rejectSuggestion,
   setDatabaseForTesting,
 } from "../../src/electron/database/index.js";
-import { combinePrerequisites, requireNativeModule, requireSupportedNode } from "../helpers/prerequisites.js";
+import { requireSupportedNode } from "../helpers/prerequisites.js";
 
-const suggestionPrerequisite = combinePrerequisites(
-  requireSupportedNode(),
-  requireNativeModule("better-sqlite3")
-);
-const describeSuggestionClip = suggestionPrerequisite.ok ? describe : describe.skip;
+const describeSuggestionClip = (() => {
+  if (!requireSupportedNode().ok) return describe.skip;
+  try {
+    const probe = new Database(":memory:");
+    probe.close();
+    return describe;
+  } catch {
+    return describe.skip;
+  }
+})();
 
 describeSuggestionClip("Suggestion to Clip Integration (Task 4.9)", () => {
   let tempDir: string;

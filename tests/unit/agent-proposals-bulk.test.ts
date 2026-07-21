@@ -9,16 +9,20 @@ const agentApiMocks = vi.hoisted(() => ({
   listAgentConversations: vi.fn(),
   applyAllSuggestions: vi.fn(),
   applySuggestion: vi.fn(),
-  cancelSuggestionPreview: vi.fn(),
   getSuggestions: vi.fn(),
-  previewSuggestion: vi.fn(),
   rejectSuggestion: vi.fn(),
   applyAgentActions: vi.fn(),
+  applySuggestionBatch: vi.fn(),
+  rejectSuggestionBatch: vi.fn(),
+  restoreSuggestionBatch: vi.fn(),
+  revertSuggestionBatch: vi.fn(),
 }));
 
 const timelineMocks = vi.hoisted(() => {
   const timelineState = {
     clips: [] as Array<{ id: number; start_time: number }>,
+    selectedClipIds: new Set<number>(),
+    playheadTime: 0,
   };
 
   return {
@@ -75,15 +79,17 @@ describe("agent proposal bulk actions", () => {
     agentApiMocks.applyAllSuggestions.mockReset();
     agentApiMocks.applySuggestion.mockReset();
     agentApiMocks.createAgentConversation.mockReset();
-    agentApiMocks.cancelSuggestionPreview.mockReset();
     agentApiMocks.deleteAgentConversation.mockReset();
     agentApiMocks.getAgentGroundingStatus.mockReset();
     agentApiMocks.getAgentConversationMessages.mockReset();
     agentApiMocks.getSuggestions.mockReset();
     agentApiMocks.listAgentConversations.mockReset();
-    agentApiMocks.previewSuggestion.mockReset();
     agentApiMocks.rejectSuggestion.mockReset();
     agentApiMocks.applyAgentActions.mockReset();
+    agentApiMocks.applySuggestionBatch.mockReset();
+    agentApiMocks.rejectSuggestionBatch.mockReset();
+    agentApiMocks.restoreSuggestionBatch.mockReset();
+    agentApiMocks.revertSuggestionBatch.mockReset();
     timelineMocks.createClip.mockReset();
     timelineMocks.deleteClip.mockReset();
     timelineMocks.selectClip.mockReset();
@@ -91,18 +97,13 @@ describe("agent proposal bulk actions", () => {
     timelineMocks.updateClip.mockReset();
     timelineMocks.timelineState.clips = [];
 
-    agentApiMocks.previewSuggestion.mockImplementation(async (id: number) => ({
-      success: true,
-      data: {
-        clip: {
-          id: id + 1000,
-          start_time: id * 5,
-        },
-      },
-    }));
     agentApiMocks.rejectSuggestion.mockResolvedValue({
       success: true,
       data: {},
+    });
+    agentApiMocks.rejectSuggestionBatch.mockResolvedValue({
+      success: true,
+      data: { appliedCount: 2, total: 2, results: [] },
     });
     agentApiMocks.listAgentConversations.mockResolvedValue({
       success: true,
@@ -144,31 +145,7 @@ describe("agent proposal bulk actions", () => {
     agentState.error = null;
   });
 
-  it("previews only pending suggestions that do not already have a preview clip and continues after failures", async () => {
-    agentApiMocks.previewSuggestion
-      .mockResolvedValueOnce({
-        success: true,
-        data: {
-          clip: {
-            id: 1001,
-            start_time: 5,
-          },
-        },
-      })
-      .mockResolvedValueOnce({
-        success: false,
-        error: "preview failed",
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        data: {
-          clip: {
-            id: 1003,
-            start_time: 15,
-          },
-        },
-      });
-
+  it("reviews pending suggestions as renderer-only ghosts without preview IPC", async () => {
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
     agentState.suggestions = [
       createSuggestion(1),
@@ -180,21 +157,16 @@ describe("agent proposal bulk actions", () => {
     const { previewAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
     const result = await previewAllSuggestions();
 
-    expect(agentApiMocks.previewSuggestion).toHaveBeenCalledTimes(3);
-    expect(agentApiMocks.previewSuggestion).toHaveBeenNthCalledWith(1, 1);
-    expect(agentApiMocks.previewSuggestion).toHaveBeenNthCalledWith(2, 3);
-    expect(agentApiMocks.previewSuggestion).toHaveBeenNthCalledWith(3, 4);
     expect(result).toMatchObject({
-      success: false,
-      total: 3,
-      succeededIds: [1, 4],
-      failedIds: [3],
-      error: "Failed to preview some suggestions",
+      success: true,
+      total: 4,
+      succeededIds: [1, 2, 3, 4],
+      failedIds: [],
     });
-    expect(agentState.suggestions[0]?.clip_id).toBe(1001);
+    expect(agentState.suggestions[0]?.clip_id).toBeNull();
     expect(agentState.suggestions[1]?.clip_id).toBe(222);
     expect(agentState.suggestions[2]?.clip_id).toBeNull();
-    expect(agentState.suggestions[3]?.clip_id).toBe(1003);
+    expect(agentState.suggestions[3]?.clip_id).toBeNull();
   });
 
   it("rejects every pending suggestion, including previewed ones", async () => {
@@ -220,9 +192,8 @@ describe("agent proposal bulk actions", () => {
     const { rejectAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
     const result = await rejectAllSuggestions();
 
-    expect(agentApiMocks.rejectSuggestion).toHaveBeenCalledTimes(2);
-    expect(agentApiMocks.rejectSuggestion).toHaveBeenNthCalledWith(1, 1);
-    expect(agentApiMocks.rejectSuggestion).toHaveBeenNthCalledWith(2, 2);
+    expect(agentApiMocks.rejectSuggestion).not.toHaveBeenCalled();
+    expect(agentApiMocks.rejectSuggestionBatch).toHaveBeenCalledWith({ suggestionIds: [1, 2] });
     expect(result).toMatchObject({
       success: true,
       total: 2,

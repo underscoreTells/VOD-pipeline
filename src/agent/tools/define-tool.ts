@@ -5,7 +5,7 @@ export interface AgentToolDefinition<TParsed = any> {
   description: string;
   schema: CanonicalSchemaNode;
   parse?: (validated: unknown) => TParsed;
-  execute: (input: TParsed) => Promise<string> | string;
+  execute: (input: TParsed, options?: { signal?: AbortSignal }) => Promise<string> | string;
 }
 
 export function defineAgentTool<TParsed>(

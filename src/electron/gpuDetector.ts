@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
 
+import { getCpuProxyThreadLimit } from './media-resource-limits.js';
+
 export type GPUEncoderBackend = 'videotoolbox' | 'nvenc' | 'qsv' | 'amf';
 
 export interface GPUEncoderInfo {
@@ -409,6 +411,7 @@ export function getProxyEncoderArgs(
         '-c:v', 'libx264',
         '-preset', presets[quality],
         '-crf', quality === 'high' ? '23' : quality === 'balanced' ? '28' : '32',
+        '-threads', getCpuProxyThreadLimit().toString(),
       ],
     };
   }

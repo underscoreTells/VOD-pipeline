@@ -2,6 +2,7 @@ import type { WaveformPeak } from '../../../shared/types/pipeline.js';
 import { getDatabase } from '../client.js';
 
 const MAX_WAVEFORM_CACHE_ENTRIES = 1000;
+const MAX_TIER1_CACHE_BYTES = 8 * 1024 * 1024;
 
 export async function saveWaveform(
   assetId: number,
@@ -32,6 +33,19 @@ export async function getWaveform(
   tierLevel: 1 | 2 | 3
 ): Promise<{ peaks: WaveformPeak[]; sampleRate: number; duration: number; generatedAt: string } | null> {
   const database = await getDatabase();
+  if (tierLevel === 1) {
+    const metadata = database.prepare(
+      'SELECT LENGTH(peaks) AS peak_bytes FROM waveform_cache WHERE asset_id = ? AND track_index = ? AND tier_level = ?'
+    ).get(assetId, trackIndex, tierLevel) as { peak_bytes: number } | undefined;
+
+    if (metadata && metadata.peak_bytes > MAX_TIER1_CACHE_BYTES) {
+      database.prepare(
+        'DELETE FROM waveform_cache WHERE asset_id = ? AND track_index = ? AND tier_level = ?'
+      ).run(assetId, trackIndex, tierLevel);
+      return null;
+    }
+  }
+
   const result = database.prepare(
     'SELECT peaks, sample_rate, duration, generated_at FROM waveform_cache WHERE asset_id = ? AND track_index = ? AND tier_level = ?'
   ).get(assetId, trackIndex, tierLevel) as {

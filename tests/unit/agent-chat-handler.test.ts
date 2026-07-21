@@ -16,6 +16,8 @@ const electronMocks = vi.hoisted(() => ({
 const bridgeMocks = vi.hoisted(() => ({
   ensureStarted: vi.fn(),
   send: vi.fn(),
+  registerClientRequest: vi.fn(),
+  finishClientRequest: vi.fn(),
 }));
 
 const databaseMocks = vi.hoisted(() => ({
@@ -38,6 +40,7 @@ const databaseMocks = vi.hoisted(() => ({
   updateUserChatMessageContent: vi.fn(),
   updateChatConversation: vi.fn(),
   updateClip: vi.fn(),
+  withTransaction: vi.fn(),
 }));
 
 const handlerSupportMocks = vi.hoisted(() => ({
@@ -103,6 +106,11 @@ describe("agent chat handler", () => {
     });
 
     databaseMocks.getProject.mockResolvedValue({ id: 1 });
+    databaseMocks.withTransaction.mockImplementation(
+      (operation: () => Promise<unknown>) => operation()
+    );
+    bridgeMocks.registerClientRequest.mockImplementation(() => new AbortController().signal);
+    bridgeMocks.ensureStarted.mockResolvedValue(undefined);
     databaseMocks.getChatConversation.mockResolvedValue({
       id: 2,
       project_id: 1,
@@ -203,13 +211,22 @@ describe("agent chat handler", () => {
     expect(bridgeMocks.send).not.toHaveBeenCalled();
   });
 
-  it("returns a proxy-not-ready error before persisting the chat message", async () => {
+  it("continues with transcript context while the video proxy is generating", async () => {
     handlerSupportMocks.getAgentGroundingStatus.mockResolvedValue({
       status: "generating",
       requiredVideoAssetCount: 1,
       readyVideoAssetCount: 0,
       assets: [{ assetId: 11, status: "generating" }],
       message: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
     });
 
     const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
@@ -220,13 +237,10 @@ describe("agent chat handler", () => {
       message: "Please provide new clips for this chapter",
     });
 
-    expect(result).toEqual({
-      success: false,
-      error: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
-      code: IPC_ERROR_CODES.AGENT_PROXY_NOT_READY,
-    });
-    expect(databaseMocks.createChatMessage).not.toHaveBeenCalled();
-    expect(bridgeMocks.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true });
+    expect(databaseMocks.createChatMessage).toHaveBeenCalledTimes(2);
+    expect(bridgeMocks.send).toHaveBeenCalledTimes(1);
+    expect(handlerSupportMocks.getAgentGroundingStatus).not.toHaveBeenCalled();
   });
 
   it("proceeds to the bridge when the runtime is fresh", async () => {
@@ -489,6 +503,7 @@ describe("agent chat handler", () => {
           openai: "sk-openai",
         },
       },
+      signal: expect.anything(),
     });
     expect(databaseMocks.updateChatConversation).toHaveBeenCalledWith(2, {
       title: "Raid Plan",
@@ -536,13 +551,22 @@ describe("agent chat handler", () => {
     });
   });
 
-  it("blocks rerolls before mutating history when grounding is not ready", async () => {
+  it("allows rerolls while video grounding is not ready", async () => {
     handlerSupportMocks.getAgentGroundingStatus.mockResolvedValue({
       status: "generating",
       requiredVideoAssetCount: 1,
       readyVideoAssetCount: 0,
       assets: [{ assetId: 11, status: "generating" }],
       message: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-reroll",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
     });
 
     const rerollHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_REROLL_MESSAGE);
@@ -553,22 +577,28 @@ describe("agent chat handler", () => {
       messageId: 10,
     });
 
-    expect(result).toEqual({
-      success: false,
-      error: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
-      code: IPC_ERROR_CODES.AGENT_PROXY_NOT_READY,
-    });
-    expect(databaseMocks.deleteChatMessagesAfter).not.toHaveBeenCalled();
-    expect(bridgeMocks.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true });
+    expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalled();
+    expect(bridgeMocks.send).toHaveBeenCalledTimes(1);
+    expect(handlerSupportMocks.getAgentGroundingStatus).not.toHaveBeenCalled();
   });
 
-  it("blocks edits before mutating history when grounding is not ready", async () => {
+  it("allows edits while video grounding is not ready", async () => {
     handlerSupportMocks.getAgentGroundingStatus.mockResolvedValue({
       status: "generating",
       requiredVideoAssetCount: 1,
       readyVideoAssetCount: 0,
       assets: [{ assetId: 11, status: "generating" }],
       message: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-edit",
+      threadId: "thread-1",
+      result: {
+        assistantResponse: "Drafted one new clip proposal.",
+        outcome: "proposal",
+      },
     });
 
     const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
@@ -580,13 +610,10 @@ describe("agent chat handler", () => {
       message: "Please provide sharper clips for this chapter",
     });
 
-    expect(result).toEqual({
-      success: false,
-      error: "Video proxy is still preparing. Agent chat is locked until grounding is ready.",
-      code: IPC_ERROR_CODES.AGENT_PROXY_NOT_READY,
-    });
-    expect(databaseMocks.updateUserChatMessageContent).not.toHaveBeenCalled();
-    expect(bridgeMocks.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true });
+    expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalled();
+    expect(bridgeMocks.send).toHaveBeenCalledTimes(1);
+    expect(handlerSupportMocks.getAgentGroundingStatus).not.toHaveBeenCalled();
   });
 
   it("falls back to the derived title when AI thread naming throws", async () => {

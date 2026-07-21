@@ -45,6 +45,7 @@ export const IPC_CHANNELS = {
 
   // Agent channels
   AGENT_CHAT: 'agent:chat',
+  AGENT_CANCEL_TURN: 'agent:cancel-turn',
   AGENT_GROUNDING_STATUS: 'agent:grounding-status',
   AGENT_REROLL_MESSAGE: 'agent:reroll-message',
   AGENT_EDIT_MESSAGE: 'agent:edit-message',
@@ -85,11 +86,13 @@ export const IPC_CHANNELS = {
   // Suggestion channels (Phase 4: Visual AI)
   SUGGESTION_CREATE: 'suggestion:create',
   SUGGESTION_GET_BY_CHAPTER: 'suggestion:get-by-chapter',
-  SUGGESTION_PREVIEW: 'suggestion:preview',
-  SUGGESTION_CANCEL_PREVIEW: 'suggestion:cancel-preview',
   SUGGESTION_APPLY: 'suggestion:apply',
   SUGGESTION_REJECT: 'suggestion:reject',
   SUGGESTION_APPLY_ALL: 'suggestion:apply-all',
+  SUGGESTION_APPLY_BATCH: 'suggestion:apply-batch',
+  SUGGESTION_REJECT_BATCH: 'suggestion:reject-batch',
+  SUGGESTION_RESTORE_BATCH: 'suggestion:restore-batch',
+  SUGGESTION_REVERT_BATCH: 'suggestion:revert-batch',
 
   // Settings channels (API key encryption)
   SETTINGS_ENCRYPT: 'settings:encrypt',

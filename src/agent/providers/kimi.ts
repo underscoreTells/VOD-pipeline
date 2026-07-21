@@ -151,6 +151,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
             "Authorization": `Bearer ${this.apiKey}`,
           },
           body: JSON.stringify(requestBody),
+          signal: _options.signal,
         });
       } catch (fetchError) {
         throw new Error(
@@ -405,12 +406,32 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
 /**
  * Helper function to read a file and convert to base64
  * Used for sending video files to Kimi
+ * Reads in chunks so an abort signal can cancel the I/O promptly instead of
+ * waiting for a single multi-hundred-megabyte read to finish.
  */
-export async function readFileAsBase64(filePath: string): Promise<string> {
+export async function readFileAsBase64(filePath: string, signal?: AbortSignal): Promise<string> {
   try {
+    signal?.throwIfAborted();
     const fs = await import("fs");
-    const buffer = await fs.promises.readFile(filePath);
-    return buffer.toString("base64");
+    const handle = await fs.promises.open(filePath, "r");
+    try {
+      const { size } = await handle.stat();
+      const CHUNK_SIZE = 8 * 1024 * 1024;
+      const chunks: Buffer[] = [];
+      let offset = 0;
+      while (offset < size) {
+        signal?.throwIfAborted();
+        const length = Math.min(CHUNK_SIZE, size - offset);
+        const { bytesRead, buffer } = await handle.read(Buffer.allocUnsafe(length), 0, length, offset);
+        if (bytesRead <= 0) break;
+        chunks.push(bytesRead === length ? buffer : buffer.subarray(0, bytesRead));
+        offset += bytesRead;
+      }
+      signal?.throwIfAborted();
+      return Buffer.concat(chunks).toString("base64");
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     console.error(`[readFileAsBase64] Failed for filePath=${filePath}:`, error);
     throw error;

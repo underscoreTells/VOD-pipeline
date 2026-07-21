@@ -107,7 +107,8 @@ export async function generateDetailedTranscriptsForRequests(
     end_time: number;
   },
   chapterAssetIds: number[],
-  requests: TranscriptDetailRequest[]
+  requests: TranscriptDetailRequest[],
+  options?: { signal?: AbortSignal }
 ): Promise<DetailedTranscriptWindow[]> {
   if (requests.length === 0) return [];
 
@@ -116,6 +117,7 @@ export async function generateDetailedTranscriptsForRequests(
   const windows: DetailedTranscriptWindow[] = [];
 
   for (const request of requests) {
+    options?.signal?.throwIfAborted();
     const assetId = request.assetId ?? chapterAssetIds[0];
     if (!assetId || !chapterAssetSet.has(assetId)) {
       continue;
@@ -152,7 +154,8 @@ export async function generateDetailedTranscriptsForRequests(
       asset,
       windowStart,
       windowEnd,
-      request.reason
+      request.reason,
+      options
     );
 
     if (generatedWindow) {
@@ -172,7 +175,8 @@ async function generateDetailedTranscriptWindow(
   asset: Asset,
   windowStart: number,
   windowEnd: number,
-  reason?: string
+  reason?: string,
+  options?: { signal?: AbortSignal }
 ): Promise<DetailedTranscriptWindow | null> {
   const tempAudioPath = path.join(
     os.tmpdir(),
@@ -189,6 +193,7 @@ async function generateDetailedTranscriptWindow(
       channels: 1,
       startTime: globalStart,
       endTime: globalEnd,
+      signal: options?.signal,
     });
 
     const transcription = await transcribe({
@@ -196,7 +201,7 @@ async function generateDetailedTranscriptWindow(
       model: DETAILED_TRANSCRIPT_MODEL,
       computeType: DETAILED_TRANSCRIPT_COMPUTE_TYPE,
       wordTimestamps: DETAILED_TRANSCRIPT_WORD_TIMESTAMPS,
-    });
+    }, undefined, options?.signal);
 
     const detailedSegments = transcription.segments.map((segment, index) => ({
       id: typeof segment.id === "number" && Number.isFinite(segment.id) ? segment.id : index,
@@ -227,6 +232,7 @@ async function generateDetailedTranscriptWindow(
 
     return mapDetailedTranscriptForContext(saved, reason);
   } catch (error) {
+    options?.signal?.throwIfAborted();
     console.warn(
       `[AgentChat] Failed to generate detailed transcript for chapter=${chapter.id} asset=${asset.id} window=${windowStart}-${windowEnd}:`,
       error

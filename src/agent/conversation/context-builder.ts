@@ -1,6 +1,7 @@
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ConversationTurnInput } from "./types.js";
 import { getClipVisibleRangeInChapter } from "../../shared/utils/clip-timing.js";
+import { summarizeChapterCutMap } from "./tools/chapter-cut-map.js";
 
 const TRANSCRIPT_PREVIEW_CHARS = 12000;
 const MAX_CLIP_PREVIEW_LINES = 18;
@@ -55,6 +56,9 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
     })
     .join("\n");
 
+  const cutSummary = summarizeChapterCutMap(input.context.chapterClips, chapter);
+  const cutSummaryLines = formatChapterCutSummary(cutSummary);
+
   const detailedTranscriptSummary = input.context.detailedTranscripts
     .slice(0, MAX_DETAILED_TRANSCRIPT_LINES)
     .map(
@@ -82,7 +86,10 @@ Active chapter:
 - playheadTimeGlobal=${typeof input.playheadTime === "number" ? input.playheadTime.toFixed(2) : "unknown"}
 - playheadTimeChapterLocal=${typeof chapterLocalPlayheadTime === "number" ? chapterLocalPlayheadTime.toFixed(2) : "unknown"}
 
-Existing chapter clips:
+Chapter cut summary:
+${cutSummaryLines}
+
+Existing chapter clips (preview, first ${MAX_CLIP_PREVIEW_LINES}):
 ${clipPreview || "- none yet"}
 
 Transcript excerpt:
@@ -114,6 +121,8 @@ Rules:
 - Use evidence tools when they are needed for factual verification.
 - Use loadDetailedTranscriptWindows for exact dialogue wording and timing.
 - Use analyzeChapterVideo when visual confirmation matters, when a beat depends on on-screen action or reaction, when choosing between multiple source assets, or when a proposal depends on visuals rather than dialogue or pacing alone.
+- The "Existing chapter clips" preview above only shows the first ${MAX_CLIP_PREVIEW_LINES} clips. For whole-chapter requests that need more than that preview (auditing the full cut, reviewing every clip, assessing overall pacing across the whole cut, or any analysis that depends on clips beyond the preview), call loadChapterCutMap before drafting proposals.
+- Use loadChapterCutMap to fetch a bounded, paginated, filterable view of the current chapter cut map when the ${MAX_CLIP_PREVIEW_LINES}-line preview above is not enough.
 - range_suggestion and update_clip can be grounded by transcript context, detailed transcript windows, selected clips, or the current playhead region even without a same-turn video call.
 - create_clip requires stronger grounding. Use matching analyzeChapterVideo evidence for multi-asset or visually dependent clips, and otherwise keep the clip anchored to the currently grounded local context.
 - If multiple grounded video assets are available, analyzeChapterVideo must specify assetId and create_clip must specify assetId.
@@ -126,6 +135,26 @@ Rules:
 - finalizeConversationTurn(outcome="clarification") should ask one concrete question that unblocks the next turn only after you cannot safely draft even one grounded proposal.
 - The user sees assistantResponse from finalizeConversationTurn directly in chat.
 - Do not output JSON in assistantResponse.`;
+}
+
+function formatChapterCutSummary(
+  summary: ReturnType<typeof summarizeChapterCutMap>
+): string {
+  const perAssetLine =
+    summary.perAsset.length > 0
+      ? summary.perAsset
+          .map(
+            (entry) =>
+              `assetId=${entry.assetId} clips=${entry.clipCount} retained=${entry.retainedDuration.toFixed(2)}s`
+          )
+          .join(", ")
+      : "- none";
+  return [
+    `- totalClips=${summary.totalClips}`,
+    `- essentialClips=${summary.essentialClips}`,
+    `- retainedDuration=${summary.retainedDuration.toFixed(2)}s`,
+    `- perAsset=${perAssetLine}`,
+  ].join("\n");
 }
 
 export function normalizeConversationMessages(

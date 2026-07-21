@@ -149,6 +149,15 @@ export interface AgentChatResult {
   code?: string;
 }
 
+export interface AgentCancelTurnResult {
+  success: boolean;
+  data?: {
+    cancelled: boolean;
+  };
+  error?: string;
+  code?: string;
+}
+
 export interface AgentConversationListResult {
   success: boolean;
   data?: ChatConversation[];
@@ -237,6 +246,39 @@ export interface ApplyAllSuggestionsResult {
     }>;
   };
   error?: string;
+}
+
+export interface SuggestionBatchParams {
+  suggestionIds: number[];
+}
+
+export interface SuggestionRevertSnapshotPayload {
+  clip: Pick<Clip, 'in_point' | 'out_point' | 'role' | 'description' | 'is_essential'>;
+}
+
+export interface SuggestionBatchRevertParams {
+  items: Array<{
+    suggestionId: number;
+    beforeSnapshot?: SuggestionRevertSnapshotPayload | null;
+  }>;
+}
+
+export interface SuggestionBatchMutationResult {
+  success: boolean;
+  data?: {
+    appliedCount: number;
+    total: number;
+    results: Array<{
+      suggestionId: number;
+      success: boolean;
+      clip?: Clip;
+      error?: string;
+      autoRejected?: boolean;
+    }>;
+  };
+  error?: string;
+  /** IDs of suggestions the backend automatically rejected while failing the batch. */
+  autoRejectedIds?: number[];
 }
 
 export interface GetAssetsResult {
@@ -383,6 +425,7 @@ export interface UpdateChapterInput {
   startTime?: number;
   endTime?: number;
   display_order?: number;
+  roughCutCompletedAt?: string | null;
 }
 
 export interface UpdateChapterResult {
@@ -460,7 +503,7 @@ export interface WaveformGenerationResult {
     trackIndex: number;
     tiers: Array<{
       level: 1 | 2 | 3;
-      peaks: Array<{ min: number; max: number }>;
+      peakCount: number;
       sampleRate: number;
       duration: number;
     }>;
@@ -573,6 +616,7 @@ export interface ElectronAPI {
   };
   agent: {
     chat: (params: AgentChatParams) => Promise<AgentChatResult>;
+    cancelTurn: (clientRequestId: string) => Promise<AgentCancelTurnResult>;
     getGroundingStatus: (params: AgentGroundingStatusParams) => Promise<AgentGroundingStatusResult>;
     rerollMessage: (params: AgentRerollMessageParams) => Promise<AgentChatResult>;
     editMessage: (params: AgentEditMessageParams) => Promise<AgentChatResult>;
@@ -585,11 +629,13 @@ export interface ElectronAPI {
     onStream: (callback: (data: AgentStreamEvent) => void) => () => void;
     onError: (callback: (data: { error: string }) => void) => () => void;
     getSuggestions: (params: SuggestionListParams) => Promise<SuggestionListResult>;
-    previewSuggestion: (suggestionId: number) => Promise<SuggestionMutationResult>;
-    cancelSuggestionPreview: (suggestionId: number) => Promise<SuggestionMutationResult>;
     applySuggestion: (suggestionId: number) => Promise<SuggestionMutationResult>;
     rejectSuggestion: (suggestionId: number) => Promise<SuggestionMutationResult>;
     applyAllSuggestions: (params: SuggestionListParams) => Promise<ApplyAllSuggestionsResult>;
+    applySuggestionBatch: (params: SuggestionBatchParams) => Promise<SuggestionBatchMutationResult>;
+    rejectSuggestionBatch: (params: SuggestionBatchParams) => Promise<SuggestionBatchMutationResult>;
+    restoreSuggestionBatch: (params: SuggestionBatchParams) => Promise<SuggestionBatchMutationResult>;
+    revertSuggestionBatch: (params: SuggestionBatchRevertParams) => Promise<SuggestionBatchMutationResult>;
   };
   settings: {
     encrypt: (text: string) => Promise<SettingsEncryptResult>;

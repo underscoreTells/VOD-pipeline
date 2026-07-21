@@ -1,13 +1,15 @@
 import { ipcMain } from 'electron';
 import {
   applySuggestionWithClip,
-  cancelSuggestionPreview,
+  applySuggestionsBatch,
   createSuggestion,
   getClip,
   getSuggestion,
   getSuggestionsByConversation,
-  previewSuggestionWithClip,
   rejectSuggestion,
+  rejectSuggestionsBatch,
+  restoreRejectedSuggestionsBatch,
+  revertAppliedSuggestionsBatch,
 } from '../../database/index.js';
 import type { Clip } from '../../../shared/types/database.js';
 import { createLogger } from '../../logger.js';
@@ -21,13 +23,43 @@ export const SUGGESTION_HANDLER_CHANNELS = [
   IPC_CHANNELS.SUGGESTION_CREATE,
   IPC_CHANNELS.SUGGESTION_GET_BY_CHAPTER,
   IPC_CHANNELS.SUGGESTION_APPLY,
-  IPC_CHANNELS.SUGGESTION_PREVIEW,
-  IPC_CHANNELS.SUGGESTION_CANCEL_PREVIEW,
   IPC_CHANNELS.SUGGESTION_REJECT,
   IPC_CHANNELS.SUGGESTION_APPLY_ALL,
+  IPC_CHANNELS.SUGGESTION_APPLY_BATCH,
+  IPC_CHANNELS.SUGGESTION_REJECT_BATCH,
+  IPC_CHANNELS.SUGGESTION_RESTORE_BATCH,
+  IPC_CHANNELS.SUGGESTION_REVERT_BATCH,
 ];
 
 export function registerSuggestionHandlers(): void {
+  const parseSuggestionIds = (payload: unknown): number[] => {
+    const ids = (payload as { suggestionIds?: unknown } | null)?.suggestionIds;
+    if (!Array.isArray(ids)) return [];
+    return ids.filter(
+      (id): id is number => typeof id === 'number' && Number.isInteger(id) && id > 0
+    );
+  };
+
+  const toBatchResponse = (result: Awaited<ReturnType<typeof applySuggestionsBatch>>) => {
+    if (result.success) {
+      return createSuccessResponse({
+        appliedCount: result.appliedCount,
+        total: result.total,
+        results: result.results,
+      });
+    }
+    // Surface auto-rejections persisted alongside a failed batch so the
+    // renderer can reconcile local suggestion status instead of leaving
+    // them displayed as pending.
+    const autoRejectedIds = result.results
+      .filter((item) => item.autoRejected)
+      .map((item) => item.suggestionId);
+    return {
+      ...createErrorResponse(result.error || 'Suggestion batch failed', IPC_ERROR_CODES.DATABASE_ERROR),
+      ...(autoRejectedIds.length > 0 ? { autoRejectedIds } : {}),
+    };
+  };
+
   ipcMain.handle(IPC_CHANNELS.SUGGESTION_CREATE, async (_, { chapterId, inPoint, outPoint, description, reasoning, provider }) => {
     logger.info('suggestion:create', chapterId, inPoint, outPoint);
     try {
@@ -93,42 +125,6 @@ export function registerSuggestionHandlers(): void {
       return result.success
         ? createSuccessResponse({ applied: true, clip: result.clip })
         : createErrorResponse(result.error || 'Failed to apply suggestion', IPC_ERROR_CODES.DATABASE_ERROR);
-    } catch (error) {
-      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.SUGGESTION_PREVIEW, async (_, { id }) => {
-    logger.info('suggestion:preview', id);
-    try {
-      if (!id) {
-        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-
-      const result = await previewSuggestionWithClip(id);
-      return result.success
-        ? createSuccessResponse({ previewed: true, clip: result.clip })
-        : createErrorResponse(result.error || 'Failed to preview suggestion', IPC_ERROR_CODES.DATABASE_ERROR);
-    } catch (error) {
-      return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.SUGGESTION_CANCEL_PREVIEW, async (_, { id }) => {
-    logger.info('suggestion:cancel-preview', id);
-    try {
-      if (!id) {
-        return createErrorResponse('Suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
-      }
-
-      const result = await cancelSuggestionPreview(id);
-      return result.success
-        ? createSuccessResponse({
-            cancelled: true,
-            removedClipId: result.removedClipId,
-            clip: result.clip,
-          })
-        : createErrorResponse(result.error || 'Failed to cancel suggestion preview', IPC_ERROR_CODES.DATABASE_ERROR);
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
@@ -213,5 +209,45 @@ export function registerSuggestionHandlers(): void {
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.DATABASE_ERROR);
     }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_APPLY_BATCH, async (_, payload) => {
+    const suggestionIds = parseSuggestionIds(payload);
+    if (suggestionIds.length === 0) {
+      return createErrorResponse('At least one suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    return toBatchResponse(await applySuggestionsBatch(suggestionIds));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_REJECT_BATCH, async (_, payload) => {
+    const suggestionIds = parseSuggestionIds(payload);
+    if (suggestionIds.length === 0) {
+      return createErrorResponse('At least one suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    return toBatchResponse(await rejectSuggestionsBatch(suggestionIds));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_RESTORE_BATCH, async (_, payload) => {
+    const suggestionIds = parseSuggestionIds(payload);
+    if (suggestionIds.length === 0) {
+      return createErrorResponse('At least one suggestion ID is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    return toBatchResponse(await restoreRejectedSuggestionsBatch(suggestionIds));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SUGGESTION_REVERT_BATCH, async (_, payload) => {
+    const rawItems = (payload as { items?: unknown } | null)?.items;
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return createErrorResponse('At least one suggestion revert item is required', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    const items = rawItems.filter((item): item is Parameters<typeof revertAppliedSuggestionsBatch>[0][number] => {
+      if (!item || typeof item !== 'object') return false;
+      const suggestionId = (item as { suggestionId?: unknown }).suggestionId;
+      return typeof suggestionId === 'number' && Number.isInteger(suggestionId) && suggestionId > 0;
+    });
+    if (items.length !== rawItems.length) {
+      return createErrorResponse('Suggestion revert items are invalid', IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    return toBatchResponse(await revertAppliedSuggestionsBatch(items));
   });
 }

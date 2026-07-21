@@ -6,18 +6,17 @@ import {
   type GetAssetsResult,
 } from '../api/assets.js';
 import {
-  createClip as ipcCreateClip,
   deleteClip as ipcDeleteClip,
   getClipsByProject as ipcGetClips,
   updateClip as ipcUpdateClip,
-  type CreateClipResult,
   type GetClipsResult,
 } from '../api/clips.js';
 import { loadTimelineState as ipcLoadTimelineState, saveTimelineState as ipcSaveTimelineState, type TimelineStateResult } from '../api/timeline.js';
 import type { Asset, Clip } from '../../../shared/types/database';
 import type { AssetAvailability, ProjectAsset } from '../../../shared/contracts/ipc.js';
-import { timelineState, loadTimeline, setClips, createClip, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
+import { timelineState, loadTimeline, setClips, updateClip, setError, clearTimeline, getClipById } from './timeline.svelte';
 import {
+  CreateClipCommand,
   executeCommand,
   ResizeClipCommand,
   UpdateClipTimingCommand,
@@ -225,7 +224,7 @@ export async function createProjectClip(
   isEssential: boolean = true
 ): Promise<Clip | null> {
   try {
-    const result: CreateClipResult = await ipcCreateClip({
+    const command = new CreateClipCommand('Create cut', {
       projectId,
       assetId,
       trackIndex,
@@ -235,16 +234,17 @@ export async function createProjectClip(
       description,
       isEssential,
     });
-    
-    if (result.success && result.data) {
-      createClip(result.data);
-      if (!hasClipDescription(result.data) && isAssetAvailable(result.data.asset_id)) {
-        enqueueClipAutoName(result.data.id);
+    const success = await executeCommand(command);
+    const createdClip = command.createdClip;
+
+    if (success && createdClip) {
+      if (!hasClipDescription(createdClip) && isAssetAvailable(createdClip.asset_id)) {
+        enqueueClipAutoName(createdClip.id);
         void processClipAutoNameQueue();
       }
-      return result.data;
+      return createdClip;
     } else {
-      throw new Error(result.error || 'Failed to create clip');
+      throw new Error('Failed to create clip');
     }
   } catch (error) {
     setError((error as Error).message);

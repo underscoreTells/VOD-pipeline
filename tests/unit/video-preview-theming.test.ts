@@ -1,6 +1,6 @@
 import { render } from "svelte/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Chapter, Clip } from "../../src/shared/types/database";
+import type { Chapter } from "../../src/shared/types/database";
 import type { ProjectAsset } from "../../src/shared/contracts/ipc";
 
 const mocks = vi.hoisted(() => ({
@@ -78,25 +78,7 @@ vi.mock("../../src/renderer/lib/components/chapter-preview-media.js", () => ({
   resolveChapterPreviewMediaChange: () => null,
 }));
 
-import ClipPreview from "../../src/renderer/lib/components/ClipPreview.svelte";
-import ChapterPreview from "../../src/renderer/lib/components/ChapterPreview.svelte";
-
-function createClip(overrides: Partial<Clip> = {}): Clip {
-  return {
-    id: 101,
-    project_id: 11,
-    asset_id: 201,
-    track_index: 0,
-    start_time: 2,
-    in_point: 12,
-    out_point: 19,
-    role: "setup",
-    description: "Test clip",
-    is_essential: true,
-    created_at: "2026-04-21T00:00:00.000Z",
-    ...overrides,
-  };
-}
+import ChapterEditorViewer from "../../src/renderer/lib/components/ChapterEditorViewer.svelte";
 
 function createChapter(overrides: Partial<Chapter> = {}): Chapter {
   return {
@@ -131,22 +113,6 @@ function createAsset(overrides: Partial<ProjectAsset> = {}): ProjectAsset {
   };
 }
 
-function setClipPreviewState({
-  clip = createClip(),
-  chapter = createChapter(),
-  asset = createAsset(),
-}: {
-  clip?: Clip;
-  chapter?: Chapter;
-  asset?: ProjectAsset;
-} = {}): void {
-  mocks.selectedClipsState.current = [clip];
-  mocks.timelineState.clips = [clip];
-  mocks.chaptersState.chapters = [chapter];
-  mocks.chaptersState.selectedChapterId = chapter.id;
-  mocks.projectDetail.assets = [asset];
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.selectedClipsState.current = [];
@@ -159,49 +125,11 @@ beforeEach(() => {
 });
 
 describe("video preview theming", () => {
-  it("renders ClipPreview dock shells with the shared themeable surface", () => {
-    setClipPreviewState();
-
-    const { body } = render(ClipPreview);
-
-    expect(body).toContain("player-dock-surface");
-    expect(body).not.toContain("bg-[rgba(18,18,18,0.86)]");
-    expect(body).not.toContain("border-white/8");
-  });
-
-  it("does not render the old hard-coded loop-off styling in ClipPreview markup", () => {
-    setClipPreviewState();
-
-    const { body } = render(ClipPreview);
-
-    expect(body).not.toContain("border border-white/12 bg-black text-white hover:border-white/25 hover:bg-black/90");
-  });
-
-  it("uses theme tokens for the ClipPreview unavailable state", () => {
-    setClipPreviewState({
-      asset: createAsset({
-        availability: {
-          exists: false,
-          issue: "missing_file",
-          savedPath: "/tmp/missing.mp4",
-          nearestExistingAncestor: "/tmp",
-          checkedAt: "2026-04-21T00:00:00.000Z",
-        },
-      }),
-    });
-
-    const { body } = render(ClipPreview);
-
-    expect(body).toContain("from-surface-raised to-surface-page");
-    expect(body).not.toContain("from-[#1f1f1f]");
-    expect(body).not.toContain("to-[#121212]");
-  });
-
-  it("renders ChapterPreview dock shells with the shared themeable surface", () => {
+  it("renders ChapterEditorViewer dock shells with the shared themeable surface", () => {
     const chapter = createChapter();
     const asset = createAsset();
 
-    const { body } = render(ChapterPreview, {
+    const { body } = render(ChapterEditorViewer, {
       props: {
         chapter,
         asset,

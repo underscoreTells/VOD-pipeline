@@ -616,7 +616,10 @@ function getProxyResult(error: unknown): 'failed' | 'cancelled' {
   return error instanceof FFmpegError && error.code === 'cancelled' ? 'cancelled' : 'failed';
 }
 
-function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
+function isLikelyGPUEncoderRuntimeFailure(
+  error: FFmpegError,
+  backend: GPUEncoderBackend
+): boolean {
   if (!error.details || typeof error.details !== 'object' || !('error' in error.details)) {
     return false;
   }
@@ -633,7 +636,26 @@ function isLikelyGPUEncoderRuntimeFailure(error: FFmpegError): boolean {
     /(?<![/\\_.-])\b(?:nvenc|qsv|amf|videotoolbox|vtcompression)[^\n]{0,80}(?:initializ(?:ation|e|ing)? failed|failed to (?:initialize|initialise|create|open)|not available|unsupported)/i,
     /(?:failed|unable) to (?:initialize|initialise|create) [^\n]{0,40}(?:nvenc|cuda|qsv|mfx|amf|videotoolbox|vtcompression|hwaccel)/i,
   ];
-  return gpuFailurePatterns.some((pattern) => pattern.test(stderr));
+  if (gpuFailurePatterns.some((pattern) => pattern.test(stderr))) {
+    return true;
+  }
+
+  const gpuPipelineFailurePatterns = [
+    /error reinitializing filters/i,
+    /failed to inject frame into filter network/i,
+    /cuda out of memory/i,
+    /hwaccel.*(?:failed|unavailable|unsupported)/i,
+  ];
+  const backendEvidencePatterns: Record<GPUEncoderBackend, RegExp> = {
+    nvenc: /(?:^|[^a-z0-9])(?:h264_|hevc_)?(?:nvenc|cuda|nvcuda)(?:[^a-z0-9]|$)/i,
+    qsv: /(?:^|[^a-z0-9])(?:h264_|hevc_)?(?:qsv|mfx)(?:[^a-z0-9]|$)/i,
+    amf: /(?:^|[^a-z0-9])(?:h264_|hevc_)?(?:amf|d3d11va)(?:[^a-z0-9]|$)/i,
+    videotoolbox: /(?:^|[^a-z0-9])(?:h264_|hevc_)?(?:videotoolbox|vtcompression)(?:[^a-z0-9]|$)/i,
+  };
+  return (
+    gpuPipelineFailurePatterns.some((pattern) => pattern.test(stderr))
+    && backendEvidencePatterns[backend].test(stderr)
+  );
 }
 
 /**
@@ -883,7 +905,7 @@ async function executeProxyGeneration(
         encodingPlan.useGPU &&
         error instanceof FFmpegError &&
         error.code === 'FFMPEG_ERROR' &&
-        isLikelyGPUEncoderRuntimeFailure(error)
+        isLikelyGPUEncoderRuntimeFailure(error, encodingPlan.backend as GPUEncoderBackend)
       ) {
         recordGPUEncoderRuntimeFailure(
           { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },
@@ -1063,7 +1085,7 @@ async function runChunkedChapterReverseGeneration(params: {
           encodingPlan.useGPU &&
           error instanceof FFmpegError &&
           error.code === 'FFMPEG_ERROR' &&
-          isLikelyGPUEncoderRuntimeFailure(error)
+          isLikelyGPUEncoderRuntimeFailure(error, encodingPlan.backend as GPUEncoderBackend)
         ) {
           recordGPUEncoderRuntimeFailure(
             { backend: encodingPlan.backend as GPUEncoderBackend, source: encodingPlan.ffmpegBinaryPath },

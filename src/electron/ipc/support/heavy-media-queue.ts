@@ -1,5 +1,7 @@
 import * as os from 'node:os';
 
+import { getDefaultCpuProxyLimit } from '../../media-resource-limits.js';
+
 export type HeavyMediaJobType = 'chapterProxy' | 'transcription' | 'reverseQuickWarm' | 'reverseFullWarm';
 export type HeavyMediaJobPriority = 'background' | 'interactive';
 export type HeavyMediaResourceClass = 'cpu' | 'gpu';
@@ -73,17 +75,9 @@ type MutableHeavyMediaSchedulerLimits = {
   interactiveOverflow: number;
 };
 
-function defaultCpuProxyLimit(): number {
-  const parallelism =
-    typeof os.availableParallelism === 'function'
-      ? os.availableParallelism()
-      : os.cpus().length;
-  return Math.max(1, Math.min(4, Math.floor(parallelism / 2)));
-}
-
 const heavyMediaSchedulerLimits: MutableHeavyMediaSchedulerLimits = {
-  cpuProxy: defaultCpuProxyLimit(),
-  gpuProxy: 2,
+  cpuProxy: getDefaultCpuProxyLimit(),
+  gpuProxy: 1,
   transcription: 1,
   fullReverse: 1,
   interactiveOverflow: 1,
@@ -112,8 +106,8 @@ export function configureHeavyMediaScheduler(limits: HeavyMediaSchedulerLimitsIn
 }
 
 function applyDefaultHeavyMediaSchedulerLimits(): void {
-  heavyMediaSchedulerLimits.cpuProxy = defaultCpuProxyLimit();
-  heavyMediaSchedulerLimits.gpuProxy = 2;
+  heavyMediaSchedulerLimits.cpuProxy = getDefaultCpuProxyLimit();
+  heavyMediaSchedulerLimits.gpuProxy = 1;
   heavyMediaSchedulerLimits.transcription = 1;
   heavyMediaSchedulerLimits.fullReverse = 1;
   heavyMediaSchedulerLimits.interactiveOverflow = 1;
@@ -182,7 +176,11 @@ function tryAcquireHeavyMediaSlot(job: HeavyMediaJob<unknown>): boolean {
   }
 
   if (job.pool === 'transcription') {
-    if (activeTranscription >= heavyMediaSchedulerLimits.transcription) {
+    // Whisper and software proxy encoding are both CPU-saturating workloads.
+    if (
+      activeTranscription >= heavyMediaSchedulerLimits.transcription
+      || activeCpuProxy > 0
+    ) {
       return false;
     }
     activeTranscription += 1;
@@ -192,6 +190,25 @@ function tryAcquireHeavyMediaSlot(job: HeavyMediaJob<unknown>): boolean {
   }
 
   const isCpu = job.pool === 'cpuProxy';
+  if (isCpu) {
+    // Whisper and software proxy encoding are both CPU-saturating workloads,
+    // so an active transcription excludes all CPU proxy work. A waiting
+    // transcription reserves freed CPU slots only against same-or-lower
+    // priority proxy jobs; an interactive proxy may jump ahead of a queued
+    // background transcription.
+    if (activeTranscription > 0) {
+      return false;
+    }
+    const jobPriorityRank = getHeavyMediaPriorityRank(job.priority);
+    const blockedByWaitingTranscription = heavyMediaQueue.some(
+      (queuedJob) =>
+        queuedJob.pool === 'transcription'
+        && getHeavyMediaPriorityRank(queuedJob.priority) <= jobPriorityRank
+    );
+    if (blockedByWaitingTranscription) {
+      return false;
+    }
+  }
   const active = isCpu ? activeCpuProxy : activeGpuProxy;
   const limit = isCpu ? heavyMediaSchedulerLimits.cpuProxy : heavyMediaSchedulerLimits.gpuProxy;
   const overflow = isCpu ? activeCpuProxyInteractiveOverflow : activeGpuProxyInteractiveOverflow;
@@ -404,6 +421,7 @@ export function cancelHeavyMediaJob(key: string): boolean {
     }
     heavyMediaJobs.delete(job.key);
     job.reject(new HeavyMediaCancellationError());
+    pumpHeavyMediaQueue();
     return true;
   }
 

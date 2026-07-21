@@ -63,7 +63,16 @@ export function registerWaveformHandlers(): void {
         }
       );
 
-      return createSuccessResponse(result);
+      return createSuccessResponse({
+        assetId: result.assetId,
+        trackIndex: result.trackIndex,
+        tiers: result.tiers.map((tier) => ({
+          level: tier.level,
+          peakCount: tier.peaks.length,
+          sampleRate: tier.sampleRate,
+          duration: tier.duration,
+        })),
+      });
     } catch (error) {
       if (error instanceof WaveformError) {
         const validCodes = Object.values(IPC_ERROR_CODES);

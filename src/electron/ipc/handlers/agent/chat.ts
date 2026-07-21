@@ -11,7 +11,6 @@ import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
   AgentHandlerError,
-  assertChapterGroundingReady,
   generateConversationTitle,
   logger,
   parseConversationTurnPayload,
@@ -40,6 +39,7 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
 
     logger.info('agent:chat', projectId, conversationId, provider);
+    const signal = clientRequestId ? agentBridge.registerClientRequest(clientRequestId) : undefined;
 
     try {
       if (!clientRequestId) {
@@ -64,7 +64,6 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
         provider,
         { requireFreshRuntime: true }
       );
-      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const persistedUserMessage = await createChatMessage({
@@ -84,7 +83,8 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
             message,
             chapter.title,
             threadNamingModel,
-            agentConfig
+            agentConfig,
+            signal
           ),
         });
       }
@@ -107,6 +107,7 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
         threadId,
         userMessageId: persistedUserMessage.id,
         userCreatedAt: persistedUserMessage.created_at,
+        signal,
       });
 
       return createSuccessResponse(normalized);
@@ -115,6 +116,8 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
         error,
         error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
       );
+    } finally {
+      if (clientRequestId) agentBridge.finishClientRequest(clientRequestId);
     }
   });
 }

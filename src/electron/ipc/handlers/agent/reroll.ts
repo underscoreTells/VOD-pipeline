@@ -9,7 +9,6 @@ import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
   AgentHandlerError,
-  assertChapterGroundingReady,
   logger,
   parseConversationTurnPayload,
   requireConversationId,
@@ -37,6 +36,7 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
     const messageId = toNumberOrNull(payload?.messageId);
 
     logger.info('agent:reroll-message', projectId, conversationId, messageId, provider);
+    const signal = clientRequestId ? agentBridge.registerClientRequest(clientRequestId) : undefined;
 
     try {
       if (!clientRequestId) {
@@ -59,7 +59,6 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         provider,
         { requireFreshRuntime: true }
       );
-      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === normalizedMessageId);
@@ -112,6 +111,7 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         threadId,
         userMessageId: retainedUserMessage.id,
         userCreatedAt: retainedUserMessage.created_at,
+        signal,
       });
 
       return createSuccessResponse(normalized);
@@ -120,6 +120,8 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         error,
         error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
       );
+    } finally {
+      if (clientRequestId) agentBridge.finishClientRequest(clientRequestId);
     }
   });
 }

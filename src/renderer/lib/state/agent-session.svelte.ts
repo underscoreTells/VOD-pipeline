@@ -56,15 +56,27 @@ export interface TimelineActionProposal {
   error: string | null;
 }
 
+export interface ActiveAgentTurn {
+  clientRequestId: string;
+  projectId: string;
+  chapterId: string;
+  conversationId: number;
+  kind: 'send' | 'reroll' | 'edit';
+  status: 'running' | 'cancelling';
+}
+
 export interface AgentState {
   messages: ChatMessage[];
   conversations: ChatConversation[];
   selectedConversationId: number | null;
   isLoadingConversations: boolean;
   suggestions: Suggestion[];
+  selectedSuggestionId: number | null;
+  composerDrafts: Record<string, string>;
   timelineProposals: TimelineActionProposal[];
   selectedProvider: LLMProviderType;
   isStreaming: boolean;
+  activeTurn: ActiveAgentTurn | null;
   currentProjectId: string | null;
   currentChapterId: string | null;
   isGroundingStatusLoading: boolean;
@@ -83,9 +95,12 @@ export const agentState = $state<AgentState>({
   selectedConversationId: null,
   isLoadingConversations: false,
   suggestions: [],
+  selectedSuggestionId: null,
+  composerDrafts: {},
   timelineProposals: [],
   selectedProvider: "gemini",
   isStreaming: false,
+  activeTurn: null,
   currentProjectId: null,
   currentChapterId: null,
   isGroundingStatusLoading: false,
@@ -335,6 +350,7 @@ function clearChapterConversationState(clearSuggestions: boolean): void {
 
   if (clearSuggestions) {
     agentState.suggestions = [];
+    agentState.selectedSuggestionId = null;
   }
 }
 
@@ -342,7 +358,8 @@ async function loadConversationSuggestions(
   chapterId: string,
   conversationId: number,
   requestToken?: number,
-  requestContextKey?: string
+  requestContextKey?: string,
+  isStillValid?: () => boolean
 ): Promise<void> {
   const response = await getSuggestions({
     chapterId,
@@ -357,6 +374,10 @@ async function loadConversationSuggestions(
     return;
   }
 
+  if (isStillValid && !isStillValid()) {
+    return;
+  }
+
   if (!response.success) {
     agentState.error = response.error || "Failed to load suggestions";
     agentState.suggestions = [];
@@ -364,6 +385,7 @@ async function loadConversationSuggestions(
   }
 
   agentState.suggestions = response.data ?? [];
+  agentState.selectedSuggestionId = null;
 }
 
 async function loadChapterConversations(options: {
@@ -459,10 +481,6 @@ export async function syncAgentContext(
   projectId: string | null,
   chapterId: string | null
 ) {
-  if (isStreamingBlocked()) {
-    return;
-  }
-
   const nextContextKey = buildConversationContextKey(projectId, chapterId);
   if (nextContextKey === getCurrentConversationContextKey()) {
     return;
@@ -533,9 +551,11 @@ export async function selectConversation(
   options?: {
     requestContextKey?: string;
     requestToken?: number;
+    allowWhileStreaming?: boolean;
+    isStillValid?: () => boolean;
   }
 ) {
-  if (isStreamingBlocked()) {
+  if (!options?.allowWhileStreaming && isStreamingBlocked()) {
     return false;
   }
 
@@ -545,6 +565,13 @@ export async function selectConversation(
     options.requestContextKey !== undefined &&
     !isCurrentConversationContextRequest(options.requestToken, options.requestContextKey)
   ) {
+    return false;
+  }
+
+  // Reconciliation reloads can race a queued chapter change or a replacement
+  // send while the messages IPC is in flight; bail before touching shared
+  // state when the caller's context is no longer current.
+  if (options?.isStillValid && !options.isStillValid()) {
     return false;
   }
 
@@ -566,7 +593,8 @@ export async function selectConversation(
     agentState.currentChapterId,
     conversationId,
     options?.requestToken,
-    options?.requestContextKey
+    options?.requestContextKey,
+    options?.isStillValid
   );
   return true;
 }

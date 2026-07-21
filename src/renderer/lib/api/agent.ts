@@ -4,6 +4,7 @@ import type {
   AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
+  AgentCancelTurnResult,
   AgentGroundingStatusParams,
   AgentGroundingStatusResult,
   AgentConversationCreateParams,
@@ -17,6 +18,9 @@ import type {
   SuggestionListParams,
   SuggestionListResult,
   SuggestionMutationResult,
+  SuggestionBatchParams,
+  SuggestionBatchRevertParams,
+  SuggestionBatchMutationResult,
 } from '../../../shared/contracts/electron-api.js';
 import type { AgentStreamEvent } from '../../../shared/types/agent-ipc.js';
 import { getElectronApi } from './client.js';
@@ -27,6 +31,7 @@ export type {
   AgentBranchMessageParams,
   AgentChatParams,
   AgentChatResult,
+  AgentCancelTurnResult,
   AgentGroundingStatusParams,
   AgentGroundingStatusResult,
   AgentConversationCreateParams,
@@ -40,10 +45,19 @@ export type {
   SuggestionListParams,
   SuggestionListResult,
   SuggestionMutationResult,
+  SuggestionBatchParams,
+  SuggestionBatchRevertParams,
+  SuggestionBatchMutationResult,
 } from '../../../shared/contracts/electron-api.js';
 
 export async function agentChat(params: AgentChatParams): Promise<AgentChatResult> {
   return await getElectronApi().agent.chat(params);
+}
+
+export async function cancelAgentTurn(
+  clientRequestId: string
+): Promise<AgentCancelTurnResult> {
+  return await getElectronApi().agent.cancelTurn(clientRequestId);
 }
 
 export async function getAgentGroundingStatus(
@@ -114,18 +128,6 @@ export async function getSuggestions(
   return await getElectronApi().agent.getSuggestions(params);
 }
 
-export async function previewSuggestion(
-  suggestionId: number
-): Promise<SuggestionMutationResult> {
-  return await getElectronApi().agent.previewSuggestion(suggestionId);
-}
-
-export async function cancelSuggestionPreview(
-  suggestionId: number
-): Promise<SuggestionMutationResult> {
-  return await getElectronApi().agent.cancelSuggestionPreview(suggestionId);
-}
-
 export async function applySuggestion(
   suggestionId: number
 ): Promise<SuggestionMutationResult> {
@@ -142,4 +144,28 @@ export async function rejectSuggestion(
   suggestionId: number
 ): Promise<SuggestionMutationResult> {
   return await getElectronApi().agent.rejectSuggestion(suggestionId);
+}
+
+export async function applySuggestionBatch(
+  params: SuggestionBatchParams
+): Promise<SuggestionBatchMutationResult> {
+  return await getElectronApi().agent.applySuggestionBatch(params);
+}
+
+export async function rejectSuggestionBatch(
+  params: SuggestionBatchParams
+): Promise<SuggestionBatchMutationResult> {
+  return await getElectronApi().agent.rejectSuggestionBatch(params);
+}
+
+export async function restoreSuggestionBatch(
+  params: SuggestionBatchParams
+): Promise<SuggestionBatchMutationResult> {
+  return await getElectronApi().agent.restoreSuggestionBatch(params);
+}
+
+export async function revertSuggestionBatch(
+  params: SuggestionBatchRevertParams
+): Promise<SuggestionBatchMutationResult> {
+  return await getElectronApi().agent.revertSuggestionBatch(params);
 }

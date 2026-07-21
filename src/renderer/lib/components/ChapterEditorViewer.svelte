@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import type { Chapter, Asset, Clip } from '$shared/types/database';
+  import type { Chapter, Asset, Clip, Suggestion } from '$shared/types/database';
   import type { AssetAvailability } from '$shared/contracts/ipc';
   import Icon from './ui/Icon.svelte';
   import { Clapperboard, Play, Pause } from '../constants';
@@ -33,13 +33,17 @@
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
-  import { getClipVisibleRangeInChapter } from '../../../shared/utils/clip-timing.js';
+  import {
+    getClipVisibleRangeInChapter,
+    resolveSuggestionWindowForChapter,
+  } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
     getReversePreviewFps,
     snapToPreviewSample,
   } from '../utils/previewSampling';
   import { createQueuedMediaSeek } from '../utils/queuedMediaSeek';
+  import { agentState } from '../state/agent.svelte.js';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
 
@@ -83,7 +87,53 @@
   });
 
   const hasPreview = $derived(() => Boolean(chapter && asset));
-  const previewTitle = $derived(() => chapter?.title || 'No chapter selected');
+  const selectedClip = $derived.by(() => {
+    const selectedIds = timelineState.selectedClipIds;
+    if (!selectedIds || selectedIds.size !== 1) return null;
+    const [id] = selectedIds;
+    return clips.find((clip) => clip.id === id && (!asset || clip.asset_id === asset.id)) ?? null;
+  });
+  const selectedSuggestion = $derived.by(() => {
+    if (agentState.selectedSuggestionId === null) return null;
+    return agentState.suggestions.find(
+      (suggestion) => suggestion.id === agentState.selectedSuggestionId && suggestion.status === 'pending'
+    ) ?? null;
+  });
+  const viewerMode = $derived(selectedSuggestion ? 'Suggestion' : selectedClip ? 'Cut' : 'Chapter');
+  const viewerRange = $derived.by(() => {
+    if (!chapter) return { start: 0, end: 0.01 };
+    if (selectedSuggestion) {
+      // Update suggestions merge onto the target's live window at acceptance
+      // time, so preview the payload applied to the clip's current range
+      // rather than the proposal-time stored range.
+      const liveTarget = selectedSuggestion.target_clip_id
+        ? clips.find((clip) => clip.id === selectedSuggestion.target_clip_id)
+        : null;
+      const suggestionWindow = resolveSuggestionWindowForChapter(
+        selectedSuggestion,
+        chapter,
+        liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
+      );
+      return {
+        start: clampToChapter(chapter, suggestionWindow.start),
+        end: clampToChapter(chapter, suggestionWindow.end),
+      };
+    }
+    if (selectedClip) {
+      return {
+        start: clampToChapter(chapter, selectedClip.in_point),
+        end: clampToChapter(chapter, selectedClip.out_point),
+      };
+    }
+    return { start: chapter.start_time, end: chapter.end_time };
+  });
+  const viewerDuration = $derived(Math.max(0.01, viewerRange.end - viewerRange.start));
+  const viewerLocalTime = $derived(clampNumber(currentTime - viewerRange.start, 0, viewerDuration));
+  const previewTitle = $derived(() => {
+    if (selectedSuggestion) return selectedSuggestion.description || 'Suggested cut';
+    if (selectedClip) return selectedClip.description || 'Selected cut';
+    return chapter?.title || 'No chapter selected';
+  });
   const assetUnavailable = $derived(() => asset?.availability?.exists === false);
 
   const chapterDuration = $derived(() => getChapterDuration(chapter));
@@ -186,15 +236,15 @@
   function getScrubGlobalTime(input: HTMLInputElement | null): number | null {
     if (!chapter) return null;
 
-    const fallbackLocalTime = localTime();
+    const fallbackLocalTime = viewerLocalTime;
     const rawValue = input ? Number(input.value) : fallbackLocalTime;
     const nextLocalTime = clampNumber(
       Number.isFinite(rawValue) ? rawValue : fallbackLocalTime,
       0,
-      chapterDuration()
+      viewerDuration
     );
 
-    return toChapterGlobalTime(chapter, nextLocalTime);
+    return clampNumber(viewerRange.start + nextLocalTime, viewerRange.start, viewerRange.end);
   }
 
   function beginScrubSession() {
@@ -534,13 +584,29 @@
         videoRef.currentTime = reverseTime;
       }
 
-      const mappedGlobalTime = fromReverseProxyTime(chapter, reverseTime);
+      let mappedGlobalTime = fromReverseProxyTime(chapter, reverseTime);
+      let loopedToRangeEnd = false;
+      if (viewerMode !== 'Chapter') {
+        if (mappedGlobalTime > viewerRange.end + 0.01) {
+          mappedGlobalTime = viewerRange.end;
+          videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
+        } else if (mappedGlobalTime <= viewerRange.start + 0.01) {
+          mappedGlobalTime = viewerRange.end;
+          videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
+          loopedToRangeEnd = true;
+          if (!timelineState.isPlaying) {
+            videoRef.pause();
+          }
+        }
+      }
+
       currentTime = mappedGlobalTime;
       if (!(isProgrammaticPlayheadSeek && !timelineState.isPlaying)) {
         setPlayhead(mappedGlobalTime);
       }
 
       if (
+        !loopedToRangeEnd &&
         timelineState.isPlaying &&
         timelineState.shuttleDirection === -1 &&
         reverseTime >= duration - 0.001
@@ -552,6 +618,18 @@
     }
 
     let next = clampToChapter(chapter, videoRef.currentTime);
+    if (viewerMode !== 'Chapter') {
+      if (next < viewerRange.start - 0.01) {
+        next = viewerRange.start;
+        videoRef.currentTime = next;
+      } else if (next >= viewerRange.end - 0.01) {
+        next = viewerRange.start;
+        videoRef.currentTime = next;
+        if (!timelineState.isPlaying) {
+          videoRef.pause();
+        }
+      }
+    }
     if (next !== videoRef.currentTime) {
       videoRef.pause();
       videoRef.currentTime = next;
@@ -679,6 +757,16 @@
   });
 
   $effect(() => {
+    if (!videoRef || !chapter || activeSource === 'reverse') return;
+    const focusStart = viewerRange.start;
+    const focusEnd = viewerRange.end;
+    void focusEnd;
+    if (currentTime >= focusStart - 0.01 && currentTime <= focusEnd + 0.01) return;
+    pendingGlobalSeekTime = focusStart;
+    if (videoRef.readyState >= 1) applyPendingSeek();
+  });
+
+  $effect(() => {
     const chapterId = chapter?.id ?? null;
     if (chapterId !== lastChapterId) {
       clearSelection();
@@ -787,12 +875,15 @@
 
 <div
   class={cn(
-    'chapter-preview flex h-full min-h-0 flex-col gap-2 overflow-hidden rounded-md border border-border-default bg-surface-base p-2',
+    'chapter-preview chapter-editor-viewer flex h-full min-h-0 flex-col gap-2 overflow-hidden rounded-lg border border-border-default bg-surface-base p-2',
     className,
   )}
 >
   <div class="preview-header flex cursor-default items-center justify-between gap-2">
-    <h3 class="m-0 py-0.5 text-app-xs font-medium text-text-primary">Chapter preview</h3>
+    <div class="flex items-center gap-2">
+      <h3 class="m-0 py-0.5 text-app-xs font-medium text-text-primary">Editor viewer</h3>
+      <span class="rounded-sm bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-text-tertiary">{viewerMode}</span>
+    </div>
     <span class="chapter-title truncate text-app-sm text-text-tertiary">{previewTitle()}</span>
   </div>
 
@@ -852,22 +943,22 @@
             class="scrubber ui-range-thumb-sm h-1.5 min-w-0 flex-1 appearance-none rounded-full bg-surface-hover outline-none disabled:cursor-not-allowed disabled:opacity-40"
             type="range"
             min="0"
-            max={chapterDuration()}
+            max={viewerDuration}
             step="0.01"
-            value={localTime()}
+            value={viewerLocalTime}
             disabled={assetUnavailable()}
             onpointerdown={handleScrubStart}
             oninput={handleScrubInput}
             onchange={handleScrubCommit}
           />
           <span class="transport-time flex-none whitespace-nowrap font-mono text-app-xs tabular-nums text-text-secondary">
-            {formatTime(localTime())} / {formatTime(chapterDuration())}
+            {formatTime(viewerLocalTime)} / {formatTime(viewerDuration)}
           </span>
         </div>
 
         <div class="info-grid player-dock-surface grid grid-cols-[auto_1fr_auto] auto-rows-[22px] items-center gap-x-2 gap-y-1 rounded-sm p-2">
-          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Range</span>
-          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(chapter.start_time)} - {formatTime(chapter.end_time)}</span>
+          <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">{viewerMode}</span>
+          <span class="info-value font-mono text-app-sm tabular-nums leading-[22px] text-text-secondary">{formatTime(viewerRange.start)} - {formatTime(viewerRange.end)}</span>
           <span class="info-meta text-right font-mono text-app-sm tabular-nums leading-[22px] text-text-tertiary">{clipRanges.length === 0 ? 'None' : `${clipRanges.length} kept`}</span>
 
           <span class="info-label text-app-xs font-medium leading-[22px] text-text-tertiary">Mode</span>
@@ -876,7 +967,7 @@
             class="info-meta text-right text-app-sm tabular-nums leading-[22px] text-text-tertiary"
             class:text-[#fbbf24]={Boolean(reverseStatusMessage)}
           >
-            {reverseStatusMessage ?? formatTime(localTime())}
+            {reverseStatusMessage ?? formatTime(viewerLocalTime)}
           </span>
         </div>
       </div>

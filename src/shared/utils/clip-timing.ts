@@ -1,6 +1,11 @@
-import type { Chapter, Clip } from '../types/database.js';
+import type { Chapter, Clip, Suggestion } from '../types/database.js';
 
 type ClipWindow = Pick<Clip, 'in_point' | 'out_point'>;
+type SuggestionWindow = Pick<Suggestion, 'in_point' | 'out_point'>;
+type SuggestionUpdateFields = Pick<
+  Suggestion,
+  'in_point' | 'out_point' | 'action_type' | 'target_clip_id' | 'action_payload_json'
+>;
 type ExportSortableClip = Pick<Clip, 'id' | 'asset_id' | 'in_point'>;
 type SourceSortableClip = Pick<Clip, 'id' | 'in_point'>;
 type ExportSortableChapter = Pick<Chapter, 'id' | 'display_order' | 'start_time'>;
@@ -38,6 +43,77 @@ export function clipOverlapsChapterSourceRange(
   chapter: ChapterRange
 ): boolean {
   return clip.out_point > chapter.start_time && clip.in_point < chapter.end_time;
+}
+
+/**
+ * Normalize a suggestion's stored in/out points to global source times.
+ * Since schema version 5 all stored suggestion ranges are chapter-local
+ * (legacy global-source rows are converted by a one-time migration), so this
+ * only clamps to the chapter range before shifting to global source time.
+ */
+export function normalizeSuggestionWindowForChapter(
+  suggestion: SuggestionWindow,
+  chapter: ChapterRange
+): ClipSourceRange {
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const localInPoint = clamp(suggestion.in_point, 0, chapterDuration);
+  const localOutPoint = clamp(suggestion.out_point, localInPoint, chapterDuration);
+
+  return {
+    start: chapter.start_time + localInPoint,
+    end: chapter.start_time + localOutPoint,
+  };
+}
+
+/**
+ * Merge an update suggestion's payload onto a base window, mirroring the
+ * backend's applyUpdateSuggestionToClip clamping, so preview and validation
+ * surfaces use the window the clip would actually have after accepting.
+ */
+export function mergeSuggestionUpdateWindow(
+  suggestion: Pick<Suggestion, 'action_payload_json'>,
+  base: ClipSourceRange,
+  chapter: ChapterRange
+): ClipSourceRange {
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const clampLocal = (value: number, min: number) => clamp(value, min, chapterDuration);
+  let inPoint = base.start;
+  let outPoint = base.end;
+  let updatePayload: { inPoint?: number; outPoint?: number } | undefined;
+  if (suggestion.action_payload_json) {
+    try {
+      updatePayload = (JSON.parse(suggestion.action_payload_json) as {
+        update?: { inPoint?: number; outPoint?: number };
+      }).update;
+    } catch {
+      // The repository will report malformed action payloads on apply.
+    }
+  }
+  if (typeof updatePayload?.inPoint === 'number' && Number.isFinite(updatePayload.inPoint)) {
+    inPoint = chapter.start_time + clampLocal(updatePayload.inPoint, 0);
+  }
+  if (typeof updatePayload?.outPoint === 'number' && Number.isFinite(updatePayload.outPoint)) {
+    const minLocalOut = clampLocal(inPoint - chapter.start_time, 0);
+    outPoint = chapter.start_time + clampLocal(updatePayload.outPoint, minLocalOut);
+  }
+  return { start: inPoint, end: outPoint };
+}
+
+/**
+ * Resolve the window a pending suggestion would produce. Update suggestions
+ * merge their payload onto the live target window (acceptance reads the
+ * target's current range, not the proposal-time stored range); everything
+ * else falls back to the stored proposal range.
+ */
+export function resolveSuggestionWindowForChapter(
+  suggestion: SuggestionUpdateFields,
+  chapter: ChapterRange,
+  targetWindow?: ClipSourceRange | null
+): ClipSourceRange {
+  if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id && targetWindow) {
+    return mergeSuggestionUpdateWindow(suggestion, targetWindow, chapter);
+  }
+  return normalizeSuggestionWindowForChapter(suggestion, chapter);
 }
 
 export function getClipVisibleRangeInChapter(

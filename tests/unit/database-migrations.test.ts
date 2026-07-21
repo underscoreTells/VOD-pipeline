@@ -7,10 +7,14 @@ import {
   closeDatabase,
   createClip,
   ensureClipsTableWithoutStartTime,
+  getSchemaVersion,
   initializeDatabase,
+  normalizeStoredSuggestionRangesToChapterLocal,
+  reconcilePendingSuggestionPreviews,
   repairDanglingClipReferences,
   repairClipForeignKeyTables,
   setDatabaseForTesting,
+  updateChapter,
   validateClipMigrationState,
 } from '../../src/electron/database/index.js';
 import { dropProxiesTable, ensureChapterProxyTable } from '../../src/electron/database/migrations.js';
@@ -695,6 +699,867 @@ describeNative('database clip migration repair', () => {
     } finally {
       closeSqliteDatabase(database);
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeNative('schema-version-3 pending preview reconciliation (bootstrap)', () => {
+  function seedPendingCreatePreview(database: Database.Database): {
+    suggestionId: number;
+    clipId: number;
+  } {
+    const ids = seedProjectGraph(database);
+    insertClip(database, ids, 1, 120, 180, 'setup', 'preview create');
+
+    database.prepare(
+      `INSERT INTO suggestions (
+        id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+        reasoning, provider, action_type, target_clip_id, action_payload_json,
+        preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      1,
+      ids.chapterId,
+      ids.conversationId,
+      ids.chatMessageId,
+      // Chapter-local range matching the 120-180 clip in the 100-180 chapter.
+      20,
+      80,
+      'preview create',
+      'reason',
+      'gemini',
+      'create_clip',
+      null,
+      JSON.stringify({ create: { trackIndex: 0, role: 'setup' } }),
+      null,
+      'pending',
+      0,
+      '2026-04-24T00:00:00.000Z',
+      null,
+      1
+    );
+
+    return { suggestionId: 1, clipId: 1 };
+  }
+
+  it('reconciles old pending previews and advances to the current schema during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-');
+    const dbPath = path.join(tempDir, 'v3.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(builder);
+      // Simulate a pre-v3 database: stamp user_version=2 after seeding.
+      builder.pragma('user_version = 2');
+      expect(builder.pragma('user_version', { simple: true })).toBe(2);
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      expect(() => validateClipMigrationState(database)).not.toThrow();
+
+      // The exact untouched create preview was deleted and the suggestion unlinked.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT status, clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(1) as { status: string; clip_id: number | null; preview_snapshot_json: string | null };
+      expect(row.status).toBe('pending');
+      expect(row.clip_id).toBeNull();
+      expect(row.preview_snapshot_json).toBeNull();
+
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(6);
+      // Reopening must not re-reconcile and must not throw.
+      expect(() => validateClipMigrationState(reopened)).not.toThrow();
+      expect(
+        reopened.prepare('SELECT COUNT(*) AS n FROM clips').get() as { n: number }
+      ).toEqual({ n: 0 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('holds the schema version below 3 while a preview row fails reconciliation', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-retry-');
+    const dbPath = path.join(tempDir, 'v3-retry.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(builder);
+      // Simulate a pre-v3 database with a row whose reconciliation always fails.
+      builder.pragma('user_version = 2');
+      builder.exec(
+        "CREATE TRIGGER fail_clip_delete BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'forced failure'); END;"
+      );
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      // The version is held below the v3 gate so the next startup retries.
+      expect(await getSchemaVersion(database)).toBe(2);
+      const stuckRow = database.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number | null };
+      expect(stuckRow.clip_id).toBe(clipId);
+
+      // Repair the data; the next bootstrap retries and advances the version.
+      database.exec('DROP TRIGGER fail_clip_delete');
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(6);
+      expect(reopened.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      const reconciledRow = reopened.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number | null };
+      expect(reconciledRow.clip_id).toBeNull();
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('stamps the current schema version on a fresh database with nothing to reconcile', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-fresh-');
+    const dbPath = path.join(tempDir, 'fresh.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+
+    try {
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      expect(() => validateClipMigrationState(database)).not.toThrow();
+      expect(
+        (database.prepare('SELECT COUNT(*) AS n FROM suggestions').get() as { n: number }).n
+      ).toBe(0);
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips reconciliation when user_version is already 3', () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3-skip-');
+    const dbPath = path.join(tempDir, 'skip.db');
+    const database = new Database(dbPath);
+    database.pragma('journal_mode = WAL');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const { clipId } = seedPendingCreatePreview(database);
+      // Pretend the migration already ran: stamp version 3 with the preview still
+      // present (e.g. a newer preview created after the v3 migration). The
+      // reconciliation must leave it alone.
+      database.pragma('user_version = 3');
+
+      const stats = reconcilePendingSuggestionPreviews(database);
+      expect(stats.skipped).toBe(true);
+      expect(stats.createClipsDeleted).toBe(0);
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeDefined();
+      const row = database.prepare(
+        'SELECT clip_id FROM suggestions WHERE id = ?'
+      ).get(1) as { clip_id: number };
+      expect(row.clip_id).toBe(clipId);
+    } finally {
+      closeSqliteDatabase(database);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeNative('schema-version-5 suggestion range normalization', () => {
+  function insertSuggestion(
+    database: Database.Database,
+    ids: SeededIds,
+    inPoint: number,
+    outPoint: number,
+    options: { createdAt?: string; clipId?: number | null; status?: string; actionType?: string } = {}
+  ): number {
+    return database.prepare(
+      `INSERT INTO suggestions (
+        chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+        reasoning, provider, action_type, target_clip_id, action_payload_json,
+        preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      ids.chapterId,
+      ids.conversationId,
+      ids.chatMessageId,
+      inPoint,
+      outPoint,
+      'cut',
+      'reason',
+      'gemini',
+      options.actionType ?? 'create_clip',
+      null,
+      JSON.stringify({ create: { trackIndex: 0 } }),
+      null,
+      options.status ?? 'pending',
+      0,
+      options.createdAt ?? '2026-04-24T00:00:00.000Z',
+      null,
+      options.clipId ?? null
+    ).lastInsertRowid as number;
+  }
+
+  function getSuggestionRange(database: Database.Database, id: number) {
+    return database.prepare(
+      'SELECT in_point, out_point FROM suggestions WHERE id = ?'
+    ).get(id) as { in_point: number; out_point: number };
+  }
+
+  it('converts unambiguous legacy-global ranges to chapter-local during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v5-');
+    const dbPath = path.join(tempDir, 'v5.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Chapter spans 100-180, so a stored 120-150 range written before
+      // chapter-local storage shipped must be a legacy global source range.
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+      expect(builder.pragma('user_version', { simple: true })).toBe(0);
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+
+      // A second bootstrap must not shift the range again.
+      closeDatabase();
+      const reopened = await initializeDatabase();
+      expect(await getSchemaVersion(reopened)).toBe(6);
+      expect(getSuggestionRange(reopened, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves ranges that fit the chapter duration under the chapter-local convention', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160);
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(stats.rowsFailed).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 150, out_point: 160 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('converts legacy-global ranges that only slightly exceed the chapter duration', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-200: a legacy-global 100.2-100.8 range is within one
+      // second of the 100-second duration but still cannot be chapter-local.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 200 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 100.2, 100.8, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      const range = getSuggestionRange(database, suggestionId);
+      expect(range.in_point).toBeCloseTo(0.2, 5);
+      expect(range.out_point).toBeCloseTo(0.8, 5);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('converts in-bounds legacy-global ranges using created-at provenance', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000: a legacy global 150-160 range fits the
+      // 900-second duration numerically, but the pre-cutoff created_at proves
+      // it uses global coordinates.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('does not reprocess marked rows when a retried run follows a failure', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 150, 160, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const first = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(first.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
+
+      // A retry (e.g. after the version was held for a failed row) must not
+      // shift the already-converted range a second time.
+      const second = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(second.converted).toBe(0);
+      expect(second.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 50, out_point: 60 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('derives the intended window from a materialized create preview clip', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // The preview clip records the window the preview path actually
+      // produced, so it disambiguates the stored range even for rows written
+      // after chapter-local storage shipped.
+      const previewClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'preview create', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, { clipId: previewClipId });
+      database.pragma('user_version = 4');
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(1);
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('runs the corrective pass for version-5 databases and skips at version 6', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // A pre-cutoff global range that fits the chapter duration was left
+      // unchanged by the previous v5 pass and must be revisited now.
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+      database.pragma('user_version = 5');
+
+      const first = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(first.skipped).toBe(false);
+      expect(first.converted).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+
+      database.pragma('user_version = 6');
+      const second = normalizeStoredSuggestionRangesToChapterLocal(database);
+      expect(second.skipped).toBe(true);
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('normalizes SQLite CURRENT_TIMESTAMP formats before classifying provenance', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter-local suggestion written after the cutoff in SQLite's
+      // space-separated timestamp format: it must not be treated as legacy.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-02-14 23:30:00',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 120, out_point: 150 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('converts pre-cutoff rows whose values only fit the chapter global bounds', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // 120-150 cannot be chapter-local in the 100-180 chapter (duration
+      // 80) and the row predates chapter-local storage: legacy global
+      // source times.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('converts post-cutoff rows whose values only fit the chapter global bounds', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // A legacy build kept running past the chapter-local cutoff still
+      // wrote global source times: 120-150 cannot be chapter-local in the
+      // 100-180 chapter (duration 80), so the row is converted rather than
+      // clamped to a zero-length window — the created-at timestamp cannot
+      // distinguish which build wrote a post-cutoff row.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        createdAt: '2026-04-24T00:00:00.000Z',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(1);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('derives ambiguous in-bounds rows from a linked clip before trusting timestamps', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000, so a stored 120-150 range fits both the
+      // local and the global reading; the linked clip at the global 120-150
+      // window is ground truth for the intended chapter-local window.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const linkedClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'preview create', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, { clipId: linkedClipId });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(1);
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('ignores the linked clip of an applied suggestion when classifying the range', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter spans 100-1000. The committed clip of an applied suggestion
+      // remains editable; after the user moved it to 500-560 its bounds are
+      // not evidence of the historical suggestion window, so the stored
+      // post-cutoff chapter-local 120-150 range must be left untouched.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const movedClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 500, 560, null, 'applied cut', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(database, ids, 120, 150, {
+        clipId: movedClipId,
+        status: 'applied',
+      });
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.resolvedFromPreview).toBe(0);
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 120, out_point: 150 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps out-of-range rows written after chapter-local storage shipped', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      // Chapter-local 70-80 became out of range after the chapter bounds
+      // changed to 100-160; written after chapter-local storage shipped, it
+      // must be clamped, not shifted.
+      database.prepare('UPDATE chapters SET start_time = 100, end_time = 160 WHERE id = ?').run(ids.chapterId);
+      const suggestionId = insertSuggestion(database, ids, 70, 80);
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.converted).toBe(0);
+      expect(stats.clampedOutOfRange).toBe(1);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 60, out_point: 60 });
+    } finally {
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('reconciles a legacy preview before normalizing its range during bootstrap', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v3v5-');
+    const dbPath = path.join(tempDir, 'v3v5.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Legacy-global pending preview: stored range 120-150 with the
+      // materialized clip at the same global window in the 100-180 chapter.
+      const previewClipId = builder.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'cut', 1, '2026-01-15T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, {
+        createdAt: '2026-01-15T00:00:00.000Z',
+        clipId: previewClipId,
+      });
+      builder.pragma('user_version = 2');
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      // The reconciliation recognized the preview via its legacy-global
+      // interpretation and removed it before the range was normalized.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT in_point, out_point, clip_id FROM suggestions WHERE id = ?'
+      ).get(suggestionId) as { in_point: number; out_point: number; clip_id: number | null };
+      expect(row.clip_id).toBeNull();
+      expect(row).toMatchObject({ in_point: 20, out_point: 50 });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves preview clip evidence for range normalization when both range readings fit', async () => {
+    const tempDir = createTempDir('vod-pipeline-migration-v2v6-');
+    const dbPath = path.join(tempDir, 'v2v6.db');
+    const restoreDbPath = setBootstrapDbPath(dbPath);
+    const builder = new Database(dbPath);
+    builder.pragma('journal_mode = WAL');
+    builder.pragma('foreign_keys = ON');
+
+    try {
+      builder.exec(readCurrentSchema());
+      const ids = seedProjectGraph(builder);
+      // Chapter spans 100-1000, so the stored post-cutoff 120-150 range fits
+      // both the chapter-local and the legacy-global reading; the untouched
+      // preview clip at the global 120-150 window is the only evidence that
+      // the intended chapter-local window is 20-50.
+      builder.prepare('UPDATE chapters SET start_time = 100, end_time = 1000 WHERE id = ?').run(ids.chapterId);
+      const previewClipId = builder.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 120, 150, null, 'cut', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+      const suggestionId = insertSuggestion(builder, ids, 120, 150, { clipId: previewClipId });
+      builder.pragma('user_version = 2');
+      closeSqliteDatabase(builder);
+
+      const database = await initializeDatabase();
+      expect(await getSchemaVersion(database)).toBe(6);
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const row = database.prepare(
+        'SELECT in_point, out_point, clip_id, range_space FROM suggestions WHERE id = ?'
+      ).get(suggestionId) as {
+        in_point: number;
+        out_point: number;
+        clip_id: number | null;
+        range_space: string | null;
+      };
+      expect(row.clip_id).toBeNull();
+      expect(row).toMatchObject({ in_point: 20, out_point: 50, range_space: 'chapter_local' });
+    } finally {
+      closeDatabase();
+      setDatabaseForTesting(null);
+      restoreDbPath();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores only the base snapshot when update previews share a target clip', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+
+      const targetClipId = database.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(ids.projectId, ids.assetId, 0, 140, 160, 'setup', 'second edit', 1, '2026-04-24T00:00:00.000Z')
+        .lastInsertRowid as number;
+
+      const insertUpdatePreview = (snapshot: { in: number; out: number; description: string }) =>
+        database.prepare(
+          `INSERT INTO suggestions (
+            chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+            reasoning, provider, action_type, target_clip_id, action_payload_json,
+            preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ids.chapterId, ids.conversationId, ids.chatMessageId, 10, 20, 'preview update', 'reason',
+          'gemini', 'update_clip', targetClipId, JSON.stringify({ update: { outPoint: 60 } }),
+          JSON.stringify({
+            clip: {
+              id: targetClipId,
+              in_point: snapshot.in,
+              out_point: snapshot.out,
+              role: 'setup',
+              description: snapshot.description,
+              is_essential: true,
+            },
+          }),
+          'pending', 0, '2026-04-24T00:00:00.000Z', null, targetClipId
+        ).lastInsertRowid as number;
+
+      // The clip went A (base) -> B -> current; only A may be restored.
+      const olderSuggestionId = insertUpdatePreview({ in: 110, out: 170, description: 'base state' });
+      const newerSuggestionId = insertUpdatePreview({ in: 120, out: 165, description: 'first edit' });
+
+      await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+
+      const clip = database.prepare(
+        'SELECT in_point, out_point, description FROM clips WHERE id = ?'
+      ).get(targetClipId) as { in_point: number; out_point: number; description: string };
+      expect(clip).toEqual({ in_point: 110, out_point: 170, description: 'base state' });
+
+      for (const suggestionId of [olderSuggestionId, newerSuggestionId]) {
+        const row = database.prepare(
+          'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+        ).get(suggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+        expect(row.clip_id).toBeNull();
+        expect(row.preview_snapshot_json).toBeNull();
+      }
+    } finally {
+      setDatabaseForTesting(null);
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('clamps chapter-local suggestion ranges when chapter bounds shrink', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+      const suggestionId = insertSuggestion(database, ids, 70.2, 70.8);
+
+      const updated = await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+      expect(updated).toBe(true);
+
+      // The new duration is 70, so the previously in-range local window is
+      // clamped back into bounds instead of being stranded out of range.
+      const range = getSuggestionRange(database, suggestionId);
+      expect(range.in_point).toBeCloseTo(70, 5);
+      expect(range.out_point).toBeCloseTo(70, 5);
+
+      // Non-bound updates leave suggestion ranges alone.
+      const unaffectedId = insertSuggestion(database, ids, 10, 20);
+      await updateChapter(ids.chapterId, { title: 'Renamed' });
+      expect(getSuggestionRange(database, unaffectedId)).toEqual({ in_point: 10, out_point: 20 });
+    } finally {
+      setDatabaseForTesting(null);
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('cancels materialized suggestion previews when chapter bounds change', async () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      setDatabaseForTesting(database);
+
+      const insertClipRow = (inPoint: number, outPoint: number, description: string) =>
+        database.prepare(
+          `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(ids.projectId, ids.assetId, 0, inPoint, outPoint, 'setup', description, 1, '2026-04-24T00:00:00.000Z')
+          .lastInsertRowid as number;
+
+      const insertSuggestionRow = (values: {
+        actionType: 'create_clip' | 'update_clip';
+        targetClipId: number | null;
+        clipId: number | null;
+        snapshot: string | null;
+      }) =>
+        database.prepare(
+          `INSERT INTO suggestions (
+            chapter_id, conversation_id, chat_message_id, in_point, out_point, description,
+            reasoning, provider, action_type, target_clip_id, action_payload_json,
+            preview_snapshot_json, status, display_order, created_at, applied_at, clip_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ids.chapterId, ids.conversationId, ids.chatMessageId, 20, 50, 'preview', 'reason',
+          'gemini', values.actionType, values.targetClipId,
+          JSON.stringify({ create: { trackIndex: 0 } }), values.snapshot, 'pending', 0,
+          '2026-04-24T00:00:00.000Z', null, values.clipId
+        ).lastInsertRowid as number;
+
+      // create_clip preview: the materialized clip is linked from the suggestion.
+      const previewClipId = insertClipRow(120, 150, 'preview create');
+      const createSuggestionId = insertSuggestionRow({
+        actionType: 'create_clip',
+        targetClipId: null,
+        clipId: previewClipId,
+        snapshot: null,
+      });
+
+      // update_clip preview: the live clip holds speculative timing while the
+      // snapshot preserves the original range.
+      const targetClipId = insertClipRow(130, 160, 'speculative edit');
+      const snapshot = JSON.stringify({
+        clip: {
+          id: targetClipId,
+          in_point: 110,
+          out_point: 170,
+          role: 'setup',
+          description: 'original timing',
+          is_essential: true,
+        },
+      });
+      const updateSuggestionId = insertSuggestionRow({
+        actionType: 'update_clip',
+        targetClipId,
+        clipId: targetClipId,
+        snapshot,
+      });
+
+      const updated = await updateChapter(ids.chapterId, { start_time: 50, end_time: 120 });
+      expect(updated).toBe(true);
+
+      // The create preview clip is deleted and both suggestions are unlinked.
+      expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
+      const createRow = database.prepare(
+        'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(createSuggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+      expect(createRow.clip_id).toBeNull();
+      expect(createRow.preview_snapshot_json).toBeNull();
+
+      // The update preview clip is restored from its snapshot and unlinked.
+      const restoredClip = database.prepare(
+        'SELECT in_point, out_point, description FROM clips WHERE id = ?'
+      ).get(targetClipId) as { in_point: number; out_point: number; description: string };
+      expect(restoredClip).toEqual({ in_point: 110, out_point: 170, description: 'original timing' });
+      const updateRow = database.prepare(
+        'SELECT clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(updateSuggestionId) as { clip_id: number | null; preview_snapshot_json: string | null };
+      expect(updateRow.clip_id).toBeNull();
+      expect(updateRow.preview_snapshot_json).toBeNull();
+    } finally {
+      setDatabaseForTesting(null);
+      closeSqliteDatabase(database);
+    }
+  });
+
+  it('skips suggestions whose chapter is missing without failing the migration', () => {
+    const database = new Database(':memory:');
+    database.pragma('foreign_keys = ON');
+
+    try {
+      database.exec(readCurrentSchema());
+      const ids = seedProjectGraph(database);
+      const suggestionId = insertSuggestion(database, ids, 5000, 5100);
+      database.pragma('foreign_keys = OFF');
+      database.prepare('DELETE FROM chapters WHERE id = ?').run(ids.chapterId);
+      database.pragma('foreign_keys = ON');
+
+      const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
+
+      expect(stats.orphanedSkipped).toBe(1);
+      expect(stats.rowsFailed).toBe(0);
+      expect(stats.converted).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 5000, out_point: 5100 });
+    } finally {
+      closeSqliteDatabase(database);
     }
   });
 });

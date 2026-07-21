@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Chapter, Asset } from "$shared/types/database";
   import { chaptersState, selectChapter, deleteChapter, updateChapter, getAssetsForChapter } from "../state/chapters.svelte";
+  import { agentState, cancelActiveAgentTurn } from "../state/agent.svelte";
   import { collapseLeft } from "../state/layout.svelte";
   import { formatTime } from "../utils/time";
   import { formatChapterRange } from "./chapter-panel-helpers.js";
@@ -13,9 +14,15 @@
     class?: string;
     projectAssets: Asset[];
     onImportClick: () => void;
+    onChapterSelect?: (chapterId: number) => void | Promise<void>;
   }
 
-  let { class: className = '', projectAssets, onImportClick }: Props = $props();
+  let {
+    class: className = '',
+    projectAssets,
+    onImportClick,
+    onChapterSelect,
+  }: Props = $props();
 
   // Track which groups are expanded
   let expandedGroups = $state<Set<number>>(new Set());
@@ -82,13 +89,25 @@
   }
 
   function handleSelectChapter(chapterId: number) {
+    if (onChapterSelect) {
+      void onChapterSelect(chapterId);
+      return;
+    }
     selectChapter(chapterId);
   }
 
-  function handleDeleteChapter(chapterId: number) {
-    if (confirm("Are you sure you want to delete this chapter?")) {
-      deleteChapter(chapterId);
+  async function handleDeleteChapter(chapterId: number) {
+    if (!confirm("Are you sure you want to delete this chapter?")) return;
+    // Deleting the chapter clears the selection and transitions the agent
+    // context; an in-flight turn for this chapter would otherwise keep the
+    // worker request running against deleted conversations and lock the
+    // composer until it settles, so cancel it before deleting.
+    const activeTurn = agentState.activeTurn;
+    if (activeTurn && activeTurn.chapterId === String(chapterId)) {
+      const cancelled = await cancelActiveAgentTurn();
+      if (!cancelled) return;
     }
+    await deleteChapter(chapterId);
   }
 
   function startEditing(chapter: Chapter) {
@@ -203,6 +222,9 @@
                       <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                     </div>
                   {/if}
+                  {#if chapter.rough_cut_completed_at}
+                    <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-primary-subtle text-accent-primary" title="Rough cut complete"><Icon icon={Check} size={11} /></span>
+                  {/if}
                   
                   <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>
                     {formatTime(chapter.end_time - chapter.start_time)}
@@ -274,6 +296,9 @@
                         <span class="truncate text-app-sm leading-[1.3] text-text-secondary" class:text-text-primary={selected} class:font-medium={selected}>{chapter.title}</span>
                         <span class="truncate font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>{formatChapterRange(chapter)}</span>
                       </div>
+                    {/if}
+                    {#if chapter.rough_cut_completed_at}
+                      <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-primary-subtle text-accent-primary" title="Rough cut complete"><Icon icon={Check} size={11} /></span>
                     {/if}
                     
                     <span class="shrink-0 font-mono text-app-xs text-text-tertiary" class:text-text-secondary={selected}>

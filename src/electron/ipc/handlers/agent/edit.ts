@@ -17,7 +17,6 @@ import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
   AgentHandlerError,
-  assertChapterGroundingReady,
   generateConversationTitle,
   logger,
   parseConversationTurnPayload,
@@ -48,6 +47,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
 
     logger.info('agent:edit-message', projectId, conversationId, messageId, provider);
+    const signal = clientRequestId ? agentBridge.registerClientRequest(clientRequestId) : undefined;
 
     try {
       if (!clientRequestId) {
@@ -73,7 +73,6 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
         provider,
         { requireFreshRuntime: true }
       );
-      await assertChapterGroundingReady(normalizedProjectId, chapter.id);
       const syncedConversation = await syncConversationProvider(conversation, provider);
       const targetMessage = await getChatMessageByConversation(
         syncedConversation.id,
@@ -109,7 +108,8 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
             message,
             chapter.title,
             threadNamingModel,
-            agentConfig
+            agentConfig,
+            signal
           ),
         });
       }
@@ -148,6 +148,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
         threadId,
         userMessageId: targetMessage.id,
         userCreatedAt: targetMessage.created_at,
+        signal,
       });
 
       return createSuccessResponse(normalized);
@@ -156,6 +157,8 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
         error,
         error instanceof AgentHandlerError ? error.code : IPC_ERROR_CODES.UNKNOWN_ERROR
       );
+    } finally {
+      if (clientRequestId) agentBridge.finishClientRequest(clientRequestId);
     }
   });
 }
