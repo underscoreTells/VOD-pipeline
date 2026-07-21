@@ -133,9 +133,15 @@ export function createLoadChapterCutMapTool(
         clipIds,
       });
 
-      const totalFiltered = filteredClips.length;
+      // Paginate in narrative order: the input list is ordered by track, so
+      // sort by source in-point (stable id tie-breaker) before slicing.
+      const sortedClips = [...filteredClips].sort(
+        (left, right) => left.inPoint - right.inPoint || left.id - right.id
+      );
+
+      const totalFiltered = sortedClips.length;
       const totalAll = allClips.length;
-      const page = filteredClips.slice(pageOffset, pageOffset + pageLimit);
+      const page = sortedClips.slice(pageOffset, pageOffset + pageLimit);
 
       const payload: ChapterCutMapResult = {
         page: page.map((clip) => buildClipEntry(clip, chapter)),

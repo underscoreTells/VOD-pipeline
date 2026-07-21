@@ -23,6 +23,7 @@
   } from '../../state/timeline.svelte.js';
   import { canRedo, canUndo, redo, undo } from '../../state/undo-redo.svelte.js';
   import { agentState, focusSuggestion } from '../../state/agent.svelte.js';
+  import { chaptersState } from '../../state/chapters.svelte.js';
   import { generateAssetWaveform } from '../../state/project-waveforms.svelte.js';
   import {
     calculateZoomAroundPointer,
@@ -70,6 +71,8 @@
     fullStart?: number;
     fullEnd?: number;
     assetDuration?: number | null;
+    moveMinStart?: number;
+    moveMaxStart?: number;
   };
 
   let { projectId, chapter, assets, clips, suggestions, playbackAvailable, activeAsset: viewedAsset, onPinnedAssetChange }: Props = $props();
@@ -231,6 +234,26 @@
     );
   }
 
+  // Chapter-local bounds for a move drag's full-range start, derived from
+  // sibling chapters that share the clip's asset. Export assigns each clip to
+  // exactly one chapter by source-range overlap, so a moved clip must never
+  // extend into another chapter linked to the same asset.
+  function computeMoveChapterBounds(clip: Clip): { minStart: number; maxStart: number } {
+    const clipDuration = clip.out_point - clip.in_point;
+    let minStart = Number.NEGATIVE_INFINITY;
+    let maxStart = Number.POSITIVE_INFINITY;
+    for (const other of chaptersState.chapters) {
+      if (other.id === chapter.id) continue;
+      if (!(chaptersState.chapterAssets.get(other.id) ?? []).includes(clip.asset_id)) continue;
+      if (other.end_time <= clip.in_point) {
+        minStart = Math.max(minStart, other.end_time - chapter.start_time);
+      } else if (other.start_time >= clip.out_point) {
+        maxStart = Math.min(maxStart, other.start_time - chapter.start_time - clipDuration);
+      }
+    }
+    return { minStart, maxStart };
+  }
+
   function handleTimelinePointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
@@ -275,6 +298,7 @@
         // Preview the clip's full source range (which may extend beyond the
         // chapter) and measure the grab offset from its true in-point, so the
         // committed window always matches what the preview shows.
+        const moveBounds = computeMoveChapterBounds(clip);
         dragPreview = {
           start: clip.in_point - chapter.start_time,
           end: clip.out_point - chapter.start_time,
@@ -292,6 +316,8 @@
           fullStart: clip.in_point,
           fullEnd: clip.out_point,
           assetDuration: assets.find((asset) => asset.id === clip.asset_id)?.duration ?? null,
+          moveMinStart: moveBounds.minStart,
+          moveMaxStart: moveBounds.maxStart,
         });
       }
       return;
@@ -388,8 +414,15 @@
       const maxAssetStart = assetDuration !== null
         ? assetDuration - chapter.start_time - clipDuration
         : Number.POSITIVE_INFINITY;
-      const lowerBound = Math.max(-chapter.start_time, minVisible - clipDuration);
-      const upperBound = Math.max(lowerBound, Math.min(duration - minVisible, maxAssetStart));
+      const lowerBound = Math.max(
+        -chapter.start_time,
+        minVisible - clipDuration,
+        drag.moveMinStart ?? Number.NEGATIVE_INFINITY
+      );
+      const upperBound = Math.max(
+        lowerBound,
+        Math.min(duration - minVisible, maxAssetStart, drag.moveMaxStart ?? Number.POSITIVE_INFINITY)
+      );
       const start = clampNumber(time - (drag.offset ?? 0), lowerBound, upperBound);
       dragPreview = { start, end: start + clipDuration };
     }
@@ -434,8 +467,8 @@
       // coordinates (it may start before the chapter start), so map it
       // straight back to source time; the committed visible window then
       // matches what the preview showed. The drag bounds kept the range
-      // inside the asset, but frame snapping can nudge it past an exact
-      // boundary, so clamp against the asset once more here.
+      // inside the asset and out of sibling chapters, but frame snapping can
+      // nudge it past an exact boundary, so clamp once more here.
       const clipDuration = clip.out_point - clip.in_point;
       const assetDuration = typeof activeDrag.assetDuration === 'number' && Number.isFinite(activeDrag.assetDuration)
         ? activeDrag.assetDuration
@@ -443,10 +476,22 @@
       const maxInPoint = assetDuration !== null
         ? Math.max(0, assetDuration - clipDuration)
         : Number.POSITIVE_INFINITY;
-      const nextIn = clampNumber(chapter.start_time + preview.start, 0, maxInPoint);
+      const boundedStart = clampNumber(
+        preview.start,
+        activeDrag.moveMinStart ?? Number.NEGATIVE_INFINITY,
+        activeDrag.moveMaxStart ?? Number.POSITIVE_INFINITY
+      );
+      const nextIn = clampNumber(chapter.start_time + boundedStart, 0, maxInPoint);
       const nextOut = nextIn + clipDuration;
-      const range = clampAgainstLane(activeDrag.assetId, localTime(nextIn), localTime(nextOut), clip.id);
-      if (!range) return;
+      // The clips prop only contains clips overlapping this chapter, so check
+      // the full absolute range against every same-asset project clip to catch
+      // collisions with clips hidden outside the chapter window.
+      const overlapsClip = timelineState.clips.some((other) =>
+        other.id !== clip.id &&
+        other.asset_id === activeDrag.assetId &&
+        rangesOverlap({ start: nextIn, end: nextOut }, { start: other.in_point, end: other.out_point }, 1 / fps / 2)
+      );
+      if (overlapsClip) return;
       await executeSlideClipWindow(
         clip.id,
         clip.in_point,

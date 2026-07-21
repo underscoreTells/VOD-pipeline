@@ -171,7 +171,7 @@ describe("loadChapterCutMap tool", () => {
   it("reports chapter-local visible ranges and durations per clip", async () => {
     const result = await runTool(buildInput(FIXTURE_CLIPS), {});
 
-    const firstClip = result.page[0];
+    const firstClip = result.page.find((clip) => clip.id === 1);
     expect(firstClip).toMatchObject({
       id: 1,
       assetId: 2,
@@ -195,7 +195,7 @@ describe("loadChapterCutMap tool", () => {
     });
   });
 
-  it("paginates with offset and limit and sets hasNext correctly", async () => {
+  it("paginates in source-time order with offset and limit and sets hasNext correctly", async () => {
     const result = await runTool(
       buildInput(FIXTURE_CLIPS),
       { offset: 2, limit: 2 }
@@ -205,7 +205,8 @@ describe("loadChapterCutMap tool", () => {
     expect(result.pagination.limit).toBe(2);
     expect(result.pagination.totalFiltered).toBe(FIXTURE_CLIPS.length);
     expect(result.pagination.hasNext).toBe(true);
-    expect(result.page.map((clip) => clip.id)).toEqual([3, 4]);
+    // Source-time order: 6 (80), 1 (100), 2 (160), 3 (210), 4 (270), 5 (330)
+    expect(result.page.map((clip) => clip.id)).toEqual([2, 3]);
   });
 
   it("paginates the final page without hasNext", async () => {
@@ -214,8 +215,20 @@ describe("loadChapterCutMap tool", () => {
       { offset: 4, limit: 2 }
     );
 
-    expect(result.page.map((clip) => clip.id)).toEqual([5, 6]);
+    expect(result.page.map((clip) => clip.id)).toEqual([4, 5]);
     expect(result.pagination.hasNext).toBe(false);
+  });
+
+  it("orders pages by source in-point across tracks with a stable id tie-breaker", async () => {
+    const clips = [
+      buildClip({ id: 1, trackIndex: 0, inPoint: 100, outPoint: 120 }),
+      buildClip({ id: 2, trackIndex: 1, inPoint: 90, outPoint: 95 }),
+      buildClip({ id: 3, trackIndex: 0, inPoint: 90, outPoint: 96 }),
+      buildClip({ id: 4, trackIndex: 2, inPoint: 80, outPoint: 85 }),
+    ];
+    const result = await runTool(buildInput(clips), {});
+
+    expect(result.page.map((clip) => clip.id)).toEqual([4, 2, 3, 1]);
   });
 
   it("clamps limit to the configured maximum", async () => {
@@ -239,7 +252,7 @@ describe("loadChapterCutMap tool", () => {
       { clipIds: [2, 4, 6] }
     );
 
-    expect(result.page.map((clip) => clip.id)).toEqual([2, 4, 6]);
+    expect(result.page.map((clip) => clip.id)).toEqual([6, 2, 4]);
     expect(result.pagination.totalFiltered).toBe(3);
     expect(result.pagination.totalAll).toBe(FIXTURE_CLIPS.length);
     expect(result.summary.totalClips).toBe(3);
