@@ -7,6 +7,7 @@ import {
   getSuggestionsByConversation,
   updateChatConversation,
   createChatMessage,
+  withTransaction,
 } from '../../../database/index.js';
 import type {
   ChatConversation,
@@ -347,20 +348,31 @@ export async function runConversationTurn(
   const finalParsed = parseConversationTurnResult(finalResult, chapterDuration, chapterAssetIds);
   const assistantMessage = finalParsed.message || 'Analysis complete';
   const thinkingMarkdown = finalParsed.thinkingMarkdown;
-  const persistedAssistantMessage = await createChatMessage({
-    conversation_id: options.conversation.id,
-    role: 'assistant',
-    content: assistantMessage,
-    thinking_markdown: thinkingMarkdown,
-    trace_json: serializeExecutionTrace(executionTrace),
+  // Persist the assistant message and its suggestions atomically, rechecking
+  // cancellation around each write: an abort arriving mid-persistence rolls
+  // the whole turn output back instead of leaving a partial message or a
+  // subset of the suggestions behind for a turn the renderer has already
+  // marked as cancelling.
+  const { persistedAssistantMessage, persistedSuggestions } = await withTransaction(async () => {
+    options.signal?.throwIfAborted();
+    const message = await createChatMessage({
+      conversation_id: options.conversation.id,
+      role: 'assistant',
+      content: assistantMessage,
+      thinking_markdown: thinkingMarkdown,
+      trace_json: serializeExecutionTrace(executionTrace),
+    });
+    options.signal?.throwIfAborted();
+    const suggestions = await persistAgentSuggestions(
+      options.chapter.id,
+      options.conversation.id,
+      message.id,
+      options.effectiveProvider,
+      finalParsed.suggestionDrafts
+    );
+    options.signal?.throwIfAborted();
+    return { persistedAssistantMessage: message, persistedSuggestions: suggestions };
   });
-  const persistedSuggestions = await persistAgentSuggestions(
-    options.chapter.id,
-    options.conversation.id,
-    persistedAssistantMessage.id,
-    options.effectiveProvider,
-    finalParsed.suggestionDrafts
-  );
 
   return {
     message: assistantMessage,

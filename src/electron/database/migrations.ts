@@ -696,10 +696,11 @@ type SuggestionRow = Suggestion;
 //
 // Older builds persisted suggestion in/out points as global source times while
 // current builds persist chapter-local values. Neither a range heuristic nor
-// the database's user_version can classify a stored row: version stamping
-// never converted row data, chapter bound edits can strand chapter-local
-// rows out of range, and a legacy build kept running past the chapter-local
-// cutoff still wrote global times. This migration (gated by user_version < 6 —
+// the database's user_version can classify a stored row on its own: version
+// stamping never converted row data, chapter bound edits made by builds that
+// predated clamp-on-edit can strand chapter-local rows out of range, and a
+// legacy build kept running past the chapter-local cutoff still wrote global
+// times. This migration (gated by user_version < 6 —
 // version 5 databases went through an earlier pass that left pre-cutoff
 // in-bounds global rows untouched — and by the per-row range_space marker so
 // retried runs never reprocess a row) decides per row from concrete evidence
@@ -714,15 +715,23 @@ type SuggestionRow = Suggestion;
 //       user_version 2 the preview reconciliation runs first and stamps
 //       this derived window onto the suggestion before unlinking the
 //       preview, so those rows arrive here already marked.
-//   fits only the chapter's global bounds, written before chapter-local
-//       storage shipped -> legacy global source times; shift by the
-//       chapter start (a post-cutoff row in this state is a chapter-local
-//       row stranded when the chapter was shortened and is clamped)
+//   fits only the chapter's global bounds -> legacy global source times;
+//       shift by the chapter start. The write path clamps chapter-local
+//       values into [0, chapterDuration], so a stored range that cannot be
+//       chapter-local was written by a global-range build — whenever it
+//       ran, since legacy builds kept writing global times past the
+//       cutoff — or stranded by a bound edit from a build without
+//       clamp-on-edit. A stranded row's intended window is unrecoverable
+//       (the historical bounds are gone), while shifting a legacy row is
+//       exactly correct, so the row is shifted rather than destructively
+//       clamped to a zero-length window.
 //   fits only the chapter-local bounds -> already chapter-local; mark it
 //   fits both (or neither) -> ambiguous; created-at provenance breaks the
-//       tie: pre-cutoff rows shift by the chapter start, post-cutoff
-//       in-bounds rows are marked, post-cutoff out-of-range rows are
-//       chapter-local rows stranded by a bound edit and are clamped
+//       tie: pre-cutoff rows shift by the chapter start (no chapter-local
+//       build existed before the cutoff, so the timestamp is durable build
+//       evidence in that direction only), post-cutoff in-bounds rows are
+//       preserved as-is, post-cutoff out-of-range rows are chapter-local
+//       rows stranded by a bound edit and are clamped
 //
 // Every processed row is marked range_space = 'chapter_local', fixing the
 // convention that all stored suggestion ranges are chapter-local from
@@ -732,12 +741,12 @@ type SuggestionRow = Suggestion;
 /**
  * Suggestions created before this timestamp were written by builds that
  * stored ranges as global source times; chapter-local storage shipped with
- * the proposal-first clip actions build (2026-02-14 23:12 UTC). The wall
- * clock cannot classify a row on its own, so concrete range evidence is
- * checked first; it gates the legacy-global reading of ranges that only
- * fit the chapter's global bounds (a post-cutoff row in that state is a
- * local row stranded by a bound edit) and breaks ties for genuinely
- * ambiguous rows.
+ * the proposal-first clip actions build (2026-02-14 23:12 UTC). The
+ * timestamp is durable build evidence in one direction only — no
+ * chapter-local build existed before the cutoff — so it never gates the
+ * legacy-global reading on its own (a legacy build kept running past the
+ * cutoff still wrote global times); it only breaks ties for genuinely
+ * ambiguous rows, where pre-cutoff rows must be legacy global.
  */
 const CHAPTER_LOCAL_STORAGE_CUTOFF = '2026-02-14T23:12:17';
 
@@ -872,8 +881,14 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
         // suggestion's global source times must sit inside its chapter's
         // bounds. A range that fits only the local interpretation is
         // already chapter-local; a range that fits only the global
-        // interpretation is legacy for pre-cutoff rows, while post-cutoff
-        // rows in that state are local rows stranded by a bound edit.
+        // interpretation is legacy global source times no matter when the
+        // row was written — a chapter-local build could not have written
+        // out-of-bounds values, and legacy builds kept writing global
+        // times past the cutoff. (A post-cutoff row in this state could
+        // also be a local row stranded by a bound edit from a build
+        // without clamp-on-edit, but that row's intended window is
+        // unrecoverable and shifting is strictly less destructive than
+        // collapsing it to a zero-length clamp.)
         const fitsChapterLocal =
           row.in_point >= -rangeEpsilon &&
           row.out_point >= -rangeEpsilon &&
@@ -887,13 +902,8 @@ export function normalizeStoredSuggestionRangesToChapterLocal(
           normalizeSuggestionCreatedAt(row.created_at) < CHAPTER_LOCAL_STORAGE_CUTOFF;
 
         // Cannot be chapter-local but sits inside the chapter's global
-        // bounds, and the row predates chapter-local storage: legacy
-        // global source times. A post-cutoff row in this state is a
-        // chapter-local row stranded when the chapter was shortened after
-        // the row was written — fitting the new global bounds does not
-        // prove legacy provenance — so it falls through to the stranded
-        // clamp below instead of being shifted.
-        if (!fitsChapterLocal && fitsChapterGlobal && isLegacyGlobal) {
+        // bounds: legacy global source times; shift by the chapter start.
+        if (!fitsChapterLocal && fitsChapterGlobal) {
           const localIn = clampToRange(row.in_point - row.chapter_start, 0, chapterDuration);
           const localOut = clampToRange(row.out_point - row.chapter_start, localIn, chapterDuration);
           updateRange.run(localIn, localOut, row.suggestion_id);

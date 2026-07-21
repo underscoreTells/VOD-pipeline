@@ -23,7 +23,7 @@
   } from '../../state/timeline.svelte.js';
   import { canRedo, canUndo, redo, undo } from '../../state/undo-redo.svelte.js';
   import { agentState, focusSuggestion } from '../../state/agent.svelte.js';
-  import { chaptersState } from '../../state/chapters.svelte.js';
+  import { chaptersState, loadAssetsForChapter } from '../../state/chapters.svelte.js';
   import { generateAssetWaveform } from '../../state/project-waveforms.svelte.js';
   import {
     calculateZoomAroundPointer,
@@ -254,6 +254,23 @@
     return { minStart, maxStart };
   }
 
+  // Move bounds are only trustworthy once every sibling chapter's asset links
+  // have loaded: a missing cache entry is indistinguishable from "not linked",
+  // and loadChapters publishes the chapter list before the per-chapter link
+  // loads resolve, so a partially loaded cache would silently drop bounds.
+  function siblingAssetLinksLoaded(): boolean {
+    return chaptersState.chapters.every(
+      (other) => other.id === chapter.id || chaptersState.chapterAssets.has(other.id)
+    );
+  }
+
+  function ensureSiblingAssetLinks(): void {
+    for (const other of chaptersState.chapters) {
+      if (other.id === chapter.id || chaptersState.chapterAssets.has(other.id)) continue;
+      void loadAssetsForChapter(other.id);
+    }
+  }
+
   function handleTimelinePointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
@@ -293,6 +310,15 @@
       } else {
         if (!event.ctrlKey && !event.metaKey) {
           dragPreview = null;
+          return;
+        }
+        // Refuse the move while sibling asset links are still loading (or a
+        // load failed): the bounds derived from a partial cache could let the
+        // clip extend into a sibling chapter. Trigger the loads so the next
+        // attempt can proceed.
+        if (!siblingAssetLinksLoaded()) {
+          dragPreview = null;
+          ensureSiblingAssetLinks();
           return;
         }
         // Preview the clip's full source range (which may extend beyond the
@@ -468,7 +494,9 @@
       // straight back to source time; the committed visible window then
       // matches what the preview showed. The drag bounds kept the range
       // inside the asset and out of sibling chapters, but frame snapping can
-      // nudge it past an exact boundary, so clamp once more here.
+      // nudge it past an exact boundary, so re-derive the sibling bounds from
+      // the live cache (links may have finished loading mid-drag) and clamp
+      // once more here.
       const clipDuration = clip.out_point - clip.in_point;
       const assetDuration = typeof activeDrag.assetDuration === 'number' && Number.isFinite(activeDrag.assetDuration)
         ? activeDrag.assetDuration
@@ -476,10 +504,11 @@
       const maxInPoint = assetDuration !== null
         ? Math.max(0, assetDuration - clipDuration)
         : Number.POSITIVE_INFINITY;
+      const moveBounds = computeMoveChapterBounds(clip);
       const boundedStart = clampNumber(
         preview.start,
-        activeDrag.moveMinStart ?? Number.NEGATIVE_INFINITY,
-        activeDrag.moveMaxStart ?? Number.POSITIVE_INFINITY
+        moveBounds.minStart,
+        moveBounds.maxStart
       );
       const nextIn = clampNumber(chapter.start_time + boundedStart, 0, maxInPoint);
       const nextOut = nextIn + clipDuration;

@@ -40,6 +40,7 @@ const databaseMocks = vi.hoisted(() => ({
   updateUserChatMessageContent: vi.fn(),
   updateChatConversation: vi.fn(),
   updateClip: vi.fn(),
+  withTransaction: vi.fn(),
 }));
 
 const handlerSupportMocks = vi.hoisted(() => ({
@@ -105,6 +106,9 @@ describe("agent chat handler", () => {
     });
 
     databaseMocks.getProject.mockResolvedValue({ id: 1 });
+    databaseMocks.withTransaction.mockImplementation(
+      (operation: () => Promise<unknown>) => operation()
+    );
     bridgeMocks.registerClientRequest.mockImplementation(() => new AbortController().signal);
     bridgeMocks.ensureStarted.mockResolvedValue(undefined);
     databaseMocks.getChatConversation.mockResolvedValue({

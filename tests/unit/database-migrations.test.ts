@@ -1158,18 +1158,18 @@ describeNative('schema-version-5 suggestion range normalization', () => {
     }
   });
 
-  it('clamps post-cutoff rows stranded by a bound edit that still fit the global bounds', () => {
+  it('converts post-cutoff rows whose values only fit the chapter global bounds', () => {
     const database = new Database(':memory:');
     database.pragma('foreign_keys = ON');
 
     try {
       database.exec(readCurrentSchema());
       const ids = seedProjectGraph(database);
-      // Chapter-local 120-150 was written after the cutoff while the
-      // chapter spanned 100-1000; the chapter was later shortened to
-      // 100-180, so the row is out of local bounds yet still fits the new
-      // global bounds. Fitting the global bounds does not prove legacy
-      // provenance, so the row is clamped, not shifted.
+      // A legacy build kept running past the chapter-local cutoff still
+      // wrote global source times: 120-150 cannot be chapter-local in the
+      // 100-180 chapter (duration 80), so the row is converted rather than
+      // clamped to a zero-length window — the created-at timestamp cannot
+      // distinguish which build wrote a post-cutoff row.
       database.prepare('UPDATE chapters SET start_time = 100, end_time = 180 WHERE id = ?').run(ids.chapterId);
       const suggestionId = insertSuggestion(database, ids, 120, 150, {
         createdAt: '2026-04-24T00:00:00.000Z',
@@ -1177,9 +1177,9 @@ describeNative('schema-version-5 suggestion range normalization', () => {
 
       const stats = normalizeStoredSuggestionRangesToChapterLocal(database);
 
-      expect(stats.converted).toBe(0);
-      expect(stats.clampedOutOfRange).toBe(1);
-      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 80, out_point: 80 });
+      expect(stats.converted).toBe(1);
+      expect(stats.clampedOutOfRange).toBe(0);
+      expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
     } finally {
       closeSqliteDatabase(database);
     }

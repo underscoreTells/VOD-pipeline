@@ -20,8 +20,8 @@ export interface ChapterCutMapClipEntry {
   id: number;
   assetId: number;
   trackIndex: number;
-  inPoint: number;
-  outPoint: number;
+  sourceInPoint: number;
+  sourceOutPoint: number;
   visibleStartLocal: number;
   visibleEndLocal: number;
   visibleDuration: number;
@@ -108,7 +108,7 @@ export function createLoadChapterCutMapTool(
   return defineAgentTool<LoadChapterCutMapInput>({
     name: "loadChapterCutMap",
     description:
-      "Load a bounded, paginated, filterable view of the current chapter cut map (all input.context.chapterClips) when the 18-line preview in the system prompt is not enough. Use this for whole-chapter review requests (audit the full cut, review every clip, or assess overall pacing). Supports optional chapter-local startLocalTime/endLocalTime bounds (filters by visible-range overlap), an explicit clipIds filter, and offset/limit pagination. Returns per-clip details with chapter-local visible ranges and durations, pagination metadata, and a compact summary for the filtered set. This tool only provides evidence and never creates recommendations.",
+      "Load a bounded, paginated, filterable view of the current chapter cut map (all input.context.chapterClips) when the 18-line preview in the system prompt is not enough. Use this for whole-chapter review requests (audit the full cut, review every clip, or assess overall pacing). Supports optional chapter-local startLocalTime/endLocalTime bounds (filters by visible-range overlap), an explicit clipIds filter, and offset/limit pagination. Returns per-clip details with chapter-local visible ranges and durations (use these for any update or create proposal, which take chapter-local seconds), absolute sourceInPoint/sourceOutPoint times for reference, pagination metadata, and a compact summary for the filtered set. This tool only provides evidence and never creates recommendations.",
     schema: loadChapterCutMapSchema,
     execute: async ({ startLocalTime, endLocalTime, clipIds, offset, limit }) => {
       writer?.writeStatus({
@@ -206,8 +206,8 @@ function buildClipEntry(
     id: clip.id,
     assetId: clip.assetId,
     trackIndex: clip.trackIndex,
-    inPoint: clip.inPoint,
-    outPoint: clip.outPoint,
+    sourceInPoint: clip.inPoint,
+    sourceOutPoint: clip.outPoint,
     visibleStartLocal: range.visibleStartLocal,
     visibleEndLocal: range.visibleEndLocal,
     visibleDuration: Math.max(
