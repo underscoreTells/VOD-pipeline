@@ -464,11 +464,9 @@ function formatSuggestionPayload(payloadJson: string | null): string {
   if (!payloadJson) return 'null';
 
   try {
-    const serialized = JSON.stringify(JSON.parse(payloadJson));
-    if (serialized.length <= 2400) return serialized;
-    return JSON.stringify({ truncated: true, preview: serialized.slice(0, 2200) });
+    return JSON.stringify(JSON.parse(payloadJson));
   } catch {
-    return JSON.stringify(payloadJson.slice(0, 2200));
+    return JSON.stringify(payloadJson);
   }
 }
 

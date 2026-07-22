@@ -377,6 +377,7 @@ describe("agent chat handler", () => {
   });
 
   it("includes explicitly mentioned suggestions beyond the normal summary limit", async () => {
+    const finalSegmentMetadata = `final-segment-${"x".repeat(2500)}`;
     const suggestions = Array.from({ length: 13 }, (_, index) => ({
       id: index + 1,
       chapter_id: 3,
@@ -390,7 +391,14 @@ describe("agent chat handler", () => {
       action_type: index === 12 ? "split_clip" : "create_clip",
       target_clip_id: index === 12 ? 80 : null,
       action_payload_json: index === 12
-        ? JSON.stringify({ split: { segments: [{ inPoint: 12, outPoint: 14 }, { inPoint: 16, outPoint: 18 }] } })
+        ? JSON.stringify({
+            split: {
+              segments: [
+                { inPoint: 12, outPoint: 14 },
+                { inPoint: 16, outPoint: 18, metadata: finalSegmentMetadata },
+              ],
+            },
+          })
         : null,
       preview_snapshot_json: null,
       status: "pending",
@@ -428,6 +436,8 @@ describe("agent chat handler", () => {
     );
     expect(context?.suggestionSummary).toContain('reasoning="Preserve the second retained beat."');
     expect(context?.suggestionSummary).toContain('actionPayload={"split":{"segments"');
+    expect(context?.suggestionSummary).toContain(finalSegmentMetadata);
+    expect(context?.suggestionSummary).not.toContain('"truncated":true');
     expect(context?.suggestionSummary).toContain("suggestion#1 ");
     expect(context?.suggestionSummary).toContain("suggestion#12 ");
   });
