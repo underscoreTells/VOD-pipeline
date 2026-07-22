@@ -157,6 +157,43 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(result.contextPayload).toMatchObject({ referencedEntities: context.referencedEntities });
   });
 
+  it("preserves bounded chapter and clip grounding during hard context compaction", () => {
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 80 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        role: null,
+        description: "d".repeat(400),
+        isEssential: true,
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      videoAnalysisAssets: [],
+      referencedEntities: [{ type: "clip", id: 80 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten @clip 80." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.chapter).toEqual(context.chapter);
+    expect(compacted.chapterAssetIds).toEqual([11]);
+    expect(compacted.chapterClips.length).toBeGreaterThan(0);
+    expect(compacted.chapterClips.length).toBeLessThan(context.chapterClips.length);
+    expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+  });
+
   it("drops additional older messages when the retained recent set is still too large", () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",

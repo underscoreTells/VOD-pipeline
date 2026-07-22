@@ -9,6 +9,8 @@ import {
   deleteChatMessagesAfter,
   getClip,
   previewSuggestionWithClip,
+  rejectSuggestionsBatch,
+  restoreRejectedSuggestionsBatch,
   revertAppliedSuggestionsBatch,
   setDatabaseForTesting,
   supersedeSuggestion,
@@ -577,6 +579,93 @@ describeTx("suggestion transactions (withTransaction)", () => {
       });
       expect((await cancelSuggestionPreview(replacement.id)).success).toBe(true);
       expect(await getClip(preview.clip!.id)).toBeNull();
+    });
+
+    it('retains inherited ownership when applying and undoing an update replacement', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Update ownership', 'thread-update-ownership')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 18, description: 'Trim owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+      expect((await applySuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(db.prepare('SELECT preview_snapshot_json FROM suggestions WHERE id = ?').get(replacement.id)).toMatchObject({
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
+
+      expect((await revertAppliedSuggestionsBatch([{
+        suggestionId: replacement.id,
+        beforeSnapshot: {
+          clip: {
+            in_point: 10,
+            out_point: 20,
+            role: null,
+            description: 'Owned preview',
+            is_essential: true,
+          },
+        },
+      }])).success).toBe(true);
+      expect(db.prepare('SELECT preview_snapshot_json FROM suggestions WHERE id = ?').get(replacement.id)).toMatchObject({
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
+      expect((await cancelSuggestionPreview(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
+    });
+
+    it('recreates an inherited target when undoing rejection', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Reject ownership', 'thread-reject-ownership')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 18, description: 'Trim owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+
+      expect((await rejectSuggestionsBatch([replacement.id])).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
+      expect((await restoreRejectedSuggestionsBatch([replacement.id])).success).toBe(true);
+
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 10, out_point: 20 });
+      expect(db.prepare(
+        'SELECT status, target_clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(replacement.id)).toMatchObject({
+        status: 'pending',
+        target_clip_id: preview.clip!.id,
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
+      expect((await applySuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 12, out_point: 18 });
     });
 
     it('transfers inherited preview ownership through a replacement chain', async () => {

@@ -107,10 +107,61 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
 
   if (estimateContextTokens(compacted) <= maxTokens) return compacted;
 
-  const minimalContext = Array.isArray(context.referencedEntities)
-    ? { referencedEntities: context.referencedEntities }
-    : {};
-  return estimateContextTokens(minimalContext) <= maxTokens ? minimalContext : null;
+  const minimalContext: Record<string, unknown> = {
+    ...(context.chapter && typeof context.chapter === 'object' ? { chapter: context.chapter } : {}),
+    chapterAssetIds: Array.isArray(context.chapterAssetIds) ? context.chapterAssetIds : [],
+    chapterClips: [],
+    ...(Array.isArray(context.referencedEntities) ? { referencedEntities: context.referencedEntities } : {}),
+  };
+  if (estimateContextTokens(minimalContext) > maxTokens) {
+    // Returning the original payload forces the caller's final size check to
+    // reject the turn instead of silently running without chapter grounding.
+    return contextPayload;
+  }
+
+  const compactClips = Array.isArray(context.chapterClips)
+    ? context.chapterClips.map((clip) => {
+        if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return clip;
+        const normalizedClip = clip as Record<string, unknown>;
+        return {
+          ...normalizedClip,
+          ...(typeof normalizedClip.description === 'string'
+            ? { description: normalizedClip.description.slice(0, 240) }
+            : {}),
+          ...(typeof normalizedClip.transcriptExcerpt === 'string' ? { transcriptExcerpt: '' } : {}),
+        };
+      })
+    : [];
+  const referencedClipIds = new Set(
+    (Array.isArray(context.referencedEntities) ? context.referencedEntities : [])
+      .filter((entity): entity is Record<string, unknown> => (
+        Boolean(entity) && typeof entity === 'object' && !Array.isArray(entity)
+      ))
+      .filter((entity) => entity.type === 'clip' && typeof entity.id === 'number')
+      .map((entity) => entity.id as number)
+  );
+  const prioritizedClips = [
+    ...compactClips.filter((clip) => (
+      Boolean(clip)
+      && typeof clip === 'object'
+      && !Array.isArray(clip)
+      && referencedClipIds.has((clip as Record<string, unknown>).id as number)
+    )),
+    ...compactClips.filter((clip) => (
+      !clip
+      || typeof clip !== 'object'
+      || Array.isArray(clip)
+      || !referencedClipIds.has((clip as Record<string, unknown>).id as number)
+    )),
+  ];
+  const selectedClips = new Set<unknown>();
+  for (const clip of prioritizedClips) {
+    const candidateClips = compactClips.filter((candidate) => selectedClips.has(candidate) || candidate === clip);
+    const candidateContext = { ...minimalContext, chapterClips: candidateClips };
+    if (estimateContextTokens(candidateContext) <= maxTokens) selectedClips.add(clip);
+  }
+  minimalContext.chapterClips = compactClips.filter((clip) => selectedClips.has(clip));
+  return minimalContext;
 }
 
 function getProviderContextLimit(provider: unknown): number {

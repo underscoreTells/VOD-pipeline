@@ -197,6 +197,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const simulatedTargets = new Map<number, { start: number; end: number }>();
   const removedTargetIds = new Set<number>();
   const splitTargetIds = new Set<number>();
+  const splitRangesByTarget = new Map<number, Array<{ start: number; end: number }>>();
   const proposals: Array<{
     assetId: number;
     targetClipId: number | null;
@@ -232,6 +233,13 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
       const splitError = validateSplitSuggestion(suggestion, chapter, splitTarget);
       if (splitError) return splitError;
       splitTargetIds.add(suggestion.target_clip_id);
+      splitRangesByTarget.set(
+        suggestion.target_clip_id,
+        resolveSuggestionWindowsForChapter(suggestion, chapter, {
+          start: splitTarget.in_point,
+          end: splitTarget.out_point,
+        })
+      );
       continue;
     }
     const assetId = resolveSuggestionAssetId(suggestion);
@@ -269,6 +277,15 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const rangesByAsset = new Map<number, Array<{ start: number; end: number; owner: string }>>();
   for (const clip of timelineState.clips) {
     if (removedTargetIds.has(clip.id)) continue;
+    const splitRanges = splitRangesByTarget.get(clip.id);
+    if (splitRanges) {
+      const ranges = rangesByAsset.get(clip.asset_id) ?? [];
+      splitRanges.forEach((range, index) => {
+        ranges.push({ ...range, owner: `clip:${clip.id}:split:${index}` });
+      });
+      rangesByAsset.set(clip.asset_id, ranges);
+      continue;
+    }
     // Clips moved by an update in this batch are checked at their simulated
     // final position, so a range the target vacated is free for proposals.
     const current = simulatedTargets.get(clip.id) ?? { start: clip.in_point, end: clip.out_point };
@@ -277,11 +294,13 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     rangesByAsset.set(clip.asset_id, ranges);
   }
   for (const proposal of finalProposals) {
+    if (proposal.targetClipId !== null && splitTargetIds.has(proposal.targetClipId)) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     ranges.push({ ...proposal.proposed, owner: proposal.owner });
     rangesByAsset.set(proposal.assetId, ranges);
   }
   for (const proposal of finalProposals) {
+    if (proposal.targetClipId !== null && splitTargetIds.has(proposal.targetClipId)) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     for (const range of ranges) {
       if (range.owner === proposal.owner) continue;

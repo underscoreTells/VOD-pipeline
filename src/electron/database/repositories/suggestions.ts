@@ -1001,9 +1001,12 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
       updatedClip = applyResult.clip;
     }
 
+    const retainedOwnershipSnapshot = existingSnapshot?.ownedCreatedClipId
+      ? suggestion.preview_snapshot_json
+      : null;
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(new Date().toISOString(), updatedClip.id, id);
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = ? WHERE id = ?"
+    ).run(new Date().toISOString(), updatedClip.id, retainedOwnershipSnapshot, id);
 
     if (updateResult.changes === 0) {
       // Roll back the clip update applied above.
@@ -1065,14 +1068,17 @@ async function rejectSuggestionTx(id: number): Promise<boolean> {
     return false;
   }
 
+  const retainedOwnershipSnapshot = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId
+    ? suggestion.preview_snapshot_json
+    : null;
   const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
   if (!cleanupResult.success) {
     return false;
   }
 
   const result = database.prepare(
-    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-  ).run(id);
+    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+  ).run(retainedOwnershipSnapshot, id);
 
   return result.changes > 0;
 }
@@ -1396,6 +1402,9 @@ async function rejectOrRestoreSuggestionTx(
     if (suggestion.status !== 'pending') {
       return { success: false, error: 'Suggestion is not pending' };
     }
+    const retainedOwnershipSnapshot = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId
+      ? suggestion.preview_snapshot_json
+      : null;
     const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
     if (!cleanupResult.success) {
       return {
@@ -1404,8 +1413,8 @@ async function rejectOrRestoreSuggestionTx(
       };
     }
     const result = database.prepare(
-      "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(id);
+      "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(retainedOwnershipSnapshot, id);
     if (result.changes === 0) {
       return { success: false, error: 'Failed to update suggestion status' };
     }
@@ -1416,13 +1425,19 @@ async function rejectOrRestoreSuggestionTx(
   if (suggestion.status !== 'rejected') {
     return { success: false, error: 'Suggestion is not rejected' };
   }
+  let restoredClip: Clip | undefined;
+  if (parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId) {
+    const restored = await restoreStructuralSuggestionSnapshot(suggestion, true);
+    if (!restored.success) return restored;
+    restoredClip = restored.clip;
+  }
   const result = database.prepare(
     "UPDATE suggestions SET status = 'pending', applied_at = NULL WHERE id = ?"
   ).run(id);
   if (result.changes === 0) {
     return { success: false, error: 'Failed to restore suggestion status' };
   }
-  return { success: true };
+  return { success: true, clip: restoredClip };
 }
 /**
  * Atomically revert a batch of applied suggestions. For `create_clip`
@@ -1549,9 +1564,21 @@ async function revertAppliedSuggestionTx(
       return { success: false, error: `Failed to restore clip ${targetClip.id}` };
     }
     const refreshed = await getClip(targetClip.id);
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
+    let ownershipSnapshotJson: string | null = null;
+    if (ownedCreatedClipId && refreshed) {
+      const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+        serializeSuggestionPreviewSnapshot(refreshed)
+      );
+      if (!ownershipSnapshot) {
+        return { success: false, error: 'Failed to preserve update preview ownership' };
+      }
+      ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+      ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+    }
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(item.suggestionId);
+      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(ownershipSnapshotJson, item.suggestionId);
     if (updateResult.changes === 0) {
       throw new SuggestionRollback({
         success: false,
