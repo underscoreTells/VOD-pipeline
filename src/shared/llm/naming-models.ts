@@ -2,7 +2,7 @@ import type { LLMProviderType } from './provider-registry.js';
 
 export type NamingModelProvider = Extract<LLMProviderType, 'openai' | 'gemini' | 'kimi'>;
 
-export type NamingModelId = 'gpt-5-nano' | 'gemini-3-flash-preview' | 'kimi-k2.5';
+export type NamingModelId = 'gpt-5-nano' | 'gemini-3.5-flash-lite' | 'kimi-k3';
 
 export interface NamingModelOption {
   id: NamingModelId;
@@ -21,14 +21,14 @@ export const NAMING_MODEL_OPTIONS: NamingModelOption[] = [
     description: 'Smallest OpenAI naming model',
   },
   {
-    id: 'gemini-3-flash-preview',
-    label: 'Gemini 3 Flash',
+    id: 'gemini-3.5-flash-lite',
+    label: 'Gemini 3.5 Flash-Lite',
     provider: 'gemini',
     description: 'Fast Gemini naming model',
   },
   {
-    id: 'kimi-k2.5',
-    label: 'Kimi K2.5',
+    id: 'kimi-k3',
+    label: 'Kimi K3',
     provider: 'kimi',
     description: 'Moonshot Kimi naming model',
   },
@@ -36,22 +36,24 @@ export const NAMING_MODEL_OPTIONS: NamingModelOption[] = [
 
 const NAMING_MODEL_PROVIDER_MAP: Record<NamingModelId, NamingModelProvider> = {
   'gpt-5-nano': 'openai',
-  'gemini-3-flash-preview': 'gemini',
-  'kimi-k2.5': 'kimi',
+  'gemini-3.5-flash-lite': 'gemini',
+  'kimi-k3': 'kimi',
 };
 
 const LEGACY_NAMING_MODEL_ALIASES: Record<string, NamingModelId> = {
   'gpt-4o-mini': 'gpt-5-nano',
   'gpt-4o': 'gpt-5-nano',
-  'gemini-1.5-flash': 'gemini-3-flash-preview',
-  'gemini-3.0-flash': 'gemini-3-flash-preview',
-  'gemini-3-flash': 'gemini-3-flash-preview',
+  'gemini-1.5-flash': 'gemini-3.5-flash-lite',
+  'gemini-3.0-flash': 'gemini-3.5-flash-lite',
+  'gemini-3-flash': 'gemini-3.5-flash-lite',
+  'gemini-3-flash-preview': 'gemini-3.5-flash-lite',
+  'kimi-k2.5': 'kimi-k3',
 };
 
 export function isNamingModelId(value: unknown): value is NamingModelId {
   return value === 'gpt-5-nano' ||
-    value === 'gemini-3-flash-preview' ||
-    value === 'kimi-k2.5';
+    value === 'gemini-3.5-flash-lite' ||
+    value === 'kimi-k3';
 }
 
 export function normalizeNamingModel(

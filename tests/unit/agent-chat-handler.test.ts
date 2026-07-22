@@ -858,7 +858,8 @@ describe("agent chat handler", () => {
     expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalledWith(
       2,
       12,
-      "Find a sharper payoff"
+      "Find a sharper payoff",
+      null
     );
     expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalledWith(2, 12);
     expect(result).toMatchObject({

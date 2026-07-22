@@ -91,7 +91,7 @@ describe("applyNearLimitTokenGuard: per-provider limits come from the registry",
     expect(applyNearLimitTokenGuard(small, null, "openai").effectiveContextLimit).toBe(123904);
     expect(applyNearLimitTokenGuard(small, null, "anthropic").effectiveContextLimit).toBe(195904);
     expect(applyNearLimitTokenGuard(small, null, "gemini").effectiveContextLimit).toBe(995904);
-    expect(applyNearLimitTokenGuard(small, null, "kimi").effectiveContextLimit).toBe(123904);
+    expect(applyNearLimitTokenGuard(small, null, "kimi").effectiveContextLimit).toBe(1_044_480);
   });
 
   it("falls back to the gemini limit for an unknown provider", () => {

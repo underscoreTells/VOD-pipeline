@@ -7,6 +7,7 @@ import type {
   TimelineAction,
   TranscriptDetailRequest,
 } from "../../shared/types/agent-ipc.js";
+import type { ChatEntityMention } from '../../shared/types/database.js';
 
 export type TurnOutcome = ConversationTurnResult["outcome"];
 
@@ -19,7 +20,8 @@ export type ProposalDraft =
     } & Extract<TimelineAction, { type: "create_clip" }>)
   | ({
       type: "update_clip";
-    } & Extract<TimelineAction, { type: "update_clip" }>);
+    } & Extract<TimelineAction, { type: "update_clip" }>)
+  | Extract<TimelineAction, { type: 'delete_clip' | 'split_clip' }>;
 
 export interface ConversationChapterContext {
   id: string;
@@ -37,6 +39,12 @@ export interface ConversationClipContext {
   role: string | null;
   description: string | null;
   isEssential: boolean;
+  visibleDuration?: number;
+  transcriptExcerpt?: string;
+  previousClipId?: number | null;
+  nextClipId?: number | null;
+  omittedBeforeDuration?: number;
+  omittedAfterDuration?: number;
 }
 
 export interface ConversationContextPayload {
@@ -50,6 +58,7 @@ export interface ConversationContextPayload {
     proxyPath: string;
   }>;
   suggestionSummary?: string;
+  referencedEntities?: ChatEntityMention[];
 }
 
 export interface ConversationTurnInput {

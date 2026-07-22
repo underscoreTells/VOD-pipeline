@@ -50,7 +50,7 @@ describe("clip suggest-name handler", () => {
       chapterId: 12,
       inPoint: 4,
       outPoint: 9,
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       providerConfig: {
         providers: {
           gemini: "AIza-gemini",
@@ -63,7 +63,7 @@ describe("clip suggest-name handler", () => {
       chapterId: 12,
       inPoint: 4,
       outPoint: 9,
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       providerConfig: {
         providers: {
           gemini: "AIza-gemini",

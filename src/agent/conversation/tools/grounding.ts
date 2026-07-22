@@ -16,6 +16,14 @@ export function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void
       continue;
     }
 
+    if (proposal.type === 'delete_clip') continue;
+
+    if (proposal.type === 'split_clip') {
+      validateKeepWindowDescription(proposal.leftDescription, 'split_clip.leftDescription');
+      validateKeepWindowDescription(proposal.rightDescription, 'split_clip.rightDescription');
+      continue;
+    }
+
     validateKeepWindowDescription(
       proposal.updates.description ?? undefined,
       "update_clip.updates.description"
@@ -52,7 +60,7 @@ export function validateProposalGrounding(
     }
 
     if (!accumulator.hasSuccessfulVideoEvidence && !hasNonVisualProposalGrounding(input, accumulator, proposal)) {
-      if (proposal.type === "update_clip") {
+      if (proposal.type !== "range_suggestion") {
         throw new Error(
           "update_clip requires transcript context, a selected clip, the playhead region, or matching video evidence."
         );
@@ -152,7 +160,7 @@ function hasSelectedClipGrounding(
   range: { start: number; end: number } | null
 ): boolean {
   if (
-    proposal.type === "update_clip" &&
+    proposal.type !== "range_suggestion" && proposal.type !== 'create_clip' &&
     input.selectedClipIds.includes(proposal.clipId)
   ) {
     return true;
@@ -201,6 +209,10 @@ function getProposalRangeInChapter(
 
   if (proposal.type === "create_clip") {
     return { start: proposal.inPoint, end: proposal.outPoint };
+  }
+
+  if (proposal.type === 'delete_clip' || proposal.type === 'split_clip') {
+    return getChapterLocalClipRange(input, proposal.clipId);
   }
 
   const existingRange = getChapterLocalClipRange(input, proposal.clipId);

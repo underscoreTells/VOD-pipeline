@@ -55,7 +55,7 @@ describe("conversation system prompt", () => {
       "description must describe what is inside the kept window or updated clip"
     );
     expect(prompt).toContain("Chapter clip order is inferred from source timing");
-    expect(prompt).toContain("Use create_clip and update_clip only to define or revise source windows and metadata");
+    expect(prompt).toContain("delete_clip for committed clip removal, and split_clip for an atomic division");
     expect(prompt).toContain("prefer drafting at least one concrete proposal instead of asking for clarification");
     expect(prompt).toContain("cut dead air, repeated explanation, reset loops, stalled tangents");
     expect(prompt).toContain("range_suggestion and update_clip can be grounded by transcript context");

@@ -3,6 +3,7 @@ import {
   getChapter,
   getClip,
   getSuggestionsByConversation,
+  supersedeSuggestion,
 } from '../../database/index.js';
 import type { Clip, Suggestion } from '../../../shared/types/database.js';
 import type {
@@ -75,6 +76,7 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         description: typeof action.description === 'string' || action.description === null ? action.description : undefined,
         isEssential: typeof action.isEssential === 'boolean' ? action.isEssential : undefined,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+        supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
       });
       continue;
     }
@@ -122,6 +124,33 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         clipId: action.clipId,
         updates,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+        supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+      });
+      continue;
+    }
+
+    if (action.type === 'delete_clip') {
+      if (typeof action.clipId !== 'number' || !Number.isInteger(action.clipId)) continue;
+      actions.push({
+        type: 'delete_clip',
+        clipId: action.clipId,
+        reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+        supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+      });
+      continue;
+    }
+
+    if (action.type === 'split_clip') {
+      if (typeof action.clipId !== 'number' || !Number.isInteger(action.clipId)) continue;
+      if (typeof action.splitPoint !== 'number' || !Number.isFinite(action.splitPoint)) continue;
+      actions.push({
+        type: 'split_clip',
+        clipId: action.clipId,
+        splitPoint: action.splitPoint,
+        leftDescription: typeof action.leftDescription === 'string' || action.leftDescription === null ? action.leftDescription : undefined,
+        rightDescription: typeof action.rightDescription === 'string' || action.rightDescription === null ? action.rightDescription : undefined,
+        reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
+        supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
       });
     }
   }
@@ -134,9 +163,10 @@ interface PersistableSuggestionDraft {
   out_point: number;
   description: string | null;
   reasoning: string | null;
-  action_type: 'create_clip' | 'update_clip';
+  action_type: Suggestion['action_type'];
   target_clip_id: number | null;
   action_payload_json: string | null;
+  supersedes_suggestion_id: number | null;
 }
 
 function normalizeSuggestionDrafts(value: unknown): PersistableSuggestionDraft[] {
@@ -158,6 +188,7 @@ function normalizeSuggestionDrafts(value: unknown): PersistableSuggestionDraft[]
         action_type: 'create_clip',
         target_clip_id: null,
         action_payload_json: null,
+        supersedes_suggestion_id: typeof record.supersedesSuggestionId === 'number' ? record.supersedesSuggestionId : null,
       };
     })
     .filter((item): item is PersistableSuggestionDraft => item !== null);
@@ -185,6 +216,39 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
           reasoning: action.reasoning ?? null,
           target_clip_id: null,
           action_payload_json: JSON.stringify(payload),
+          supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+        };
+      }
+
+      if (action.type === 'delete_clip') {
+        return {
+          action_type: 'delete_clip',
+          target_clip_id: action.clipId,
+          in_point: 0,
+          out_point: 1,
+          description: `Delete clip #${action.clipId}`,
+          reasoning: action.reasoning ?? null,
+          action_payload_json: JSON.stringify({ delete: true }),
+          supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+        };
+      }
+
+      if (action.type === 'split_clip') {
+        return {
+          action_type: 'split_clip',
+          target_clip_id: action.clipId,
+          in_point: action.splitPoint,
+          out_point: action.splitPoint + 0.01,
+          description: `Split clip #${action.clipId}`,
+          reasoning: action.reasoning ?? null,
+          action_payload_json: JSON.stringify({
+            split: {
+              splitPoint: action.splitPoint,
+              leftDescription: action.leftDescription,
+              rightDescription: action.rightDescription,
+            },
+          }),
+          supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
         };
       }
 
@@ -215,6 +279,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
         description: updates.description ?? `Update clip #${action.clipId}`,
         reasoning: action.reasoning ?? null,
         action_payload_json: JSON.stringify(payload),
+        supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
       };
     })
     .filter((item): item is PersistableSuggestionDraft => Boolean(item));
@@ -280,7 +345,7 @@ export async function persistAgentSuggestions(
     let localInPoint = suggestion.in_point;
     let localOutPoint = suggestion.out_point;
 
-    if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id) {
+    if (suggestion.action_type !== 'create_clip' && suggestion.target_clip_id) {
       const targetClip = await getClip(suggestion.target_clip_id);
       if (!targetClip) {
         continue;
@@ -309,6 +374,13 @@ export async function persistAgentSuggestions(
 
       localInPoint = payloadInPoint ?? baseLocalIn;
       localOutPoint = payloadOutPoint ?? baseLocalOut;
+      if (suggestion.action_type === 'split_clip' && typeof suggestion.action_payload_json === 'string') {
+        const payload = JSON.parse(suggestion.action_payload_json) as { split?: { splitPoint?: number } };
+        if (typeof payload.split?.splitPoint === 'number') {
+          localInPoint = payload.split.splitPoint;
+          localOutPoint = payload.split.splitPoint + 0.01;
+        }
+      }
     }
 
     localInPoint = clamp(localInPoint, 0, chapterDuration);
@@ -334,7 +406,19 @@ export async function persistAgentSuggestions(
       status: 'pending',
       display_order: displayOrder,
       clip_id: null,
+      supersedes_suggestion_id: suggestion.supersedes_suggestion_id,
     });
+    if (suggestion.supersedes_suggestion_id) {
+      const superseded = await supersedeSuggestion(
+        suggestion.supersedes_suggestion_id,
+        createdSuggestion.id,
+        conversationId,
+        chapterId
+      );
+      if (!superseded) {
+        throw new Error(`Suggestion ${suggestion.supersedes_suggestion_id} cannot be superseded`);
+      }
+    }
     created.push(createdSuggestion);
     displayOrder += 1;
   }

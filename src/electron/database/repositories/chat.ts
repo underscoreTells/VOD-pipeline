@@ -125,14 +125,15 @@ export async function createChatMessage(
   const database = await getDatabase();
   const now = new Date().toISOString();
   const result = database.prepare(
-    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.conversation_id,
     input.role,
     input.content,
     input.thinking_markdown ?? null,
     input.trace_json ?? null,
+    input.mentions_json ?? null,
     now
   );
 
@@ -145,6 +146,7 @@ export async function createChatMessage(
     content: input.content,
     thinking_markdown: input.thinking_markdown ?? null,
     trace_json: input.trace_json ?? null,
+    mentions_json: input.mentions_json ?? null,
     created_at: now,
   };
 }
@@ -154,7 +156,7 @@ export async function getChatMessagesByConversation(
 ): Promise<ChatConversationMessage[]> {
   const database = await getDatabase();
   return database.prepare(
-    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
+    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at
      FROM chat_messages
      WHERE conversation_id = ?
      ORDER BY created_at ASC, id ASC`
@@ -167,7 +169,7 @@ export async function getChatMessageByConversation(
 ): Promise<ChatConversationMessage | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
+    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at
      FROM chat_messages
      WHERE id = ? AND conversation_id = ?`
   ).get(messageId, conversationId) as ChatConversationMessage | undefined;
@@ -178,14 +180,15 @@ export async function getChatMessageByConversation(
 export async function updateUserChatMessageContent(
   conversationId: number,
   messageId: number,
-  content: string
+  content: string,
+  mentionsJson: string | null = null
 ): Promise<boolean> {
   const database = await getDatabase();
   const result = database.prepare(
     `UPDATE chat_messages
-     SET content = ?
+     SET content = ?, mentions_json = ?
      WHERE id = ? AND conversation_id = ? AND role = 'user'`
-  ).run(content, messageId, conversationId);
+  ).run(content, mentionsJson, messageId, conversationId);
 
   if (result.changes > 0) {
     touchConversation(database, conversationId);
@@ -231,8 +234,8 @@ export async function cloneChatMessagesThrough(
 
   const messagesToClone = sourceMessages.slice(0, throughIndex + 1);
   const insertMessage = database.prepare(
-    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   const cloneMessages = database.transaction((messages: ChatConversationMessage[]) => {
     for (const message of messages) {
@@ -242,6 +245,7 @@ export async function cloneChatMessagesThrough(
         message.content,
         message.thinking_markdown ?? null,
         message.trace_json ?? null,
+        message.mentions_json ?? null,
         message.created_at
       );
     }

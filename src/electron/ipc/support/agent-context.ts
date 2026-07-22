@@ -10,7 +10,10 @@ import {
 import type { AgentGroundingStatusData, ProxyOptions } from '../../../shared/contracts/electron-api.js';
 import type { DetailedTranscriptWindow } from '../../../shared/types/agent-ipc.js';
 import { clipOverlapsChapterSourceRange } from '../../../shared/utils/clip-timing.js';
-import { formatOverviewTranscript } from './transcripts.js';
+import {
+  formatOverviewTranscript,
+  normalizeChapterLocalTranscriptSegment,
+} from './transcripts.js';
 import {
   ensureChapterProxyReady,
   getReusableChapterProxy,
@@ -223,7 +226,7 @@ export async function buildAgentChatContext(
   const chapterAssetIds = await getAssetsForChapter(chapter.id);
   const chapterAssetSet = new Set(chapterAssetIds);
   const chapterAssets = projectAssets.filter((asset) => chapterAssetSet.has(asset.id));
-  const chapterClips = projectClips
+  const baseChapterClips = projectClips
     .filter((clip) => chapterAssetSet.has(clip.asset_id))
     .filter((clip) => clipOverlapsChapterSourceRange(clip, chapter))
     .map((clip) => ({
@@ -243,6 +246,48 @@ export async function buildAgentChatContext(
     chapter.start_time,
     chapter.end_time
   );
+  const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+  const localTranscriptSegments = transcriptSegments
+    .map((segment) => normalizeChapterLocalTranscriptSegment(segment, chapter.start_time, chapterDuration))
+    .filter((segment): segment is NonNullable<typeof segment> => segment !== null);
+  const sortedClips = [...baseChapterClips].sort(
+    (left, right) => left.inPoint - right.inPoint || left.id - right.id
+  );
+  const clipsByAsset = new Map<number, typeof sortedClips>();
+  for (const clip of sortedClips) {
+    const clips = clipsByAsset.get(clip.assetId) ?? [];
+    clips.push(clip);
+    clipsByAsset.set(clip.assetId, clips);
+  }
+  const chapterClips = sortedClips.map((clip, index) => {
+    const localStart = Math.max(0, clip.inPoint - chapter.start_time);
+    const localEnd = Math.min(chapterDuration, clip.outPoint - chapter.start_time);
+    const assetClips = clipsByAsset.get(clip.assetId) ?? [];
+    const assetIndex = assetClips.findIndex((candidate) => candidate.id === clip.id);
+    const previousAssetClip = assetClips[assetIndex - 1];
+    const nextAssetClip = assetClips[assetIndex + 1];
+    return {
+      ...clip,
+      visibleDuration: Math.max(0, localEnd - localStart),
+      transcriptExcerpt: localTranscriptSegments
+        .filter((segment) => segment.end > localStart && segment.start < localEnd)
+        .map((segment) => segment.text)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 1200),
+      previousClipId: sortedClips[index - 1]?.id ?? null,
+      nextClipId: sortedClips[index + 1]?.id ?? null,
+      omittedBeforeDuration: Math.max(
+        0,
+        localStart - (previousAssetClip ? previousAssetClip.outPoint - chapter.start_time : 0)
+      ),
+      omittedAfterDuration: Math.max(
+        0,
+        (nextAssetClip ? nextAssetClip.inPoint - chapter.start_time : chapterDuration) - localEnd
+      ),
+    };
+  });
 
   const videoAnalysisAssets: Array<{ assetId: number; proxyPath: string }> = [];
   for (const asset of chapterAssets.filter((candidate) => candidate.file_type === 'video')) {

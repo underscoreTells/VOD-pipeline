@@ -28,6 +28,11 @@ export interface ChapterCutMapClipEntry {
   role: string | null;
   description: string | null;
   isEssential: boolean;
+  transcriptExcerpt: string;
+  previousClipId: number | null;
+  nextClipId: number | null;
+  omittedBeforeDuration: number;
+  omittedAfterDuration: number;
 }
 
 export interface ChapterCutMapPerAssetEntry {
@@ -217,6 +222,11 @@ function buildClipEntry(
     role: clip.role,
     description: clip.description,
     isEssential: clip.isEssential,
+    transcriptExcerpt: clip.transcriptExcerpt ?? '',
+    previousClipId: clip.previousClipId ?? null,
+    nextClipId: clip.nextClipId ?? null,
+    omittedBeforeDuration: clip.omittedBeforeDuration ?? 0,
+    omittedAfterDuration: clip.omittedAfterDuration ?? 0,
   };
 }
 

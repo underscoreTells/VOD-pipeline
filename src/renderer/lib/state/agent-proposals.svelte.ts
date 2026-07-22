@@ -6,6 +6,7 @@ import {
   restoreSuggestionBatch,
   revertSuggestionBatch,
 } from '../api/agent.js';
+import { getClipsByProject } from '../api/clips.js';
 import { getAssetsForChapter, getSelectedChapter } from './chapters.svelte.js';
 import { projectDetail } from './project-media.svelte.js';
 import { rangesOverlap } from '../utils/timeline-geometry.js';
@@ -98,6 +99,17 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
+async function refreshProjectTimelineClips(): Promise<void> {
+  if (projectDetail.projectId === null) return;
+  const response = await getClipsByProject(projectDetail.projectId);
+  if (!response.success || !response.data) return;
+  timelineState.clips = response.data;
+  const liveIds = new Set(response.data.map((clip) => clip.id));
+  timelineState.selectedClipIds = new Set(
+    [...timelineState.selectedClipIds].filter((id) => liveIds.has(id))
+  );
+}
+
 function resolveProposedWindow(
   suggestion: Suggestion,
   chapter: { start_time: number; end_time: number },
@@ -124,6 +136,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const chapter = getSelectedChapter();
   if (!chapter) return 'Select a chapter before applying suggested cuts.';
   const simulatedTargets = new Map<number, { start: number; end: number }>();
+  const removedTargetIds = new Set<number>();
   const proposals: Array<{
     assetId: number;
     targetClipId: number | null;
@@ -137,6 +150,15 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   for (const suggestionId of suggestionIds) {
     const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
+    if (suggestion.action_type === 'delete_clip') {
+      if (!suggestion.target_clip_id) return 'A delete suggestion has no target clip.';
+      removedTargetIds.add(suggestion.target_clip_id);
+      continue;
+    }
+    if (suggestion.action_type === 'split_clip') {
+      if (!suggestion.target_clip_id) return 'A split suggestion has no target clip.';
+      continue;
+    }
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return 'A suggested cut has no unambiguous source asset.';
     const targetClipId = suggestion.action_type === 'update_clip' ? suggestion.target_clip_id : null;
@@ -171,6 +193,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   }
   const rangesByAsset = new Map<number, Array<{ start: number; end: number; owner: string }>>();
   for (const clip of timelineState.clips) {
+    if (removedTargetIds.has(clip.id)) continue;
     // Clips moved by an update in this batch are checked at their simulated
     // final position, so a range the target vacated is free for proposals.
     const current = simulatedTargets.get(clip.id) ?? { start: clip.in_point, end: clip.out_point };
@@ -299,6 +322,7 @@ class ApplySuggestionBatchCommand implements Command {
       }
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
+    await refreshProjectTimelineClips();
 
     this.appliedClips.clear();
     const isProjectCurrent = this.isProjectCurrent();
@@ -334,6 +358,7 @@ class ApplySuggestionBatchCommand implements Command {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to undo suggested cuts');
     }
+    await refreshProjectTimelineClips();
 
     if (this.isProjectCurrent()) {
       for (const suggestionId of this.suggestionIds) {
@@ -399,6 +424,7 @@ class RejectSuggestionBatchCommand implements Command {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to reject suggested cuts');
     }
+    await refreshProjectTimelineClips();
     // Reconcile preview artifacts: rejected create previews were deleted and
     // rejected update previews were restored to their original clip state.
     if (this.isProjectCurrent()) {

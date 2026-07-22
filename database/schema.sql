@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   content TEXT NOT NULL,
   thinking_markdown TEXT,
   trace_json TEXT,
+  mentions_json TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
 );
@@ -216,11 +217,12 @@ CREATE TABLE IF NOT EXISTS suggestions (
   description TEXT,
   reasoning TEXT,  -- Why AI suggested this
   provider TEXT,   -- 'gemini' or 'kimi'
-  action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip')),
+  action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip', 'delete_clip', 'split_clip')),
   target_clip_id INTEGER,
   action_payload_json TEXT,
   preview_snapshot_json TEXT,
-  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected')),
+  status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected', 'superseded')),
+  supersedes_suggestion_id INTEGER,
   display_order INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   applied_at DATETIME,
@@ -230,7 +232,8 @@ CREATE TABLE IF NOT EXISTS suggestions (
   FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
   FOREIGN KEY (chat_message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
   FOREIGN KEY (target_clip_id) REFERENCES clips(id) ON DELETE SET NULL,
-  FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
+  FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL,
+  FOREIGN KEY (supersedes_suggestion_id) REFERENCES suggestions(id) ON DELETE SET NULL
 );
 
 -- Indexes for performance

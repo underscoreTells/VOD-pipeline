@@ -87,6 +87,7 @@ export interface KimiChatModelParams {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  baseURL?: string;
 }
 
 interface KimiCallOptions extends BaseChatModelCallOptions {
@@ -107,8 +108,8 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
   constructor(fields: KimiChatModelParams) {
     super({});
     this.apiKey = fields.apiKey;
-    this.model = fields.model || "kimi-k2.5";
-    this.baseUrl = "https://api.moonshot.cn/v1";
+    this.model = fields.model || "kimi-k3";
+    this.baseUrl = fields.baseURL || "https://api.moonshot.ai/v1";
     this.temperature = fields.temperature ?? 0.7;
     this.maxTokens = fields.maxTokens;
   }
@@ -137,7 +138,7 @@ export class KimiChatModel extends BaseChatModel<KimiCallOptions> {
         messages: kimiMessages,
         tools: this.extractToolDefinitions(_options),
         tool_choice: this.extractToolChoice(_options),
-        temperature: this.temperature,
+        temperature: this.model.startsWith('kimi-k3') ? 1 : this.temperature,
         max_tokens: this.maxTokens,
         stream: false,
       };

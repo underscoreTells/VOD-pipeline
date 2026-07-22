@@ -53,7 +53,7 @@ describe("settings state", () => {
     await loadSettings();
 
     expect(settingsState.settings.autoChapterNamingModel).toBe("gpt-5-nano");
-    expect(settingsState.settings.autoClipNamingModel).toBe("gemini-3-flash-preview");
+    expect(settingsState.settings.autoClipNamingModel).toBe("gemini-3.5-flash-lite");
     expect(settingsState.settings.autoThreadNamingModel).toBe("gpt-5-nano");
   });
 });

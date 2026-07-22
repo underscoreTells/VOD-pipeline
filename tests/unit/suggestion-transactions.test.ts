@@ -4,8 +4,12 @@ import * as path from "path";
 import Database from "better-sqlite3";
 import {
   applySuggestionWithClip,
+  cancelSuggestionPreview,
   createSuggestion,
+  previewSuggestionWithClip,
+  revertAppliedSuggestionsBatch,
   setDatabaseForTesting,
+  supersedeSuggestion,
   withTransaction,
 } from "../../src/electron/database/index.js";
 import { requireSupportedNode } from "../helpers/prerequisites.js";
@@ -209,6 +213,81 @@ describeTx("suggestion transactions (withTransaction)", () => {
         .prepare("SELECT status FROM suggestions WHERE id = ?")
         .get(suggestion.id) as { status: string };
       expect(row.status).toBe("applied");
+    });
+
+    it('previews and cancels a reversible clip deletion', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, description, is_essential)
+         VALUES (?, ?, 0, 10, 20, 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Delete Original', reasoning: 'Pacing',
+        provider: 'gemini', action_type: 'delete_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ delete: true }), preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect(db.prepare('SELECT id FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
+      expect(db.prepare('SELECT description FROM clips WHERE id = ?').get(clipId)).toEqual({ description: 'Original' });
+    });
+
+    it('previews, applies, and reverts an atomic clip split', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, description, is_essential)
+         VALUES (?, ?, 0, 10, 30, 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 20, out_point: 20.01, description: 'Split Original', reasoning: 'Separate beats',
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ split: { splitPoint: 20, leftDescription: 'Setup', rightDescription: 'Payoff' } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect(db.prepare('SELECT in_point, out_point, description FROM clips ORDER BY in_point').all()).toEqual([
+        { in_point: 10, out_point: 20, description: 'Setup' },
+        { in_point: 20, out_point: 30, description: 'Payoff' },
+      ]);
+      expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect((await revertAppliedSuggestionsBatch([{ suggestionId: suggestion.id }])).success).toBe(true);
+      expect(db.prepare('SELECT id, in_point, out_point, description FROM clips').all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 30, description: 'Original' },
+      ]);
+    });
+
+    it('links a replacement while retaining the superseded suggestion for audit history', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Audit', 'thread-audit')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Original', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 18, description: 'Replacement', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+      expect(db.prepare('SELECT status FROM suggestions WHERE id = ?').get(original.id)).toEqual({ status: 'superseded' });
+      expect(db.prepare('SELECT supersedes_suggestion_id FROM suggestions WHERE id = ?').get(replacement.id)).toEqual({
+        supersedes_suggestion_id: original.id,
+      });
     });
   });
 });

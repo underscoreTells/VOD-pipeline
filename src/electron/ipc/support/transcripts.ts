@@ -4,7 +4,7 @@ const OVERVIEW_TRANSCRIPT_CHUNK_SECONDS = 15;
 const OVERVIEW_TRANSCRIPT_MAX_LINES = 320;
 const OVERVIEW_TRANSCRIPT_MAX_CHARS = 30000;
 
-function normalizeChapterLocalSegment(
+export function normalizeChapterLocalTranscriptSegment(
   segment: { start_time: number; end_time: number; text: string },
   chapterStart: number,
   chapterDuration: number
@@ -40,7 +40,7 @@ export function formatOverviewTranscript(
   const chapterDuration = Math.max(0.01, chapterEnd - chapterStart);
 
   const normalized = transcriptSegments
-    .map((segment) => normalizeChapterLocalSegment(segment, chapterStart, chapterDuration))
+    .map((segment) => normalizeChapterLocalTranscriptSegment(segment, chapterStart, chapterDuration))
     .filter((segment): segment is NonNullable<typeof segment> => segment !== null)
     .sort((a, b) => a.start - b.start);
 

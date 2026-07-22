@@ -17,6 +17,7 @@ export function createDraftAssistantMessage(
     id: `draft-${clientRequestId}`,
     databaseId: null,
     timestamp,
+    mentions: [],
     requestId: clientRequestId,
     isStreaming: true,
   };

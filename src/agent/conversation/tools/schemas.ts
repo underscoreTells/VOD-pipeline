@@ -56,6 +56,7 @@ export const rangeSuggestionSchema = s.object(
         maxLength: 400,
       })
     ),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
   },
   { description: "Suggest a kept source window using chapter-local seconds." }
 );
@@ -81,6 +82,7 @@ export const createClipSchema = s.object(
         maxLength: 400,
       })
     ),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
   },
   {
     description:
@@ -120,6 +122,7 @@ export const updateClipSchema = s.object(
         maxLength: 400,
       })
     ),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
   },
   {
     description:
@@ -127,11 +130,34 @@ export const updateClipSchema = s.object(
   }
 );
 
+export const deleteClipSchema = s.object(
+  {
+    type: s.required(s.literalString('delete_clip')),
+    clipId: s.required(s.integer({ minimum: 1 })),
+    reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+  },
+  { description: 'Delete an existing committed clip after preview and approval.' }
+);
+
+export const splitClipSchema = s.object(
+  {
+    type: s.required(s.literalString('split_clip')),
+    clipId: s.required(s.integer({ minimum: 1 })),
+    splitPoint: s.required(s.number({ minimum: 0 })),
+    leftDescription: s.optional(s.nullable(s.string({ minLength: 1, maxLength: 240 }))),
+    rightDescription: s.optional(s.nullable(s.string({ minLength: 1, maxLength: 240 }))),
+    reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+  },
+  { description: 'Split an existing committed clip at a chapter-local source time.' }
+);
+
 export const draftRoughCutProposalsSchema = s.object(
   {
     proposals: s.required(
       s.array(
-        s.discriminatedUnion("type", [rangeSuggestionSchema, createClipSchema, updateClipSchema]),
+        s.discriminatedUnion("type", [rangeSuggestionSchema, createClipSchema, updateClipSchema, deleteClipSchema, splitClipSchema]),
         {
           minItems: 1,
           maxItems: MAX_PROPOSAL_DRAFTS,

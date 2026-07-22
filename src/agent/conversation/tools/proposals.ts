@@ -15,7 +15,7 @@ export function createDraftRoughCutProposalsTool(
   return defineAgentTool<DraftRoughCutProposalsInput>({
     name: "draftRoughCutProposals",
     description:
-      "Create actionable rough-cut proposals. Use range_suggestion as a keep-only shorthand for the kept source window, create_clip for new clips, and update_clip for existing clip edits. Descriptions must describe the kept footage inside the proposed window or updated clip, while reasoning can explain what the edit skips or trims. Transcript context, detailed transcript windows, selected clips, and the playhead region can ground trims and clip updates without a same-turn video call. Use analyzeChapterVideo when visual confirmation or multi-asset clip creation matters. Clips are source excerpts only, so proposal timing is defined entirely by inPoint/outPoint. Do not describe actionable edits only in prose.",
+      "Create actionable rough-cut proposals. Use range_suggestion/create_clip for kept windows, update_clip for trims or metadata, delete_clip to remove a committed clip, and split_clip to divide one at a chapter-local source time. Set supersedesSuggestionId when revising a pending suggestion; the original remains in audit history. Do not describe actionable edits only in prose.",
     schema: draftRoughCutProposalsSchema,
     execute: async ({ proposals }) => {
       const accepted = normalizeProposalDrafts(proposals);
@@ -61,6 +61,17 @@ function normalizeProposalDrafts(value: ProposalDraft[]): ProposalDraft[] {
       if (item.outPoint <= item.inPoint) {
         continue;
       }
+      normalized.push(item);
+      continue;
+    }
+
+    if (item.type === 'delete_clip') {
+      normalized.push(item);
+      continue;
+    }
+
+    if (item.type === 'split_clip') {
+      if (!Number.isFinite(item.splitPoint)) continue;
       normalized.push(item);
       continue;
     }

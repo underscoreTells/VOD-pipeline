@@ -82,20 +82,23 @@ function createSuggestionsTableSql(tableName: string): string {
       description TEXT,
       reasoning TEXT,
       provider TEXT,
-      action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip')),
+      action_type TEXT DEFAULT 'create_clip' CHECK(action_type IN ('create_clip', 'update_clip', 'delete_clip', 'split_clip')),
       target_clip_id INTEGER,
       action_payload_json TEXT,
       preview_snapshot_json TEXT,
-      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected')),
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'applied', 'rejected', 'superseded')),
+      supersedes_suggestion_id INTEGER,
       display_order INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       applied_at DATETIME,
       clip_id INTEGER,
+      range_space TEXT,
       FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
       FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
       FOREIGN KEY (chat_message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
       FOREIGN KEY (target_clip_id) REFERENCES clips(id) ON DELETE SET NULL,
-      FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL
+      FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE SET NULL,
+      FOREIGN KEY (supersedes_suggestion_id) REFERENCES suggestions(id) ON DELETE SET NULL
     )
   `;
 }
@@ -193,7 +196,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -220,6 +223,7 @@ export function ensureSchemaColumns(database: Database.Database): void {
     { table: 'suggestions', column: 'action_payload_json', definition: 'TEXT' },
     { table: 'suggestions', column: 'preview_snapshot_json', definition: 'TEXT' },
     { table: 'suggestions', column: 'range_space', definition: 'TEXT' },
+    { table: 'suggestions', column: 'supersedes_suggestion_id', definition: 'INTEGER REFERENCES suggestions(id) ON DELETE SET NULL' },
   ];
 
   const failedMigrations: string[] = [];
@@ -238,11 +242,35 @@ export function ensureSchemaColumns(database: Database.Database): void {
     );
   }
 
+  const suggestionsSql = getTableSql(database, 'suggestions') ?? '';
+  if (!suggestionsSql.includes("'delete_clip'") || !suggestionsSql.includes("'superseded'")) {
+    withForeignKeysDisabled(database, () => {
+      rebuildTable(
+        database,
+        'suggestions',
+        'suggestions_action_upgrade',
+        createSuggestionsTableSql('suggestions_action_upgrade'),
+        [
+          'id', 'chapter_id', 'conversation_id', 'chat_message_id', 'in_point', 'out_point',
+          'description', 'reasoning', 'provider', 'action_type', 'target_clip_id',
+          'action_payload_json', 'preview_snapshot_json', 'status', 'supersedes_suggestion_id',
+          'display_order', 'created_at', 'applied_at', 'clip_id', 'range_space',
+        ]
+      );
+    });
+  }
+
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_suggestions_conversation_id
       ON suggestions(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_suggestions_chat_message_id
       ON suggestions(chat_message_id);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_chapter_id
+      ON suggestions(chapter_id);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_status
+      ON suggestions(status);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_provider
+      ON suggestions(provider);
   `);
 }
 
@@ -526,6 +554,7 @@ export function ensureChatConversationTables(database: Database.Database): void 
       content TEXT NOT NULL,
       thinking_markdown TEXT,
       trace_json TEXT,
+      mentions_json TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
     );
@@ -542,6 +571,7 @@ export function ensureChatConversationTables(database: Database.Database): void 
 
   ensureColumn(database, 'chat_messages', 'thinking_markdown', 'TEXT');
   ensureColumn(database, 'chat_messages', 'trace_json', 'TEXT');
+  ensureColumn(database, 'chat_messages', 'mentions_json', 'TEXT');
 }
 
 export function ensureChapterProxyTable(database: Database.Database): void {

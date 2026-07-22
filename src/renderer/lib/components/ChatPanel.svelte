@@ -30,7 +30,11 @@
   import { Check, X, ArrowUp, Plus, Trash2, ChevronDown, ChevronRight, Copy, GitBranch, Pencil, Repeat, Play } from '../constants';
   import {
     canSubmitComposerMessage,
+    filterComposerMentionCandidates,
+    getComposerMentionQuery,
+    removeComposerMentionQuery,
     shouldInterceptComposerEnter,
+    type ComposerMentionCandidate,
   } from './chat-panel-composer.js';
   import {
     countExecutionTraceSteps,
@@ -38,8 +42,10 @@
   } from "../../../shared/utils/execution-trace.js";
   import { cn } from "../utils/cn";
   import { PROVIDER_IDS, getProviderLabel } from '../../../shared/llm/provider-registry.js';
-  import { getSelectedChapter } from '../state/chapters.svelte.js';
+  import { getAssetsForChapter, getSelectedChapter } from '../state/chapters.svelte.js';
   import { timelineState } from '../state/timeline.svelte.js';
+  import { clipOverlapsChapterSourceRange } from '../../../shared/utils/clip-timing.js';
+  import type { ChatEntityMention } from '../../../shared/types/database.js';
 
   interface Props {
     class?: string;
@@ -48,6 +54,8 @@
   let { class: className = '' }: Props = $props();
 
   let message = $state("");
+  let composerMentions = $state<ChatEntityMention[]>([]);
+  let mentionMenuIndex = $state(0);
   let chatPanelElement = $state<HTMLDivElement | null>(null);
   let chatContainer = $state<HTMLDivElement | null>(null);
   let messageInput = $state<HTMLTextAreaElement | null>(null);
@@ -110,6 +118,44 @@
         : currentConversation?.title || 'Select conversation'
   );
   let currentChapter = $derived(getSelectedChapter());
+  let mentionCandidates = $derived.by((): ComposerMentionCandidate[] => {
+    if (!currentChapter) return [];
+    const chapterAssetIds = new Set(getAssetsForChapter(currentChapter.id));
+    const clips = timelineState.clips
+      .filter((clip) => chapterAssetIds.has(clip.asset_id) && clipOverlapsChapterSourceRange(clip, currentChapter))
+      .map((clip) => ({
+        type: 'clip' as const,
+        id: clip.id,
+        label: clip.description?.trim() || `Clip ${clip.id}`,
+        detail: `${(clip.in_point - currentChapter.start_time).toFixed(1)}-${(clip.out_point - currentChapter.start_time).toFixed(1)}s`,
+      }));
+    const clipNames = new Map(timelineState.clips.map((clip) => [clip.id, clip.description?.trim()]));
+    const suggestions = agentState.suggestions
+      .filter((suggestion) => suggestion.status === 'pending')
+      .map((suggestion) => ({
+        type: 'suggestion' as const,
+        id: suggestion.id,
+        label: (suggestion.target_clip_id ? clipNames.get(suggestion.target_clip_id) : null)
+          || suggestion.description?.trim()
+          || `Suggestion ${suggestion.id}`,
+        detail: suggestion.action_type === 'create_clip'
+          ? 'Pending new clip'
+          : suggestion.action_type === 'delete_clip'
+            ? 'Pending deletion'
+            : suggestion.action_type === 'split_clip'
+              ? 'Pending split'
+              : 'Pending clip update',
+      }));
+    return [...clips, ...suggestions].filter(
+      (candidate) => !composerMentions.some((mention) => mention.type === candidate.type && mention.id === candidate.id)
+    );
+  });
+  let activeMentionQuery = $derived(getComposerMentionQuery(message, messageInput?.selectionStart ?? message.length));
+  let visibleMentionCandidates = $derived(
+    activeMentionQuery
+      ? filterComposerMentionCandidates(mentionCandidates, activeMentionQuery.query)
+      : []
+  );
   let composerKey = $derived(`${agentState.currentProjectId ?? 'none'}:${agentState.currentChapterId ?? 'none'}:${agentState.selectedConversationId ?? 'new'}`);
 
   let groundingBanner = $derived.by(() => {
@@ -176,6 +222,7 @@
     if (composerKey === previousComposerKey) return;
     previousComposerKey = composerKey;
     message = agentState.composerDrafts[composerKey] ?? '';
+    composerMentions = [];
   });
 
   $effect(() => {
@@ -309,10 +356,12 @@
     if (!canSubmitCurrentMessage) return;
 
     const msg = message;
+    const mentions = composerMentions;
     message = "";
+    composerMentions = [];
     agentState.composerDrafts[composerKey] = '';
     autoResizeMessageInput();
-    await sendChatMessage(msg);
+    await sendChatMessage(msg, mentions);
   }
 
   async function handleSubmit(e: Event) {
@@ -321,6 +370,28 @@
   }
 
   function handleInputKeydown(event: KeyboardEvent) {
+    if (visibleMentionCandidates.length > 0) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        mentionMenuIndex = (mentionMenuIndex + direction + visibleMentionCandidates.length) % visibleMentionCandidates.length;
+        return;
+      }
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        selectMention(visibleMentionCandidates[mentionMenuIndex] ?? visibleMentionCandidates[0]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        const query = activeMentionQuery;
+        if (query) {
+          const removed = removeComposerMentionQuery(message, query);
+          message = removed.message;
+        }
+        return;
+      }
+    }
     if (shouldInterceptComposerEnter({
       key: event.key,
       shiftKey: event.shiftKey,
@@ -329,6 +400,28 @@
       event.preventDefault();
       void submitMessage();
     }
+  }
+
+  function selectMention(candidate: ComposerMentionCandidate | undefined) {
+    if (!candidate || !activeMentionQuery) return;
+    const removed = removeComposerMentionQuery(message, activeMentionQuery);
+    message = removed.message;
+    composerMentions = [...composerMentions, {
+      type: candidate.type,
+      id: candidate.id,
+      label: candidate.label,
+    }];
+    mentionMenuIndex = 0;
+    requestAnimationFrame(() => {
+      messageInput?.focus();
+      messageInput?.setSelectionRange(removed.cursor, removed.cursor);
+    });
+  }
+
+  function removeComposerMention(mention: ChatEntityMention) {
+    composerMentions = composerMentions.filter(
+      (candidate) => candidate.type !== mention.type || candidate.id !== mention.id
+    );
   }
 
   function formatTime(date: Date) {
@@ -420,6 +513,8 @@
       const clipLabel = suggestion.target_clip_id ? `Clip #${suggestion.target_clip_id}` : 'Target clip';
       return `${clipLabel} (${formatDuration(suggestion.in_point, suggestion.out_point)})`;
     }
+    if (suggestion.action_type === 'delete_clip') return `Delete clip #${suggestion.target_clip_id ?? '?'}`;
+    if (suggestion.action_type === 'split_clip') return `Split clip #${suggestion.target_clip_id ?? '?'} at ${formatContextTime(suggestion.in_point)}`;
     return formatDuration(suggestion.in_point, suggestion.out_point);
   }
 
@@ -701,6 +796,15 @@
                     : 'text-text-secondary',
                 )}
               >
+                {#if msg.role === 'user' && (msg.mentions?.length ?? 0) > 0}
+                  <div class="mb-2 flex flex-wrap gap-1.5">
+                    {#each msg.mentions ?? [] as mention (`${mention.type}:${mention.id}`)}
+                      <span class="inline-flex max-w-full items-center rounded-md border border-accent-primary bg-accent-primary-subtle px-2 py-0.5 text-app-xs font-medium text-accent-primary">
+                        <span class="truncate">@{mention.label}</span>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
                 <MarkdownContent content={msg.content} role={msg.role} />
               </div>
             {/if}
@@ -951,17 +1055,39 @@
           {/if}
         </div>
       {/if}
-      <form class="composer flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
-        <textarea
-          class="min-h-28 max-h-[180px] flex-1 resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
-          rows="1"
-          bind:value={message}
-          bind:this={messageInput}
-          placeholder={composerPlaceholder}
-          disabled={isComposerDisabled}
-          oninput={autoResizeMessageInput}
-          onkeydown={handleInputKeydown}
-        ></textarea>
+      <form class="composer relative flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
+        {#if visibleMentionCandidates.length > 0}
+          <div class="absolute bottom-[calc(100%+6px)] left-0 right-0 z-20 overflow-hidden rounded-lg border border-border-default bg-surface-elevated p-1 shadow-xl" role="listbox" aria-label="Mention a clip or suggestion">
+            {#each visibleMentionCandidates as candidate, index (`${candidate.type}:${candidate.id}`)}
+              <button type="button" role="option" aria-selected={index === mentionMenuIndex} class={cn('flex w-full items-center gap-3 rounded-md px-3 py-2 text-left', index === mentionMenuIndex ? 'bg-accent-primary-subtle' : 'hover:bg-surface-hover')} onmousedown={(event) => event.preventDefault()} onclick={() => selectMention(candidate)}>
+                <span class="min-w-0 flex-1 truncate text-app-sm font-medium text-text-primary">{candidate.label}</span>
+                <span class="shrink-0 text-app-xs text-text-tertiary">{candidate.detail}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <div class="min-w-0 flex-1">
+          {#if composerMentions.length > 0}
+            <div class="flex flex-wrap gap-1.5 pt-1">
+              {#each composerMentions as mention (`${mention.type}:${mention.id}`)}
+                <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-accent-primary bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary" onclick={() => removeComposerMention(mention)} title={`Remove ${mention.label} mention`}>
+                  <span class="truncate">@{mention.label}</span>
+                  <Icon icon={X} size={10} />
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <textarea
+            class="min-h-28 max-h-[180px] w-full resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
+            rows="1"
+            bind:value={message}
+            bind:this={messageInput}
+            placeholder={composerPlaceholder}
+            disabled={isComposerDisabled}
+            oninput={() => { mentionMenuIndex = 0; autoResizeMessageInput(); }}
+            onkeydown={handleInputKeydown}
+          ></textarea>
+        </div>
         <button
           type="submit"
           class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"

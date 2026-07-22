@@ -33,17 +33,25 @@ function normalizeAgentConfig(value: unknown): Partial<AgentConfig> | null {
   if (!isRecord(value)) return null;
 
   const providersRaw = isRecord(value.providers) ? value.providers : {};
+  const modelsRaw = isRecord(value.models) ? value.models : {};
+  const baseURLsRaw = isRecord(value.baseURLs) ? value.baseURLs : {};
   const providers: NonNullable<Partial<AgentConfig>["providers"]> = {};
+  const models: NonNullable<Partial<AgentConfig>["models"]> = {};
+  const baseURLs: NonNullable<Partial<AgentConfig>["baseURLs"]> = {};
 
   for (const provider of PROVIDER_IDS) {
     const apiKey = providersRaw[provider];
     if (typeof apiKey === "string" && apiKey.trim().length > 0) {
       providers[provider] = apiKey.trim();
     }
+    const model = modelsRaw[provider];
+    if (typeof model === 'string' && model.trim()) models[provider] = model.trim();
+    const baseURL = baseURLsRaw[provider];
+    if (typeof baseURL === 'string' && baseURL.trim()) baseURLs[provider] = baseURL.trim();
   }
 
   const defaultProvider = normalizeProvider(value.defaultProvider);
-  const normalized: Partial<AgentConfig> = { providers };
+  const normalized: Partial<AgentConfig> = { providers, models, baseURLs };
 
   if (defaultProvider) {
     normalized.defaultProvider = defaultProvider;

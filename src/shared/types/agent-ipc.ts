@@ -13,6 +13,7 @@ export interface CreateClipAction {
   description?: string | null;
   isEssential?: boolean;
   reasoning?: string;
+  supersedesSuggestionId?: number;
 }
 
 export interface UpdateClipAction {
@@ -26,9 +27,27 @@ export interface UpdateClipAction {
     isEssential?: boolean;
   };
   reasoning?: string;
+  supersedesSuggestionId?: number;
 }
 
-export type TimelineAction = CreateClipAction | UpdateClipAction;
+export interface DeleteClipAction {
+  type: 'delete_clip';
+  clipId: number;
+  reasoning?: string;
+  supersedesSuggestionId?: number;
+}
+
+export interface SplitClipAction {
+  type: 'split_clip';
+  clipId: number;
+  splitPoint: number;
+  leftDescription?: string | null;
+  rightDescription?: string | null;
+  reasoning?: string;
+  supersedesSuggestionId?: number;
+}
+
+export type TimelineAction = CreateClipAction | UpdateClipAction | DeleteClipAction | SplitClipAction;
 
 export interface TranscriptDetailRequest {
   windowStart: number;
@@ -51,6 +70,7 @@ export interface AgentSuggestionDraft {
   out_point: number;
   description?: string;
   reasoning?: string;
+  supersedesSuggestionId?: number;
 }
 
 export interface ConversationTurnResult {

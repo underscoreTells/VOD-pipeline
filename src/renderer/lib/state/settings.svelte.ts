@@ -28,6 +28,15 @@ import {
 
 export type { LLMProviderType };
 
+export interface OpenAICompatibleProfile {
+  id: string;
+  name: string;
+  baseURL: string;
+  model: string;
+  apiKey: string;
+  contextTokenLimit: number;
+}
+
 export interface Settings {
   // API Keys (encrypted before storage)
   geminiApiKey: string;
@@ -35,6 +44,11 @@ export interface Settings {
   anthropicApiKey: string;
   kimiApiKey: string;
   openrouterApiKey: string;
+  kimiCodeApiKey: string;
+  providerModels: Partial<Record<LLMProviderType, string>>;
+  kimiBaseURL: string;
+  openAICompatibleProfiles: OpenAICompatibleProfile[];
+  activeOpenAICompatibleProfileId: string | null;
 
   // Default provider selection
   defaultVideoProvider: LLMProviderType;
@@ -133,6 +147,20 @@ export async function loadSettings(): Promise<void> {
     if (parsed.autoTranscribeOnImport !== undefined) {
       settingsState.settings.autoTranscribeOnImport = parsed.autoTranscribeOnImport;
     }
+    if (parsed.providerModels && typeof parsed.providerModels === 'object') {
+      settingsState.settings.providerModels = parsed.providerModels;
+    }
+    if (typeof parsed.kimiBaseURL === 'string' && parsed.kimiBaseURL.trim()) {
+      settingsState.settings.kimiBaseURL = parsed.kimiBaseURL;
+    }
+    if (typeof parsed.activeOpenAICompatibleProfileId === 'string') {
+      settingsState.settings.activeOpenAICompatibleProfileId = parsed.activeOpenAICompatibleProfileId;
+    }
+    if (Array.isArray(parsed.openAICompatibleProfiles)) {
+      settingsState.settings.openAICompatibleProfiles = parsed.openAICompatibleProfiles.map(
+        (profile: OpenAICompatibleProfile) => ({ ...profile, apiKey: '' })
+      );
+    }
 
     // Decrypt API keys if present
     if (parsed._encryptedKeys) {
@@ -149,6 +177,11 @@ export async function loadSettings(): Promise<void> {
       settingsState.settings.anthropicApiKey = keys.anthropicApiKey || "";
       settingsState.settings.kimiApiKey = keys.kimiApiKey || "";
       settingsState.settings.openrouterApiKey = keys.openrouterApiKey || "";
+      settingsState.settings.kimiCodeApiKey = keys.kimiCodeApiKey || "";
+      const profileKeys = keys.openAICompatibleProfileKeys ?? {};
+      settingsState.settings.openAICompatibleProfiles = settingsState.settings.openAICompatibleProfiles.map(
+        (profile) => ({ ...profile, apiKey: profileKeys[profile.id] || '' })
+      );
     }
     // Backwards compatibility: if no encrypted keys but plaintext keys exist, migrate them
     else if (parsed.geminiApiKey !== undefined) {
@@ -157,6 +190,7 @@ export async function loadSettings(): Promise<void> {
       settingsState.settings.anthropicApiKey = parsed.anthropicApiKey || "";
       settingsState.settings.kimiApiKey = parsed.kimiApiKey || "";
       settingsState.settings.openrouterApiKey = parsed.openrouterApiKey || "";
+      settingsState.settings.kimiCodeApiKey = parsed.kimiCodeApiKey || "";
       // Migrate to encrypted storage on next save
       await saveSettings();
     }
@@ -180,6 +214,10 @@ export async function saveSettings(): Promise<void> {
       anthropicApiKey: settingsState.settings.anthropicApiKey,
       kimiApiKey: settingsState.settings.kimiApiKey,
       openrouterApiKey: settingsState.settings.openrouterApiKey,
+      kimiCodeApiKey: settingsState.settings.kimiCodeApiKey,
+      openAICompatibleProfileKeys: Object.fromEntries(
+        settingsState.settings.openAICompatibleProfiles.map((profile) => [profile.id, profile.apiKey])
+      ),
     };
 
     const response = await encryptSettings(JSON.stringify(keysToEncrypt));
@@ -200,6 +238,12 @@ export async function saveSettings(): Promise<void> {
       autoClipNamingModel: normalizeNamingModel(settingsState.settings.autoClipNamingModel),
       autoThreadNamingModel: normalizeNamingModel(settingsState.settings.autoThreadNamingModel),
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
+      providerModels: settingsState.settings.providerModels,
+      kimiBaseURL: settingsState.settings.kimiBaseURL,
+      activeOpenAICompatibleProfileId: settingsState.settings.activeOpenAICompatibleProfileId,
+      openAICompatibleProfiles: settingsState.settings.openAICompatibleProfiles.map(
+        ({ apiKey: _apiKey, ...profile }) => profile
+      ),
       _encryptedKeys: response.data,
     };
 
@@ -228,6 +272,7 @@ export async function updateSetting<K extends keyof Settings>(
  */
 export async function updateApiKey(provider: LLMProviderType, apiKey: string): Promise<void> {
   const key = PROVIDER_KEY_MAP[provider];
+  if (!key) return;
   (settingsState.settings as unknown as Record<string, string>)[key] = apiKey;
 
   // Update provider status
@@ -295,7 +340,7 @@ export async function testProvider(provider: LLMProviderType): Promise<boolean> 
     error: null,
   };
 
-  if (!apiKey) {
+  if (!apiKey && provider !== 'openaiCompatible') {
     status.error = "No API key configured";
     settingsState.providerStatuses.set(provider, status);
     return false;
@@ -303,7 +348,7 @@ export async function testProvider(provider: LLMProviderType): Promise<boolean> 
 
   // Mock validation - in production, make actual API call
   // For now, just check if key looks valid (starts with expected prefix)
-  const isValidFormat = validateProviderApiKey(provider, apiKey);
+  const isValidFormat = provider === 'openaiCompatible' || validateProviderApiKey(provider, apiKey);
 
   if (!isValidFormat) {
     const prefixes = getProviderMetadata(provider).apiKeyPrefixes;

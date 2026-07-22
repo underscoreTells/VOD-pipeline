@@ -6,6 +6,7 @@ import type {
 import type {
   ChatConversation,
   ChatConversationMessage,
+  ChatEntityMention,
   ExecutionTraceEntry,
   Suggestion,
 } from "../../../shared/types/database";
@@ -15,6 +16,7 @@ import {
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
 import { parseExecutionTraceJson } from "../../../shared/utils/execution-trace.js";
+import { parseChatMentions } from '../../../shared/utils/chat-mentions.js';
 import {
   buildConversationContextKey,
   isConversationContextRequestCurrent,
@@ -44,6 +46,7 @@ export interface ChatMessage {
   id: string;
   databaseId: number | null;
   timestamp: Date;
+  mentions: ChatEntityMention[];
   requestId?: string;
   isStreaming?: boolean;
 }
@@ -186,6 +189,7 @@ export function mapConversationMessages(messages: ChatConversationMessage[]): Ch
     id: `db-${item.id}`,
     databaseId: item.id,
     timestamp: new Date(item.created_at),
+    mentions: parseChatMentions(item.mentions_json),
   }));
 }
 

@@ -78,6 +78,7 @@ function createMessage(id: number, role: "user" | "assistant", content: string, 
     id: `db-${id}`,
     databaseId: id,
     timestamp: new Date(createdAt),
+    mentions: [],
   };
 }
 
@@ -146,7 +147,8 @@ describe("agent streaming message actions", () => {
       },
     });
 
-    await sendChatMessage("Send this prompt");
+    const proxiedMentions = new Proxy([], {});
+    await sendChatMessage("Send this prompt", proxiedMentions);
 
     expect(agentState.messages).toHaveLength(2);
     expect(agentState.messages[0]).toMatchObject({
@@ -160,11 +162,14 @@ describe("agent streaming message actions", () => {
       content: "Persisted assistant response",
     });
     expect(agentApiMocks.agentChat).toHaveBeenCalledWith(expect.objectContaining({
+      mentions: [],
       proxyOptions: {
         encodingMode: "auto",
         quality: "balanced",
       },
     }));
+    const request = agentApiMocks.agentChat.mock.calls[0]?.[0];
+    expect(() => structuredClone(request)).not.toThrow();
   });
 
   it("reconciles edited history against persisted message metadata", async () => {

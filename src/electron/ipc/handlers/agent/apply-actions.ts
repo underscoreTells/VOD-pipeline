@@ -154,6 +154,9 @@ export function registerAgentApplyActionsHandler(): void {
           if (chapter && !chapterAssetIdSet.has(existingClip.asset_id)) {
             throw new Error(`Clip ${action.clipId} is not linked to chapter ${chapter.id}`);
           }
+          if (action.type === 'delete_clip' || action.type === 'split_clip') {
+            throw new Error(`${action.type} must be applied through the reversible suggestion preview flow`);
+          }
 
           const updates: Partial<Clip> = {};
           if (action.updates.inPoint !== undefined) {

@@ -37,6 +37,17 @@ export interface ProviderMetadata {
   defaultBaseURL?: string;
   /** Environment variable that overrides the base URL. */
   baseURLEnvVar?: string;
+  /** Curated models that are compatible with the agent's tool loop. */
+  models: readonly ProviderModelMetadata[];
+  /** API keys are optional for local OpenAI-compatible servers. */
+  apiKeyOptional?: boolean;
+}
+
+export interface ProviderModelMetadata {
+  id: string;
+  label: string;
+  contextTokenLimit: number;
+  supportsVideo: boolean;
 }
 
 export const PROVIDER_METADATA = {
@@ -44,14 +55,21 @@ export const PROVIDER_METADATA = {
     label: 'Google Gemini',
     envVar: 'GEMINI_API_KEY',
     apiKeyPrefixes: ['AIza'],
-    defaultModel: 'gemini-3-flash-preview',
+    defaultModel: 'gemini-3.6-flash',
     modelAliases: {
-      'gemini-3.0-flash': 'gemini-3-flash-preview',
-      'gemini-3-flash': 'gemini-3-flash-preview',
+      'gemini-1.5-flash': 'gemini-3.5-flash-lite',
+      'gemini-3.0-flash': 'gemini-3.6-flash',
+      'gemini-3-flash': 'gemini-3.6-flash',
+      'gemini-3-flash-preview': 'gemini-3.6-flash',
     },
     contextTokenLimit: 1_000_000,
     supportsVideo: true,
     nativeStreaming: true,
+    models: [
+      { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', contextTokenLimit: 1_048_576, supportsVideo: true },
+      { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', contextTokenLimit: 1_048_576, supportsVideo: true },
+      { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', contextTokenLimit: 1_048_576, supportsVideo: true },
+    ],
   },
   openai: {
     label: 'OpenAI',
@@ -62,6 +80,11 @@ export const PROVIDER_METADATA = {
     contextTokenLimit: 128_000,
     supportsVideo: false,
     nativeStreaming: true,
+    models: [
+      { id: 'gpt-5', label: 'GPT-5', contextTokenLimit: 400_000, supportsVideo: false },
+      { id: 'gpt-5-mini', label: 'GPT-5 Mini', contextTokenLimit: 400_000, supportsVideo: false },
+      { id: 'gpt-4o', label: 'GPT-4o', contextTokenLimit: 128_000, supportsVideo: false },
+    ],
   },
   anthropic: {
     label: 'Anthropic Claude',
@@ -72,6 +95,9 @@ export const PROVIDER_METADATA = {
     contextTokenLimit: 200_000,
     supportsVideo: false,
     nativeStreaming: true,
+    models: [
+      { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', contextTokenLimit: 200_000, supportsVideo: false },
+    ],
   },
   openrouter: {
     label: 'OpenRouter',
@@ -84,17 +110,58 @@ export const PROVIDER_METADATA = {
     nativeStreaming: true,
     defaultBaseURL: 'https://openrouter.ai/api/v1',
     baseURLEnvVar: 'OPENROUTER_BASE_URL',
+    models: [
+      { id: 'anthropic/claude-sonnet-4-20250514', label: 'Claude Sonnet 4', contextTokenLimit: 200_000, supportsVideo: false },
+    ],
   },
   kimi: {
-    label: 'Kimi K2.5 (Moonshot AI)',
+    label: 'Kimi Platform',
     envVar: 'KIMI_API_KEY',
     apiKeyPrefixes: ['sk-'],
-    defaultModel: 'kimi-k2.5',
-    modelAliases: {},
-    contextTokenLimit: 128_000,
+    defaultModel: 'kimi-k3',
+    modelAliases: {
+      'kimi-k2.5': 'kimi-k3',
+    },
+    contextTokenLimit: 1_048_576,
     supportsVideo: true,
     nativeStreaming: false,
-    defaultBaseURL: 'https://api.moonshot.cn/v1',
+    defaultBaseURL: 'https://api.moonshot.ai/v1',
+    baseURLEnvVar: 'KIMI_BASE_URL',
+    models: [
+      { id: 'kimi-k3', label: 'Kimi K3', contextTokenLimit: 1_048_576, supportsVideo: true },
+      { id: 'kimi-k2.7-code', label: 'Kimi K2.7 Code', contextTokenLimit: 262_144, supportsVideo: true },
+      { id: 'kimi-k2.6', label: 'Kimi K2.6', contextTokenLimit: 262_144, supportsVideo: true },
+    ],
+  },
+  kimiCode: {
+    label: 'Kimi For Coding',
+    envVar: 'KIMI_CODE_API_KEY',
+    apiKeyPrefixes: ['sk-'],
+    defaultModel: 'k3',
+    modelAliases: {},
+    contextTokenLimit: 1_048_576,
+    supportsVideo: false,
+    nativeStreaming: true,
+    defaultBaseURL: 'https://api.kimi.com/coding/v1',
+    baseURLEnvVar: 'KIMI_CODE_BASE_URL',
+    models: [
+      { id: 'k3', label: 'Kimi K3', contextTokenLimit: 1_048_576, supportsVideo: false },
+      { id: 'kimi-for-coding', label: 'Kimi K2.7 Code', contextTokenLimit: 262_144, supportsVideo: false },
+      { id: 'kimi-for-coding-highspeed', label: 'Kimi K2.7 Code HighSpeed', contextTokenLimit: 262_144, supportsVideo: false },
+    ],
+  },
+  openaiCompatible: {
+    label: 'OpenAI Compatible',
+    envVar: 'OPENAI_COMPATIBLE_API_KEY',
+    apiKeyPrefixes: [],
+    defaultModel: 'default',
+    modelAliases: {},
+    contextTokenLimit: 128_000,
+    supportsVideo: false,
+    nativeStreaming: true,
+    baseURLEnvVar: 'OPENAI_COMPATIBLE_BASE_URL',
+    apiKeyOptional: true,
+    models: [],
   },
 } as const satisfies Record<string, ProviderMetadata>;
 
@@ -134,6 +201,19 @@ export function getProviderContextTokenLimit(provider: LLMProviderType): number 
   return PROVIDER_METADATA[provider].contextTokenLimit;
 }
 
+export function getProviderModels(provider: LLMProviderType): readonly ProviderModelMetadata[] {
+  return PROVIDER_METADATA[provider].models;
+}
+
+export function getProviderModelContextTokenLimit(
+  provider: LLMProviderType,
+  model?: string | null
+): number {
+  const resolved = resolveProviderModel(provider, model);
+  return PROVIDER_METADATA[provider].models.find((candidate) => candidate.id === resolved)?.contextTokenLimit
+    ?? PROVIDER_METADATA[provider].contextTokenLimit;
+}
+
 /** Resolves model aliases to the provider's canonical model name. */
 export function resolveProviderModel(
   provider: LLMProviderType,
@@ -151,6 +231,7 @@ export function validateProviderApiKey(
   key: string
 ): boolean {
   if (!key) return false;
+  if (getProviderMetadata(provider).apiKeyOptional) return true;
   return PROVIDER_METADATA[provider].apiKeyPrefixes.some((prefix) =>
     key.startsWith(prefix)
   );

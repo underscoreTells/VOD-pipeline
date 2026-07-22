@@ -78,7 +78,7 @@ describe("naming service", () => {
     const result = await suggestConversationTitle({
       message: "Let's figure out how to stage the boss fight.",
       chapterTitle: "Boss Fight",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       providerConfig: {
         providers: {
           gemini: "AIza-gemini",
@@ -88,7 +88,7 @@ describe("naming service", () => {
 
     expect(providerMocks.createLLM).toHaveBeenCalledWith(expect.objectContaining({
       provider: "gemini",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       apiKey: "AIza-gemini",
       maxTokens: 20,
     }));
@@ -104,7 +104,7 @@ describe("naming service", () => {
     const available = await suggestConversationTitle({
       message: "We need a better title for this callback thread.",
       chapterTitle: "Callbacks",
-      model: "kimi-k2.5",
+      model: "kimi-k3",
       providerConfig: {
         providers: {
           kimi: "sk-kimi",
@@ -114,7 +114,7 @@ describe("naming service", () => {
 
     expect(providerMocks.createLLM).toHaveBeenCalledWith(expect.objectContaining({
       provider: "kimi",
-      model: "kimi-k2.5",
+      model: "kimi-k3",
       apiKey: "sk-kimi",
     }));
     expect(available).toBe("Final Twist Setup");
@@ -123,7 +123,7 @@ describe("naming service", () => {
     const missing = await suggestConversationTitle({
       message: "We need a better title for this callback thread.",
       chapterTitle: "Callbacks",
-      model: "kimi-k2.5",
+      model: "kimi-k3",
       providerConfig: {
         providers: {},
       },
@@ -198,7 +198,7 @@ describe("naming service", () => {
     expect(providerMocks.createLLM).toHaveBeenCalledTimes(3);
     expect(providerMocks.createLLM).toHaveBeenNthCalledWith(3, expect.objectContaining({
       provider: "gemini",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       apiKey: "AIza-gemini",
       temperature: 0.2,
       maxTokens: 20,

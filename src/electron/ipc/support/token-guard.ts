@@ -88,7 +88,8 @@ function buildConversationArchiveSummary(
 export function applyNearLimitTokenGuard(
   rawMessages: Array<{ role: string; content: string }>,
   contextPayload: unknown,
-  provider: unknown
+  provider: unknown,
+  contextTokenLimitOverride?: number
 ): {
   messages: Array<{ role: string; content: string }>;
   estimatedTotalTokens: number;
@@ -96,7 +97,9 @@ export function applyNearLimitTokenGuard(
   compressed: boolean;
 } {
   const normalizedMessages = normalizeMessagePayload(rawMessages);
-  const contextLimit = getProviderContextLimit(provider);
+  const contextLimit = typeof contextTokenLimitOverride === 'number' && Number.isFinite(contextTokenLimitOverride)
+    ? Math.max(8192, Math.floor(contextTokenLimitOverride))
+    : getProviderContextLimit(provider);
   const effectiveContextLimit = Math.max(8192, contextLimit - TOKEN_GUARD_RESPONSE_RESERVE);
   const softThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_SOFT_RATIO);
   const hardThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_HARD_RATIO);
