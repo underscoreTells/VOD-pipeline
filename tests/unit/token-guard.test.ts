@@ -112,6 +112,19 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(withContext.compressed).toBe(false);
   });
 
+  it("budgets the generated system prompt before accepting an 8K turn", () => {
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "x".repeat(8_000) }],
+      null,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.estimatedTotalTokens).toBeGreaterThan(3_700);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+  });
+
   it("reserves response space and compacts transcript context for an 8K model", () => {
     const context = {
       transcript: "t".repeat(30_000),
@@ -236,7 +249,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
   it("drops additional older messages when the retained recent set is still too large", () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
-      content: String(index).repeat(12_000),
+      content: String(index).repeat(7_000),
     }));
 
     const result = applyNearLimitTokenGuard(messages, null, "openaiCompatible", 8192);

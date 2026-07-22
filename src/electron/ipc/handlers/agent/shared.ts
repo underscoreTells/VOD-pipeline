@@ -445,11 +445,26 @@ function summarizeSuggestions(
           : suggestion.action_type === 'split_clip'
             ? `split clip #${suggestion.target_clip_id ?? 'unknown'}`
             : 'keep window';
+      const referencedDetails = referencedSuggestionIds.has(suggestion.id)
+        ? ` reasoning=${JSON.stringify((suggestion.reasoning ?? '').slice(0, 1200))} actionPayload=${formatSuggestionPayload(suggestion.action_payload_json)}`
+        : '';
       return `- suggestion#${suggestion.id} action=${suggestion.action_type} ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
         2
-      )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();
+      )}s status=${suggestion.status} desc=${suggestion.description ?? ''}${referencedDetails}`.trim();
     })
     .join('\n');
+}
+
+function formatSuggestionPayload(payloadJson: string | null): string {
+  if (!payloadJson) return 'null';
+
+  try {
+    const serialized = JSON.stringify(JSON.parse(payloadJson));
+    if (serialized.length <= 2400) return serialized;
+    return JSON.stringify({ truncated: true, preview: serialized.slice(0, 2200) });
+  } catch {
+    return JSON.stringify(payloadJson.slice(0, 2200));
+  }
 }
 
 export interface ConversationTurnPayload {

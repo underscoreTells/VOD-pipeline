@@ -604,6 +604,7 @@
         if (viewerMode === 'Suggestion' && viewerRanges.length > 1) {
           const segmentedTime = resolveSegmentedPreviewTime(viewerRanges, mappedGlobalTime, -1);
           if (Math.abs(segmentedTime - mappedGlobalTime) > 0.01) {
+            loopedToRangeEnd = mappedGlobalTime <= viewerRanges[0].start + 0.01;
             mappedGlobalTime = segmentedTime;
             videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
           }

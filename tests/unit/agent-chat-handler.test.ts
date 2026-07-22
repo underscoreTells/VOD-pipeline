@@ -385,11 +385,13 @@ describe("agent chat handler", () => {
       in_point: index,
       out_point: index + 1,
       description: `Suggestion ${index + 1}`,
-      reasoning: null,
+      reasoning: index === 12 ? "Preserve the second retained beat." : null,
       provider: "gemini",
-      action_type: index === 12 ? "update_clip" : "create_clip",
+      action_type: index === 12 ? "split_clip" : "create_clip",
       target_clip_id: index === 12 ? 80 : null,
-      action_payload_json: null,
+      action_payload_json: index === 12
+        ? JSON.stringify({ split: { segments: [{ inPoint: 12, outPoint: 14 }, { inPoint: 16, outPoint: 18 }] } })
+        : null,
       preview_snapshot_json: null,
       status: "pending",
       supersedes_suggestion_id: null,
@@ -418,8 +420,10 @@ describe("agent chat handler", () => {
 
     const context = handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1];
     expect(context?.suggestionSummary).toContain(
-      "suggestion#13 action=update_clip update clip #80"
+      "suggestion#13 action=split_clip split clip #80"
     );
+    expect(context?.suggestionSummary).toContain('reasoning="Preserve the second retained beat."');
+    expect(context?.suggestionSummary).toContain('actionPayload={"split":{"segments"');
     expect(context?.suggestionSummary).not.toContain("suggestion#12 ");
   });
 

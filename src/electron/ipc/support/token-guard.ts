@@ -9,6 +9,7 @@ const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
 const TOKEN_GUARD_MIN_RECENT_MESSAGES = 8;
 const TOKEN_GUARD_MAX_SUMMARY_CHARS = 12000;
 const TOKEN_GUARD_MIN_MESSAGES_AFTER_TRIM = 6;
+const TOKEN_GUARD_SYSTEM_PROMPT_OVERHEAD = 1800;
 
 function estimateTokenCount(text: string): number {
   return Math.max(1, Math.ceil(text.length / TOKEN_ESTIMATE_CHARS_PER_TOKEN));
@@ -277,7 +278,12 @@ export function applyNearLimitTokenGuard(
 
   let guardedContextPayload = contextPayload;
   const estimateTotal = (messages: Array<{ role: string; content: string }>) => {
-    return estimateMessageTokens(messages) + estimateContextTokens(guardedContextPayload);
+    const contextTokens = estimateContextTokens(guardedContextPayload);
+    // The worker renders this context into a system prompt in addition to its
+    // fixed editing instructions. Counting both is deliberately conservative.
+    return estimateMessageTokens(messages)
+      + TOKEN_GUARD_SYSTEM_PROMPT_OVERHEAD
+      + (contextTokens * 2);
   };
 
   let estimatedTotalTokens = estimateTotal(normalizedMessages);
@@ -320,7 +326,9 @@ export function applyNearLimitTokenGuard(
   }
 
   if (estimatedTotalTokens > hardThreshold) {
-    const contextBudget = Math.max(0, hardThreshold - estimateMessageTokens(guardedMessages));
+    const contextBudget = Math.max(0, Math.floor(
+      (hardThreshold - estimateMessageTokens(guardedMessages) - TOKEN_GUARD_SYSTEM_PROMPT_OVERHEAD) / 2
+    ));
     guardedContextPayload = compactContextPayload(guardedContextPayload, contextBudget);
     estimatedTotalTokens = estimateTotal(guardedMessages);
   }
