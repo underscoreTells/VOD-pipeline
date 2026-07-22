@@ -538,5 +538,146 @@ describeTx("suggestion transactions (withTransaction)", () => {
       expect(db.prepare('SELECT id FROM suggestions WHERE id = ?').get(replacement.id)).toBeUndefined();
       expect(await getClip(preview.clip!.id)).toBeNull();
     });
+
+    it('recreates an owned preview target when undoing an applied structural replacement', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Structural ownership', 'thread-structural-ownership')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Remove owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'delete_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ delete: {} }), preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+      expect((await applySuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
+
+      expect((await revertAppliedSuggestionsBatch([{ suggestionId: replacement.id }])).success).toBe(true);
+
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 10, out_point: 20 });
+      expect(db.prepare('SELECT status, target_clip_id FROM suggestions WHERE id = ?').get(replacement.id)).toEqual({
+        status: 'pending',
+        target_clip_id: preview.clip!.id,
+      });
+      expect((await applySuggestionWithClip(replacement.id)).success).toBe(true);
+    });
+
+    it('transfers inherited preview ownership through a replacement chain', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Revision chain', 'thread-revision-chain')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Original preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      const firstReplacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 11, out_point: 19, description: 'First revision', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 11, outPoint: 19 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, firstReplacement.id, conversationId, chapterId)).toBe(true);
+      const secondReplacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 18, description: 'Second revision', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 2, clip_id: null,
+        supersedes_suggestion_id: firstReplacement.id,
+      });
+
+      expect(await supersedeSuggestion(
+        firstReplacement.id,
+        secondReplacement.id,
+        conversationId,
+        chapterId
+      )).toBe(true);
+      expect(await getClip(preview.clip!.id)).not.toBeNull();
+      expect((await previewSuggestionWithClip(secondReplacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 12, out_point: 18 });
+    });
+
+    it('restores every retained ancestor when deleting a replacement chain', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Deleted revision chain', 'thread-deleted-revision-chain')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const originalMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Original', '2026-04-18T12:00:00.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const retainedMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'user', 'Revise it', '2026-04-18T12:00:01.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const firstReplacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'First replacement', '2026-04-18T12:00:02.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const secondReplacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Second replacement', '2026-04-18T12:00:03.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: originalMessageId,
+        in_point: 10, out_point: 20, description: 'Original', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const firstReplacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: firstReplacementMessageId,
+        in_point: 11, out_point: 19, description: 'First replacement', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, firstReplacement.id, conversationId, chapterId)).toBe(true);
+      const secondReplacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: secondReplacementMessageId,
+        in_point: 12, out_point: 18, description: 'Second replacement', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 2, clip_id: null,
+        supersedes_suggestion_id: firstReplacement.id,
+      });
+      expect(await supersedeSuggestion(
+        firstReplacement.id,
+        secondReplacement.id,
+        conversationId,
+        chapterId
+      )).toBe(true);
+
+      expect(await deleteChatMessagesAfter(conversationId, retainedMessageId)).toBe(2);
+
+      expect(db.prepare('SELECT status FROM suggestions WHERE id = ?').get(original.id)).toEqual({ status: 'pending' });
+      expect(db.prepare('SELECT id FROM suggestions WHERE id IN (?, ?)').all(
+        firstReplacement.id,
+        secondReplacement.id
+      )).toEqual([]);
+    });
   });
 });

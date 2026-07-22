@@ -69,6 +69,7 @@
   let copiedMessageId = $state<string | null>(null);
   let editingMessageId = $state<string | null>(null);
   let editingMessageValue = $state("");
+  let editingMessageMentions = $state<ChatEntityMention[]>([]);
   let messageActionPending = $state(false);
   let previousComposerKey = '';
   let copyResetTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -461,19 +462,28 @@
     if (!canEditMessage(message)) return;
     editingMessageId = message.id;
     editingMessageValue = message.content;
+    editingMessageMentions = message.mentions.map((mention) => ({ ...mention }));
   }
 
   function cancelEditingMessage() {
     editingMessageId = null;
     editingMessageValue = "";
+    editingMessageMentions = [];
+  }
+
+  function removeEditingMention(mention: ChatEntityMention) {
+    editingMessageMentions = editingMessageMentions.filter(
+      (candidate) => candidate.type !== mention.type || candidate.id !== mention.id
+    );
   }
 
   async function handleSaveEditedMessage(message: ChatMessage) {
     if (editingMessageId !== message.id || !editingMessageValue.trim()) return;
 
     const nextContent = editingMessageValue;
+    const nextMentions = editingMessageMentions;
     cancelEditingMessage();
-    await editMessage(message, nextContent);
+    await editMessage(message, nextContent, nextMentions);
   }
 
   async function handleCopyMessage(message: ChatMessage) {
@@ -794,6 +804,23 @@
 
             {#if editingMessageId === msg.id}
               <div class="message-edit flex flex-col gap-2 rounded-lg bg-surface-elevated px-4 py-3">
+                {#if editingMessageMentions.length > 0}
+                  <div class="flex flex-wrap gap-1.5" aria-label="Message mentions">
+                    {#each editingMessageMentions as mention (`${mention.type}:${mention.id}`)}
+                      <span class="inline-flex max-w-full items-center gap-1 rounded-md border border-accent-primary bg-accent-primary-subtle py-0.5 pl-2 pr-1 text-app-xs font-medium text-accent-primary">
+                        <span class="truncate">@{mention.label}</span>
+                        <button
+                          class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent-primary hover:bg-accent-primary hover:text-white"
+                          type="button"
+                          aria-label={`Remove @${mention.label}`}
+                          onclick={() => removeEditingMention(mention)}
+                        >
+                          <Icon icon={X} size={10} />
+                        </button>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
                 <textarea
                   class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
                   bind:value={editingMessageValue}

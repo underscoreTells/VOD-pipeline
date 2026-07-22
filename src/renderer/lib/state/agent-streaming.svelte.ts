@@ -527,7 +527,7 @@ export async function rerollMessage(targetMessage: ChatMessage) {
 export async function editMessage(
   targetMessage: ChatMessage,
   message: string,
-  mentions: ChatEntityMention[] = []
+  mentions: ChatEntityMention[] = targetMessage.mentions
 ) {
   if (
     agentState.isStreaming

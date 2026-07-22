@@ -247,7 +247,8 @@ async function restoreClipFromSuggestionSnapshot(
 }
 
 async function restoreStructuralSuggestionSnapshot(
-  suggestion: Suggestion
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
 ): Promise<ApplySuggestionResult> {
   const database = await getDatabase();
   const snapshot = parseSuggestionPreviewSnapshot(suggestion);
@@ -257,7 +258,7 @@ async function restoreStructuralSuggestionSnapshot(
     await deleteClip(createdClipId);
   }
 
-  if (snapshot.ownedCreatedClipId === snapshot.clip.id) {
+  if (!preserveOwnedTarget && snapshot.ownedCreatedClipId === snapshot.clip.id) {
     await deleteClip(snapshot.ownedCreatedClipId);
     return { success: true };
   }
@@ -524,15 +525,19 @@ export async function supersedeSuggestion(
     || original.status !== 'pending'
     || replacement.supersedes_suggestion_id !== originalId
   ) return false;
-  const replacementOwnsPreviewClip = original.action_type === 'create_clip'
-    && original.clip_id !== null
-    && replacement.target_clip_id === original.clip_id;
+  const inheritedOwnedClipId = parseSuggestionPreviewSnapshot(original)?.ownedCreatedClipId;
+  const ownedPreviewClipId = original.action_type === 'create_clip'
+    ? original.clip_id
+    : inheritedOwnedClipId;
+  const replacementOwnsPreviewClip = ownedPreviewClipId !== null
+    && ownedPreviewClipId !== undefined
+    && replacement.target_clip_id === ownedPreviewClipId;
   let ownershipSnapshotJson: string | null = null;
   if (!replacementOwnsPreviewClip) {
     const cleanup = await cleanupPendingSuggestionArtifacts(original);
     if (!cleanup.success) return false;
   } else {
-    const previewClip = await getClip(original.clip_id!);
+    const previewClip = await getClip(ownedPreviewClipId);
     if (!previewClip) return false;
     const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
       serializeSuggestionPreviewSnapshot(previewClip)
@@ -572,7 +577,7 @@ export async function cleanupPendingSuggestionsForMessages(messageIds: number[])
             action_type, target_clip_id, action_payload_json, preview_snapshot_json,
             status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
      FROM suggestions
-     WHERE chat_message_id IN (${placeholders}) AND status = 'pending'
+     WHERE chat_message_id IN (${placeholders}) AND status IN ('pending', 'superseded')
      ORDER BY id DESC`
   ).all(...messageIds) as Suggestion[]).map(normalizeSuggestionRecord);
 
@@ -1459,7 +1464,7 @@ async function revertAppliedSuggestionTx(
   }
 
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
-    const restored = await restoreStructuralSuggestionSnapshot(suggestion);
+    const restored = await restoreStructuralSuggestionSnapshot(suggestion, true);
     if (!restored.success) return restored;
     const updateResult = database.prepare(
       "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"

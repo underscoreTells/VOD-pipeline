@@ -216,7 +216,7 @@ describe("agent streaming message actions", () => {
       id: "db-12",
       databaseId: 12,
       content: "Find a sharper payoff",
-      mentions: [],
+      mentions: [{ type: "clip", id: 7, label: "Setup clip" }],
     });
     expect(agentState.messages[3]).toMatchObject({
       id: "db-14",
@@ -224,7 +224,7 @@ describe("agent streaming message actions", () => {
       content: "Use the ladder payoff instead.",
     });
     expect(agentApiMocks.editAgentMessage).toHaveBeenCalledWith(expect.objectContaining({
-      mentions: [],
+      mentions: [{ type: "clip", id: 7, label: "Setup clip" }],
       proxyOptions: {
         encodingMode: "auto",
         quality: "balanced",
