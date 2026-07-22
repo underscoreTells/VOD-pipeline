@@ -109,6 +109,9 @@ describe("naming service", () => {
         providers: {
           kimi: "sk-kimi",
         },
+        baseURLs: {
+          kimi: "https://api.moonshot.cn/v1",
+        },
       },
     });
 
@@ -116,6 +119,7 @@ describe("naming service", () => {
       provider: "kimi",
       model: "kimi-k3",
       apiKey: "sk-kimi",
+      baseURL: "https://api.moonshot.cn/v1",
     }));
     expect(available).toBe("Final Twist Setup");
 

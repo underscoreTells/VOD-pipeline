@@ -22,6 +22,7 @@ interface NamingRequestAttempt {
   provider: NamingModelProvider;
   apiKey: string;
   model?: string;
+  baseURL?: string;
 }
 
 export function sanitizeGeneratedName(value: unknown): string | null {
@@ -106,7 +107,8 @@ function appendNamingRequestAttempt(
   }
 
   attemptKeys.add(attemptKey);
-  attempts.push({ provider, apiKey, model });
+  const baseURL = providerConfig?.baseURLs?.[provider];
+  attempts.push({ provider, apiKey, model, ...(baseURL ? { baseURL } : {}) });
 }
 
 function buildNamingRequestAttempts(input: {
@@ -186,6 +188,7 @@ async function requestGeneratedName(input: {
         provider: attempt.provider,
         apiKey: attempt.apiKey,
         ...(attempt.model ? { model: attempt.model } : {}),
+        ...(attempt.baseURL ? { baseURL: attempt.baseURL } : {}),
         temperature: 0.2,
         maxTokens: input.maxTokens,
       });

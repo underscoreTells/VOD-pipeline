@@ -62,6 +62,27 @@ interface ResolvedSplitSegment {
   is_essential: boolean;
 }
 
+async function validateStructuralSuggestionTarget(
+  suggestion: Suggestion,
+  chapter: Chapter
+): Promise<string | null> {
+  const snapshotClip = parseSuggestionPreviewSnapshot(suggestion)?.clip;
+  const targetClip = snapshotClip ?? (
+    suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null
+  );
+  if (!targetClip) return 'Structural suggestion target clip was not found';
+  if (targetClip.asset_id === undefined) return 'Structural suggestion snapshot is incomplete';
+
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  if (!chapterAssetIds.includes(targetClip.asset_id)) {
+    return `Target clip ${targetClip.id} is not linked to chapter ${chapter.id}`;
+  }
+  if (targetClip.in_point < chapter.start_time || targetClip.out_point > chapter.end_time) {
+    return `Target clip ${targetClip.id} is not contained in chapter ${chapter.id}`;
+  }
+  return null;
+}
+
 function resolveSplitSegments(
   suggestion: Suggestion,
   chapter: Chapter,
@@ -578,17 +599,16 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
   }
 
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) return { success: false, error: 'Chapter not found for this suggestion' };
+    const targetError = await validateStructuralSuggestionTarget(suggestion, chapter);
+    if (targetError) return { success: false, error: targetError };
     if (suggestion.preview_snapshot_json) {
       const snapshot = parseSuggestionPreviewSnapshot(suggestion);
       return { success: true, clip: snapshot ? await getClip(snapshot.clip.id) ?? undefined : undefined };
     }
-    const chapter = await getChapter(suggestion.chapter_id);
     const targetClip = suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null;
-    if (!chapter || !targetClip) return { success: false, error: 'Structural suggestion target clip was not found' };
-    const chapterAssetIds = await getAssetsForChapter(chapter.id);
-    if (!chapterAssetIds.includes(targetClip.asset_id)) {
-      return { success: false, error: `Target clip ${targetClip.id} is not linked to chapter ${chapter.id}` };
-    }
+    if (!targetClip) return { success: false, error: 'Structural suggestion target clip was not found' };
     const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
     if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
     if (isDeleteSuggestion(suggestion)) {
@@ -812,6 +832,8 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
   }
 
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const targetError = await validateStructuralSuggestionTarget(suggestion, chapter);
+    if (targetError) return { success: false, error: targetError };
     if (!suggestion.preview_snapshot_json) {
       const previewResult = await previewSuggestionWithClipTx(id);
       if (!previewResult.success) return previewResult;
@@ -1289,7 +1311,7 @@ export async function revertAppliedSuggestionsBatch(
   const collected: SuggestionBatchItemResult[] = [];
   try {
     return await withTransaction(async () => {
-      for (const item of items) {
+      for (const item of [...items].reverse()) {
         const outcome = await revertAppliedSuggestionTx(item);
         if (!outcome.success) {
           throw new SuggestionBatchAbort(

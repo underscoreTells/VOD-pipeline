@@ -95,6 +95,13 @@
     // Clear test result when key changes
     testResults[provider] = null;
   }
+
+  function handleProviderModelChange(provider: LLMProviderType, model: string) {
+    settingsState.settings.providerModels = {
+      ...settingsState.settings.providerModels,
+      [provider]: model,
+    };
+  }
   
   async function handleSave() {
     await saveSettings();
@@ -243,7 +250,7 @@
                 </div>
                 {@const models = getProviderModels(provider)}
                 {#if models.length > 0}
-                  <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" value={settingsState.settings.providerModels[provider] ?? getProviderMetadata(provider).defaultModel} onchange={(event) => settingsState.settings.providerModels[provider] = event.currentTarget.value} aria-label={`${getProviderLabel(provider)} model`}>
+                  <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" value={settingsState.settings.providerModels[provider] ?? getProviderMetadata(provider).defaultModel} onchange={(event) => handleProviderModelChange(provider, event.currentTarget.value)} aria-label={`${getProviderLabel(provider)} model`}>
                     {#each models as model (model.id)}
                       <option value={model.id}>{model.label}</option>
                     {/each}

@@ -467,6 +467,42 @@ describeBatch("suggestion batch transactions", () => {
       expect(row.applied_at).toBeNull();
     });
 
+    it("reverts dependent update and delete suggestions in reverse application order", async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const original = await createClip({
+        project_id: projectId,
+        asset_id: assetId,
+        track_index: 0,
+        in_point: 100,
+        out_point: 150,
+        role: "setup",
+        description: "original",
+        is_essential: true,
+      });
+      const before = snapshotClip(original);
+      const updateId = await insertPendingUpdateSuggestion(chapterId, original.id, 130);
+      const deleteId = await insertPendingDeleteSuggestion(chapterId, original.id);
+
+      expect((await applySuggestionsBatch([updateId, deleteId])).success).toBe(true);
+      expect(await getClip(original.id)).toBeNull();
+
+      const result = await revertAppliedSuggestionsBatch([
+        { suggestionId: updateId, beforeSnapshot: before },
+        { suggestionId: deleteId },
+      ]);
+
+      expect(result.success).toBe(true);
+      expect((await getClip(original.id))?.out_point).toBe(150);
+      expect(db.prepare("SELECT status, target_clip_id FROM suggestions WHERE id = ?").get(updateId)).toEqual({
+        status: "pending",
+        target_clip_id: original.id,
+      });
+      expect(db.prepare("SELECT status, target_clip_id FROM suggestions WHERE id = ?").get(deleteId)).toEqual({
+        status: "pending",
+        target_clip_id: original.id,
+      });
+    });
+
     it("rolls back the entire batch when an update_clip revert lacks beforeSnapshot", async () => {
       const { projectId, assetId, chapterId } = insertFixtures();
       const original = await createClip({

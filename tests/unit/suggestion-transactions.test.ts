@@ -6,6 +6,7 @@ import {
   applySuggestionWithClip,
   cancelSuggestionPreview,
   createSuggestion,
+  getClip,
   previewSuggestionWithClip,
   revertAppliedSuggestionsBatch,
   setDatabaseForTesting,
@@ -291,6 +292,31 @@ describeTx("suggestion transactions (withTransaction)", () => {
         target_clip_id: clipId,
       });
       expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
+    });
+
+    it('rejects structural targets that are not fully contained in the suggestion chapter', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      db.prepare('UPDATE chapters SET start_time = 10, end_time = 20 WHERE id = ?').run(chapterId);
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, description, is_essential)
+         VALUES (?, ?, 0, 5, 15, 'Cross-chapter clip', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 0, out_point: 5, description: 'Delete crossing clip', reasoning: 'Pacing',
+        provider: 'gemini', action_type: 'delete_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ delete: true }), preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      const result = await applySuggestionWithClip(suggestion.id);
+
+      expect(result).toEqual({
+        success: false,
+        error: `Target clip ${clipId} is not contained in chapter ${chapterId}`,
+      });
+      expect(await getClip(clipId)).not.toBeNull();
+      expect(db.prepare('SELECT status FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({ status: 'pending' });
     });
 
     it('previews, applies, and reverts an atomic clip split', async () => {
