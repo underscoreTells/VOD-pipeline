@@ -212,7 +212,11 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
       if (!suggestion.target_clip_id) return 'A split suggestion has no target clip.';
       const target = timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
       if (!target) return 'A split suggestion target clip no longer exists.';
-      const splitError = validateSplitSuggestion(suggestion, chapter, target);
+      const simulated = simulatedTargets.get(suggestion.target_clip_id);
+      const splitTarget = simulated
+        ? { ...target, in_point: simulated.start, out_point: simulated.end }
+        : target;
+      const splitError = validateSplitSuggestion(suggestion, chapter, splitTarget);
       if (splitError) return splitError;
       continue;
     }

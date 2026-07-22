@@ -10,6 +10,10 @@ import { runConversationTurn } from "./conversation/runner.js";
 import {
   normalizeConversationMessages,
 } from "./conversation/context-builder.js";
+import {
+  normalizeClipContextDetails,
+  normalizeReferencedEntities,
+} from './conversation/input-normalization.js';
 import type {
   ConversationContextPayload,
   ConversationTurnInput,
@@ -230,6 +234,7 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
         role: typeof clip.role === "string" ? clip.role : null,
         description: typeof clip.description === "string" ? clip.description : null,
         isEssential: Boolean(clip.isEssential),
+        ...normalizeClipContextDetails(clip),
       };
     })
     .filter(
@@ -245,6 +250,7 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
     videoAnalysisAssets: asVideoAnalysisAssets(contextRaw.videoAnalysisAssets),
     suggestionSummary:
       typeof contextRaw.suggestionSummary === "string" ? contextRaw.suggestionSummary : undefined,
+    referencedEntities: normalizeReferencedEntities(contextRaw.referencedEntities),
   };
 
   return {
