@@ -47,6 +47,12 @@ describe('chapter cut workspace', () => {
     expect(timelineSource).not.toContain('{#each assets as asset (asset.id)}');
   });
 
+  it('renders each kept window in a split suggestion independently', () => {
+    expect(timelineSource).toContain('resolveSuggestionWindowsForChapter');
+    expect(timelineSource).toContain('{#each suggestionRanges as suggestionRange, segmentIndex');
+    expect(timelineSource).toContain('{#each suggestionLocalRanges(suggestion) as suggestionRange, segmentIndex');
+  });
+
   it('treats a click as a scrub and only creates a range after crossing the drag threshold', () => {
     expect(timelineSource).toContain('!dragMoved && Math.abs(event.clientX');
     expect(timelineSource).toContain('if (!dragMoved) {');

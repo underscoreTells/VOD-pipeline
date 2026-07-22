@@ -1,13 +1,14 @@
 import dotenv from "dotenv";
 import type { LLMConfig, LLMProviderType } from "./providers/index.js";
-import { PROVIDER_IDS, PROVIDER_METADATA } from "../shared/llm/provider-registry.js";
+import { getProviderMetadata, PROVIDER_IDS, PROVIDER_METADATA } from "../shared/llm/provider-registry.js";
 
 export interface AgentConfig {
   defaultProvider: LLMProviderType;
   providers: Partial<Record<LLMProviderType, string>>;
   temperature?: number;
   maxTokens?: number;
-  openrouterBaseURL?: string;
+  models?: Partial<Record<LLMProviderType, string>>;
+  baseURLs?: Partial<Record<LLMProviderType, string>>;
 }
 
 export let ipcConfig: Partial<AgentConfig> | null = null;
@@ -16,18 +17,29 @@ export function setIpcConfig(config: Partial<AgentConfig> | null): void {
   ipcConfig = config;
 }
 
+function getEnvironmentBaseURLs(): AgentConfig['baseURLs'] {
+  const baseURLs: AgentConfig['baseURLs'] = {};
+  for (const id of PROVIDER_IDS) {
+    const envVar = getProviderMetadata(id).baseURLEnvVar;
+    const value = envVar ? process.env[envVar] : undefined;
+    if (value) baseURLs[id] = value;
+  }
+  return baseURLs;
+}
+
 export async function loadConfig(): Promise<AgentConfig> {
   try {
     if (ipcConfig) {
-      // Align with the .env path: temperature defaults to 0.7 and openrouterBaseURL falls back to env.
       const config: AgentConfig = {
         defaultProvider: ipcConfig.defaultProvider || "gemini",
         providers: ipcConfig.providers || {},
         temperature: ipcConfig.temperature ?? 0.7,
         maxTokens: ipcConfig.maxTokens,
-        openrouterBaseURL:
-          ipcConfig.openrouterBaseURL ??
-          process.env[PROVIDER_METADATA.openrouter.baseURLEnvVar ?? ""],
+        models: ipcConfig.models ?? {},
+        baseURLs: {
+          ...getEnvironmentBaseURLs(),
+          ...ipcConfig.baseURLs,
+        },
       };
 
       if (Object.keys(config.providers).length === 0) {
@@ -47,8 +59,8 @@ export async function loadConfig(): Promise<AgentConfig> {
   const providers: AgentConfig["providers"] = {};
   for (const id of PROVIDER_IDS) {
     const envValue = process.env[PROVIDER_METADATA[id].envVar];
-    if (envValue) {
-      providers[id] = envValue;
+    if (envValue || (id === defaultProvider && getProviderMetadata(id).apiKeyOptional)) {
+      providers[id] = envValue ?? "";
     }
   }
 
@@ -64,7 +76,8 @@ export async function loadConfig(): Promise<AgentConfig> {
     providers,
     temperature: 0.7,
     maxTokens: undefined,
-    openrouterBaseURL: process.env[PROVIDER_METADATA.openrouter.baseURLEnvVar ?? ""],
+    models: {},
+    baseURLs: getEnvironmentBaseURLs(),
   };
 }
 
@@ -75,19 +88,22 @@ export function getProviderLLMConfig(
   const providerType = provider ?? agentConfig.defaultProvider;
 
   const apiKey = agentConfig.providers[providerType];
-  if (!apiKey) {
+  const metadata = getProviderMetadata(providerType);
+  if (!apiKey && !metadata.apiKeyOptional) {
     throw new Error(`No API key found for provider: ${providerType}`);
   }
 
   const llmConfig: LLMConfig = {
     provider: providerType,
-    apiKey,
+    apiKey: apiKey ?? "",
     temperature: agentConfig.temperature,
     maxTokens: agentConfig.maxTokens,
+    model: agentConfig.models?.[providerType],
   };
 
-  if (providerType === "openrouter") {
-    llmConfig.baseURL = agentConfig.openrouterBaseURL;
+  if (metadata.defaultBaseURL || agentConfig.baseURLs?.[providerType]) {
+    llmConfig.baseURL = agentConfig.baseURLs?.[providerType]
+      ?? metadata.defaultBaseURL;
   }
 
   return llmConfig;

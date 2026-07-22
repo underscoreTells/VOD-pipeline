@@ -78,6 +78,7 @@ function createMessage(id: number, role: "user" | "assistant", content: string, 
     id: `db-${id}`,
     databaseId: id,
     timestamp: new Date(createdAt),
+    mentions: [],
   };
 }
 
@@ -146,7 +147,8 @@ describe("agent streaming message actions", () => {
       },
     });
 
-    await sendChatMessage("Send this prompt");
+    const proxiedMentions = new Proxy([], {});
+    await sendChatMessage("Send this prompt", proxiedMentions);
 
     expect(agentState.messages).toHaveLength(2);
     expect(agentState.messages[0]).toMatchObject({
@@ -160,11 +162,15 @@ describe("agent streaming message actions", () => {
       content: "Persisted assistant response",
     });
     expect(agentApiMocks.agentChat).toHaveBeenCalledWith(expect.objectContaining({
+      mentions: [],
       proxyOptions: {
         encodingMode: "auto",
         quality: "balanced",
       },
     }));
+    const request = agentApiMocks.agentChat.mock.calls[0]?.[0];
+    expect(() => structuredClone(request)).not.toThrow();
+    expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
   });
 
   it("reconciles edited history against persisted message metadata", async () => {
@@ -181,6 +187,7 @@ describe("agent streaming message actions", () => {
       createMessage(12, "user", "Find a softer payoff", "2026-04-18T12:02:00.000Z"),
       createMessage(13, "assistant", "Use the reset clip.", "2026-04-18T12:03:00.000Z"),
     ];
+    agentState.messages[2]!.mentions = [{ type: "clip", id: 7, label: "Setup clip" }];
     agentState.suggestions = [];
     agentState.isStreaming = false;
     agentState.groundingStatus = "ready";
@@ -209,6 +216,7 @@ describe("agent streaming message actions", () => {
       id: "db-12",
       databaseId: 12,
       content: "Find a sharper payoff",
+      mentions: [{ type: "clip", id: 7, label: "Setup clip" }],
     });
     expect(agentState.messages[3]).toMatchObject({
       id: "db-14",
@@ -216,6 +224,7 @@ describe("agent streaming message actions", () => {
       content: "Use the ladder payoff instead.",
     });
     expect(agentApiMocks.editAgentMessage).toHaveBeenCalledWith(expect.objectContaining({
+      mentions: [{ type: "clip", id: 7, label: "Setup clip" }],
       proxyOptions: {
         encodingMode: "auto",
         quality: "balanced",

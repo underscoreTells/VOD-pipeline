@@ -36,6 +36,7 @@ const databaseMocks = vi.hoisted(() => ({
   getChatMessagesByConversation: vi.fn(),
   getClip: vi.fn(),
   getProject: vi.fn(),
+  getSuggestion: vi.fn(),
   getSuggestionsByConversation: vi.fn(),
   updateUserChatMessageContent: vi.fn(),
   updateChatConversation: vi.fn(),
@@ -292,6 +293,72 @@ describe("agent chat handler", () => {
     });
   });
 
+  it("preserves historical mention identities in model history", async () => {
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 9,
+        conversation_id: 2,
+        role: "user",
+        content: "Shorten this",
+        mentions_json: JSON.stringify([{ type: "clip", id: 7, label: "Intro" }]),
+        created_at: "2026-04-18T11:59:00.000Z",
+      },
+    ]);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "Tightened it.", outcome: "chat" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    const result = await chatHandler?.({}, {
+      clientRequestId: "client-history-mention",
+      projectId: "1",
+      conversationId: 2,
+      message: "Make it tighter",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(handlerSupportMocks.applyNearLimitTokenGuard).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: 'Shorten this\n\n[Referenced entities: clip#7 "Intro"]',
+        },
+      ]),
+      expect.any(Object),
+      "gemini"
+    );
+  });
+
+  it("passes through a null context produced by the token guard", async () => {
+    handlerSupportMocks.applyNearLimitTokenGuard.mockReturnValue({
+      messages: [{ role: "user", content: "Please provide new clips for this chapter" }],
+      contextPayload: null,
+      estimatedTotalTokens: 1_024,
+      effectiveContextLimit: 1_024,
+      compressed: true,
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "No context fit.", outcome: "chat" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    const result = await chatHandler?.({}, {
+      clientRequestId: "client-null-context",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(bridgeMocks.send.mock.calls[0]?.[0]?.metadata?.context).toBeNull();
+  });
+
   it("summarizes keep-window suggestions with keep-oriented wording in follow-up context", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
     databaseMocks.getSuggestionsByConversation.mockResolvedValue([
@@ -338,7 +405,7 @@ describe("agent chat handler", () => {
       expect.any(Array),
       expect.objectContaining({
         suggestionSummary: expect.stringContaining(
-          "keep window 12.00-18.00s status=pending desc=Keep the payoff reaction"
+          "suggestion#7 action=create_clip keep window 12.00-18.00s status=pending desc=Keep the payoff reaction"
         ),
       }),
       expect.anything()
@@ -346,6 +413,72 @@ describe("agent chat handler", () => {
     expect(handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1]?.suggestionSummary).not.toContain(
       "create proposal"
     );
+  });
+
+  it("includes explicitly mentioned suggestions beyond the normal summary limit", async () => {
+    const finalSegmentMetadata = `final-segment-${"x".repeat(2500)}`;
+    const suggestions = Array.from({ length: 13 }, (_, index) => ({
+      id: index + 1,
+      chapter_id: 3,
+      conversation_id: 2,
+      chat_message_id: 101,
+      in_point: index,
+      out_point: index + 1,
+      description: `Suggestion ${index + 1}`,
+      reasoning: index === 12 ? "Preserve the second retained beat." : null,
+      provider: "gemini",
+      action_type: index === 12 ? "split_clip" : "create_clip",
+      target_clip_id: index === 12 ? 80 : null,
+      action_payload_json: index === 12
+        ? JSON.stringify({
+            split: {
+              segments: [
+                { inPoint: 12, outPoint: 14 },
+                { inPoint: 16, outPoint: 18, metadata: finalSegmentMetadata },
+              ],
+            },
+          })
+        : null,
+      preview_snapshot_json: null,
+      status: "pending",
+      supersedes_suggestion_id: null,
+      display_order: index,
+      created_at: "2026-04-18T12:00:00.000Z",
+      applied_at: null,
+      clip_id: null,
+    }));
+    databaseMocks.getSuggestionsByConversation.mockResolvedValue(suggestions);
+    databaseMocks.getSuggestion.mockImplementation(async (id: number) => suggestions[id - 1] ?? null);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "Revised it.", outcome: "proposal" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-mentioned-suggestion",
+      projectId: "1",
+      conversationId: 2,
+      message: "Revise these suggestions",
+      mentions: suggestions.map((suggestion) => ({
+        type: "suggestion" as const,
+        id: suggestion.id,
+        label: `Suggestion ${suggestion.id}`,
+      })),
+    });
+
+    const context = handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1];
+    expect(context?.suggestionSummary).toContain(
+      "suggestion#13 action=split_clip split clip #80"
+    );
+    expect(context?.suggestionSummary).toContain('reasoning="Preserve the second retained beat."');
+    expect(context?.suggestionSummary).toContain('actionPayload={"split":{"segments"');
+    expect(context?.suggestionSummary).toContain(finalSegmentMetadata);
+    expect(context?.suggestionSummary).not.toContain('"truncated":true');
+    expect(context?.suggestionSummary).toContain("suggestion#1 ");
+    expect(context?.suggestionSummary).toContain("suggestion#12 ");
   });
 
   it("reports grounding status through the dedicated IPC handler", async () => {
@@ -858,7 +991,8 @@ describe("agent chat handler", () => {
     expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalledWith(
       2,
       12,
-      "Find a sharper payoff"
+      "Find a sharper payoff",
+      null
     );
     expect(databaseMocks.deleteChatMessagesAfter).toHaveBeenCalledWith(2, 12);
     expect(result).toMatchObject({
@@ -895,6 +1029,68 @@ describe("agent chat handler", () => {
     });
     expect(databaseMocks.updateUserChatMessageContent).not.toHaveBeenCalled();
     expect(bridgeMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("allows an edit to retain its historical suggestion mention", async () => {
+    const mention = { type: "suggestion" as const, id: 77, label: "Original suggestion" };
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 10,
+      conversation_id: 2,
+      role: "user",
+      content: "Use this suggestion",
+      mentions_json: JSON.stringify([mention]),
+      created_at: "2026-04-18T12:00:00.000Z",
+    });
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 10,
+        conversation_id: 2,
+        role: "user",
+        content: "Use this suggestion",
+        mentions_json: JSON.stringify([mention]),
+        created_at: "2026-04-18T12:00:00.000Z",
+      },
+    ]);
+    databaseMocks.getSuggestion.mockResolvedValue({
+      id: 77,
+      chapter_id: 3,
+      conversation_id: 2,
+      status: "applied",
+      target_clip_id: null,
+      description: "Applied suggestion",
+    });
+    databaseMocks.createChatMessage.mockReset();
+    databaseMocks.createChatMessage.mockResolvedValue({
+      id: 204,
+      created_at: "2026-04-18T12:05:00.000Z",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-2",
+      result: {
+        assistantResponse: "Updated response.",
+        outcome: "proposal",
+      },
+    });
+
+    const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
+    const result = await editHandler?.({}, {
+      clientRequestId: "client-edit",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 10,
+      message: "Use this suggestion with a tighter setup",
+      mentions: [mention],
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalledWith(
+      2,
+      10,
+      "Use this suggestion with a tighter setup",
+      JSON.stringify([{ ...mention, label: "Applied suggestion" }])
+    );
   });
 
   it("branches a conversation through the selected message", async () => {

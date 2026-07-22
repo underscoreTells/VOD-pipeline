@@ -74,7 +74,8 @@ vi.mock("../../src/renderer/lib/api/chapters.js", () => ({
   getChapterReverseProxy: mocks.getChapterReverseProxy,
 }));
 
-vi.mock("../../src/renderer/lib/components/chapter-preview-media.js", () => ({
+vi.mock("../../src/renderer/lib/components/chapter-preview-media.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/renderer/lib/components/chapter-preview-media.js")>(),
   resolveChapterPreviewMediaChange: () => null,
 }));
 

@@ -8,7 +8,7 @@ import {
 } from "./base.js";
 
 export class OpenAIToolStrategy<
-  TProvider extends Extract<LLMProviderType, "openai" | "openrouter" | "kimi"> = "openai",
+  TProvider extends Extract<LLMProviderType, "openai" | "openrouter" | "kimi" | "kimiCode" | "openaiCompatible"> = "openai",
 > implements ProviderToolStrategy<OpenAIFunctionToolDefinition> {
   readonly provider: TProvider;
 

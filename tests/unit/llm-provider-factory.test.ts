@@ -97,14 +97,14 @@ describe("createLLM", () => {
     createLLM({
       provider: "gemini",
       apiKey: "AIza-gemini",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.6-flash",
       temperature: 0.2,
       maxTokens: 24,
     } satisfies LLMConfig);
 
     expect(geminiMocks.ChatGoogleGenerativeAI).toHaveBeenCalledWith({
       apiKey: "AIza-gemini",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.6-flash",
       temperature: 0.2,
       maxOutputTokens: 24,
     });

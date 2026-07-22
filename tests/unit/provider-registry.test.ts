@@ -72,21 +72,21 @@ describe("provider-registry: VIDEO_CAPABLE_PROVIDERS", () => {
 });
 
 describe("provider-registry: resolveProviderModel", () => {
-  it("resolves gemini aliases to the canonical preview model", () => {
+  it("resolves gemini aliases to the current canonical model", () => {
     expect(resolveProviderModel("gemini", "gemini-3.0-flash")).toBe(
-      "gemini-3-flash-preview"
+      "gemini-3.6-flash"
     );
     expect(resolveProviderModel("gemini", "gemini-3-flash")).toBe(
-      "gemini-3-flash-preview"
+      "gemini-3.6-flash"
     );
   });
 
   it("resolves aliases case-insensitively", () => {
     expect(resolveProviderModel("gemini", "GEMINI-3-FLASH")).toBe(
-      "gemini-3-flash-preview"
+      "gemini-3.6-flash"
     );
     expect(resolveProviderModel("gemini", "Gemini-3.0-Flash")).toBe(
-      "gemini-3-flash-preview"
+      "gemini-3.6-flash"
     );
   });
 
@@ -107,8 +107,8 @@ describe("provider-registry: resolveProviderModel", () => {
     expect(resolveProviderModel("anthropic", "claude-sonnet-4-20250514")).toBe(
       "claude-sonnet-4-20250514"
     );
-    expect(resolveProviderModel("gemini", "gemini-3-flash-preview")).toBe(
-      "gemini-3-flash-preview"
+    expect(resolveProviderModel("gemini", "gemini-3.1-pro-preview")).toBe(
+      "gemini-3.1-pro-preview"
     );
   });
 

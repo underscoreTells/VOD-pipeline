@@ -128,7 +128,14 @@ export interface ChatConversationMessage {
   content: string;
   thinking_markdown?: string | null;
   trace_json?: string | null;
+  mentions_json?: string | null;
   created_at: string;
+}
+
+export interface ChatEntityMention {
+  type: 'clip' | 'suggestion';
+  id: number;
+  label: string;
 }
 
 export interface ExecutionTraceEntry {
@@ -234,11 +241,12 @@ export interface Suggestion {
   description: string | null;
   reasoning: string | null;
   provider: LLMProviderType | null;
-  action_type: 'create_clip' | 'update_clip';
+  action_type: 'create_clip' | 'update_clip' | 'delete_clip' | 'split_clip';
   target_clip_id: number | null;
   action_payload_json: string | null;
   preview_snapshot_json: string | null;
-  status: 'pending' | 'applied' | 'rejected';
+  status: 'pending' | 'applied' | 'rejected' | 'superseded';
+  supersedes_suggestion_id: number | null;
   display_order: number;
   created_at: string;
   applied_at: string | null;
@@ -247,13 +255,14 @@ export interface Suggestion {
 
 export type CreateSuggestionInput = Omit<
   Suggestion,
-  'id' | 'created_at' | 'applied_at' | 'action_type' | 'target_clip_id' | 'action_payload_json' | 'preview_snapshot_json' | 'clip_id'
+  'id' | 'created_at' | 'applied_at' | 'action_type' | 'target_clip_id' | 'action_payload_json' | 'preview_snapshot_json' | 'clip_id' | 'supersedes_suggestion_id'
 > & {
   action_type?: Suggestion['action_type'];
   target_clip_id?: number | null;
   action_payload_json?: string | null;
   preview_snapshot_json?: string | null;
   clip_id?: number | null;
+  supersedes_suggestion_id?: number | null;
 };
 
 export type UpdateSuggestionInput = Partial<Pick<Suggestion, 'status' | 'display_order'>>;

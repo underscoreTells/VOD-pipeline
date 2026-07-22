@@ -3,7 +3,9 @@ import {
   getAssetsForChapter,
   getChapter,
   getChatConversation,
+  getClip,
   getProject,
+  getSuggestion,
   getSuggestionsByConversation,
   updateChatConversation,
   createChatMessage,
@@ -12,6 +14,7 @@ import {
 import type {
   ChatConversation,
   ChatConversationMessage,
+  ChatEntityMention,
   ExecutionTraceEntry,
   Suggestion,
 } from '../../../../shared/types/database.js';
@@ -31,6 +34,8 @@ import {
 } from '../../../../shared/utils/execution-trace.js';
 import { sanitizeAssistantContent } from '../../../../shared/utils/assistant-content.js';
 import { deriveConversationTitle } from '../../../../shared/utils/conversation-title.js';
+import { parseChatMentions } from '../../../../shared/utils/chat-mentions.js';
+import { clipOverlapsChapterSourceRange } from '../../../../shared/utils/clip-timing.js';
 import { IPC_ERROR_CODES } from '../../channels.js';
 import {
   applyNearLimitTokenGuard,
@@ -199,12 +204,21 @@ export async function assertChapterGroundingReady(
 export function sanitizeConversationHistory(
   messages: ChatConversationMessage[]
 ): Array<{ role: string; content: string }> {
-  return messages.map((item) => ({
-    role: item.role,
-    content: item.role === 'assistant'
-      ? sanitizeAssistantContent(item.content)
-      : item.content,
-  }));
+  return messages.map((item) => {
+    const mentions = item.role === 'user' ? parseChatMentions(item.mentions_json) : [];
+    const mentionContext = mentions.length > 0
+      ? `\n\n[Referenced entities: ${mentions
+          .map((mention) => `${mention.type}#${mention.id} ${JSON.stringify(mention.label)}`)
+          .join(', ')}]`
+      : '';
+
+    return {
+      role: item.role,
+      content: item.role === 'assistant'
+        ? sanitizeAssistantContent(item.content)
+        : `${item.content}${mentionContext}`,
+    };
+  });
 }
 
 export async function generateConversationTitle(
@@ -240,6 +254,7 @@ export async function runConversationTurn(
     clientRequestId: string;
     conversation: ChatConversation;
     conversationHistory: Array<{ role: string; content: string }>;
+    mentions?: ChatEntityMention[];
     effectiveProvider?: string;
     playheadTime?: number;
     projectId: number;
@@ -262,16 +277,24 @@ export async function runConversationTurn(
     ensureChapterProxyReady: false,
   });
   options.signal?.throwIfAborted();
+  const referencedSuggestionIds = new Set(
+    (options.mentions ?? [])
+      .filter((mention) => mention.type === 'suggestion')
+      .map((mention) => mention.id)
+  );
   const contextWithSuggestions = {
     ...initialContext,
-    suggestionSummary: summarizeSuggestions(existingSuggestions),
+    suggestionSummary: summarizeSuggestions(existingSuggestions, referencedSuggestionIds),
+    referencedEntities: options.mentions ?? [],
+    selectedClipIds: options.selectedClipIds,
   };
 
-  const guardedInitialPayload = applyNearLimitTokenGuard(
-    options.conversationHistory,
-    contextWithSuggestions,
-    options.effectiveProvider
-  );
+  const contextTokenLimit = options.effectiveProvider
+    ? options.agentConfig?.contextTokenLimits?.[options.effectiveProvider as keyof typeof options.agentConfig.contextTokenLimits]
+    : undefined;
+  const guardedInitialPayload = contextTokenLimit === undefined
+    ? applyNearLimitTokenGuard(options.conversationHistory, contextWithSuggestions, options.effectiveProvider)
+    : applyNearLimitTokenGuard(options.conversationHistory, contextWithSuggestions, options.effectiveProvider, contextTokenLimit);
 
   if (guardedInitialPayload.compressed) {
     logger.info(
@@ -295,7 +318,9 @@ export async function runConversationTurn(
       selectedClipIds: options.selectedClipIds,
       playheadTime: options.playheadTime,
       agentConfig: options.agentConfig,
-      context: contextWithSuggestions,
+      context: 'contextPayload' in guardedInitialPayload
+        ? guardedInitialPayload.contextPayload
+        : contextWithSuggestions,
     },
   }, {
     streamContext: {
@@ -406,22 +431,52 @@ function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
-function summarizeSuggestions(suggestions: Suggestion[]): string {
+function summarizeSuggestions(
+  suggestions: Suggestion[],
+  referencedSuggestionIds: ReadonlySet<number> = new Set()
+): string {
   if (suggestions.length === 0) {
     return '- none';
   }
 
-  return suggestions
-    .slice(0, 12)
+  const referencedSuggestions = suggestions.filter((suggestion) =>
+    referencedSuggestionIds.has(suggestion.id)
+  );
+  const unreferencedSuggestions = suggestions.filter(
+    (suggestion) => !referencedSuggestionIds.has(suggestion.id)
+  );
+  const summarizedSuggestions = [
+    ...referencedSuggestions,
+    ...unreferencedSuggestions.slice(0, Math.max(0, 12 - referencedSuggestions.length)),
+  ];
+
+  return summarizedSuggestions
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'
         ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`
-        : 'keep window';
-      return `- ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
+        : suggestion.action_type === 'delete_clip'
+          ? `delete clip #${suggestion.target_clip_id ?? 'unknown'}`
+          : suggestion.action_type === 'split_clip'
+            ? `split clip #${suggestion.target_clip_id ?? 'unknown'}`
+            : 'keep window';
+      const referencedDetails = referencedSuggestionIds.has(suggestion.id)
+        ? ` reasoning=${JSON.stringify((suggestion.reasoning ?? '').slice(0, 1200))} actionPayload=${formatSuggestionPayload(suggestion.action_payload_json)}`
+        : '';
+      return `- suggestion#${suggestion.id} action=${suggestion.action_type} ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
         2
-      )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();
+      )}s status=${suggestion.status} desc=${suggestion.description ?? ''}${referencedDetails}`.trim();
     })
     .join('\n');
+}
+
+function formatSuggestionPayload(payloadJson: string | null): string {
+  if (!payloadJson) return 'null';
+
+  try {
+    return JSON.stringify(JSON.parse(payloadJson));
+  } catch {
+    return JSON.stringify(payloadJson);
+  }
 }
 
 export interface ConversationTurnPayload {
@@ -433,6 +488,58 @@ export interface ConversationTurnPayload {
   playheadTime: number | undefined;
   proxyOptions: ProxyOptions | undefined;
   agentConfig: ProviderConfigPayload | undefined;
+  mentions: ChatEntityMention[];
+}
+
+export async function validateConversationMentions(
+  mentions: ChatEntityMention[],
+  projectId: number,
+  chapterId: number,
+  conversationId: number,
+  historicalSuggestionIds: ReadonlySet<number> = new Set()
+): Promise<ChatEntityMention[]> {
+  const chapterAssetIds = new Set(await getAssetsForChapter(chapterId));
+  const chapter = await getChapter(chapterId);
+  if (!chapter || chapter.project_id !== projectId) {
+    throw new AgentHandlerError('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
+  }
+  const validated: ChatEntityMention[] = [];
+
+  for (const mention of mentions) {
+    if (mention.type === 'clip') {
+      const clip = await getClip(mention.id);
+      if (
+        !clip
+        || clip.project_id !== projectId
+        || !chapterAssetIds.has(clip.asset_id)
+        || !clipOverlapsChapterSourceRange(clip, chapter)
+      ) {
+        throw new AgentHandlerError(`Referenced clip ${mention.id} is not in this chapter`, IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      validated.push({
+        ...mention,
+        label: clip.description?.trim() || `Clip ${clip.id}`,
+      });
+      continue;
+    }
+
+    const suggestion = await getSuggestion(mention.id);
+    if (
+      !suggestion
+      || suggestion.chapter_id !== chapterId
+      || suggestion.conversation_id !== conversationId
+      || (suggestion.status !== 'pending' && !historicalSuggestionIds.has(suggestion.id))
+    ) {
+      throw new AgentHandlerError(`Referenced suggestion ${mention.id} is not pending in this conversation`, IPC_ERROR_CODES.VALIDATION_ERROR);
+    }
+    const targetClip = suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null;
+    validated.push({
+      ...mention,
+      label: targetClip?.description?.trim() || suggestion.description?.trim() || `Suggestion ${suggestion.id}`,
+    });
+  }
+
+  return validated;
 }
 
 export function parseConversationTurnPayload(payload: unknown): ConversationTurnPayload {
@@ -456,6 +563,7 @@ export function parseConversationTurnPayload(payload: unknown): ConversationTurn
   const agentConfig = value.agentConfig && typeof value.agentConfig === 'object'
     ? value.agentConfig as ProviderConfigPayload
     : undefined;
+  const mentions = parseChatMentions(value.mentions);
 
   return {
     clientRequestId,
@@ -466,5 +574,6 @@ export function parseConversationTurnPayload(payload: unknown): ConversationTurn
     playheadTime,
     proxyOptions,
     agentConfig,
+    mentions,
   };
 }

@@ -239,6 +239,10 @@ describeNative("Chat conversation persistence", () => {
       content: "keep this",
       thinking_markdown: null,
       trace_json: null,
+      mentions_json: JSON.stringify([
+        { type: "clip", id: 31, label: "Opening clip" },
+        { type: "suggestion", id: 42, label: "Trim suggestion" },
+      ]),
     });
     const second = await createChatMessage({
       conversation_id: sourceConversation.id,
@@ -266,6 +270,9 @@ describeNative("Chat conversation persistence", () => {
     expect(clonedMessages).toHaveLength(2);
     expect(clonedMessages[0]?.content).toBe("keep this");
     expect(clonedMessages[0]?.created_at).toBe(first.created_at);
+    expect(clonedMessages[0]?.mentions_json).toBe(JSON.stringify([
+      { type: "clip", id: 31, label: "Opening clip" },
+    ]));
     expect(clonedMessages[1]?.content).toBe("keep that");
     expect(clonedMessages[1]?.thinking_markdown).toBe("## Reasoning\n\nImportant context.");
     expect(clonedMessages[1]?.trace_json).toBe("{\"id\":\"trace-1\"}");

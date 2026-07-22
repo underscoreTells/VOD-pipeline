@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   canSubmitComposerMessage,
+  filterComposerMentionCandidates,
+  getComposerMentionQuery,
+  removeComposerMentionQuery,
   shouldInterceptComposerEnter,
 } from "../../src/renderer/lib/components/chat-panel-composer.js";
 
@@ -51,5 +54,20 @@ describe("chat panel composer helpers", () => {
       key: "Enter",
       shiftKey: true,
     })).toBe(false);
+  });
+
+  it('finds, filters, and removes the active mention query', () => {
+    const mentionQuery = getComposerMentionQuery('Trim @pay', 9);
+    expect(mentionQuery).toEqual({ start: 5, end: 9, query: 'pay' });
+    expect(filterComposerMentionCandidates([
+      { type: 'clip', id: 1, label: 'Setup', detail: '0-4s' },
+      { type: 'suggestion', id: 2, label: 'Payoff', detail: 'pending update' },
+    ], mentionQuery!.query)).toEqual([
+      { type: 'suggestion', id: 2, label: 'Payoff', detail: 'pending update' },
+    ]);
+    expect(removeComposerMentionQuery('Trim @pay please', mentionQuery!)).toEqual({
+      message: 'Trim  please',
+      cursor: 5,
+    });
   });
 });

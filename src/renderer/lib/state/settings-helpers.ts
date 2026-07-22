@@ -12,6 +12,7 @@ import {
 import {
   PROVIDER_IDS,
   VIDEO_CAPABLE_PROVIDERS,
+  getProviderModelContextTokenLimit,
   getProviderLabel as getRegistryProviderLabel,
   providerSupportsVideo,
   validateProviderApiKey,
@@ -21,12 +22,13 @@ import type {
   Settings,
 } from './settings.svelte.js';
 
-export const PROVIDER_KEY_MAP: Record<LLMProviderType, keyof Settings> = {
+export const PROVIDER_KEY_MAP: Partial<Record<LLMProviderType, keyof Settings>> = {
   gemini: 'geminiApiKey',
   openai: 'openaiApiKey',
   anthropic: 'anthropicApiKey',
   kimi: 'kimiApiKey',
   openrouter: 'openrouterApiKey',
+  kimiCode: 'kimiCodeApiKey',
 };
 
 export const providerOrder: LLMProviderType[] = PROVIDER_IDS;
@@ -39,6 +41,11 @@ export const defaultSettings: Settings = {
   anthropicApiKey: '',
   kimiApiKey: '',
   openrouterApiKey: '',
+  kimiCodeApiKey: '',
+  providerModels: {},
+  kimiBaseURL: 'https://api.moonshot.ai/v1',
+  openAICompatibleProfiles: [],
+  activeOpenAICompatibleProfileId: null,
   defaultVideoProvider: 'gemini',
   defaultTextProvider: 'openai',
   autoGenerateProxies: true,
@@ -71,11 +78,24 @@ export function supportsVideo(provider: LLMProviderType): boolean {
 }
 
 export function getApiKey(settings: Settings, provider: LLMProviderType): string {
-  const key = settings[PROVIDER_KEY_MAP[provider]];
+  if (provider === 'openaiCompatible') {
+    return (settings.openAICompatibleProfiles ?? []).find(
+      (profile) => profile.id === settings.activeOpenAICompatibleProfileId
+    )?.apiKey ?? '';
+  }
+  const settingKey = PROVIDER_KEY_MAP[provider];
+  if (!settingKey) return '';
+  const key = settings[settingKey];
   return typeof key === 'string' ? key : '';
 }
 
 export function isProviderConfigured(settings: Settings, provider: LLMProviderType): boolean {
+  if (provider === 'openaiCompatible') {
+    const profile = (settings.openAICompatibleProfiles ?? []).find(
+      (candidate) => candidate.id === settings.activeOpenAICompatibleProfileId
+    );
+    return Boolean(profile?.baseURL.trim() && profile.model.trim());
+  }
   return getApiKey(settings, provider).length > 0;
 }
 
@@ -95,14 +115,42 @@ export function buildProviderConfig(
 
   for (const provider of providerOrder) {
     const apiKey = getApiKey(settings, provider);
-    if (apiKey) {
-      providers[provider] = apiKey;
+    if (apiKey || (provider === 'openaiCompatible' && isProviderConfigured(settings, provider))) {
+      providers[provider] = apiKey || 'not-required';
     }
+  }
+
+  const profiles = settings.openAICompatibleProfiles ?? [];
+  const activeProfile = profiles.find(
+    (profile) => profile.id === settings.activeOpenAICompatibleProfileId
+  );
+  const models = {
+    ...(settings.providerModels ?? {}),
+    ...(activeProfile ? { openaiCompatible: activeProfile.model } : {}),
+  };
+  const baseURLs = {
+    ...(settings.kimiBaseURL && settings.kimiBaseURL !== defaultSettings.kimiBaseURL
+      ? { kimi: settings.kimiBaseURL }
+      : {}),
+    ...(activeProfile ? { openaiCompatible: activeProfile.baseURL } : {}),
+  };
+  const contextTokenLimits: NonNullable<ProviderConfigPayload['contextTokenLimits']> = {};
+  for (const provider of providerOrder) {
+    const model = models[provider];
+    if (model) {
+      contextTokenLimits[provider] = getProviderModelContextTokenLimit(provider, model);
+    }
+  }
+  if (activeProfile) {
+    contextTokenLimits.openaiCompatible = activeProfile.contextTokenLimit;
   }
 
   return {
     defaultProvider,
     providers,
+    ...(Object.keys(models).length > 0 ? { models } : {}),
+    ...(Object.keys(baseURLs).length > 0 ? { baseURLs } : {}),
+    ...(Object.keys(contextTokenLimits).length > 0 ? { contextTokenLimits } : {}),
   };
 }
 

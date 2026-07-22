@@ -6,13 +6,14 @@ import {
   restoreSuggestionBatch,
   revertSuggestionBatch,
 } from '../api/agent.js';
+import { getClipsByProject } from '../api/clips.js';
 import { getAssetsForChapter, getSelectedChapter } from './chapters.svelte.js';
 import { projectDetail } from './project-media.svelte.js';
 import { rangesOverlap } from '../utils/timeline-geometry.js';
 import {
   mergeSuggestionUpdateWindow,
   normalizeSuggestionWindowForChapter,
-  resolveSuggestionWindowForChapter,
+  resolveSuggestionWindowsForChapter,
 } from '../../../shared/utils/clip-timing.js';
 import {
   createClip as createTimelineClip,
@@ -98,6 +99,83 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
+function validateSplitSuggestion(
+  suggestion: Suggestion,
+  chapter: { start_time: number },
+  target: Clip
+): string | null {
+  if (!suggestion.action_payload_json) return 'A split suggestion has no segment payload.';
+
+  try {
+    const payload = JSON.parse(suggestion.action_payload_json) as {
+      split?: {
+        segments?: Array<{ inPoint?: unknown; outPoint?: unknown }>;
+        splitPoint?: unknown;
+      };
+    };
+    const split = payload.split;
+    if (!split) return 'A split suggestion has no segment payload.';
+    if (!Array.isArray(split.segments)) {
+      const targetLocalIn = target.in_point - chapter.start_time;
+      const targetLocalOut = target.out_point - chapter.start_time;
+      return typeof split.splitPoint === 'number'
+        && Number.isFinite(split.splitPoint)
+        && split.splitPoint > targetLocalIn
+        && split.splitPoint < targetLocalOut
+          ? null
+          : 'A split suggestion has no valid interior split point.';
+    }
+    if (split.segments.length < 2) return 'A split suggestion requires at least two segments.';
+
+    let previousOut = Number.NEGATIVE_INFINITY;
+    const targetLocalIn = target.in_point - chapter.start_time;
+    const targetLocalOut = target.out_point - chapter.start_time;
+    for (const segment of split.segments) {
+      const { inPoint, outPoint } = segment;
+      if (
+        typeof inPoint !== 'number'
+        || !Number.isFinite(inPoint)
+        || typeof outPoint !== 'number'
+        || !Number.isFinite(outPoint)
+        || outPoint <= inPoint
+        || inPoint < targetLocalIn
+        || outPoint > targetLocalOut
+        || inPoint < previousOut
+      ) {
+        return 'Split segments must be ordered, non-overlapping ranges inside the target clip.';
+      }
+      previousOut = outPoint;
+    }
+    return null;
+  } catch {
+    return 'A split suggestion has a malformed segment payload.';
+  }
+}
+
+async function refreshProjectTimelineClips(): Promise<boolean> {
+  const projectId = projectDetail.projectId;
+  if (projectId === null) return false;
+  try {
+    const response = await getClipsByProject(projectId);
+    if (projectDetail.projectId !== projectId) return false;
+    if (!response.success || !response.data) {
+      console.error('Failed to refresh timeline clips after a committed suggestion mutation:', response.error);
+      return false;
+    }
+    timelineState.clips = response.data;
+    const liveIds = new Set(response.data.map((clip) => clip.id));
+    timelineState.selectedClipIds = new Set(
+      [...timelineState.selectedClipIds].filter((id) => liveIds.has(id))
+    );
+    return true;
+  } catch (error) {
+    // The backend mutation is already committed. Keep the command undoable
+    // and use its result payload for best-effort local reconciliation.
+    console.error('Failed to refresh timeline clips after a committed suggestion mutation:', error);
+    return false;
+  }
+}
+
 function resolveProposedWindow(
   suggestion: Suggestion,
   chapter: { start_time: number; end_time: number },
@@ -124,6 +202,9 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   const chapter = getSelectedChapter();
   if (!chapter) return 'Select a chapter before applying suggested cuts.';
   const simulatedTargets = new Map<number, { start: number; end: number }>();
+  const removedTargetIds = new Set<number>();
+  const splitTargetIds = new Set<number>();
+  const splitRangesByTarget = new Map<number, Array<{ start: number; end: number }>>();
   const proposals: Array<{
     assetId: number;
     targetClipId: number | null;
@@ -137,6 +218,37 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   for (const suggestionId of suggestionIds) {
     const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
+    if (suggestion.target_clip_id && removedTargetIds.has(suggestion.target_clip_id)) {
+      return 'A suggested cut targets a clip deleted earlier in this batch.';
+    }
+    if (suggestion.target_clip_id && splitTargetIds.has(suggestion.target_clip_id)) {
+      return 'A suggested cut targets a clip split earlier in this batch.';
+    }
+    if (suggestion.action_type === 'delete_clip') {
+      if (!suggestion.target_clip_id) return 'A delete suggestion has no target clip.';
+      removedTargetIds.add(suggestion.target_clip_id);
+      continue;
+    }
+    if (suggestion.action_type === 'split_clip') {
+      if (!suggestion.target_clip_id) return 'A split suggestion has no target clip.';
+      const target = timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
+      if (!target) return 'A split suggestion target clip no longer exists.';
+      const simulated = simulatedTargets.get(suggestion.target_clip_id);
+      const splitTarget = simulated
+        ? { ...target, in_point: simulated.start, out_point: simulated.end }
+        : target;
+      const splitError = validateSplitSuggestion(suggestion, chapter, splitTarget);
+      if (splitError) return splitError;
+      splitTargetIds.add(suggestion.target_clip_id);
+      splitRangesByTarget.set(
+        suggestion.target_clip_id,
+        resolveSuggestionWindowsForChapter(suggestion, chapter, {
+          start: splitTarget.in_point,
+          end: splitTarget.out_point,
+        })
+      );
+      continue;
+    }
     const assetId = resolveSuggestionAssetId(suggestion);
     if (!assetId) return 'A suggested cut has no unambiguous source asset.';
     const targetClipId = suggestion.action_type === 'update_clip' ? suggestion.target_clip_id : null;
@@ -171,6 +283,16 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   }
   const rangesByAsset = new Map<number, Array<{ start: number; end: number; owner: string }>>();
   for (const clip of timelineState.clips) {
+    if (removedTargetIds.has(clip.id)) continue;
+    const splitRanges = splitRangesByTarget.get(clip.id);
+    if (splitRanges) {
+      const ranges = rangesByAsset.get(clip.asset_id) ?? [];
+      splitRanges.forEach((range, index) => {
+        ranges.push({ ...range, owner: `clip:${clip.id}:split:${index}` });
+      });
+      rangesByAsset.set(clip.asset_id, ranges);
+      continue;
+    }
     // Clips moved by an update in this batch are checked at their simulated
     // final position, so a range the target vacated is free for proposals.
     const current = simulatedTargets.get(clip.id) ?? { start: clip.in_point, end: clip.out_point };
@@ -179,11 +301,19 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     rangesByAsset.set(clip.asset_id, ranges);
   }
   for (const proposal of finalProposals) {
+    if (
+      proposal.targetClipId !== null
+      && (splitTargetIds.has(proposal.targetClipId) || removedTargetIds.has(proposal.targetClipId))
+    ) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     ranges.push({ ...proposal.proposed, owner: proposal.owner });
     rangesByAsset.set(proposal.assetId, ranges);
   }
   for (const proposal of finalProposals) {
+    if (
+      proposal.targetClipId !== null
+      && (splitTargetIds.has(proposal.targetClipId) || removedTargetIds.has(proposal.targetClipId))
+    ) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     for (const range of ranges) {
       if (range.owner === proposal.owner) continue;
@@ -196,6 +326,22 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
       }
     }
   }
+  for (const [targetClipId, splitRanges] of splitRangesByTarget) {
+    const target = timelineState.clips.find((clip) => clip.id === targetClipId);
+    if (!target) continue;
+    const ranges = rangesByAsset.get(target.asset_id) ?? [];
+    const splitOwnerPrefix = `clip:${targetClipId}:split:`;
+    for (const splitRange of splitRanges) {
+      for (const range of ranges) {
+        if (range.owner.startsWith(splitOwnerPrefix)) continue;
+        if (rangesOverlap(splitRange, range, 0.001)) {
+          return range.owner.startsWith('clip:')
+            ? 'Resolve the overlapping suggested cut before accepting it.'
+            : 'Suggested cuts in this batch overlap each other.';
+        }
+      }
+    }
+  }
   return null;
 }
 
@@ -204,6 +350,7 @@ class ApplySuggestionBatchCommand implements Command {
   failureReason: string | null = null;
   private beforeSnapshots: Map<number, SuggestionBeforeSnapshot> | null = null;
   private appliedClips = new Map<number, Clip>();
+  private appliedClipIds = new Map<number, number[]>();
   private readonly conversationId = agentState.selectedConversationId;
   private readonly chapterId = getSelectedChapter()?.id ?? null;
   private readonly projectId = projectDetail.projectId;
@@ -299,15 +446,25 @@ class ApplySuggestionBatchCommand implements Command {
       }
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
+    const timelineRefreshed = await refreshProjectTimelineClips();
 
     this.appliedClips.clear();
+    this.appliedClipIds.clear();
     const isProjectCurrent = this.isProjectCurrent();
     const isChapterCurrent = this.isChapterCurrent();
     const isConversationCurrent = this.isConversationCurrent();
     for (const result of response.data.results) {
-      if (!result.success || !result.clip) continue;
+      if (!result.success) continue;
+      if (!timelineRefreshed && isProjectCurrent) {
+        for (const clipId of result.removedClipIds ?? []) deleteTimelineClip(clipId);
+        for (const clip of result.clips ?? (result.clip ? [result.clip] : [])) upsertTimelineClip(clip);
+      }
+      this.appliedClipIds.set(
+        result.suggestionId,
+        (result.clips ?? (result.clip ? [result.clip] : [])).map((clip) => clip.id)
+      );
+      if (!result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
-      if (isProjectCurrent) upsertTimelineClip(result.clip);
       if (!isConversationCurrent) continue;
       const suggestion = agentState.suggestions.find((item) => item.id === result.suggestionId);
       if (suggestion) suggestion.clip_id = result.clip.id;
@@ -334,11 +491,18 @@ class ApplySuggestionBatchCommand implements Command {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to undo suggested cuts');
     }
+    const timelineRefreshed = await refreshProjectTimelineClips();
 
     if (this.isProjectCurrent()) {
-      for (const suggestionId of this.suggestionIds) {
+      for (const result of response.data.results) {
+        const suggestionId = result.suggestionId;
         const appliedClip = this.appliedClips.get(suggestionId);
-        const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;
+        const restored = result.clip;
+        if (!timelineRefreshed) {
+          for (const clipId of this.appliedClipIds.get(suggestionId) ?? []) {
+            if (clipId !== restored?.id) deleteTimelineClip(clipId);
+          }
+        }
         if (restored) {
           upsertTimelineClip(restored);
         } else if (appliedClip) {
@@ -399,6 +563,7 @@ class RejectSuggestionBatchCommand implements Command {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to reject suggested cuts');
     }
+    await refreshProjectTimelineClips();
     // Reconcile preview artifacts: rejected create previews were deleted and
     // rejected update previews were restored to their original clip state.
     if (this.isProjectCurrent()) {
@@ -423,8 +588,14 @@ class RejectSuggestionBatchCommand implements Command {
   async undo(isCurrent?: () => boolean): Promise<void> {
     if (isCurrent && !isCurrent()) return;
     const response = await restoreSuggestionBatch({ suggestionIds: this.suggestionIds });
-    if (!response.success) {
+    if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to restore suggested cuts');
+    }
+    await refreshProjectTimelineClips();
+    if (this.isProjectCurrent()) {
+      for (const result of response.data.results) {
+        if (result.success) upsertTimelineClip(result.clip);
+      }
     }
     if (!this.isConversationCurrent()) return;
     setSuggestionStatus(this.suggestionIds, 'pending');
@@ -455,12 +626,12 @@ export function focusSuggestion(suggestionId: number): boolean {
   const liveTarget = suggestion.target_clip_id
     ? timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id)
     : null;
-  const window = resolveSuggestionWindowForChapter(
+  const [firstWindow] = resolveSuggestionWindowsForChapter(
     suggestion,
     chapter,
     liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
   );
-  setPlayhead(window.start);
+  setPlayhead(firstWindow.start);
   return true;
 }
 

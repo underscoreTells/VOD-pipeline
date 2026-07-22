@@ -50,9 +50,9 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
       const localOut = chapter
         ? Math.max(localIn, (visibleRange?.end ?? clip.outPoint) - chapter.startTime)
         : clip.outPoint;
-      return `- clip#${clip.id} source=${localIn.toFixed(
-        2
-      )}-${localOut.toFixed(2)} role=${clip.role ?? "none"} desc=${clip.description ?? ""}`;
+       return `- clip#${clip.id} source=${localIn.toFixed(
+         2
+       )}-${localOut.toFixed(2)} duration=${(clip.visibleDuration ?? localOut - localIn).toFixed(2)}s prev=${clip.previousClipId ?? "none"} next=${clip.nextClipId ?? "none"} omittedBefore=${(clip.omittedBeforeDuration ?? 0).toFixed(2)}s omittedAfter=${(clip.omittedAfterDuration ?? 0).toFixed(2)}s role=${clip.role ?? "none"} desc=${clip.description ?? ""} dialogue=${JSON.stringify(clip.transcriptExcerpt ?? "")}`;
     })
     .join("\n");
 
@@ -74,6 +74,9 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
     typeof input.context.suggestionSummary === "string" && input.context.suggestionSummary.trim().length > 0
       ? input.context.suggestionSummary.trim()
       : "- none";
+  const referencedEntities = (input.context.referencedEntities ?? [])
+    .map((mention) => `- ${mention.type}#${mention.id} name=${JSON.stringify(mention.label)}`)
+    .join('\n');
 
   return `You are a senior rough-cut video editing copilot working inside a chapter-based timeline tool.
 
@@ -104,6 +107,9 @@ ${groundedVideoAssetIds.length > 0 ? `- [${groundedVideoAssetIds.join(", ")}]` :
 Existing proposal summary for this conversation:
 ${suggestionSummary}
 
+Entities explicitly referenced by the user in the latest message:
+${referencedEntities || "- none"}
+
 Rules:
 - If the user asks to make the cut tighter, faster, cleaner, more engaging, less fluffy, or to improve the current section, prefer drafting at least one concrete proposal instead of asking for clarification.
 - Use clarification only when there is no local anchor from transcript context, detailed transcript windows, selected clips, or the playhead region and you cannot safely draft even one grounded proposal.
@@ -115,9 +121,11 @@ Rules:
 - If the user asks to cut, remove, trim, drop, skip, omit, or delete something, translate that into the kept result window or a clip-boundary update. Do not label the kept window as the removed material.
 - For proposal copy, description must describe what is inside the kept window or updated clip. reasoning may explain what the edit skips, trims, omits, or removes.
 - Chapter clip order is inferred from source timing, so do not propose timeline gaps or manual repositioning.
-- Use create_clip and update_clip only to define or revise source windows and metadata.
+- Use create_clip/update_clip to define or revise source windows, delete_clip for committed clip removal, and split_clip to atomically replace one clip with ordered kept segments. Gaps between split_clip segments remove footage.
+- When revising a pending suggestion, set supersedesSuggestionId to its structured suggestion ID so the original remains auditable.
 - Prioritize narrative continuity and story progression over isolated highlight density.
 - Do not invent clip identifiers or asset identifiers.
+- Treat explicitly referenced entities as the user's intended targets. Use their structured IDs, not names parsed from prose.
 - Use evidence tools when they are needed for factual verification.
 - Use loadDetailedTranscriptWindows for exact dialogue wording and timing.
 - Use analyzeChapterVideo when visual confirmation matters, when a beat depends on on-screen action or reaction, when choosing between multiple source assets, or when a proposal depends on visuals rather than dialogue or pacing alone.

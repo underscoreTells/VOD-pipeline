@@ -16,6 +16,18 @@ export function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void
       continue;
     }
 
+    if (proposal.type === 'delete_clip') continue;
+
+    if (proposal.type === 'split_clip') {
+      proposal.segments.forEach((segment, index) => {
+        validateKeepWindowDescription(
+          segment.description,
+          `split_clip.segments[${index}].description`
+        );
+      });
+      continue;
+    }
+
     validateKeepWindowDescription(
       proposal.updates.description ?? undefined,
       "update_clip.updates.description"
@@ -51,10 +63,18 @@ export function validateProposalGrounding(
       continue;
     }
 
+    if (proposal.type === 'delete_clip') {
+      validateTargetClipInChapter(input, proposal.clipId, proposal.type);
+    }
+
+    if (proposal.type === 'split_clip') {
+      validateSplitClipSegments(input, proposal);
+    }
+
     if (!accumulator.hasSuccessfulVideoEvidence && !hasNonVisualProposalGrounding(input, accumulator, proposal)) {
-      if (proposal.type === "update_clip") {
+      if (proposal.type !== "range_suggestion") {
         throw new Error(
-          "update_clip requires transcript context, a selected clip, the playhead region, or matching video evidence."
+          "Timeline edits require transcript context, a selected clip, the playhead region, or matching video evidence."
         );
       }
 
@@ -62,6 +82,39 @@ export function validateProposalGrounding(
         "range_suggestion requires transcript context, detailed transcript windows, the playhead region, or matching video evidence."
       );
     }
+  }
+}
+
+function validateTargetClipInChapter(
+  input: ConversationTurnInput,
+  clipId: number,
+  proposalType: 'delete_clip' | 'split_clip'
+): { start: number; end: number } {
+  const targetRange = getChapterLocalClipRange(input, clipId);
+  if (!targetRange) {
+    throw new Error(`${proposalType} target clip ${clipId} is not available in this chapter.`);
+  }
+  return targetRange;
+}
+
+function validateSplitClipSegments(
+  input: ConversationTurnInput,
+  proposal: Extract<ProposalDraft, { type: 'split_clip' }>
+): void {
+  const targetRange = validateTargetClipInChapter(input, proposal.clipId, proposal.type);
+
+  let previousOut = Number.NEGATIVE_INFINITY;
+  for (const segment of proposal.segments) {
+    if (
+      segment.inPoint < targetRange.start
+      || segment.outPoint > targetRange.end
+      || segment.inPoint < previousOut
+    ) {
+      throw new Error(
+        'split_clip segments must be ordered, non-overlapping kept windows inside the target clip.'
+      );
+    }
+    previousOut = segment.outPoint;
   }
 }
 
@@ -151,18 +204,24 @@ function hasSelectedClipGrounding(
   proposal: ProposalDraft,
   range: { start: number; end: number } | null
 ): boolean {
+  const groundedClipIds = new Set([
+    ...input.selectedClipIds,
+    ...(input.context.referencedEntities ?? [])
+      .filter((entity) => entity.type === 'clip')
+      .map((entity) => entity.id),
+  ]);
   if (
-    proposal.type === "update_clip" &&
-    input.selectedClipIds.includes(proposal.clipId)
+    proposal.type !== "range_suggestion" && proposal.type !== 'create_clip' &&
+    groundedClipIds.has(proposal.clipId)
   ) {
     return true;
   }
 
-  if (!range || input.selectedClipIds.length === 0) {
+  if (!range || groundedClipIds.size === 0) {
     return false;
   }
 
-  return input.selectedClipIds.some((clipId) => {
+  return [...groundedClipIds].some((clipId) => {
     const selectedRange = getChapterLocalClipRange(input, clipId);
     return selectedRange
       ? rangesOverlap(range.start, range.end, selectedRange.start, selectedRange.end)
@@ -203,6 +262,10 @@ function getProposalRangeInChapter(
     return { start: proposal.inPoint, end: proposal.outPoint };
   }
 
+  if (proposal.type === 'delete_clip' || proposal.type === 'split_clip') {
+    return getChapterLocalClipRange(input, proposal.clipId);
+  }
+
   const existingRange = getChapterLocalClipRange(input, proposal.clipId);
   const start = proposal.updates.inPoint ?? existingRange?.start;
   const end = proposal.updates.outPoint ?? existingRange?.end;
@@ -227,6 +290,10 @@ function getChapterLocalClipRange(
   const clip = input.context.chapterClips.find((candidate) => candidate.id === clipId);
   const chapter = input.context.chapter;
   if (!clip || !chapter) {
+    return null;
+  }
+
+  if (clip.inPoint < chapter.startTime || clip.outPoint > chapter.endTime) {
     return null;
   }
 

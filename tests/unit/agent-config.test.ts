@@ -49,6 +49,21 @@ describe("Agent Config", () => {
     expect(Object.keys(config.providers)).toContain("anthropic");
   });
 
+  it("loads an optional-key provider from environment configuration without a key", async () => {
+    process.env.DEFAULT_PROVIDER = "openaiCompatible";
+    process.env.OPENAI_COMPATIBLE_BASE_URL = "http://localhost:11434/v1";
+
+    const config = await loadConfig();
+    const llmConfig = getProviderLLMConfig(config);
+
+    expect(config.providers).toHaveProperty("openaiCompatible", "");
+    expect(llmConfig).toMatchObject({
+      provider: "openaiCompatible",
+      apiKey: "",
+      baseURL: "http://localhost:11434/v1",
+    });
+  });
+
   it("should validate that at least one API key is present", async () => {
     await expect(loadConfig()).rejects.toThrow(/No API keys/);
   });
@@ -80,6 +95,31 @@ describe("Agent Config", () => {
     });
 
     await expect(loadConfig()).rejects.toThrow("No API keys found");
+  });
+
+  it("should preserve environment base URLs beneath IPC config", async () => {
+    process.env.OPENROUTER_BASE_URL = "https://proxy.example/v1";
+    setIpcConfig({
+      defaultProvider: "openrouter",
+      providers: { openrouter: "ipc-openrouter-key" },
+    });
+
+    const config = await loadConfig();
+
+    expect(config.baseURLs?.openrouter).toBe("https://proxy.example/v1");
+  });
+
+  it("should prefer explicit IPC base URLs over environment values", async () => {
+    process.env.OPENROUTER_BASE_URL = "https://proxy.example/v1";
+    setIpcConfig({
+      defaultProvider: "openrouter",
+      providers: { openrouter: "ipc-openrouter-key" },
+      baseURLs: { openrouter: "https://ipc.example/v1" },
+    });
+
+    const config = await loadConfig();
+
+    expect(config.baseURLs?.openrouter).toBe("https://ipc.example/v1");
   });
 });
 

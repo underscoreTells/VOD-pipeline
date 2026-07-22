@@ -6,8 +6,10 @@ import type {
   CreateChatConversationMessageInput,
   UpdateChatConversationInput,
 } from '../../../shared/types/database.js';
+import { parseChatMentions, serializeChatMentions } from '../../../shared/utils/chat-mentions.js';
 import { DEFAULT_CONVERSATION_TITLE } from '../../../shared/utils/conversation-title.js';
-import { getDatabase } from '../client.js';
+import { getDatabase, withTransaction } from '../client.js';
+import { cleanupPendingSuggestionsForMessages } from './suggestions.js';
 
 function touchConversation(
   database: Awaited<ReturnType<typeof getDatabase>>,
@@ -114,7 +116,13 @@ export async function updateChatConversation(
 
 export async function deleteChatConversation(id: number): Promise<boolean> {
   const database = await getDatabase();
-  const result = database.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+  const result = await withTransaction(async () => {
+    const messageIds = (database.prepare(
+      'SELECT id FROM chat_messages WHERE conversation_id = ?'
+    ).all(id) as Array<{ id: number }>).map(({ id: messageId }) => messageId);
+    await cleanupPendingSuggestionsForMessages(messageIds);
+    return database.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+  });
 
   return result.changes > 0;
 }
@@ -125,14 +133,15 @@ export async function createChatMessage(
   const database = await getDatabase();
   const now = new Date().toISOString();
   const result = database.prepare(
-    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.conversation_id,
     input.role,
     input.content,
     input.thinking_markdown ?? null,
     input.trace_json ?? null,
+    input.mentions_json ?? null,
     now
   );
 
@@ -145,6 +154,7 @@ export async function createChatMessage(
     content: input.content,
     thinking_markdown: input.thinking_markdown ?? null,
     trace_json: input.trace_json ?? null,
+    mentions_json: input.mentions_json ?? null,
     created_at: now,
   };
 }
@@ -154,7 +164,7 @@ export async function getChatMessagesByConversation(
 ): Promise<ChatConversationMessage[]> {
   const database = await getDatabase();
   return database.prepare(
-    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
+    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at
      FROM chat_messages
      WHERE conversation_id = ?
      ORDER BY created_at ASC, id ASC`
@@ -167,7 +177,7 @@ export async function getChatMessageByConversation(
 ): Promise<ChatConversationMessage | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, created_at
+    `SELECT id, conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at
      FROM chat_messages
      WHERE id = ? AND conversation_id = ?`
   ).get(messageId, conversationId) as ChatConversationMessage | undefined;
@@ -178,14 +188,15 @@ export async function getChatMessageByConversation(
 export async function updateUserChatMessageContent(
   conversationId: number,
   messageId: number,
-  content: string
+  content: string,
+  mentionsJson: string | null = null
 ): Promise<boolean> {
   const database = await getDatabase();
   const result = database.prepare(
     `UPDATE chat_messages
-     SET content = ?
+     SET content = ?, mentions_json = ?
      WHERE id = ? AND conversation_id = ? AND role = 'user'`
-  ).run(content, messageId, conversationId);
+  ).run(content, mentionsJson, messageId, conversationId);
 
   if (result.changes > 0) {
     touchConversation(database, conversationId);
@@ -204,11 +215,19 @@ export async function deleteChatMessagesAfter(
     return 0;
   }
 
-  const result = database.prepare(
-    `DELETE FROM chat_messages
-     WHERE conversation_id = ?
-       AND (created_at > ? OR (created_at = ? AND id > ?))`
-  ).run(conversationId, target.created_at, target.created_at, messageId);
+  const result = await withTransaction(async () => {
+    const messageIds = (database.prepare(
+      `SELECT id FROM chat_messages
+       WHERE conversation_id = ?
+         AND (created_at > ? OR (created_at = ? AND id > ?))`
+    ).all(conversationId, target.created_at, target.created_at, messageId) as Array<{ id: number }>)
+      .map(({ id }) => id);
+    await cleanupPendingSuggestionsForMessages(messageIds);
+    return database.prepare(
+      `DELETE FROM chat_messages
+       WHERE id IN (${messageIds.map(() => '?').join(', ') || 'NULL'})`
+    ).run(...messageIds);
+  });
 
   if (result.changes > 0) {
     touchConversation(database, conversationId);
@@ -231,17 +250,21 @@ export async function cloneChatMessagesThrough(
 
   const messagesToClone = sourceMessages.slice(0, throughIndex + 1);
   const insertMessage = database.prepare(
-    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chat_messages (conversation_id, role, content, thinking_markdown, trace_json, mentions_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   const cloneMessages = database.transaction((messages: ChatConversationMessage[]) => {
     for (const message of messages) {
+      const mentionsJson = serializeChatMentions(
+        parseChatMentions(message.mentions_json).filter((mention) => mention.type === 'clip')
+      );
       insertMessage.run(
         targetConversationId,
         message.role,
         message.content,
         message.thinking_markdown ?? null,
         message.trace_json ?? null,
+        mentionsJson,
         message.created_at
       );
     }

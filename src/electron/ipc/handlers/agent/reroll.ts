@@ -7,6 +7,7 @@ import {
 import { toNumberOrNull } from '../../handler-support.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
+import { parseChatMentions } from '../../../../shared/utils/chat-mentions.js';
 import {
   AgentHandlerError,
   logger,
@@ -103,6 +104,7 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         conversationHistory: sanitizeConversationHistory(
           existingMessages.slice(0, retainedIndex + 1)
         ),
+        mentions: parseChatMentions(retainedUserMessage.mentions_json),
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,

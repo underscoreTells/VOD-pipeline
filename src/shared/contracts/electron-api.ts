@@ -4,6 +4,7 @@ import type {
   Chapter,
   ChatConversation,
   ChatConversationMessage,
+  ChatEntityMention,
   Clip,
   Project,
   Suggestion,
@@ -23,6 +24,9 @@ export type ProviderConfigProvider = LLMProviderType;
 export interface ProviderConfigPayload {
   defaultProvider?: ProviderConfigProvider;
   providers?: Partial<Record<ProviderConfigProvider, string>>;
+  models?: Partial<Record<ProviderConfigProvider, string>>;
+  baseURLs?: Partial<Record<ProviderConfigProvider, string>>;
+  contextTokenLimits?: Partial<Record<ProviderConfigProvider, number>>;
 }
 
 export interface ProxyOptions {
@@ -67,6 +71,7 @@ export interface AgentChatParams {
   projectId: string;
   conversationId: number;
   message: string;
+  mentions?: ChatEntityMention[];
   provider?: string;
   proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
@@ -128,6 +133,7 @@ export interface AgentEditMessageParams {
   conversationId: number;
   messageId: number;
   message: string;
+  mentions?: ChatEntityMention[];
   provider?: string;
   proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
@@ -272,6 +278,8 @@ export interface SuggestionBatchMutationResult {
       suggestionId: number;
       success: boolean;
       clip?: Clip;
+      clips?: Clip[];
+      removedClipIds?: number[];
       error?: string;
       autoRejected?: boolean;
     }>;

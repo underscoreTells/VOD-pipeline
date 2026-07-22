@@ -102,8 +102,9 @@ export function mergeSuggestionUpdateWindow(
 /**
  * Resolve the window a pending suggestion would produce. Update suggestions
  * merge their payload onto the live target window (acceptance reads the
- * target's current range, not the proposal-time stored range); everything
- * else falls back to the stored proposal range.
+ * target's current range, not the proposal-time stored range). Delete
+ * suggestions also resolve to the live target because their stored range is
+ * only a placeholder. Everything else falls back to the stored proposal range.
  */
 export function resolveSuggestionWindowForChapter(
   suggestion: SuggestionUpdateFields,
@@ -113,7 +114,73 @@ export function resolveSuggestionWindowForChapter(
   if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id && targetWindow) {
     return mergeSuggestionUpdateWindow(suggestion, targetWindow, chapter);
   }
+  if (suggestion.action_type === 'delete_clip' && suggestion.target_clip_id && targetWindow) {
+    return targetWindow;
+  }
   return normalizeSuggestionWindowForChapter(suggestion, chapter);
+}
+
+/** Resolve every kept window produced by a suggestion. */
+export function resolveSuggestionWindowsForChapter(
+  suggestion: SuggestionUpdateFields,
+  chapter: ChapterRange,
+  targetWindow?: ClipSourceRange | null
+): ClipSourceRange[] {
+  if (suggestion.action_type !== 'split_clip' || !suggestion.action_payload_json) {
+    return [resolveSuggestionWindowForChapter(suggestion, chapter, targetWindow)];
+  }
+
+  try {
+    const payload = JSON.parse(suggestion.action_payload_json) as {
+      split?: {
+        segments?: Array<{ inPoint?: unknown; outPoint?: unknown }>;
+        splitPoint?: unknown;
+      };
+    };
+    const split = payload.split;
+    if (Array.isArray(split?.segments) && split.segments.length >= 2) {
+      const chapterDuration = Math.max(0.01, chapter.end_time - chapter.start_time);
+      const windows: ClipSourceRange[] = [];
+      let previousEnd = Number.NEGATIVE_INFINITY;
+      for (const segment of split.segments) {
+        if (
+          typeof segment.inPoint !== 'number'
+          || !Number.isFinite(segment.inPoint)
+          || typeof segment.outPoint !== 'number'
+          || !Number.isFinite(segment.outPoint)
+          || segment.outPoint <= segment.inPoint
+          || segment.inPoint < previousEnd
+        ) {
+          return [resolveSuggestionWindowForChapter(suggestion, chapter, targetWindow)];
+        }
+        const localStart = clamp(segment.inPoint, 0, chapterDuration);
+        const localEnd = clamp(segment.outPoint, localStart, chapterDuration);
+        if (localEnd <= localStart) {
+          return [resolveSuggestionWindowForChapter(suggestion, chapter, targetWindow)];
+        }
+        windows.push({
+          start: chapter.start_time + localStart,
+          end: chapter.start_time + localEnd,
+        });
+        previousEnd = segment.outPoint;
+      }
+      return windows;
+    }
+
+    if (typeof split?.splitPoint === 'number' && Number.isFinite(split.splitPoint) && targetWindow) {
+      const splitTime = chapter.start_time + split.splitPoint;
+      if (splitTime > targetWindow.start && splitTime < targetWindow.end) {
+        return [
+          { start: targetWindow.start, end: splitTime },
+          { start: splitTime, end: targetWindow.end },
+        ];
+      }
+    }
+  } catch {
+    // Fall back to the stored suggestion bounds for malformed persisted data.
+  }
+
+  return [resolveSuggestionWindowForChapter(suggestion, chapter, targetWindow)];
 }
 
 export function getClipVisibleRangeInChapter(

@@ -7,6 +7,7 @@ import {
 } from '../../../database/index.js';
 import { normalizeNamingModel } from '../../../../shared/llm/naming-models.js';
 import { DEFAULT_CONVERSATION_TITLE } from '../../../../shared/utils/conversation-title.js';
+import { serializeChatMentions } from '../../../../shared/utils/chat-mentions.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
@@ -21,6 +22,7 @@ import {
   runConversationTurn,
   sanitizeConversationHistory,
   syncConversationProvider,
+  validateConversationMentions,
 } from './shared.js';
 
 export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgentBridge>): void {
@@ -34,6 +36,7 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
       playheadTime,
       proxyOptions,
       agentConfig,
+      mentions,
     } = parseConversationTurnPayload(payload);
     const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
@@ -65,6 +68,12 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
         { requireFreshRuntime: true }
       );
       const syncedConversation = await syncConversationProvider(conversation, provider);
+      const validatedMentions = await validateConversationMentions(
+        mentions,
+        normalizedProjectId,
+        chapter.id,
+        syncedConversation.id
+      );
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const persistedUserMessage = await createChatMessage({
         conversation_id: syncedConversation.id,
@@ -72,6 +81,7 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
         content: message,
         thinking_markdown: null,
         trace_json: null,
+        mentions_json: serializeChatMentions(validatedMentions),
       });
 
       if (
@@ -99,6 +109,7 @@ export function registerAgentChatHandler(agentBridge: ReturnType<typeof getAgent
           ...existingMessages,
           persistedUserMessage,
         ]),
+        mentions: validatedMentions,
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,

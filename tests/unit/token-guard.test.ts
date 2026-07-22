@@ -91,7 +91,7 @@ describe("applyNearLimitTokenGuard: per-provider limits come from the registry",
     expect(applyNearLimitTokenGuard(small, null, "openai").effectiveContextLimit).toBe(123904);
     expect(applyNearLimitTokenGuard(small, null, "anthropic").effectiveContextLimit).toBe(195904);
     expect(applyNearLimitTokenGuard(small, null, "gemini").effectiveContextLimit).toBe(995904);
-    expect(applyNearLimitTokenGuard(small, null, "kimi").effectiveContextLimit).toBe(123904);
+    expect(applyNearLimitTokenGuard(small, null, "kimi").effectiveContextLimit).toBe(1_044_480);
   });
 
   it("falls back to the gemini limit for an unknown provider", () => {
@@ -110,5 +110,211 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
 
     expect(withContext.estimatedTotalTokens).toBeGreaterThan(withoutContext.estimatedTotalTokens);
     expect(withContext.compressed).toBe(false);
+  });
+
+  it("budgets the generated system prompt before accepting an 8K turn", () => {
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "x".repeat(8_000) }],
+      null,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.estimatedTotalTokens).toBeGreaterThan(3_700);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+  });
+
+  it("reserves response space and compacts transcript context for an 8K model", () => {
+    const context = {
+      transcript: "t".repeat(30_000),
+      chapterClips: [{ id: 1, transcriptExcerpt: "c".repeat(1_200) }],
+      detailedTranscripts: [],
+      referencedEntities: [{ type: "clip", id: 1 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten this clip." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.effectiveContextLimit).toBe(4096);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(result.contextPayload).toMatchObject({
+      referencedEntities: context.referencedEntities,
+      detailedTranscripts: [],
+    });
+    expect((result.contextPayload as typeof context).transcript.length).toBeLessThan(context.transcript.length);
+  });
+
+  it("fits escaped transcript text against the serialized context budget", () => {
+    const context = {
+      transcript: "\n\"\\".repeat(12_000),
+      chapterClips: [{ id: 1, transcriptExcerpt: "\n\"\\".repeat(500) }],
+      detailedTranscripts: [],
+      referencedEntities: [{ type: "clip", id: 1 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten this clip." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(result.contextPayload).toMatchObject({ referencedEntities: context.referencedEntities });
+  });
+
+  it("preserves bounded chapter and clip grounding during hard context compaction", () => {
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 80 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        role: null,
+        description: "d".repeat(400),
+        isEssential: true,
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      videoAnalysisAssets: [{ assetId: 11, proxyPath: "/tmp/chapter-proxy.mp4" }],
+      referencedEntities: [{ type: "clip", id: 80 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten @clip 80." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.chapter).toEqual(context.chapter);
+    expect(compacted.chapterAssetIds).toEqual([11]);
+    expect(compacted.chapterClips.length).toBeGreaterThan(0);
+    expect(compacted.chapterClips.length).toBeLessThan(context.chapterClips.length);
+    expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.chapterClips[0]?.id).toBe(80);
+    expect(compacted.videoAnalysisAssets).toEqual(context.videoAnalysisAssets);
+  });
+
+  it("prioritizes target clips and details for mentioned suggestions during hard compaction", () => {
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 80 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        description: "d".repeat(400),
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      videoAnalysisAssets: [{ assetId: 11, proxyPath: "/tmp/chapter-proxy.mp4" }],
+      referencedEntities: [{ type: "suggestion", id: 42, label: "Trim payoff" }],
+      selectedClipIds: [],
+      suggestionSummary: [
+        "- suggestion#1 action=create_clip keep window 1.00-2.00s status=pending desc=Opening",
+        "- suggestion#42 action=update_clip update clip #80 79.00-80.00s status=pending desc=Trim payoff",
+      ].join("\n"),
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Revise @suggestion 42." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.chapterClips[0]?.id).toBe(80);
+    expect(compacted.suggestionSummary).toContain("suggestion#42 action=update_clip update clip #80");
+    expect(compacted.suggestionSummary).not.toContain("suggestion#1 ");
+  });
+
+  it("preserves every mentioned suggestion before truncating the summary", () => {
+    const referencedSuggestionIds = Array.from({ length: 8 }, (_, index) => index + 41);
+    const referencedSuggestionLines = referencedSuggestionIds.map((id) => (
+      `- suggestion#${id} action=update_clip update clip #1 10.00-11.00s status=pending `
+      + `desc=${`required-${id}-`.repeat(8)}`
+    ));
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 14 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        description: "d".repeat(80),
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      referencedEntities: referencedSuggestionIds.map((id) => ({
+        type: "suggestion",
+        id,
+        label: `Suggestion ${id}`,
+      })),
+      selectedClipIds: [],
+      suggestionSummary: [
+        ...referencedSuggestionLines,
+        ...Array.from({ length: 20 }, (_, index) => (
+          `- suggestion#${index + 1} action=create_clip keep window 1.00-2.00s `
+          + `status=pending desc=${"optional".repeat(100)}`
+        )),
+      ].join("\n"),
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Revise all mentioned suggestions." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.suggestionSummary).toBe(referencedSuggestionLines.join("\n"));
+  });
+
+  it("drops additional older messages when the retained recent set is still too large", () => {
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: String(index).repeat(7_000),
+    }));
+
+    const result = applyNearLimitTokenGuard(messages, null, "openaiCompatible", 8192);
+
+    expect(result.compressed).toBe(true);
+    expect(result.messages.length).toBeLessThan(messages.length);
+    expect(result.messages.at(-1)).toEqual(messages.at(-1));
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+  });
+
+  it("rejects a latest message that cannot fit by itself", () => {
+    expect(() => applyNearLimitTokenGuard(
+      [{ role: "user", content: "x".repeat(20_000) }],
+      null,
+      "openaiCompatible",
+      8192
+    )).toThrow("latest message exceeds this model's input limit");
   });
 });

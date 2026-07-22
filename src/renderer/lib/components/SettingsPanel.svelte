@@ -4,6 +4,12 @@
     getNamingModelProvider,
   } from "../../../shared/llm/naming-models.js";
   import {
+    PROVIDER_IDS,
+    VIDEO_CAPABLE_PROVIDERS,
+    getProviderMetadata,
+    getProviderModels,
+  } from '../../../shared/llm/provider-registry.js';
+  import {
     settingsState, 
     saveSettings, 
     updateApiKey, 
@@ -16,7 +22,9 @@
   } from "../state/settings.svelte";
   import {
     buildProviderConfig,
+    getApiKey,
     getProviderConfigApiKey,
+    isProviderConfigured,
   } from "../state/settings-helpers.js";
   import { getGPUStatus, type GPUStatusPayload } from "../api/gpu.js";
   import Badge from './ui/Badge.svelte';
@@ -31,13 +39,15 @@
     anthropic: null,
     kimi: null,
     openrouter: null,
+    kimiCode: null,
+    openaiCompatible: null,
   });
   let gpuStatus = $state<GPUStatusPayload | null>(null);
   let gpuStatusLoading = $state(false);
   let gpuStatusError = $state<string | null>(null);
 
-  const providers: LLMProviderType[] = ["gemini", "openai", "anthropic", "kimi", "openrouter"];
-  const videoProviders: LLMProviderType[] = ["gemini", "kimi"];
+  const providers: LLMProviderType[] = PROVIDER_IDS;
+  const videoProviders: LLMProviderType[] = VIDEO_CAPABLE_PROVIDERS;
 
   async function loadGpuStatus(force = false) {
     gpuStatusLoading = true;
@@ -85,6 +95,13 @@
     // Clear test result when key changes
     testResults[provider] = null;
   }
+
+  function handleProviderModelChange(provider: LLMProviderType, model: string) {
+    settingsState.settings.providerModels = {
+      ...settingsState.settings.providerModels,
+      [provider]: model,
+    };
+  }
   
   async function handleSave() {
     await saveSettings();
@@ -114,6 +131,31 @@
     const providerConfig = buildProviderConfig(settingsState.settings);
     const provider = getNamingModelProvider(model);
     return getProviderConfigApiKey(providerConfig, provider) ? '' : ' (no API key)';
+  }
+
+  function addCompatibleProfile() {
+    const id = crypto.randomUUID();
+    settingsState.settings.openAICompatibleProfiles = [
+      ...settingsState.settings.openAICompatibleProfiles,
+      {
+        id,
+        name: 'Local model',
+        baseURL: 'http://localhost:11434/v1',
+        model: '',
+        apiKey: '',
+        contextTokenLimit: 128000,
+      },
+    ];
+    settingsState.settings.activeOpenAICompatibleProfileId = id;
+  }
+
+  function removeCompatibleProfile(id: string) {
+    settingsState.settings.openAICompatibleProfiles = settingsState.settings.openAICompatibleProfiles.filter(
+      (profile) => profile.id !== id
+    );
+    if (settingsState.settings.activeOpenAICompatibleProfileId === id) {
+      settingsState.settings.activeOpenAICompatibleProfileId = settingsState.settings.openAICompatibleProfiles[0]?.id ?? null;
+    }
   }
 </script>
 
@@ -162,7 +204,7 @@
                   <button 
                     class="rounded-[4px] border border-border-default bg-transparent px-2.5 py-1 text-app-xs font-medium text-text-secondary transition-all hover:border-border-strong hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
                     onclick={() => handleTestProvider(provider)}
-                    disabled={testingProvider === provider || !settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
+                    disabled={testingProvider === provider || !isProviderConfigured(settingsState.settings, provider)}
                   >
                     {#if testingProvider === provider}
                       Testing...
@@ -172,20 +214,55 @@
                   </button>
                 </div>
                 
+                {#if provider === 'openaiCompatible'}
+                  <div class="flex flex-col gap-3">
+                    {#each settingsState.settings.openAICompatibleProfiles as profile (profile.id)}
+                      <div class="rounded-md border border-border-default bg-surface-raised p-3">
+                        <div class="mb-2 flex items-center gap-2">
+                          <input type="radio" name="active-compatible-profile" checked={settingsState.settings.activeOpenAICompatibleProfileId === profile.id} onchange={() => settingsState.settings.activeOpenAICompatibleProfileId = profile.id} aria-label={`Use ${profile.name}`} />
+                          <input class="min-w-0 flex-1 rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 text-app-sm text-text-primary" bind:value={profile.name} aria-label="Profile name" placeholder="Profile name" />
+                          <button type="button" class="rounded-[4px] px-2 py-1 text-app-xs text-accent-destructive hover:bg-accent-destructive hover:text-white" onclick={() => removeCompatibleProfile(profile.id)}>Remove</button>
+                        </div>
+                        <div class="grid gap-2 sm:grid-cols-2">
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" bind:value={profile.baseURL} aria-label="Base URL" placeholder="http://localhost:11434/v1" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" bind:value={profile.model} aria-label="Model ID" placeholder="Model ID" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" type="password" bind:value={profile.apiKey} aria-label="API key" placeholder="API key (optional)" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" type="number" min="8192" step="1024" bind:value={profile.contextTokenLimit} aria-label="Context token limit" />
+                        </div>
+                      </div>
+                    {/each}
+                    <button type="button" class="self-start rounded-[4px] border border-border-default px-2.5 py-1.5 text-app-xs text-text-secondary hover:bg-surface-hover" onclick={addCompatibleProfile}>Add endpoint profile</button>
+                  </div>
+                {:else}
                 <div class="api-key-input flex items-center gap-2">
                   <input
                     class="flex-1 rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 font-mono text-app-sm text-text-primary transition-colors focus:border-accent-primary"
                     type="password"
-                    value={settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
+                    value={getApiKey(settingsState.settings, provider)}
                     oninput={(e) => handleApiKeyChange(provider, e.currentTarget.value)}
                     placeholder={`Enter ${getProviderLabel(provider)} API key`}
                   />
-                  {#if settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
+                  {#if getApiKey(settingsState.settings, provider)}
                     <span class="key-status text-app-sm text-accent-success"><Icon icon={CheckCircle2} size={12} /></span>
                   {:else}
                     <span class="key-status text-app-sm text-text-tertiary"><Icon icon={Circle} size={12} /></span>
                   {/if}
                 </div>
+                {@const models = getProviderModels(provider)}
+                {#if models.length > 0}
+                  <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" value={settingsState.settings.providerModels[provider] ?? getProviderMetadata(provider).defaultModel} onchange={(event) => handleProviderModelChange(provider, event.currentTarget.value)} aria-label={`${getProviderLabel(provider)} model`}>
+                    {#each models as model (model.id)}
+                      <option value={model.id}>{model.label}</option>
+                    {/each}
+                  </select>
+                {/if}
+                {#if provider === 'kimi'}
+                  <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" bind:value={settingsState.settings.kimiBaseURL} aria-label="Kimi Platform endpoint">
+                    <option value="https://api.moonshot.ai/v1">Global Platform</option>
+                    <option value="https://api.moonshot.cn/v1">China Platform</option>
+                  </select>
+                {/if}
+                {/if}
                 
                 {#if testResults[provider]}
                   <div
@@ -212,7 +289,7 @@
             <label for="video-provider" class="mb-2 block text-app-sm font-medium text-text-secondary">Default Video Provider:</label>
             <select id="video-provider" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.defaultVideoProvider}>
               {#each videoProviders as provider (provider)}
-                {@const apiKey = settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
+                {@const apiKey = getApiKey(settingsState.settings, provider)}
                 <option value={provider} disabled={!apiKey}>
                   {getProviderLabel(provider)} {!apiKey ? "(no API key)" : ""}
                 </option>
@@ -225,9 +302,9 @@
             <label for="text-provider" class="mb-2 block text-app-sm font-medium text-text-secondary">Default Text Provider:</label>
             <select id="text-provider" class="w-full cursor-pointer rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary transition-colors focus:border-accent-primary" bind:value={settingsState.settings.defaultTextProvider}>
               {#each providers as provider (provider)}
-                {@const apiKey = settingsState.settings[`${provider}ApiKey` as keyof typeof settingsState.settings]}
-                <option value={provider} disabled={!apiKey}>
-                  {getProviderLabel(provider)} {!apiKey ? "(no API key)" : ""}
+                {@const configured = isProviderConfigured(settingsState.settings, provider)}
+                <option value={provider} disabled={!configured}>
+                  {getProviderLabel(provider)} {!configured ? "(not configured)" : ""}
                 </option>
               {/each}
             </select>

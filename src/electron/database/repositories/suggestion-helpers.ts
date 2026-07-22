@@ -31,17 +31,39 @@ export interface SuggestionActionPayload {
     description?: string | null;
     isEssential?: boolean;
   };
+  delete?: boolean;
+  split?: {
+    segments?: Array<{
+      inPoint: number;
+      outPoint: number;
+      role?: Clip['role'];
+      description?: string | null;
+      isEssential?: boolean;
+    }>;
+    splitPoint?: number;
+    leftDescription?: string | null;
+    rightDescription?: string | null;
+  };
 }
 
 export interface SuggestionPreviewSnapshot {
   clip: {
     id: number;
+    project_id?: number;
+    asset_id?: number;
+    track_index?: number;
     in_point: number;
     out_point: number;
     role: Clip['role'];
     description: string | null;
     is_essential: boolean;
+    created_at?: string;
   };
+  createdClipIds?: number[];
+  beatIds?: number[];
+  targetSuggestionIds?: number[];
+  linkedSuggestionIds?: number[];
+  ownedCreatedClipId?: number;
 }
 
 export interface NormalizedSuggestionClipWindow {
@@ -51,6 +73,14 @@ export interface NormalizedSuggestionClipWindow {
 
 export function isUpdateSuggestion(suggestion: Suggestion): boolean {
   return suggestion.action_type === 'update_clip';
+}
+
+export function isDeleteSuggestion(suggestion: Suggestion): boolean {
+  return suggestion.action_type === 'delete_clip';
+}
+
+export function isSplitSuggestion(suggestion: Suggestion): boolean {
+  return suggestion.action_type === 'split_clip';
 }
 
 export function parseSuggestionActionPayload(
@@ -97,11 +127,15 @@ export function serializeSuggestionPreviewSnapshot(clip: Clip): string {
   return JSON.stringify({
     clip: {
       id: clip.id,
+      project_id: clip.project_id,
+      asset_id: clip.asset_id,
+      track_index: clip.track_index,
       in_point: clip.in_point,
       out_point: clip.out_point,
       role: clip.role,
       description: clip.description,
       is_essential: clip.is_essential,
+      created_at: clip.created_at,
     },
   } satisfies SuggestionPreviewSnapshot);
 }
@@ -115,12 +149,17 @@ export function normalizeSuggestionRecord(row: Suggestion): Suggestion {
     chat_message_id: typeof row.chat_message_id === 'number' && Number.isFinite(row.chat_message_id)
       ? row.chat_message_id
       : null,
-    action_type: row.action_type === 'update_clip' ? 'update_clip' : 'create_clip',
+    action_type: row.action_type === 'update_clip' || row.action_type === 'delete_clip' || row.action_type === 'split_clip'
+      ? row.action_type
+      : 'create_clip',
     target_clip_id: typeof row.target_clip_id === 'number' && Number.isFinite(row.target_clip_id)
       ? row.target_clip_id
       : null,
     action_payload_json: typeof row.action_payload_json === 'string' ? row.action_payload_json : null,
     preview_snapshot_json: typeof row.preview_snapshot_json === 'string' ? row.preview_snapshot_json : null,
+    supersedes_suggestion_id: typeof row.supersedes_suggestion_id === 'number' && Number.isFinite(row.supersedes_suggestion_id)
+      ? row.supersedes_suggestion_id
+      : null,
   };
 }
 

@@ -32,6 +32,7 @@ import {
   sanitizeThinkingMarkdown,
 } from "../../../shared/utils/assistant-content.js";
 import type { AgentChatData } from "../../../shared/types/agent-ipc.js";
+import type { ChatEntityMention } from '../../../shared/types/database.js';
 import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
@@ -126,7 +127,7 @@ function ensureStreamingSubscriptions(): void {
   }
 }
 
-function buildUserMessage(message: string): ChatMessage {
+function buildUserMessage(message: string, mentions: ChatEntityMention[]): ChatMessage {
   return {
     role: "user",
     content: message,
@@ -135,7 +136,12 @@ function buildUserMessage(message: string): ChatMessage {
     id: uuidv4(),
     databaseId: null,
     timestamp: new SvelteDate(),
+    mentions,
   };
+}
+
+function cloneMentions(mentions: ChatEntityMention[]): ChatEntityMention[] {
+  return mentions.map(({ type, id, label }) => ({ type, id, label }));
 }
 
 function updateConversationTitle(conversationId: number, title: string): void {
@@ -304,13 +310,7 @@ async function runStreamingMutation(options: {
         response.data
       );
 
-      if (options.kind === "send") {
-        if (Array.isArray(response.data.suggestions) && response.data.suggestions.length > 0) {
-          agentState.suggestions.push(...response.data.suggestions);
-        }
-      } else {
-        await refreshSuggestions(options.conversationId);
-      }
+      await refreshSuggestions(options.conversationId);
 
       return true;
     }
@@ -401,7 +401,7 @@ function getRetainedUserMessage(targetMessage: ChatMessage): ChatMessage | null 
     .find((message) => message.role === "user") ?? null;
 }
 
-export async function sendChatMessage(message: string) {
+export async function sendChatMessage(message: string, mentions: ChatEntityMention[] = []) {
   if (!message.trim() || agentState.isStreaming) {
     return false;
   }
@@ -417,6 +417,7 @@ export async function sendChatMessage(message: string) {
   }
 
   const clientRequestId = uuidv4();
+  const plainMentions = cloneMentions(mentions);
   const shouldOptimisticallyRenameConversation =
     agentState.messages.length === 0
     && agentState.conversations.some(
@@ -424,7 +425,7 @@ export async function sendChatMessage(message: string) {
         conversation.id === conversationId
         && conversation.title === DEFAULT_CONVERSATION_TITLE
     );
-  const userMessage = buildUserMessage(message);
+  const userMessage = buildUserMessage(message, plainMentions);
   const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
 
   if (shouldOptimisticallyRenameConversation) {
@@ -447,6 +448,7 @@ export async function sendChatMessage(message: string) {
       projectId: mutationContext.currentProjectId,
       conversationId,
       message,
+      mentions: plainMentions,
       provider: agentState.selectedProvider,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
@@ -522,7 +524,11 @@ export async function rerollMessage(targetMessage: ChatMessage) {
   });
 }
 
-export async function editMessage(targetMessage: ChatMessage, message: string) {
+export async function editMessage(
+  targetMessage: ChatMessage,
+  message: string,
+  mentions: ChatEntityMention[] = targetMessage.mentions
+) {
   if (
     agentState.isStreaming
     || targetMessage.role !== "user"
@@ -550,10 +556,12 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
   }
 
   const clientRequestId = uuidv4();
+  const plainMentions = cloneMentions(mentions);
   const assistantDraft = createDraftAssistantMessage(clientRequestId, new SvelteDate());
   const updatedUserMessage: ChatMessage = {
     ...targetMessage,
     content: message,
+    mentions: plainMentions,
   };
 
   return await runStreamingMutation({
@@ -577,6 +585,7 @@ export async function editMessage(targetMessage: ChatMessage, message: string) {
       conversationId,
       messageId: targetMessage.databaseId,
       message,
+      mentions: plainMentions,
       provider: agentState.selectedProvider,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,

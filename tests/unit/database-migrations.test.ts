@@ -759,7 +759,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(6);
+      expect(await getSchemaVersion(database)).toBe(8);
       expect(() => validateClipMigrationState(database)).not.toThrow();
 
       // The exact untouched create preview was deleted and the suggestion unlinked.
@@ -773,7 +773,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(6);
+      expect(await getSchemaVersion(reopened)).toBe(8);
       // Reopening must not re-reconcile and must not throw.
       expect(() => validateClipMigrationState(reopened)).not.toThrow();
       expect(
@@ -817,7 +817,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
       database.exec('DROP TRIGGER fail_clip_delete');
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(6);
+      expect(await getSchemaVersion(reopened)).toBe(8);
       expect(reopened.prepare('SELECT 1 FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
       const reconciledRow = reopened.prepare(
         'SELECT clip_id FROM suggestions WHERE id = ?'
@@ -838,7 +838,7 @@ describeNative('schema-version-3 pending preview reconciliation (bootstrap)', ()
 
     try {
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(6);
+      expect(await getSchemaVersion(database)).toBe(8);
       expect(() => validateClipMigrationState(database)).not.toThrow();
       expect(
         (database.prepare('SELECT COUNT(*) AS n FROM suggestions').get() as { n: number }).n
@@ -942,13 +942,13 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(6);
+      expect(await getSchemaVersion(database)).toBe(8);
       expect(getSuggestionRange(database, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
 
       // A second bootstrap must not shift the range again.
       closeDatabase();
       const reopened = await initializeDatabase();
-      expect(await getSchemaVersion(reopened)).toBe(6);
+      expect(await getSchemaVersion(reopened)).toBe(8);
       expect(getSuggestionRange(reopened, suggestionId)).toEqual({ in_point: 20, out_point: 50 });
     } finally {
       closeDatabase();
@@ -1295,7 +1295,7 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(6);
+      expect(await getSchemaVersion(database)).toBe(8);
       // The reconciliation recognized the preview via its legacy-global
       // interpretation and removed it before the range was normalized.
       expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
@@ -1338,7 +1338,7 @@ describeNative('schema-version-5 suggestion range normalization', () => {
       closeSqliteDatabase(builder);
 
       const database = await initializeDatabase();
-      expect(await getSchemaVersion(database)).toBe(6);
+      expect(await getSchemaVersion(database)).toBe(8);
       expect(database.prepare('SELECT 1 FROM clips WHERE id = ?').get(previewClipId)).toBeUndefined();
       const row = database.prepare(
         'SELECT in_point, out_point, clip_id, range_space FROM suggestions WHERE id = ?'

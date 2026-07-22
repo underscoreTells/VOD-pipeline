@@ -89,6 +89,18 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
       }) as BaseChatModel;
     },
   },
+  openaiCompatible: {
+    toolStrategy: new OpenAIToolStrategy('openaiCompatible'),
+    createModel(config, model) {
+      return new ChatOpenAI({
+        apiKey: config.apiKey || 'not-required',
+        model,
+        temperature: config.temperature ?? 0.2,
+        maxTokens: config.maxTokens,
+        configuration: { baseURL: config.baseURL },
+      }) as BaseChatModel;
+    },
+  },
   gemini: {
     toolStrategy: new GeminiToolStrategy(),
     createModel(config, model) {
@@ -119,7 +131,22 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         model,
         temperature: config.temperature ?? 0.7,
         maxTokens: config.maxTokens,
+        baseURL: config.baseURL,
       });
+    },
+  },
+  kimiCode: {
+    toolStrategy: new OpenAIToolStrategy('kimiCode'),
+    createModel(config, model) {
+      return new ChatOpenAI({
+        apiKey: config.apiKey,
+        model,
+        maxTokens: config.maxTokens,
+        modelKwargs: { reasoning_effort: 'high' },
+        configuration: {
+          baseURL: config.baseURL || getProviderMetadata('kimiCode').defaultBaseURL,
+        },
+      }) as BaseChatModel;
     },
   },
 };

@@ -18,16 +18,21 @@ import {
 import {
   clampToRange,
   isUpdateSuggestion,
+  isDeleteSuggestion,
+  isSplitSuggestion,
   normalizeSuggestionClipWindow,
   normalizeSuggestionRecord,
   parseSuggestionActionPayload,
   parseSuggestionPreviewSnapshot,
+  parseSuggestionPreviewSnapshotJson,
   serializeSuggestionPreviewSnapshot,
 } from './suggestion-helpers.js';
 
 export interface ApplySuggestionResult {
   success: boolean;
   clip?: Clip;
+  clips?: Clip[];
+  removedClipIds?: number[];
   error?: string;
   /** True when the failure itself marked the suggestion as rejected. */
   autoRejected?: boolean;
@@ -49,6 +54,99 @@ class SuggestionRollback extends Error {
     super(result.error ?? 'Suggestion operation failed');
     this.name = 'SuggestionRollback';
   }
+}
+
+interface ResolvedSplitSegment {
+  in_point: number;
+  out_point: number;
+  role: Clip['role'];
+  description: string | null;
+  is_essential: boolean;
+}
+
+async function validateStructuralSuggestionTarget(
+  suggestion: Suggestion,
+  chapter: Chapter
+): Promise<string | null> {
+  const snapshotClip = parseSuggestionPreviewSnapshot(suggestion)?.clip;
+  const targetClip = snapshotClip ?? (
+    suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null
+  );
+  if (!targetClip) return 'Structural suggestion target clip was not found';
+  if (targetClip.asset_id === undefined) return 'Structural suggestion snapshot is incomplete';
+
+  const chapterAssetIds = await getAssetsForChapter(chapter.id);
+  if (!chapterAssetIds.includes(targetClip.asset_id)) {
+    return `Target clip ${targetClip.id} is not linked to chapter ${chapter.id}`;
+  }
+  if (targetClip.in_point < chapter.start_time || targetClip.out_point > chapter.end_time) {
+    return `Target clip ${targetClip.id} is not contained in chapter ${chapter.id}`;
+  }
+  return null;
+}
+
+function resolveSplitSegments(
+  suggestion: Suggestion,
+  chapter: Chapter,
+  targetClip: Clip
+): { segments: ResolvedSplitSegment[] } | { error: string } {
+  const split = parseSuggestionActionPayload(suggestion)?.split;
+  if (!split) return { error: 'Missing split payload for split suggestion' };
+
+  const targetLocalIn = targetClip.in_point - chapter.start_time;
+  const targetLocalOut = targetClip.out_point - chapter.start_time;
+  const chapterDuration = chapter.end_time - chapter.start_time;
+  const rawSegments = Array.isArray(split.segments)
+    ? split.segments
+    : typeof split.splitPoint === 'number'
+      ? [
+          {
+            inPoint: targetLocalIn,
+            outPoint: split.splitPoint,
+            description: split.leftDescription,
+          },
+          {
+            inPoint: split.splitPoint,
+            outPoint: targetLocalOut,
+            description: split.rightDescription,
+          },
+        ]
+      : null;
+
+  if (!rawSegments || rawSegments.length < 2) {
+    return { error: 'A split suggestion requires at least two segments' };
+  }
+
+  const segments: ResolvedSplitSegment[] = [];
+  for (const raw of rawSegments) {
+    if (
+      !raw
+      || typeof raw.inPoint !== 'number'
+      || !Number.isFinite(raw.inPoint)
+      || typeof raw.outPoint !== 'number'
+      || !Number.isFinite(raw.outPoint)
+      || raw.outPoint <= raw.inPoint
+      || raw.inPoint < 0
+      || raw.outPoint > chapterDuration
+      || raw.inPoint < targetLocalIn
+      || raw.outPoint > targetLocalOut
+      || (segments.length > 0 && chapter.start_time + raw.inPoint < segments[segments.length - 1].out_point)
+    ) {
+      return {
+        error: 'Split segments must be ordered, non-overlapping kept ranges inside the target clip',
+      };
+    }
+
+    segments.push({
+      in_point: chapter.start_time + raw.inPoint,
+      out_point: chapter.start_time + raw.outPoint,
+      role: raw.role !== undefined ? raw.role : targetClip.role,
+      description: raw.description !== undefined ? raw.description : targetClip.description,
+      is_essential: raw.isEssential ?? targetClip.is_essential,
+    });
+  }
+
+  return { segments };
 }
 
 async function applyUpdateSuggestionToClip(
@@ -112,48 +210,128 @@ async function applyUpdateSuggestionToClip(
 }
 
 async function restoreClipFromSuggestionSnapshot(
-  suggestion: Suggestion
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
 ): Promise<ApplySuggestionResult> {
   const snapshot = parseSuggestionPreviewSnapshot(suggestion);
   const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
 
-  if (!snapshot || !targetClipId) {
+  if (!snapshot) {
     return { success: true };
   }
 
-  const targetClip = await getClip(targetClipId);
-  if (!targetClip) {
-    return { success: true };
+  let refreshed: Clip | null = null;
+  if (targetClipId) {
+    const targetClip = await getClip(targetClipId);
+    if (targetClip) {
+      const restored = await updateClip(targetClip.id, {
+        in_point: snapshot.clip.in_point,
+        out_point: snapshot.clip.out_point,
+        role: snapshot.clip.role,
+        description: snapshot.clip.description,
+        is_essential: snapshot.clip.is_essential,
+      });
+
+      if (!restored) {
+        return {
+          success: false,
+          error: `Failed to restore clip ${targetClip.id} from preview snapshot`,
+        };
+      }
+      refreshed = await getClip(targetClip.id);
+    }
   }
 
-  const restored = await updateClip(targetClip.id, {
-    in_point: snapshot.clip.in_point,
-    out_point: snapshot.clip.out_point,
-    role: snapshot.clip.role,
-    description: snapshot.clip.description,
-    is_essential: snapshot.clip.is_essential,
-  });
-
-  if (!restored) {
-    return {
-      success: false,
-      error: `Failed to restore clip ${targetClip.id} from preview snapshot`,
-    };
+  if (snapshot.ownedCreatedClipId && !preserveOwnedTarget) {
+    await deleteClip(snapshot.ownedCreatedClipId);
+    if (refreshed?.id === snapshot.ownedCreatedClipId) refreshed = null;
   }
-
-  const refreshed = await getClip(targetClip.id);
   return { success: true, clip: refreshed ?? undefined };
 }
 
+async function restoreStructuralSuggestionSnapshot(
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
+): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
+  const snapshot = parseSuggestionPreviewSnapshot(suggestion);
+  if (!snapshot) return { success: true };
+
+  for (const createdClipId of snapshot.createdClipIds ?? []) {
+    await deleteClip(createdClipId);
+  }
+
+  if (!preserveOwnedTarget && snapshot.ownedCreatedClipId === snapshot.clip.id) {
+    await deleteClip(snapshot.ownedCreatedClipId);
+    return { success: true };
+  }
+
+  let clip = await getClip(snapshot.clip.id);
+  if (clip) {
+    const restored = await updateClip(clip.id, {
+      in_point: snapshot.clip.in_point,
+      out_point: snapshot.clip.out_point,
+      role: snapshot.clip.role,
+      description: snapshot.clip.description,
+      is_essential: snapshot.clip.is_essential,
+    });
+    if (!restored) return { success: false, error: `Failed to restore clip ${clip.id}` };
+    clip = await getClip(clip.id);
+    if (!clip) return { success: false, error: `Restored clip ${snapshot.clip.id} could not be loaded` };
+  } else {
+    if (
+      snapshot.clip.project_id === undefined
+      || snapshot.clip.asset_id === undefined
+      || snapshot.clip.track_index === undefined
+    ) {
+      return { success: false, error: 'Structural suggestion snapshot is incomplete' };
+    }
+    clip = await createClip({
+      id: snapshot.clip.id,
+      project_id: snapshot.clip.project_id,
+      asset_id: snapshot.clip.asset_id,
+      track_index: snapshot.clip.track_index,
+      in_point: snapshot.clip.in_point,
+      out_point: snapshot.clip.out_point,
+      role: snapshot.clip.role,
+      description: snapshot.clip.description,
+      is_essential: snapshot.clip.is_essential,
+      created_at: snapshot.clip.created_at,
+    });
+  }
+
+  const restoreLinks = (table: 'beats' | 'suggestions', column: 'clip_id' | 'target_clip_id', ids: number[]) => {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    database.prepare(
+      `UPDATE ${table} SET ${column} = ? WHERE ${column} IS NULL AND id IN (${placeholders})`
+    ).run(clip.id, ...ids);
+  };
+  restoreLinks('beats', 'clip_id', snapshot.beatIds ?? []);
+  restoreLinks('suggestions', 'target_clip_id', snapshot.targetSuggestionIds ?? []);
+  restoreLinks('suggestions', 'clip_id', snapshot.linkedSuggestionIds ?? []);
+
+  // Older snapshots only recorded the clip itself.
+  database.prepare(
+    'UPDATE suggestions SET target_clip_id = ? WHERE id = ? AND target_clip_id IS NULL'
+  ).run(clip.id, suggestion.id);
+  return { success: true, clip };
+}
+
 async function cleanupPendingSuggestionArtifacts(
-  suggestion: Suggestion
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
 ): Promise<ApplySuggestionResult> {
   if (suggestion.status !== 'pending') {
     return { success: true };
   }
 
+  if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    return await restoreStructuralSuggestionSnapshot(suggestion, preserveOwnedTarget);
+  }
+
   if (isUpdateSuggestion(suggestion)) {
-    return await restoreClipFromSuggestionSnapshot(suggestion);
+    return await restoreClipFromSuggestionSnapshot(suggestion, preserveOwnedTarget);
   }
 
   if (suggestion.clip_id) {
@@ -247,9 +425,14 @@ export async function createSuggestion(
   suggestion: CreateSuggestionInput
 ): Promise<Suggestion> {
   const database = await getDatabase();
-  const normalizedActionType = suggestion.action_type === 'update_clip' ? 'update_clip' : 'create_clip';
+  const normalizedActionType: Suggestion['action_type'] =
+    suggestion.action_type === 'update_clip'
+    || suggestion.action_type === 'delete_clip'
+    || suggestion.action_type === 'split_clip'
+      ? suggestion.action_type
+      : 'create_clip';
   const normalizedTargetClipId =
-    normalizedActionType === 'update_clip' &&
+    normalizedActionType !== 'create_clip' &&
     typeof suggestion.target_clip_id === 'number' &&
     Number.isFinite(suggestion.target_clip_id)
       ? suggestion.target_clip_id
@@ -277,8 +460,9 @@ export async function createSuggestion(
       display_order,
       clip_id,
       range_space
+      ,supersedes_suggestion_id
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'chapter_local')`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'chapter_local', ?)`
   ).run(
     suggestion.chapter_id,
     suggestion.conversation_id ?? null,
@@ -294,7 +478,8 @@ export async function createSuggestion(
     normalizedPreviewSnapshot,
     suggestion.status,
     suggestion.display_order,
-    suggestion.clip_id ?? null
+    suggestion.clip_id ?? null,
+    suggestion.supersedes_suggestion_id ?? null
   );
 
   return {
@@ -309,6 +494,7 @@ export async function createSuggestion(
     created_at: new Date().toISOString(),
     applied_at: null,
     clip_id: suggestion.clip_id ?? null,
+    supersedes_suggestion_id: suggestion.supersedes_suggestion_id ?? null,
   };
 }
 
@@ -317,12 +503,158 @@ export async function getSuggestion(id: number): Promise<Suggestion | null> {
   const result = database.prepare(
     `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
             action_type, target_clip_id, action_payload_json, preview_snapshot_json,
-            status, display_order, created_at, applied_at, clip_id
+            status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
      FROM suggestions
      WHERE id = ?`
   ).get(id) as Suggestion | undefined;
 
   return result ? normalizeSuggestionRecord(result) : null;
+}
+
+export async function supersedeSuggestion(
+  originalId: number,
+  replacementId: number,
+  conversationId: number,
+  chapterId: number
+): Promise<boolean> {
+  if (originalId === replacementId) return false;
+  const database = await getDatabase();
+  const original = await getSuggestion(originalId);
+  const replacement = await getSuggestion(replacementId);
+  if (
+    !original
+    || !replacement
+    || original.conversation_id !== conversationId
+    || original.chapter_id !== chapterId
+    || original.status !== 'pending'
+    || replacement.supersedes_suggestion_id !== originalId
+  ) return false;
+  const originalSnapshot = parseSuggestionPreviewSnapshot(original);
+  const inheritedOwnedClipId = originalSnapshot?.ownedCreatedClipId;
+  const ownedPreviewClipId = original.action_type === 'create_clip'
+    ? original.clip_id
+    : inheritedOwnedClipId;
+  let replacementOwnsPreviewClip = ownedPreviewClipId !== null
+    && ownedPreviewClipId !== undefined
+    && replacement.target_clip_id === ownedPreviewClipId;
+  let ownershipSnapshotJson: string | null = null;
+  if (isSplitSuggestion(original) && originalSnapshot) {
+    const replacementTargetsCreatedSegment = originalSnapshot.createdClipIds?.includes(
+      replacement.target_clip_id ?? -1
+    ) ?? false;
+    const replacementTargetsSplitPreview = replacement.target_clip_id === originalSnapshot.clip.id
+      || replacementTargetsCreatedSegment;
+    const preserveOwnedTarget = replacementTargetsSplitPreview
+      && inheritedOwnedClipId === originalSnapshot.clip.id;
+    const cleanup = await cleanupPendingSuggestionArtifacts(original, preserveOwnedTarget);
+    if (!cleanup.success) return false;
+
+    if (replacementTargetsCreatedSegment) {
+      const retargetResult = database.prepare(
+        `UPDATE suggestions SET target_clip_id = ?
+         WHERE id = ? AND status = 'pending' AND supersedes_suggestion_id = ?`
+      ).run(originalSnapshot.clip.id, replacementId, originalId);
+      if (retargetResult.changes !== 1) return false;
+    }
+    replacementOwnsPreviewClip = preserveOwnedTarget;
+  } else if (!replacementOwnsPreviewClip) {
+    const cleanup = await cleanupPendingSuggestionArtifacts(original);
+    if (!cleanup.success) return false;
+  }
+
+  if (replacementOwnsPreviewClip && ownedPreviewClipId !== null && ownedPreviewClipId !== undefined) {
+    const previewClip = await getClip(ownedPreviewClipId);
+    if (!previewClip) return false;
+    const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+      serializeSuggestionPreviewSnapshot(previewClip)
+    );
+    if (!ownershipSnapshot) return false;
+    ownershipSnapshot.ownedCreatedClipId = previewClip.id;
+    ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+  }
+  const transfer = database.transaction(() => {
+    if (ownershipSnapshotJson) {
+      const replacementResult = database.prepare(
+        `UPDATE suggestions SET preview_snapshot_json = ?
+         WHERE id = ? AND status = 'pending' AND supersedes_suggestion_id = ?`
+      ).run(ownershipSnapshotJson, replacementId, originalId);
+      if (replacementResult.changes !== 1) return false;
+    }
+    const result = database.prepare(
+      `UPDATE suggestions
+       SET status = 'superseded', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL
+       WHERE id = ? AND conversation_id = ? AND chapter_id = ? AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM suggestions replacement
+            WHERE replacement.id = ? AND replacement.supersedes_suggestion_id = suggestions.id
+          )`
+    ).run(originalId, conversationId, chapterId, replacementId);
+    return result.changes === 1;
+  });
+  return transfer();
+}
+
+export async function cleanupPendingSuggestionsForMessages(messageIds: number[]): Promise<void> {
+  if (messageIds.length === 0) return;
+  const database = await getDatabase();
+  const placeholders = messageIds.map(() => '?').join(', ');
+  const suggestions = (database.prepare(
+    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
+            action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+            status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
+     FROM suggestions
+     WHERE chat_message_id IN (${placeholders}) AND status IN ('pending', 'rejected', 'superseded')
+     ORDER BY id DESC`
+  ).all(...messageIds) as Suggestion[]).map(normalizeSuggestionRecord);
+
+  for (const staleSuggestion of suggestions) {
+    const suggestion = await getSuggestion(staleSuggestion.id);
+    if (!suggestion) continue;
+
+    const ancestor = suggestion.supersedes_suggestion_id
+      ? await getSuggestion(suggestion.supersedes_suggestion_id)
+      : null;
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
+    const transferOwnership = ownedCreatedClipId !== undefined
+      && ancestor?.status === 'superseded'
+      && ancestor.action_type !== 'create_clip';
+    const cleanup = suggestion.status === 'rejected' && transferOwnership
+      ? await restoreStructuralSuggestionSnapshot(suggestion, true)
+      : await cleanupPendingSuggestionArtifacts(suggestion, transferOwnership);
+    if (!cleanup.success) {
+      throw new Error(cleanup.error || `Failed to clean up suggestion ${suggestion.id}`);
+    }
+    if (ancestor) {
+      let ownershipSnapshotJson: string | null = null;
+      if (transferOwnership) {
+        const ownedClip = cleanup.clip ?? await getClip(ownedCreatedClipId);
+        if (!ownedClip) {
+          throw new Error(`Failed to transfer preview ownership to suggestion ${ancestor.id}`);
+        }
+        const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+          serializeSuggestionPreviewSnapshot(ownedClip)
+        );
+        if (!ownershipSnapshot) {
+          throw new Error(`Failed to snapshot preview ownership for suggestion ${ancestor.id}`);
+        }
+        ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+        ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+      }
+      database.prepare(
+        `UPDATE suggestions
+         SET status = 'pending',
+             target_clip_id = CASE WHEN ? IS NOT NULL THEN ? ELSE target_clip_id END,
+             preview_snapshot_json = CASE WHEN ? IS NOT NULL THEN ? ELSE preview_snapshot_json END
+         WHERE id = ? AND status = 'superseded'`
+      ).run(
+        ownershipSnapshotJson,
+        ownedCreatedClipId ?? null,
+        ownershipSnapshotJson,
+        ownershipSnapshotJson,
+        ancestor.id
+      );
+    }
+  }
 }
 
 export async function getSuggestionsByChapter(
@@ -332,7 +664,7 @@ export async function getSuggestionsByChapter(
   const database = await getDatabase();
   let query = `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
                       action_type, target_clip_id, action_payload_json, preview_snapshot_json,
-                      status, display_order, created_at, applied_at, clip_id
+                       status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
                FROM suggestions
                WHERE chapter_id = ?`;
   const params: unknown[] = [chapterId];
@@ -355,7 +687,7 @@ export async function getSuggestionsByConversation(
   const database = await getDatabase();
   let query = `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
                       action_type, target_clip_id, action_payload_json, preview_snapshot_json,
-                      status, display_order, created_at, applied_at, clip_id
+                       status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
                FROM suggestions
                WHERE conversation_id = ?`;
   const params: unknown[] = [conversationId];
@@ -398,6 +730,78 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
     return { success: false, error: 'Suggestion is not pending' };
   }
 
+  if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const chapter = await getChapter(suggestion.chapter_id);
+    if (!chapter) return { success: false, error: 'Chapter not found for this suggestion' };
+    const targetError = await validateStructuralSuggestionTarget(suggestion, chapter);
+    if (targetError) return { success: false, error: targetError };
+    if (suggestion.preview_snapshot_json) {
+      const snapshot = parseSuggestionPreviewSnapshot(suggestion);
+      if (!snapshot) {
+        return { success: false, error: 'Structural suggestion preview snapshot is invalid' };
+      }
+      const snapshotClipId = snapshot?.clip.id;
+      const ownedCreatedClipId = snapshot?.ownedCreatedClipId;
+      const ownershipOnly = snapshotClipId !== undefined
+        && ownedCreatedClipId === snapshotClipId
+        && suggestion.clip_id === null
+        && await getClip(snapshotClipId) !== null;
+      if (!ownershipOnly) {
+        return { success: true, clip: await getClip(snapshot.clip.id) ?? undefined };
+      }
+    }
+    const targetClip = suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null;
+    if (!targetClip) return { success: false, error: 'Structural suggestion target clip was not found' };
+    const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
+    if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (existingSnapshot?.ownedCreatedClipId) {
+      snapshot.ownedCreatedClipId = existingSnapshot.ownedCreatedClipId;
+    }
+    if (isDeleteSuggestion(suggestion)) {
+      snapshot.beatIds = (database.prepare(
+        'SELECT id FROM beats WHERE clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
+      snapshot.targetSuggestionIds = (database.prepare(
+        'SELECT id FROM suggestions WHERE target_clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
+      snapshot.linkedSuggestionIds = (database.prepare(
+        'SELECT id FROM suggestions WHERE clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
+      if (!await deleteClip(targetClip.id)) return { success: false, error: `Failed to delete clip ${targetClip.id}` };
+      database.prepare('UPDATE suggestions SET preview_snapshot_json = ?, clip_id = NULL WHERE id = ?')
+        .run(JSON.stringify(snapshot), id);
+      return { success: true };
+    }
+    const resolved = resolveSplitSegments(suggestion, chapter, targetClip);
+    if ('error' in resolved) return { success: false, error: resolved.error };
+    const [firstSegment, ...remainingSegments] = resolved.segments;
+    if (!await updateClip(targetClip.id, {
+      in_point: firstSegment.in_point,
+      out_point: firstSegment.out_point,
+      role: firstSegment.role,
+      description: firstSegment.description,
+      is_essential: firstSegment.is_essential,
+    })) return { success: false, error: `Failed to split clip ${targetClip.id}` };
+    snapshot.createdClipIds = [];
+    for (const segment of remainingSegments) {
+      const createdClip = await createClip({
+        project_id: targetClip.project_id,
+        asset_id: targetClip.asset_id,
+        track_index: targetClip.track_index,
+        in_point: segment.in_point,
+        out_point: segment.out_point,
+        role: segment.role,
+        description: segment.description,
+        is_essential: segment.is_essential,
+      });
+      snapshot.createdClipIds.push(createdClip.id);
+    }
+    database.prepare('UPDATE suggestions SET preview_snapshot_json = ?, clip_id = ? WHERE id = ?')
+      .run(JSON.stringify(snapshot), targetClip.id, id);
+    return { success: true, clip: await getClip(targetClip.id) ?? undefined };
+  }
+
   if (isUpdateSuggestion(suggestion)) {
     const chapter = await getChapter(suggestion.chapter_id);
     if (!chapter) {
@@ -414,11 +818,17 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
       return { success: false, error: `Target clip ${targetClipId} not found` };
     }
 
-    if (suggestion.preview_snapshot_json) {
+    if (suggestion.preview_snapshot_json && suggestion.clip_id) {
       return { success: true, clip: targetClip };
     }
 
-    const snapshotJson = serializeSuggestionPreviewSnapshot(targetClip);
+    const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
+    if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (existingSnapshot?.ownedCreatedClipId) {
+      snapshot.ownedCreatedClipId = existingSnapshot.ownedCreatedClipId;
+    }
+    const snapshotJson = JSON.stringify(snapshot);
     const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
     if (!applyResult.success || !applyResult.clip) {
       return applyResult;
@@ -498,6 +908,14 @@ async function cancelSuggestionPreviewTx(
     return { success: false, error: 'Suggestion is not pending' };
   }
 
+  if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const restoreResult = await restoreStructuralSuggestionSnapshot(suggestion);
+    if (!restoreResult.success) return restoreResult;
+    database.prepare('UPDATE suggestions SET clip_id = NULL, preview_snapshot_json = NULL, applied_at = NULL WHERE id = ?')
+      .run(id);
+    return { success: true, clip: restoreResult.clip };
+  }
+
   if (isUpdateSuggestion(suggestion)) {
     const restoreResult = await restoreClipFromSuggestionSnapshot(suggestion);
     if (!restoreResult.success) {
@@ -566,6 +984,42 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
     return { success: false, error: 'Chapter not found for this suggestion' };
   }
 
+  if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const targetError = await validateStructuralSuggestionTarget(suggestion, chapter);
+    if (targetError) return { success: false, error: targetError };
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    const snapshotClipId = existingSnapshot?.clip.id;
+    const ownedCreatedClipId = existingSnapshot?.ownedCreatedClipId;
+    const ownershipOnly = snapshotClipId !== undefined
+      && ownedCreatedClipId === snapshotClipId
+      && suggestion.clip_id === null
+      && await getClip(snapshotClipId) !== null;
+    if (!existingSnapshot || ownershipOnly) {
+      const previewResult = await previewSuggestionWithClipTx(id);
+      if (!previewResult.success) return previewResult;
+    }
+    const refreshed = await getSuggestion(id);
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'applied', applied_at = ? WHERE id = ?"
+    ).run(new Date().toISOString(), id);
+    if (updateResult.changes === 0) {
+      throw new SuggestionRollback({ success: false, error: 'Failed to update suggestion status' });
+    }
+    const snapshot = refreshed ? parseSuggestionPreviewSnapshot(refreshed) : null;
+    if (!snapshot) return { success: true };
+    if (isDeleteSuggestion(suggestion)) {
+      return { success: true, removedClipIds: [snapshot.clip.id] };
+    }
+    const clips = (await Promise.all(
+      [...new Set([snapshot.clip.id, ...(snapshot.createdClipIds ?? [])])].map((clipId) => getClip(clipId))
+    )).filter((clip): clip is Clip => clip !== null);
+    return {
+      success: true,
+      clip: clips.find((clip) => clip.id === snapshot.clip.id),
+      clips,
+    };
+  }
+
   if (isUpdateSuggestion(suggestion)) {
     const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
     if (!targetClipId) {
@@ -578,7 +1032,8 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
     }
 
     let updatedClip = targetClip;
-    if (!suggestion.preview_snapshot_json) {
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (!existingSnapshot || (existingSnapshot.ownedCreatedClipId && !suggestion.clip_id)) {
       const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
       if (!applyResult.success || !applyResult.clip) {
         return applyResult;
@@ -586,9 +1041,12 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
       updatedClip = applyResult.clip;
     }
 
+    const retainedOwnershipSnapshot = existingSnapshot?.ownedCreatedClipId
+      ? suggestion.preview_snapshot_json
+      : null;
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(new Date().toISOString(), updatedClip.id, id);
+      "UPDATE suggestions SET status = 'applied', applied_at = ?, clip_id = ?, preview_snapshot_json = ? WHERE id = ?"
+    ).run(new Date().toISOString(), updatedClip.id, retainedOwnershipSnapshot, id);
 
     if (updateResult.changes === 0) {
       // Roll back the clip update applied above.
@@ -650,14 +1108,17 @@ async function rejectSuggestionTx(id: number): Promise<boolean> {
     return false;
   }
 
+  const retainedOwnershipSnapshot = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId
+    ? suggestion.preview_snapshot_json
+    : null;
   const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
   if (!cleanupResult.success) {
     return false;
   }
 
   const result = database.prepare(
-    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-  ).run(id);
+    "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+  ).run(retainedOwnershipSnapshot, id);
 
   return result.changes > 0;
 }
@@ -757,6 +1218,8 @@ export interface SuggestionBatchItemResult {
   suggestionId: number;
   success: boolean;
   clip?: Clip;
+  clips?: Clip[];
+  removedClipIds?: number[];
   error?: string;
   /** True when the failure itself marked the suggestion as rejected. */
   autoRejected?: boolean;
@@ -835,7 +1298,7 @@ export async function applySuggestionsBatch(
     return await withTransaction(async () => {
       for (const id of suggestionIds) {
         const result = await applySuggestionWithClipTx(id);
-        if (!result.success || !result.clip) {
+        if (!result.success) {
           throw new SuggestionBatchAbort(
             id,
             result.error ?? 'Suggestion operation failed',
@@ -846,7 +1309,9 @@ export async function applySuggestionsBatch(
         collected.push({
           suggestionId: id,
           success: true,
-          clip: result.clip,
+          ...(result.clip ? { clip: result.clip } : {}),
+          ...(result.clips ? { clips: result.clips } : {}),
+          ...(result.removedClipIds ? { removedClipIds: result.removedClipIds } : {}),
         });
       }
       return {
@@ -981,6 +1446,9 @@ async function rejectOrRestoreSuggestionTx(
     if (suggestion.status !== 'pending') {
       return { success: false, error: 'Suggestion is not pending' };
     }
+    const retainedOwnershipSnapshot = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId
+      ? suggestion.preview_snapshot_json
+      : null;
     const cleanupResult = await cleanupPendingSuggestionArtifacts(suggestion);
     if (!cleanupResult.success) {
       return {
@@ -989,8 +1457,8 @@ async function rejectOrRestoreSuggestionTx(
       };
     }
     const result = database.prepare(
-      "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(id);
+      "UPDATE suggestions SET status = 'rejected', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(retainedOwnershipSnapshot, id);
     if (result.changes === 0) {
       return { success: false, error: 'Failed to update suggestion status' };
     }
@@ -1001,13 +1469,19 @@ async function rejectOrRestoreSuggestionTx(
   if (suggestion.status !== 'rejected') {
     return { success: false, error: 'Suggestion is not rejected' };
   }
+  let restoredClip: Clip | undefined;
+  if (parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId) {
+    const restored = await restoreStructuralSuggestionSnapshot(suggestion, true);
+    if (!restored.success) return restored;
+    restoredClip = restored.clip;
+  }
   const result = database.prepare(
     "UPDATE suggestions SET status = 'pending', applied_at = NULL WHERE id = ?"
   ).run(id);
   if (result.changes === 0) {
     return { success: false, error: 'Failed to restore suggestion status' };
   }
-  return { success: true };
+  return { success: true, clip: restoredClip };
 }
 /**
  * Atomically revert a batch of applied suggestions. For `create_clip`
@@ -1028,7 +1502,7 @@ export async function revertAppliedSuggestionsBatch(
   const collected: SuggestionBatchItemResult[] = [];
   try {
     return await withTransaction(async () => {
-      for (const item of items) {
+      for (const item of [...items].reverse()) {
         const outcome = await revertAppliedSuggestionTx(item);
         if (!outcome.success) {
           throw new SuggestionBatchAbort(
@@ -1084,6 +1558,30 @@ async function revertAppliedSuggestionTx(
     return { success: false, error: 'Suggestion is not applied' };
   }
 
+  if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
+    const restored = await restoreStructuralSuggestionSnapshot(suggestion, true);
+    if (!restored.success) return restored;
+    let ownershipSnapshotJson: string | null = null;
+    if (ownedCreatedClipId && restored.clip) {
+      const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+        serializeSuggestionPreviewSnapshot(restored.clip)
+      );
+      if (!ownershipSnapshot) {
+        return { success: false, error: 'Failed to preserve structural preview ownership' };
+      }
+      ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+      ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+    }
+    const updateResult = database.prepare(
+      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(ownershipSnapshotJson, item.suggestionId);
+    if (updateResult.changes === 0) {
+      throw new SuggestionRollback({ success: false, error: 'Failed to update suggestion status' });
+    }
+    return restored;
+  }
+
   if (isUpdateSuggestion(suggestion)) {
     const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
     if (!targetClipId) {
@@ -1110,9 +1608,21 @@ async function revertAppliedSuggestionTx(
       return { success: false, error: `Failed to restore clip ${targetClip.id}` };
     }
     const refreshed = await getClip(targetClip.id);
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
+    let ownershipSnapshotJson: string | null = null;
+    if (ownedCreatedClipId && refreshed) {
+      const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+        serializeSuggestionPreviewSnapshot(refreshed)
+      );
+      if (!ownershipSnapshot) {
+        return { success: false, error: 'Failed to preserve update preview ownership' };
+      }
+      ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+      ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+    }
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(item.suggestionId);
+      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(ownershipSnapshotJson, item.suggestionId);
     if (updateResult.changes === 0) {
       throw new SuggestionRollback({
         success: false,

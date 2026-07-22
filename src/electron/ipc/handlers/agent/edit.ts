@@ -13,6 +13,7 @@ import {
   deriveConversationTitle,
 } from '../../../../shared/utils/conversation-title.js';
 import { toNumberOrNull } from '../../handler-support.js';
+import { parseChatMentions, serializeChatMentions } from '../../../../shared/utils/chat-mentions.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
@@ -28,6 +29,7 @@ import {
   runConversationTurn,
   sanitizeConversationHistory,
   syncConversationProvider,
+  validateConversationMentions,
 } from './shared.js';
 
 export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgentBridge>): void {
@@ -41,6 +43,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
       playheadTime,
       proxyOptions,
       agentConfig,
+      mentions,
     } = parseConversationTurnPayload(payload);
     const messageId = toNumberOrNull(payload?.messageId);
     const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
@@ -87,6 +90,18 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
           IPC_ERROR_CODES.VALIDATION_ERROR
         );
       }
+      const historicalSuggestionIds = new Set(
+        parseChatMentions(targetMessage.mentions_json)
+          .filter((mention) => mention.type === 'suggestion')
+          .map((mention) => mention.id)
+      );
+      const validatedMentions = await validateConversationMentions(
+        mentions,
+        normalizedProjectId,
+        chapter.id,
+        syncedConversation.id,
+        historicalSuggestionIds
+      );
 
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === targetMessage.id);
@@ -117,7 +132,8 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
       const updated = await updateUserChatMessageContent(
         syncedConversation.id,
         targetMessage.id,
-        message
+        message,
+        serializeChatMentions(validatedMentions)
       );
       if (!updated) {
         throw new AgentHandlerError(
@@ -133,13 +149,16 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
 
       const updatedMessages = existingMessages
         .slice(0, targetIndex + 1)
-        .map((item) => item.id === targetMessage.id ? { ...item, content: message } : item);
+        .map((item) => item.id === targetMessage.id
+          ? { ...item, content: message, mentions_json: serializeChatMentions(validatedMentions) }
+          : item);
       const normalized = await runConversationTurn(agentBridge, {
         agentConfig,
         chapter,
         clientRequestId,
         conversation: syncedConversation,
         conversationHistory: sanitizeConversationHistory(updatedMessages),
+        mentions: validatedMentions,
         effectiveProvider,
         playheadTime,
         projectId: normalizedProjectId,
