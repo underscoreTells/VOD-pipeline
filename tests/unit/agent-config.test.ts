@@ -81,6 +81,31 @@ describe("Agent Config", () => {
 
     await expect(loadConfig()).rejects.toThrow("No API keys found");
   });
+
+  it("should preserve environment base URLs beneath IPC config", async () => {
+    process.env.OPENROUTER_BASE_URL = "https://proxy.example/v1";
+    setIpcConfig({
+      defaultProvider: "openrouter",
+      providers: { openrouter: "ipc-openrouter-key" },
+    });
+
+    const config = await loadConfig();
+
+    expect(config.baseURLs?.openrouter).toBe("https://proxy.example/v1");
+  });
+
+  it("should prefer explicit IPC base URLs over environment values", async () => {
+    process.env.OPENROUTER_BASE_URL = "https://proxy.example/v1";
+    setIpcConfig({
+      defaultProvider: "openrouter",
+      providers: { openrouter: "ipc-openrouter-key" },
+      baseURLs: { openrouter: "https://ipc.example/v1" },
+    });
+
+    const config = await loadConfig();
+
+    expect(config.baseURLs?.openrouter).toBe("https://ipc.example/v1");
+  });
 });
 
 describe("getProviderLLMConfig", () => {

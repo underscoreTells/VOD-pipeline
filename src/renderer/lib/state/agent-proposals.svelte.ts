@@ -198,6 +198,9 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   for (const suggestionId of suggestionIds) {
     const suggestion = agentState.suggestions.find((item) => item.id === suggestionId);
     if (!suggestion || suggestion.status !== 'pending') return 'A suggested cut is no longer pending.';
+    if (suggestion.target_clip_id && removedTargetIds.has(suggestion.target_clip_id)) {
+      return 'A suggested cut targets a clip deleted earlier in this batch.';
+    }
     if (suggestion.action_type === 'delete_clip') {
       if (!suggestion.target_clip_id) return 'A delete suggestion has no target clip.';
       removedTargetIds.add(suggestion.target_clip_id);

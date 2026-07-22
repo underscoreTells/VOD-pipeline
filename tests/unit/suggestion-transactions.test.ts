@@ -231,8 +231,35 @@ describeTx("suggestion transactions (withTransaction)", () => {
 
       expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
       expect(db.prepare('SELECT id FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
+      expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({ target_clip_id: null });
       expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
       expect(db.prepare('SELECT description FROM clips WHERE id = ?').get(clipId)).toEqual({ description: 'Original' });
+      expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({ target_clip_id: clipId });
+      expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
+    });
+
+    it('relinks a reverted deletion so the pending suggestion can be applied again', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, description, is_essential)
+         VALUES (?, ?, 0, 10, 20, 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Delete Original', reasoning: 'Pacing',
+        provider: 'gemini', action_type: 'delete_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ delete: true }), preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect((await revertAppliedSuggestionsBatch([{ suggestionId: suggestion.id }])).success).toBe(true);
+      expect(db.prepare('SELECT target_clip_id, status FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({
+        target_clip_id: clipId,
+        status: 'pending',
+      });
+      expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
     });
 
     it('previews, applies, and reverts an atomic clip split', async () => {

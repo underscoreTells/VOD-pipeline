@@ -17,6 +17,16 @@ export function setIpcConfig(config: Partial<AgentConfig> | null): void {
   ipcConfig = config;
 }
 
+function getEnvironmentBaseURLs(): AgentConfig['baseURLs'] {
+  const baseURLs: AgentConfig['baseURLs'] = {};
+  for (const id of PROVIDER_IDS) {
+    const envVar = getProviderMetadata(id).baseURLEnvVar;
+    const value = envVar ? process.env[envVar] : undefined;
+    if (value) baseURLs[id] = value;
+  }
+  return baseURLs;
+}
+
 export async function loadConfig(): Promise<AgentConfig> {
   try {
     if (ipcConfig) {
@@ -26,7 +36,10 @@ export async function loadConfig(): Promise<AgentConfig> {
         temperature: ipcConfig.temperature ?? 0.7,
         maxTokens: ipcConfig.maxTokens,
         models: ipcConfig.models ?? {},
-        baseURLs: ipcConfig.baseURLs ?? {},
+        baseURLs: {
+          ...getEnvironmentBaseURLs(),
+          ...ipcConfig.baseURLs,
+        },
       };
 
       if (Object.keys(config.providers).length === 0) {
@@ -64,10 +77,7 @@ export async function loadConfig(): Promise<AgentConfig> {
     temperature: 0.7,
     maxTokens: undefined,
     models: {},
-    baseURLs: Object.fromEntries(
-      PROVIDER_IDS.map((id) => [id, process.env[getProviderMetadata(id).baseURLEnvVar ?? '']])
-        .filter(([, value]) => Boolean(value))
-    ) as AgentConfig['baseURLs'],
+    baseURLs: getEnvironmentBaseURLs(),
   };
 }
 

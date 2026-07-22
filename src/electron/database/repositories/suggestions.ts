@@ -223,6 +223,7 @@ async function restoreClipFromSuggestionSnapshot(
 async function restoreStructuralSuggestionSnapshot(
   suggestion: Suggestion
 ): Promise<ApplySuggestionResult> {
+  const database = await getDatabase();
   const snapshot = parseSuggestionPreviewSnapshot(suggestion);
   if (!snapshot) return { success: true };
 
@@ -230,39 +231,47 @@ async function restoreStructuralSuggestionSnapshot(
     await deleteClip(createdClipId);
   }
 
-  const existing = await getClip(snapshot.clip.id);
-  if (existing) {
-    const restored = await updateClip(existing.id, {
+  let clip = await getClip(snapshot.clip.id);
+  if (clip) {
+    const restored = await updateClip(clip.id, {
       in_point: snapshot.clip.in_point,
       out_point: snapshot.clip.out_point,
       role: snapshot.clip.role,
       description: snapshot.clip.description,
       is_essential: snapshot.clip.is_essential,
     });
-    return restored
-      ? { success: true, clip: await getClip(existing.id) ?? undefined }
-      : { success: false, error: `Failed to restore clip ${existing.id}` };
+    if (!restored) return { success: false, error: `Failed to restore clip ${clip.id}` };
+    clip = await getClip(clip.id);
+    if (!clip) return { success: false, error: `Restored clip ${snapshot.clip.id} could not be loaded` };
+  } else {
+    if (
+      snapshot.clip.project_id === undefined
+      || snapshot.clip.asset_id === undefined
+      || snapshot.clip.track_index === undefined
+    ) {
+      return { success: false, error: 'Structural suggestion snapshot is incomplete' };
+    }
+    clip = await createClip({
+      id: snapshot.clip.id,
+      project_id: snapshot.clip.project_id,
+      asset_id: snapshot.clip.asset_id,
+      track_index: snapshot.clip.track_index,
+      in_point: snapshot.clip.in_point,
+      out_point: snapshot.clip.out_point,
+      role: snapshot.clip.role,
+      description: snapshot.clip.description,
+      is_essential: snapshot.clip.is_essential,
+      created_at: snapshot.clip.created_at,
+    });
   }
 
-  if (
-    snapshot.clip.project_id === undefined
-    || snapshot.clip.asset_id === undefined
-    || snapshot.clip.track_index === undefined
-  ) {
-    return { success: false, error: 'Structural suggestion snapshot is incomplete' };
+  // Deleting a preview target clears this foreign key via ON DELETE SET NULL.
+  const relinked = database.prepare(
+    'UPDATE suggestions SET target_clip_id = ? WHERE id = ?'
+  ).run(clip.id, suggestion.id);
+  if (relinked.changes === 0) {
+    return { success: false, error: `Failed to relink suggestion ${suggestion.id} to clip ${clip.id}` };
   }
-  const clip = await createClip({
-    id: snapshot.clip.id,
-    project_id: snapshot.clip.project_id,
-    asset_id: snapshot.clip.asset_id,
-    track_index: snapshot.clip.track_index,
-    in_point: snapshot.clip.in_point,
-    out_point: snapshot.clip.out_point,
-    role: snapshot.clip.role,
-    description: snapshot.clip.description,
-    is_essential: snapshot.clip.is_essential,
-    created_at: snapshot.clip.created_at,
-  });
   return { success: true, clip };
 }
 

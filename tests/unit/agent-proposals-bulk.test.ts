@@ -132,6 +132,7 @@ describe("agent proposal bulk actions", () => {
     });
 
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    const { chaptersState } = await import("../../src/renderer/lib/state/chapters.svelte.js");
     agentState.currentProjectId = "1";
     agentState.currentChapterId = "2";
     agentState.selectedConversationId = 12;
@@ -143,6 +144,18 @@ describe("agent proposal bulk actions", () => {
     agentState.groundingReadyVideoAssetCount = 1;
     agentState.groundingErrorDetail = null;
     agentState.error = null;
+    chaptersState.chapters = [{
+      id: 2,
+      project_id: 1,
+      title: "Chapter",
+      start_time: 0,
+      end_time: 100,
+      display_order: 0,
+      rough_cut_completed_at: null,
+      created_at: "2026-04-18T12:00:00.000Z",
+    }];
+    chaptersState.selectedChapterId = 2;
+    chaptersState.chapterAssets = new Map([[2, [11]]]);
   });
 
   it("reviews pending suggestions as renderer-only ghosts without preview IPC", async () => {
@@ -203,5 +216,45 @@ describe("agent proposal bulk actions", () => {
     expect(agentState.suggestions[0]?.status).toBe("rejected");
     expect(agentState.suggestions[1]?.status).toBe("rejected");
     expect(agentState.suggestions[1]?.clip_id).toBeNull();
+  });
+
+  it("rejects a later action targeting a clip deleted earlier in the batch", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [targetClip];
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [
+      createSuggestion(1, {
+        action_type: "delete_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ delete: true }),
+      }),
+      createSuggestion(2, {
+        action_type: "update_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ update: { outPoint: 18 } }),
+      }),
+    ];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const result = await applyAllSuggestions();
+
+    expect(result).toMatchObject({
+      success: false,
+      appliedCount: 0,
+      total: 2,
+      error: "A suggested cut targets a clip deleted earlier in this batch.",
+    });
+    expect(agentApiMocks.applySuggestionBatch).not.toHaveBeenCalled();
   });
 });
