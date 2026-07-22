@@ -60,6 +60,9 @@ export interface SuggestionPreviewSnapshot {
     created_at?: string;
   };
   createdClipIds?: number[];
+  beatIds?: number[];
+  targetSuggestionIds?: number[];
+  linkedSuggestionIds?: number[];
 }
 
 export interface NormalizedSuggestionClipWindow {

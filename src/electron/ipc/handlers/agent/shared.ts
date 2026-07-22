@@ -424,8 +424,12 @@ function summarizeSuggestions(suggestions: Suggestion[]): string {
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'
         ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`
-        : 'keep window';
-      return `- ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
+        : suggestion.action_type === 'delete_clip'
+          ? `delete clip #${suggestion.target_clip_id ?? 'unknown'}`
+          : suggestion.action_type === 'split_clip'
+            ? `split clip #${suggestion.target_clip_id ?? 'unknown'}`
+            : 'keep window';
+      return `- suggestion#${suggestion.id} action=${suggestion.action_type} ${prefix} ${suggestion.in_point.toFixed(2)}-${suggestion.out_point.toFixed(
         2
       )}s status=${suggestion.status} desc=${suggestion.description ?? ''}`.trim();
     })

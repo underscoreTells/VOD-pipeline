@@ -59,6 +59,7 @@
   let chatPanelElement = $state<HTMLDivElement | null>(null);
   let chatContainer = $state<HTMLDivElement | null>(null);
   let messageInput = $state<HTMLTextAreaElement | null>(null);
+  let messageCursor = $state(0);
   let suggestionsWrapper = $state<HTMLDivElement | null>(null);
   let suggestionsPanel = $state<HTMLDivElement | null>(null);
   let showSuggestions = $state(true);
@@ -150,7 +151,7 @@
       (candidate) => !composerMentions.some((mention) => mention.type === candidate.type && mention.id === candidate.id)
     );
   });
-  let activeMentionQuery = $derived(getComposerMentionQuery(message, messageInput?.selectionStart ?? message.length));
+  let activeMentionQuery = $derived(getComposerMentionQuery(message, messageCursor));
   let visibleMentionCandidates = $derived(
     activeMentionQuery
       ? filterComposerMentionCandidates(mentionCandidates, activeMentionQuery.query)
@@ -222,6 +223,7 @@
     if (composerKey === previousComposerKey) return;
     previousComposerKey = composerKey;
     message = agentState.composerDrafts[composerKey] ?? '';
+    messageCursor = message.length;
     composerMentions = (agentState.composerMentionDrafts[composerKey] ?? []).map(
       (mention) => ({ ...mention })
     );
@@ -363,6 +365,7 @@
     const msg = message;
     const mentions = composerMentions;
     message = "";
+    messageCursor = 0;
     composerMentions = [];
     agentState.composerDrafts[composerKey] = '';
     agentState.composerMentionDrafts[composerKey] = [];
@@ -394,6 +397,7 @@
         if (query) {
           const removed = removeComposerMentionQuery(message, query);
           message = removed.message;
+          messageCursor = removed.cursor;
         }
         return;
       }
@@ -408,10 +412,17 @@
     }
   }
 
+  function trackMessageCursor(event: Event) {
+    messageCursor = event.currentTarget instanceof HTMLTextAreaElement
+      ? event.currentTarget.selectionStart
+      : message.length;
+  }
+
   function selectMention(candidate: ComposerMentionCandidate | undefined) {
     if (!candidate || !activeMentionQuery) return;
     const removed = removeComposerMentionQuery(message, activeMentionQuery);
     message = removed.message;
+    messageCursor = removed.cursor;
     composerMentions = [...composerMentions, {
       type: candidate.type,
       id: candidate.id,
@@ -1102,7 +1113,10 @@
             bind:this={messageInput}
             placeholder={composerPlaceholder}
             disabled={isComposerDisabled}
-            oninput={() => { mentionMenuIndex = 0; autoResizeMessageInput(); }}
+            oninput={(event) => { mentionMenuIndex = 0; trackMessageCursor(event); autoResizeMessageInput(); }}
+            onselect={trackMessageCursor}
+            onclick={trackMessageCursor}
+            onkeyup={trackMessageCursor}
             onkeydown={handleInputKeydown}
           ></textarea>
         </div>

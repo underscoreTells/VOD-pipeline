@@ -339,7 +339,7 @@ describe("agent chat handler", () => {
       expect.any(Array),
       expect.objectContaining({
         suggestionSummary: expect.stringContaining(
-          "keep window 12.00-18.00s status=pending desc=Keep the payoff reaction"
+          "suggestion#7 action=create_clip keep window 12.00-18.00s status=pending desc=Keep the payoff reaction"
         ),
       }),
       expect.anything()

@@ -265,13 +265,21 @@ async function restoreStructuralSuggestionSnapshot(
     });
   }
 
-  // Deleting a preview target clears this foreign key via ON DELETE SET NULL.
-  const relinked = database.prepare(
-    'UPDATE suggestions SET target_clip_id = ? WHERE id = ?'
+  const restoreLinks = (table: 'beats' | 'suggestions', column: 'clip_id' | 'target_clip_id', ids: number[]) => {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(', ');
+    database.prepare(
+      `UPDATE ${table} SET ${column} = ? WHERE ${column} IS NULL AND id IN (${placeholders})`
+    ).run(clip.id, ...ids);
+  };
+  restoreLinks('beats', 'clip_id', snapshot.beatIds ?? []);
+  restoreLinks('suggestions', 'target_clip_id', snapshot.targetSuggestionIds ?? []);
+  restoreLinks('suggestions', 'clip_id', snapshot.linkedSuggestionIds ?? []);
+
+  // Older snapshots only recorded the clip itself.
+  database.prepare(
+    'UPDATE suggestions SET target_clip_id = ? WHERE id = ? AND target_clip_id IS NULL'
   ).run(clip.id, suggestion.id);
-  if (relinked.changes === 0) {
-    return { success: false, error: `Failed to relink suggestion ${suggestion.id} to clip ${clip.id}` };
-  }
   return { success: true, clip };
 }
 
@@ -584,6 +592,15 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
     const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
     if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
     if (isDeleteSuggestion(suggestion)) {
+      snapshot.beatIds = (database.prepare(
+        'SELECT id FROM beats WHERE clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
+      snapshot.targetSuggestionIds = (database.prepare(
+        'SELECT id FROM suggestions WHERE target_clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
+      snapshot.linkedSuggestionIds = (database.prepare(
+        'SELECT id FROM suggestions WHERE clip_id = ?'
+      ).all(targetClip.id) as Array<{ id: number }>).map(({ id }) => id);
       if (!await deleteClip(targetClip.id)) return { success: false, error: `Failed to delete clip ${targetClip.id}` };
       database.prepare('UPDATE suggestions SET preview_snapshot_json = ?, clip_id = NULL WHERE id = ?')
         .run(JSON.stringify(snapshot), id);

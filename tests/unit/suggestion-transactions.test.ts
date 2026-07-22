@@ -228,6 +228,17 @@ describeTx("suggestion transactions (withTransaction)", () => {
         action_payload_json: JSON.stringify({ delete: true }), preview_snapshot_json: null,
         status: 'pending', display_order: 0, clip_id: null,
       });
+      const beatId = db.prepare(
+        `INSERT INTO beats (chapter_id, start_time, end_time, role, clip_id)
+         VALUES (?, 10, 20, 'setup', ?)`
+      ).run(chapterId, clipId).lastInsertRowid as number;
+      const siblingSuggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 11, out_point: 19, description: 'Update Original', reasoning: 'Tighten',
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ update: { inPoint: 11 } }), preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: clipId,
+      });
 
       expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
       expect(db.prepare('SELECT id FROM clips WHERE id = ?').get(clipId)).toBeUndefined();
@@ -235,6 +246,11 @@ describeTx("suggestion transactions (withTransaction)", () => {
       expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
       expect(db.prepare('SELECT description FROM clips WHERE id = ?').get(clipId)).toEqual({ description: 'Original' });
       expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({ target_clip_id: clipId });
+      expect(db.prepare('SELECT clip_id FROM beats WHERE id = ?').get(beatId)).toEqual({ clip_id: clipId });
+      expect(db.prepare('SELECT target_clip_id, clip_id FROM suggestions WHERE id = ?').get(siblingSuggestion.id)).toEqual({
+        target_clip_id: clipId,
+        clip_id: clipId,
+      });
       expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
       expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
     });
@@ -252,12 +268,27 @@ describeTx("suggestion transactions (withTransaction)", () => {
         action_payload_json: JSON.stringify({ delete: true }), preview_snapshot_json: null,
         status: 'pending', display_order: 0, clip_id: null,
       });
+      const beatId = db.prepare(
+        `INSERT INTO beats (chapter_id, start_time, end_time, role, clip_id)
+         VALUES (?, 10, 20, 'setup', ?)`
+      ).run(chapterId, clipId).lastInsertRowid as number;
+      const siblingSuggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 11, out_point: 19, description: 'Update Original', reasoning: 'Tighten',
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ update: { inPoint: 11 } }), preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: null,
+      });
 
       expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
       expect((await revertAppliedSuggestionsBatch([{ suggestionId: suggestion.id }])).success).toBe(true);
       expect(db.prepare('SELECT target_clip_id, status FROM suggestions WHERE id = ?').get(suggestion.id)).toEqual({
         target_clip_id: clipId,
         status: 'pending',
+      });
+      expect(db.prepare('SELECT clip_id FROM beats WHERE id = ?').get(beatId)).toEqual({ clip_id: clipId });
+      expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(siblingSuggestion.id)).toEqual({
+        target_clip_id: clipId,
       });
       expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
     });

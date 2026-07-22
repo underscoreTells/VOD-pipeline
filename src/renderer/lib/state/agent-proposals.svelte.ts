@@ -148,8 +148,10 @@ function validateSplitSuggestion(
 }
 
 async function refreshProjectTimelineClips(): Promise<void> {
-  if (projectDetail.projectId === null) return;
-  const response = await getClipsByProject(projectDetail.projectId);
+  const projectId = projectDetail.projectId;
+  if (projectId === null) return;
+  const response = await getClipsByProject(projectId);
+  if (projectDetail.projectId !== projectId) return;
   if (!response.success || !response.data) return;
   timelineState.clips = response.data;
   const liveIds = new Set(response.data.map((clip) => clip.id));

@@ -45,6 +45,37 @@ export function resolveSegmentedPreviewTime(
   return ranges[ranges.length - 1].end;
 }
 
+export function getSegmentedPreviewDuration(ranges: PreviewPlaybackRange[]): number {
+  return ranges.reduce((total, range) => total + Math.max(0, range.end - range.start), 0);
+}
+
+export function toSegmentedPreviewLocalTime(
+  ranges: PreviewPlaybackRange[],
+  globalTime: number
+): number {
+  let elapsed = 0;
+  for (const range of ranges) {
+    const duration = Math.max(0, range.end - range.start);
+    if (globalTime <= range.start) return elapsed;
+    if (globalTime <= range.end) return elapsed + globalTime - range.start;
+    elapsed += duration;
+  }
+  return elapsed;
+}
+
+export function fromSegmentedPreviewLocalTime(
+  ranges: PreviewPlaybackRange[],
+  localTime: number
+): number {
+  let remaining = Math.max(0, localTime);
+  for (const range of ranges) {
+    const duration = Math.max(0, range.end - range.start);
+    if (remaining <= duration) return range.start + remaining;
+    remaining -= duration;
+  }
+  return ranges[ranges.length - 1]?.end ?? 0;
+}
+
 export function resolveChapterPreviewMediaChange(
   params: ResolveChapterPreviewMediaChangeParams
 ): ResolveChapterPreviewMediaChangeResult {

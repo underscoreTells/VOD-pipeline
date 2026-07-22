@@ -59,8 +59,8 @@ export async function loadConfig(): Promise<AgentConfig> {
   const providers: AgentConfig["providers"] = {};
   for (const id of PROVIDER_IDS) {
     const envValue = process.env[PROVIDER_METADATA[id].envVar];
-    if (envValue) {
-      providers[id] = envValue;
+    if (envValue || (id === defaultProvider && getProviderMetadata(id).apiKeyOptional)) {
+      providers[id] = envValue ?? "";
     }
   }
 
@@ -88,19 +88,19 @@ export function getProviderLLMConfig(
   const providerType = provider ?? agentConfig.defaultProvider;
 
   const apiKey = agentConfig.providers[providerType];
-  if (!apiKey) {
+  const metadata = getProviderMetadata(providerType);
+  if (!apiKey && !metadata.apiKeyOptional) {
     throw new Error(`No API key found for provider: ${providerType}`);
   }
 
   const llmConfig: LLMConfig = {
     provider: providerType,
-    apiKey,
+    apiKey: apiKey ?? "",
     temperature: agentConfig.temperature,
     maxTokens: agentConfig.maxTokens,
     model: agentConfig.models?.[providerType],
   };
 
-  const metadata = getProviderMetadata(providerType);
   if (metadata.defaultBaseURL || agentConfig.baseURLs?.[providerType]) {
     llmConfig.baseURL = agentConfig.baseURLs?.[providerType]
       ?? metadata.defaultBaseURL;

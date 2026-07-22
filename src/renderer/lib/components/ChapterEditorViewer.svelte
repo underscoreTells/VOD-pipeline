@@ -33,8 +33,11 @@
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
   import {
+    fromSegmentedPreviewLocalTime,
+    getSegmentedPreviewDuration,
     resolveChapterPreviewMediaChange,
     resolveSegmentedPreviewTime,
+    toSegmentedPreviewLocalTime,
   } from './chapter-preview-media.js';
   import {
     getClipVisibleRangeInChapter,
@@ -134,8 +137,12 @@
     const last = viewerRanges[viewerRanges.length - 1] ?? first;
     return { start: first.start, end: last.end };
   });
-  const viewerDuration = $derived(Math.max(0.01, viewerRange.end - viewerRange.start));
-  const viewerLocalTime = $derived(clampNumber(currentTime - viewerRange.start, 0, viewerDuration));
+  const viewerDuration = $derived(Math.max(0.01, getSegmentedPreviewDuration(viewerRanges)));
+  const viewerLocalTime = $derived(clampNumber(
+    toSegmentedPreviewLocalTime(viewerRanges, currentTime),
+    0,
+    viewerDuration
+  ));
   const previewTitle = $derived(() => {
     if (selectedSuggestion) return selectedSuggestion.description || 'Suggested cut';
     if (selectedClip) return selectedClip.description || 'Selected cut';
@@ -251,7 +258,7 @@
       viewerDuration
     );
 
-    return clampNumber(viewerRange.start + nextLocalTime, viewerRange.start, viewerRange.end);
+    return fromSegmentedPreviewLocalTime(viewerRanges, nextLocalTime);
   }
 
   function beginScrubSession() {

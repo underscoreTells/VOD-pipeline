@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  fromSegmentedPreviewLocalTime,
+  getSegmentedPreviewDuration,
   resolveChapterPreviewMediaChange,
   resolveSegmentedPreviewTime,
+  toSegmentedPreviewLocalTime,
 } from "../../src/renderer/lib/components/chapter-preview-media.js";
 
 describe("chapter preview media decisions", () => {
@@ -91,5 +94,9 @@ describe("chapter preview media decisions", () => {
     expect(resolveSegmentedPreviewTime(ranges, 45, -1)).toBe(40);
     expect(resolveSegmentedPreviewTime(ranges, 25, -1)).toBe(20);
     expect(resolveSegmentedPreviewTime(ranges, 9, -1)).toBe(60);
+    expect(getSegmentedPreviewDuration(ranges)).toBe(30);
+    expect(toSegmentedPreviewLocalTime(ranges, 35)).toBe(15);
+    expect(fromSegmentedPreviewLocalTime(ranges, 15)).toBe(35);
+    expect(fromSegmentedPreviewLocalTime(ranges, 25)).toBe(55);
   });
 });
