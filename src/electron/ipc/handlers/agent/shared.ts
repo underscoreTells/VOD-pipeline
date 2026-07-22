@@ -272,6 +272,7 @@ export async function runConversationTurn(
     ...initialContext,
     suggestionSummary: summarizeSuggestions(existingSuggestions),
     referencedEntities: options.mentions ?? [],
+    selectedClipIds: options.selectedClipIds,
   };
 
   const contextTokenLimit = options.effectiveProvider

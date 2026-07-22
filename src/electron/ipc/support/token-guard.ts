@@ -65,6 +65,19 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
   }
 
   const context = contextPayload as Record<string, unknown>;
+  const referencedEntities = Array.isArray(context.referencedEntities) ? context.referencedEntities : [];
+  const referencedSuggestionIds = referencedEntities
+    .filter((entity): entity is Record<string, unknown> => (
+      Boolean(entity) && typeof entity === 'object' && !Array.isArray(entity)
+    ))
+    .filter((entity) => entity.type === 'suggestion' && typeof entity.id === 'number')
+    .map((entity) => entity.id as number);
+  const referencedSuggestionSummary = typeof context.suggestionSummary === 'string'
+    ? context.suggestionSummary
+        .split('\n')
+        .filter((line) => referencedSuggestionIds.some((id) => line.includes(`suggestion#${id} `)))
+        .join('\n')
+    : '';
   const chapterClips = Array.isArray(context.chapterClips)
     ? context.chapterClips.map((clip) => {
         if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return clip;
@@ -112,7 +125,9 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
     chapterAssetIds: Array.isArray(context.chapterAssetIds) ? context.chapterAssetIds : [],
     chapterClips: [],
     videoAnalysisAssets: [],
-    ...(Array.isArray(context.referencedEntities) ? { referencedEntities: context.referencedEntities } : {}),
+    ...(referencedEntities.length > 0 ? { referencedEntities } : {}),
+    ...(referencedSuggestionSummary ? { suggestionSummary: referencedSuggestionSummary } : {}),
+    ...(Array.isArray(context.selectedClipIds) ? { selectedClipIds: context.selectedClipIds } : {}),
   };
   if (estimateContextTokens(minimalContext) > maxTokens) {
     // Returning the original payload forces the caller's final size check to
@@ -144,12 +159,16 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
       })
     : [];
   const referencedClipIds = new Set(
-    (Array.isArray(context.referencedEntities) ? context.referencedEntities : [])
+    referencedEntities
       .filter((entity): entity is Record<string, unknown> => (
         Boolean(entity) && typeof entity === 'object' && !Array.isArray(entity)
       ))
       .filter((entity) => entity.type === 'clip' && typeof entity.id === 'number')
       .map((entity) => entity.id as number)
+      .concat(
+        (Array.isArray(context.selectedClipIds) ? context.selectedClipIds : [])
+          .filter((id): id is number => typeof id === 'number' && Number.isFinite(id))
+      )
   );
   const prioritizedClips = [
     ...compactClips.filter((clip) => (

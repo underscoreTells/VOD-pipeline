@@ -116,7 +116,13 @@ export async function updateChatConversation(
 
 export async function deleteChatConversation(id: number): Promise<boolean> {
   const database = await getDatabase();
-  const result = database.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+  const result = await withTransaction(async () => {
+    const messageIds = (database.prepare(
+      'SELECT id FROM chat_messages WHERE conversation_id = ?'
+    ).all(id) as Array<{ id: number }>).map(({ id: messageId }) => messageId);
+    await cleanupPendingSuggestionsForMessages(messageIds);
+    return database.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id);
+  });
 
   return result.changes > 0;
 }

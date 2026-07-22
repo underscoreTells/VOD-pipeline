@@ -195,6 +195,44 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(compacted.videoAnalysisAssets).toEqual(context.videoAnalysisAssets);
   });
 
+  it("prioritizes selected clips and details for mentioned suggestions during hard compaction", () => {
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 80 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        description: "d".repeat(400),
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      videoAnalysisAssets: [{ assetId: 11, proxyPath: "/tmp/chapter-proxy.mp4" }],
+      referencedEntities: [{ type: "suggestion", id: 42, label: "Trim payoff" }],
+      selectedClipIds: [80],
+      suggestionSummary: [
+        "- suggestion#1 action=create_clip keep window 1.00-2.00s status=pending desc=Opening",
+        "- suggestion#42 action=update_clip update clip #80 79.00-80.00s status=pending desc=Trim payoff",
+      ].join("\n"),
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Revise @suggestion 42 using the selected clip." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.suggestionSummary).toContain("suggestion#42 action=update_clip update clip #80");
+    expect(compacted.suggestionSummary).not.toContain("suggestion#1 ");
+  });
+
   it("drops additional older messages when the retained recent set is still too large", () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",

@@ -591,11 +591,12 @@ export async function cleanupPendingSuggestionsForMessages(messageIds: number[])
       ? await getSuggestion(suggestion.supersedes_suggestion_id)
       : null;
     const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
-    const transferOwnership = suggestion.status === 'pending'
-      && ownedCreatedClipId !== undefined
+    const transferOwnership = ownedCreatedClipId !== undefined
       && ancestor?.status === 'superseded'
       && ancestor.action_type !== 'create_clip';
-    const cleanup = await cleanupPendingSuggestionArtifacts(suggestion, transferOwnership);
+    const cleanup = suggestion.status === 'rejected' && transferOwnership
+      ? await restoreStructuralSuggestionSnapshot(suggestion, true)
+      : await cleanupPendingSuggestionArtifacts(suggestion, transferOwnership);
     if (!cleanup.success) {
       throw new Error(cleanup.error || `Failed to clean up suggestion ${suggestion.id}`);
     }
