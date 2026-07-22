@@ -136,4 +136,24 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     });
     expect((result.contextPayload as typeof context).transcript.length).toBeLessThan(context.transcript.length);
   });
+
+  it("fits escaped transcript text against the serialized context budget", () => {
+    const context = {
+      transcript: "\n\"\\".repeat(12_000),
+      chapterClips: [{ id: 1, transcriptExcerpt: "\n\"\\".repeat(500) }],
+      detailedTranscripts: [],
+      referencedEntities: [{ type: "clip", id: 1 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten this clip." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(result.contextPayload).toMatchObject({ referencedEntities: context.referencedEntities });
+  });
 });

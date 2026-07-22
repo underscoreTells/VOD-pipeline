@@ -505,22 +505,30 @@ export async function supersedeSuggestion(
   if (originalId === replacementId) return false;
   const database = await getDatabase();
   const original = await getSuggestion(originalId);
+  const replacement = await getSuggestion(replacementId);
   if (
     !original
+    || !replacement
     || original.conversation_id !== conversationId
     || original.chapter_id !== chapterId
     || original.status !== 'pending'
+    || replacement.supersedes_suggestion_id !== originalId
   ) return false;
-  const cleanup = await cleanupPendingSuggestionArtifacts(original);
-  if (!cleanup.success) return false;
+  const replacementOwnsPreviewClip = original.action_type === 'create_clip'
+    && original.clip_id !== null
+    && replacement.target_clip_id === original.clip_id;
+  if (!replacementOwnsPreviewClip) {
+    const cleanup = await cleanupPendingSuggestionArtifacts(original);
+    if (!cleanup.success) return false;
+  }
   const result = database.prepare(
     `UPDATE suggestions
      SET status = 'superseded', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL
      WHERE id = ? AND conversation_id = ? AND chapter_id = ? AND status = 'pending'
-       AND EXISTS (
-         SELECT 1 FROM suggestions replacement
-         WHERE replacement.id = ? AND replacement.supersedes_suggestion_id = suggestions.id
-       )`
+        AND EXISTS (
+          SELECT 1 FROM suggestions replacement
+          WHERE replacement.id = ? AND replacement.supersedes_suggestion_id = suggestions.id
+        )`
   ).run(originalId, conversationId, chapterId, replacementId);
   return result.changes === 1;
 }

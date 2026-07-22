@@ -456,5 +456,38 @@ describeTx("suggestion transactions (withTransaction)", () => {
         supersedes_suggestion_id: original.id,
       });
     });
+
+    it('preserves a materialized create preview when its replacement targets that clip', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Preview revision', 'thread-preview-revision')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Original preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      expect(preview.success).toBe(true);
+      expect(preview.clip).toBeDefined();
+
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 18, description: 'Trim preview', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+      expect(await getClip(preview.clip!.id)).not.toBeNull();
+      expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(replacement.id)).toEqual({
+        target_clip_id: preview.clip!.id,
+      });
+    });
   });
 });

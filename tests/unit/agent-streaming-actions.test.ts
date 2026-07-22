@@ -187,6 +187,7 @@ describe("agent streaming message actions", () => {
       createMessage(12, "user", "Find a softer payoff", "2026-04-18T12:02:00.000Z"),
       createMessage(13, "assistant", "Use the reset clip.", "2026-04-18T12:03:00.000Z"),
     ];
+    agentState.messages[2]!.mentions = [{ type: "clip", id: 7, label: "Setup clip" }];
     agentState.suggestions = [];
     agentState.isStreaming = false;
     agentState.groundingStatus = "ready";
@@ -215,6 +216,7 @@ describe("agent streaming message actions", () => {
       id: "db-12",
       databaseId: 12,
       content: "Find a sharper payoff",
+      mentions: [],
     });
     expect(agentState.messages[3]).toMatchObject({
       id: "db-14",
@@ -222,6 +224,7 @@ describe("agent streaming message actions", () => {
       content: "Use the ladder payoff instead.",
     });
     expect(agentApiMocks.editAgentMessage).toHaveBeenCalledWith(expect.objectContaining({
+      mentions: [],
       proxyOptions: {
         encodingMode: "auto",
         quality: "balanced",

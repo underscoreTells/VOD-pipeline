@@ -31,6 +31,34 @@ function estimateContextTokens(contextPayload: unknown): number {
   }
 }
 
+function fitStringField(
+  payload: Record<string, unknown>,
+  field: string,
+  value: string,
+  maxTokens: number
+): void {
+  payload[field] = '';
+  if (estimateContextTokens(payload) > maxTokens) return;
+
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    payload[field] = value.slice(0, midpoint);
+    if (estimateContextTokens(payload) <= maxTokens) {
+      low = midpoint;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  payload[field] = value.slice(0, low);
+
+  while (low > 0 && estimateContextTokens(payload) > maxTokens) {
+    low -= 1;
+    payload[field] = value.slice(0, low);
+  }
+}
+
 function compactContextPayload(contextPayload: unknown, maxTokens: number): unknown {
   if (!contextPayload || typeof contextPayload !== 'object' || Array.isArray(contextPayload)) {
     return contextPayload;
@@ -58,11 +86,7 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
 
   const fitTranscript = () => {
     if (typeof context.transcript !== 'string') return;
-    const availableChars = Math.max(
-      0,
-      (maxTokens - estimateContextTokens(compacted)) * TOKEN_ESTIMATE_CHARS_PER_TOKEN
-    );
-    compacted.transcript = context.transcript.slice(0, availableChars);
+    fitStringField(compacted, 'transcript', context.transcript, maxTokens);
   };
 
   fitTranscript();
@@ -78,15 +102,15 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
 
   if (estimateContextTokens(compacted) > maxTokens && typeof compacted.suggestionSummary === 'string') {
     const suggestionSummary = compacted.suggestionSummary;
-    compacted.suggestionSummary = '';
-    const availableChars = Math.max(
-      0,
-      (maxTokens - estimateContextTokens(compacted)) * TOKEN_ESTIMATE_CHARS_PER_TOKEN
-    );
-    compacted.suggestionSummary = suggestionSummary.slice(0, availableChars);
+    fitStringField(compacted, 'suggestionSummary', suggestionSummary, maxTokens);
   }
 
-  return compacted;
+  if (estimateContextTokens(compacted) <= maxTokens) return compacted;
+
+  const minimalContext = Array.isArray(context.referencedEntities)
+    ? { referencedEntities: context.referencedEntities }
+    : {};
+  return estimateContextTokens(minimalContext) <= maxTokens ? minimalContext : null;
 }
 
 function getProviderContextLimit(provider: unknown): number {
