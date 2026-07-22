@@ -238,6 +238,17 @@ export function applyNearLimitTokenGuard(
     estimatedTotalTokens = estimateTotal(guardedMessages);
   }
 
+  while (estimatedTotalTokens > hardThreshold && guardedMessages.length > 1) {
+    guardedMessages = guardedMessages.slice(1);
+    estimatedTotalTokens = estimateTotal(guardedMessages);
+  }
+
+  if (estimatedTotalTokens > hardThreshold) {
+    throw new Error(
+      `The latest message exceeds this model's input limit (${hardThreshold} estimated tokens). Shorten it and try again.`
+    );
+  }
+
   return {
     messages: guardedMessages,
     contextPayload: guardedContextPayload,

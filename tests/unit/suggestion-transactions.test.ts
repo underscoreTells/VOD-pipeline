@@ -572,7 +572,11 @@ describeTx("suggestion transactions (withTransaction)", () => {
         status: 'pending',
         target_clip_id: preview.clip!.id,
       });
-      expect((await applySuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(db.prepare('SELECT preview_snapshot_json FROM suggestions WHERE id = ?').get(replacement.id)).toMatchObject({
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
+      expect((await cancelSuggestionPreview(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
     });
 
     it('transfers inherited preview ownership through a replacement chain', async () => {
@@ -581,6 +585,18 @@ describeTx("suggestion transactions (withTransaction)", () => {
         `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
          VALUES (?, ?, 'Revision chain', 'thread-revision-chain')`
       ).run(projectId, chapterId).lastInsertRowid as number;
+      const firstReplacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'First revision', '2026-04-18T12:00:00.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const retainedUserMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'user', 'Try again', '2026-04-18T12:00:01.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const secondReplacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Second revision', '2026-04-18T12:00:02.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
       const original = await createSuggestion({
         chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
         in_point: 10, out_point: 20, description: 'Original preview', reasoning: null,
@@ -590,7 +606,7 @@ describeTx("suggestion transactions (withTransaction)", () => {
       });
       const preview = await previewSuggestionWithClip(original.id);
       const firstReplacement = await createSuggestion({
-        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: firstReplacementMessageId,
         in_point: 11, out_point: 19, description: 'First revision', reasoning: null,
         provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
         action_payload_json: JSON.stringify({ update: { inPoint: 11, outPoint: 19 } }),
@@ -599,7 +615,7 @@ describeTx("suggestion transactions (withTransaction)", () => {
       });
       expect(await supersedeSuggestion(original.id, firstReplacement.id, conversationId, chapterId)).toBe(true);
       const secondReplacement = await createSuggestion({
-        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: secondReplacementMessageId,
         in_point: 12, out_point: 18, description: 'Second revision', reasoning: null,
         provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
         action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
@@ -616,6 +632,20 @@ describeTx("suggestion transactions (withTransaction)", () => {
       expect(await getClip(preview.clip!.id)).not.toBeNull();
       expect((await previewSuggestionWithClip(secondReplacement.id)).success).toBe(true);
       expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 12, out_point: 18 });
+
+      expect(await deleteChatMessagesAfter(conversationId, retainedUserMessageId)).toBe(1);
+
+      expect(db.prepare(
+        'SELECT status, target_clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(firstReplacement.id)).toMatchObject({
+        status: 'pending',
+        target_clip_id: preview.clip!.id,
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 10, out_point: 20 });
+      expect((await previewSuggestionWithClip(firstReplacement.id)).success).toBe(true);
+      expect((await cancelSuggestionPreview(firstReplacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
     });
 
     it('restores every retained ancestor when deleting a replacement chain', async () => {

@@ -156,4 +156,27 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
     expect(result.contextPayload).toMatchObject({ referencedEntities: context.referencedEntities });
   });
+
+  it("drops additional older messages when the retained recent set is still too large", () => {
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: String(index).repeat(12_000),
+    }));
+
+    const result = applyNearLimitTokenGuard(messages, null, "openaiCompatible", 8192);
+
+    expect(result.compressed).toBe(true);
+    expect(result.messages.length).toBeLessThan(messages.length);
+    expect(result.messages.at(-1)).toEqual(messages.at(-1));
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+  });
+
+  it("rejects a latest message that cannot fit by itself", () => {
+    expect(() => applyNearLimitTokenGuard(
+      [{ role: "user", content: "x".repeat(20_000) }],
+      null,
+      "openaiCompatible",
+      8192
+    )).toThrow("latest message exceeds this model's input limit");
+  });
 });

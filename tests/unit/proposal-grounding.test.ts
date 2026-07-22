@@ -55,6 +55,17 @@ describe('proposal grounding', () => {
     }])).not.toThrow();
   });
 
+  it('rejects structural targets that cross a chapter boundary', () => {
+    const input = createInput();
+    input.context.chapterClips[0]!.inPoint = 90;
+
+    expect(() => validateProposalGrounding(input, createAccumulator(), [{
+      type: 'delete_clip',
+      clipId: 7,
+      reasoning: 'Remove the boundary-crossing clip',
+    }])).toThrow('delete_clip target clip 7 is not available in this chapter');
+  });
+
   it('accepts a structural target grounded by an explicit clip mention', () => {
     const input = createInput();
     input.context.transcript = '';

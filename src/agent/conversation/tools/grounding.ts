@@ -293,6 +293,10 @@ function getChapterLocalClipRange(
     return null;
   }
 
+  if (clip.inPoint < chapter.startTime || clip.outPoint > chapter.endTime) {
+    return null;
+  }
+
   const visibleRange = getClipVisibleRangeInChapter(
     {
       in_point: clip.inPoint,

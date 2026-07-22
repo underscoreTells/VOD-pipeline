@@ -208,7 +208,8 @@ async function applyUpdateSuggestionToClip(
 }
 
 async function restoreClipFromSuggestionSnapshot(
-  suggestion: Suggestion
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
 ): Promise<ApplySuggestionResult> {
   const snapshot = parseSuggestionPreviewSnapshot(suggestion);
   const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
@@ -239,7 +240,7 @@ async function restoreClipFromSuggestionSnapshot(
     }
   }
 
-  if (snapshot.ownedCreatedClipId) {
+  if (snapshot.ownedCreatedClipId && !preserveOwnedTarget) {
     await deleteClip(snapshot.ownedCreatedClipId);
     if (refreshed?.id === snapshot.ownedCreatedClipId) refreshed = null;
   }
@@ -316,18 +317,19 @@ async function restoreStructuralSuggestionSnapshot(
 }
 
 async function cleanupPendingSuggestionArtifacts(
-  suggestion: Suggestion
+  suggestion: Suggestion,
+  preserveOwnedTarget = false
 ): Promise<ApplySuggestionResult> {
   if (suggestion.status !== 'pending') {
     return { success: true };
   }
 
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
-    return await restoreStructuralSuggestionSnapshot(suggestion);
+    return await restoreStructuralSuggestionSnapshot(suggestion, preserveOwnedTarget);
   }
 
   if (isUpdateSuggestion(suggestion)) {
-    return await restoreClipFromSuggestionSnapshot(suggestion);
+    return await restoreClipFromSuggestionSnapshot(suggestion, preserveOwnedTarget);
   }
 
   if (suggestion.clip_id) {
@@ -581,16 +583,50 @@ export async function cleanupPendingSuggestionsForMessages(messageIds: number[])
      ORDER BY id DESC`
   ).all(...messageIds) as Suggestion[]).map(normalizeSuggestionRecord);
 
-  for (const suggestion of suggestions) {
-    const cleanup = await cleanupPendingSuggestionArtifacts(suggestion);
+  for (const staleSuggestion of suggestions) {
+    const suggestion = await getSuggestion(staleSuggestion.id);
+    if (!suggestion) continue;
+
+    const ancestor = suggestion.supersedes_suggestion_id
+      ? await getSuggestion(suggestion.supersedes_suggestion_id)
+      : null;
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
+    const transferOwnership = ownedCreatedClipId !== undefined
+      && ancestor?.status === 'superseded'
+      && ancestor.action_type !== 'create_clip';
+    const cleanup = await cleanupPendingSuggestionArtifacts(suggestion, transferOwnership);
     if (!cleanup.success) {
       throw new Error(cleanup.error || `Failed to clean up suggestion ${suggestion.id}`);
     }
-    if (suggestion.supersedes_suggestion_id) {
+    if (ancestor) {
+      let ownershipSnapshotJson: string | null = null;
+      if (transferOwnership) {
+        const ownedClip = cleanup.clip ?? await getClip(ownedCreatedClipId);
+        if (!ownedClip) {
+          throw new Error(`Failed to transfer preview ownership to suggestion ${ancestor.id}`);
+        }
+        const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+          serializeSuggestionPreviewSnapshot(ownedClip)
+        );
+        if (!ownershipSnapshot) {
+          throw new Error(`Failed to snapshot preview ownership for suggestion ${ancestor.id}`);
+        }
+        ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+        ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+      }
       database.prepare(
-        `UPDATE suggestions SET status = 'pending'
+        `UPDATE suggestions
+         SET status = 'pending',
+             target_clip_id = CASE WHEN ? IS NOT NULL THEN ? ELSE target_clip_id END,
+             preview_snapshot_json = CASE WHEN ? IS NOT NULL THEN ? ELSE preview_snapshot_json END
          WHERE id = ? AND status = 'superseded'`
-      ).run(suggestion.supersedes_suggestion_id);
+      ).run(
+        ownershipSnapshotJson,
+        ownedCreatedClipId ?? null,
+        ownershipSnapshotJson,
+        ownershipSnapshotJson,
+        ancestor.id
+      );
     }
   }
 }
@@ -1464,11 +1500,23 @@ async function revertAppliedSuggestionTx(
   }
 
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
+    const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
     const restored = await restoreStructuralSuggestionSnapshot(suggestion, true);
     if (!restored.success) return restored;
+    let ownershipSnapshotJson: string | null = null;
+    if (ownedCreatedClipId && restored.clip) {
+      const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+        serializeSuggestionPreviewSnapshot(restored.clip)
+      );
+      if (!ownershipSnapshot) {
+        return { success: false, error: 'Failed to preserve structural preview ownership' };
+      }
+      ownershipSnapshot.ownedCreatedClipId = ownedCreatedClipId;
+      ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
+    }
     const updateResult = database.prepare(
-      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL WHERE id = ?"
-    ).run(item.suggestionId);
+      "UPDATE suggestions SET status = 'pending', applied_at = NULL, clip_id = NULL, preview_snapshot_json = ? WHERE id = ?"
+    ).run(ownershipSnapshotJson, item.suggestionId);
     if (updateResult.changes === 0) {
       throw new SuggestionRollback({ success: false, error: 'Failed to update suggestion status' });
     }
