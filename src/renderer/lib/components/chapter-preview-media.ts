@@ -40,7 +40,7 @@ export function resolveSegmentedPreviewTime(
   for (let index = ranges.length - 1; index >= 0; index -= 1) {
     const range = ranges[index];
     if (time > range.end) return range.end;
-    if (time >= range.start) return time;
+    if (time > range.start) return time;
   }
   return ranges[ranges.length - 1].end;
 }
