@@ -152,25 +152,27 @@ function validateSplitSuggestion(
   }
 }
 
-async function refreshProjectTimelineClips(): Promise<void> {
+async function refreshProjectTimelineClips(): Promise<boolean> {
   const projectId = projectDetail.projectId;
-  if (projectId === null) return;
+  if (projectId === null) return false;
   try {
     const response = await getClipsByProject(projectId);
-    if (projectDetail.projectId !== projectId) return;
+    if (projectDetail.projectId !== projectId) return false;
     if (!response.success || !response.data) {
       console.error('Failed to refresh timeline clips after a committed suggestion mutation:', response.error);
-      return;
+      return false;
     }
     timelineState.clips = response.data;
     const liveIds = new Set(response.data.map((clip) => clip.id));
     timelineState.selectedClipIds = new Set(
       [...timelineState.selectedClipIds].filter((id) => liveIds.has(id))
     );
+    return true;
   } catch (error) {
     // The backend mutation is already committed. Keep the command undoable
     // and use its result payload for best-effort local reconciliation.
     console.error('Failed to refresh timeline clips after a committed suggestion mutation:', error);
+    return false;
   }
 }
 
@@ -443,16 +445,20 @@ class ApplySuggestionBatchCommand implements Command {
       }
       throw new Error(response.error || 'Failed to apply suggested cuts');
     }
-    await refreshProjectTimelineClips();
+    const timelineRefreshed = await refreshProjectTimelineClips();
 
     this.appliedClips.clear();
     const isProjectCurrent = this.isProjectCurrent();
     const isChapterCurrent = this.isChapterCurrent();
     const isConversationCurrent = this.isConversationCurrent();
     for (const result of response.data.results) {
-      if (!result.success || !result.clip) continue;
+      if (!result.success) continue;
+      if (!timelineRefreshed && isProjectCurrent) {
+        for (const clipId of result.removedClipIds ?? []) deleteTimelineClip(clipId);
+        for (const clip of result.clips ?? (result.clip ? [result.clip] : [])) upsertTimelineClip(clip);
+      }
+      if (!result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
-      if (isProjectCurrent) upsertTimelineClip(result.clip);
       if (!isConversationCurrent) continue;
       const suggestion = agentState.suggestions.find((item) => item.id === result.suggestionId);
       if (suggestion) suggestion.clip_id = result.clip.id;

@@ -343,7 +343,11 @@ describeTx("suggestion transactions (withTransaction)", () => {
         { in_point: 10, out_point: 20, description: 'Setup' },
         { in_point: 20, out_point: 30, description: 'Payoff' },
       ]);
-      expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
+      const applyResult = await applySuggestionWithClip(suggestion.id);
+      expect(applyResult.success).toBe(true);
+      expect(applyResult.clips?.map((clip) => clip.id)).toEqual(
+        (db.prepare('SELECT id FROM clips ORDER BY in_point').all() as Array<{ id: number }>).map(({ id }) => id)
+      );
       expect((await revertAppliedSuggestionsBatch([{ suggestionId: suggestion.id }])).success).toBe(true);
       expect(db.prepare('SELECT id, in_point, out_point, description FROM clips').all()).toEqual([
         { id: clipId, in_point: 10, out_point: 30, description: 'Original' },

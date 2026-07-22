@@ -707,11 +707,13 @@
     if (!videoRef) return;
 
     if (
-      activeSource === 'normal'
-      && viewerMode === 'Suggestion'
+      viewerMode === 'Suggestion'
       && viewerRanges.length > 1
       && timelineState.isPlaying
-      && timelineState.shuttleDirection === 1
+      && (
+        (activeSource === 'normal' && timelineState.shuttleDirection === 1)
+        || (activeSource === 'reverse' && timelineState.shuttleDirection === -1)
+      )
     ) {
       handleTimeUpdate();
       void videoRef.play().catch(() => {

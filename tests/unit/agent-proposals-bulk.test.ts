@@ -555,6 +555,91 @@ describe("agent proposal bulk actions", () => {
     expect(getLastCommandDescription()).toBe("Apply suggested cut");
   });
 
+  it("reconciles deleted clips when the post-commit timeline refresh fails", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Deleted target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [targetClip];
+    clipsApiMocks.getClipsByProject.mockRejectedValue(new Error("refresh unavailable"));
+    agentApiMocks.applySuggestionBatch.mockResolvedValue({
+      success: true,
+      data: {
+        appliedCount: 1,
+        total: 1,
+        results: [{ suggestionId: 1, success: true, removedClipIds: [targetClip.id] }],
+      },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [createSuggestion(1, {
+      action_type: "delete_clip",
+      target_clip_id: targetClip.id,
+    })];
+
+    const { applySuggestion } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    expect(await applySuggestion(1)).toEqual({ success: true });
+
+    expect(timelineMocks.timelineState.clips).toEqual([]);
+  });
+
+  it("reconciles every split segment when the post-commit timeline refresh fails", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 30,
+      role: null,
+      description: "Split target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    const firstSegment = { ...targetClip, out_point: 15 };
+    const secondSegment = { ...targetClip, id: 42, in_point: 25 };
+    timelineMocks.timelineState.clips = [targetClip];
+    clipsApiMocks.getClipsByProject.mockRejectedValue(new Error("refresh unavailable"));
+    agentApiMocks.applySuggestionBatch.mockResolvedValue({
+      success: true,
+      data: {
+        appliedCount: 1,
+        total: 1,
+        results: [{
+          suggestionId: 1,
+          success: true,
+          clip: firstSegment,
+          clips: [firstSegment, secondSegment],
+        }],
+      },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [createSuggestion(1, {
+      action_type: "split_clip",
+      target_clip_id: targetClip.id,
+      action_payload_json: JSON.stringify({
+        split: {
+          segments: [
+            { inPoint: 10, outPoint: 15 },
+            { inPoint: 25, outPoint: 30 },
+          ],
+        },
+      }),
+    })];
+
+    const { applySuggestion } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    expect(await applySuggestion(1)).toEqual({ success: true });
+
+    expect(timelineMocks.timelineState.clips).toEqual([firstSegment, secondSegment]);
+  });
+
   it("restores a recreated inherited target to the timeline when undoing rejection", async () => {
     const restoredClip = {
       id: 41,

@@ -31,6 +31,8 @@ import {
 export interface ApplySuggestionResult {
   success: boolean;
   clip?: Clip;
+  clips?: Clip[];
+  removedClipIds?: number[];
   error?: string;
   /** True when the failure itself marked the suggestion as rejected. */
   autoRejected?: boolean;
@@ -1001,7 +1003,18 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
       throw new SuggestionRollback({ success: false, error: 'Failed to update suggestion status' });
     }
     const snapshot = refreshed ? parseSuggestionPreviewSnapshot(refreshed) : null;
-    return { success: true, clip: snapshot ? await getClip(snapshot.clip.id) ?? undefined : undefined };
+    if (!snapshot) return { success: true };
+    if (isDeleteSuggestion(suggestion)) {
+      return { success: true, removedClipIds: [snapshot.clip.id] };
+    }
+    const clips = (await Promise.all(
+      [...new Set([snapshot.clip.id, ...(snapshot.createdClipIds ?? [])])].map((clipId) => getClip(clipId))
+    )).filter((clip): clip is Clip => clip !== null);
+    return {
+      success: true,
+      clip: clips.find((clip) => clip.id === snapshot.clip.id),
+      clips,
+    };
   }
 
   if (isUpdateSuggestion(suggestion)) {
@@ -1202,6 +1215,8 @@ export interface SuggestionBatchItemResult {
   suggestionId: number;
   success: boolean;
   clip?: Clip;
+  clips?: Clip[];
+  removedClipIds?: number[];
   error?: string;
   /** True when the failure itself marked the suggestion as rejected. */
   autoRejected?: boolean;
@@ -1292,6 +1307,8 @@ export async function applySuggestionsBatch(
           suggestionId: id,
           success: true,
           ...(result.clip ? { clip: result.clip } : {}),
+          ...(result.clips ? { clips: result.clips } : {}),
+          ...(result.removedClipIds ? { removedClipIds: result.removedClipIds } : {}),
         });
       }
       return {

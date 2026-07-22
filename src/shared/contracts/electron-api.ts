@@ -278,6 +278,8 @@ export interface SuggestionBatchMutationResult {
       suggestionId: number;
       success: boolean;
       clip?: Clip;
+      clips?: Clip[];
+      removedClipIds?: number[];
       error?: string;
       autoRejected?: boolean;
     }>;

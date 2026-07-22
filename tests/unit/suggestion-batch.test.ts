@@ -287,7 +287,11 @@ describeBatch("suggestion batch transactions", () => {
 
       expect(result.success).toBe(true);
       expect(result.appliedCount).toBe(2);
-      expect(result.results[0]).toEqual({ suggestionId: deleteId, success: true });
+      expect(result.results[0]).toEqual({
+        suggestionId: deleteId,
+        success: true,
+        removedClipIds: [targetClip.id],
+      });
       expect(await getClip(targetClip.id)).toBeNull();
       expect(db.prepare("SELECT status FROM suggestions WHERE id = ?").get(deleteId)).toEqual({ status: "applied" });
     });
