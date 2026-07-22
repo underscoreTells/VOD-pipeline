@@ -187,6 +187,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
   if (!chapter) return 'Select a chapter before applying suggested cuts.';
   const simulatedTargets = new Map<number, { start: number; end: number }>();
   const removedTargetIds = new Set<number>();
+  const splitTargetIds = new Set<number>();
   const proposals: Array<{
     assetId: number;
     targetClipId: number | null;
@@ -203,6 +204,9 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     if (suggestion.target_clip_id && removedTargetIds.has(suggestion.target_clip_id)) {
       return 'A suggested cut targets a clip deleted earlier in this batch.';
     }
+    if (suggestion.target_clip_id && splitTargetIds.has(suggestion.target_clip_id)) {
+      return 'A suggested cut targets a clip split earlier in this batch.';
+    }
     if (suggestion.action_type === 'delete_clip') {
       if (!suggestion.target_clip_id) return 'A delete suggestion has no target clip.';
       removedTargetIds.add(suggestion.target_clip_id);
@@ -218,6 +222,7 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
         : target;
       const splitError = validateSplitSuggestion(suggestion, chapter, splitTarget);
       if (splitError) return splitError;
+      splitTargetIds.add(suggestion.target_clip_id);
       continue;
     }
     const assetId = resolveSuggestionAssetId(suggestion);

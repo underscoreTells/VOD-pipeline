@@ -307,4 +307,51 @@ describe("agent proposal bulk actions", () => {
     });
     expect(agentApiMocks.applySuggestionBatch).toHaveBeenCalledWith({ suggestionIds: [1, 2] });
   });
+
+  it("rejects a later action targeting a clip split earlier in the batch", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [targetClip];
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [
+      createSuggestion(1, {
+        action_type: "split_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({
+          split: {
+            segments: [
+              { inPoint: 10, outPoint: 15 },
+              { inPoint: 15, outPoint: 20 },
+            ],
+          },
+        }),
+      }),
+      createSuggestion(2, {
+        action_type: "update_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ update: { outPoint: 20 } }),
+      }),
+    ];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const result = await applyAllSuggestions();
+
+    expect(result).toMatchObject({
+      success: false,
+      appliedCount: 0,
+      total: 2,
+      error: "A suggested cut targets a clip split earlier in this batch.",
+    });
+    expect(agentApiMocks.applySuggestionBatch).not.toHaveBeenCalled();
+  });
 });

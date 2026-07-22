@@ -111,4 +111,29 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(withContext.estimatedTotalTokens).toBeGreaterThan(withoutContext.estimatedTotalTokens);
     expect(withContext.compressed).toBe(false);
   });
+
+  it("reserves response space and compacts transcript context for an 8K model", () => {
+    const context = {
+      transcript: "t".repeat(30_000),
+      chapterClips: [{ id: 1, transcriptExcerpt: "c".repeat(1_200) }],
+      detailedTranscripts: [],
+      referencedEntities: [{ type: "clip", id: 1 }],
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Tighten this clip." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+
+    expect(result.compressed).toBe(true);
+    expect(result.effectiveContextLimit).toBe(4096);
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(result.contextPayload).toMatchObject({
+      referencedEntities: context.referencedEntities,
+      detailedTranscripts: [],
+    });
+    expect((result.contextPayload as typeof context).transcript.length).toBeLessThan(context.transcript.length);
+  });
 });

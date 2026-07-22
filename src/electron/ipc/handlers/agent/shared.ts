@@ -303,7 +303,7 @@ export async function runConversationTurn(
       selectedClipIds: options.selectedClipIds,
       playheadTime: options.playheadTime,
       agentConfig: options.agentConfig,
-      context: contextWithSuggestions,
+      context: guardedInitialPayload.contextPayload ?? contextWithSuggestions,
     },
   }, {
     streamContext: {

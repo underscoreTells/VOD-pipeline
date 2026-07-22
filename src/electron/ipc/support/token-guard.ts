@@ -4,6 +4,7 @@ import { getProviderContextTokenLimit } from '../../../shared/llm/provider-regis
 const TOKEN_GUARD_SOFT_RATIO = 0.92;
 const TOKEN_GUARD_HARD_RATIO = 0.97;
 const TOKEN_GUARD_RESPONSE_RESERVE = 4096;
+const TOKEN_GUARD_MIN_INPUT_BUDGET = 4096;
 const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
 const TOKEN_GUARD_MIN_RECENT_MESSAGES = 8;
 const TOKEN_GUARD_MAX_SUMMARY_CHARS = 12000;
@@ -28,6 +29,64 @@ function estimateContextTokens(contextPayload: unknown): number {
   } catch {
     return 0;
   }
+}
+
+function compactContextPayload(contextPayload: unknown, maxTokens: number): unknown {
+  if (!contextPayload || typeof contextPayload !== 'object' || Array.isArray(contextPayload)) {
+    return contextPayload;
+  }
+
+  const context = contextPayload as Record<string, unknown>;
+  const chapterClips = Array.isArray(context.chapterClips)
+    ? context.chapterClips.map((clip) => {
+        if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return clip;
+        const normalizedClip = clip as Record<string, unknown>;
+        return {
+          ...normalizedClip,
+          ...(typeof normalizedClip.transcriptExcerpt === 'string'
+            ? { transcriptExcerpt: normalizedClip.transcriptExcerpt.slice(0, 240) }
+            : {}),
+        };
+      })
+    : context.chapterClips;
+  const compacted: Record<string, unknown> = {
+    ...context,
+    chapterClips,
+    ...(Array.isArray(context.detailedTranscripts) ? { detailedTranscripts: [] } : {}),
+    ...(typeof context.transcript === 'string' ? { transcript: '' } : {}),
+  };
+
+  const fitTranscript = () => {
+    if (typeof context.transcript !== 'string') return;
+    const availableChars = Math.max(
+      0,
+      (maxTokens - estimateContextTokens(compacted)) * TOKEN_ESTIMATE_CHARS_PER_TOKEN
+    );
+    compacted.transcript = context.transcript.slice(0, availableChars);
+  };
+
+  fitTranscript();
+  if (estimateContextTokens(compacted) > maxTokens && Array.isArray(compacted.chapterClips)) {
+    compacted.chapterClips = compacted.chapterClips.map((clip) => (
+      clip && typeof clip === 'object' && !Array.isArray(clip)
+        ? { ...(clip as Record<string, unknown>), transcriptExcerpt: '' }
+        : clip
+    ));
+    compacted.transcript = '';
+    fitTranscript();
+  }
+
+  if (estimateContextTokens(compacted) > maxTokens && typeof compacted.suggestionSummary === 'string') {
+    const suggestionSummary = compacted.suggestionSummary;
+    compacted.suggestionSummary = '';
+    const availableChars = Math.max(
+      0,
+      (maxTokens - estimateContextTokens(compacted)) * TOKEN_ESTIMATE_CHARS_PER_TOKEN
+    );
+    compacted.suggestionSummary = suggestionSummary.slice(0, availableChars);
+  }
+
+  return compacted;
 }
 
 function getProviderContextLimit(provider: unknown): number {
@@ -92,6 +151,7 @@ export function applyNearLimitTokenGuard(
   contextTokenLimitOverride?: number
 ): {
   messages: Array<{ role: string; content: string }>;
+  contextPayload: unknown;
   estimatedTotalTokens: number;
   effectiveContextLimit: number;
   compressed: boolean;
@@ -100,18 +160,20 @@ export function applyNearLimitTokenGuard(
   const contextLimit = typeof contextTokenLimitOverride === 'number' && Number.isFinite(contextTokenLimitOverride)
     ? Math.max(8192, Math.floor(contextTokenLimitOverride))
     : getProviderContextLimit(provider);
-  const effectiveContextLimit = Math.max(8192, contextLimit - TOKEN_GUARD_RESPONSE_RESERVE);
+  const effectiveContextLimit = Math.max(TOKEN_GUARD_MIN_INPUT_BUDGET, contextLimit - TOKEN_GUARD_RESPONSE_RESERVE);
   const softThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_SOFT_RATIO);
   const hardThreshold = Math.floor(effectiveContextLimit * TOKEN_GUARD_HARD_RATIO);
 
+  let guardedContextPayload = contextPayload;
   const estimateTotal = (messages: Array<{ role: string; content: string }>) => {
-    return estimateMessageTokens(messages) + estimateContextTokens(contextPayload);
+    return estimateMessageTokens(messages) + estimateContextTokens(guardedContextPayload);
   };
 
   let estimatedTotalTokens = estimateTotal(normalizedMessages);
-  if (estimatedTotalTokens <= softThreshold || normalizedMessages.length <= TOKEN_GUARD_MIN_RECENT_MESSAGES + 1) {
+  if (estimatedTotalTokens <= softThreshold) {
     return {
       messages: normalizedMessages,
+      contextPayload: guardedContextPayload,
       estimatedTotalTokens,
       effectiveContextLimit,
       compressed: false,
@@ -146,8 +208,15 @@ export function applyNearLimitTokenGuard(
     estimatedTotalTokens = estimateTotal(guardedMessages);
   }
 
+  if (estimatedTotalTokens > hardThreshold) {
+    const contextBudget = Math.max(0, hardThreshold - estimateMessageTokens(guardedMessages));
+    guardedContextPayload = compactContextPayload(guardedContextPayload, contextBudget);
+    estimatedTotalTokens = estimateTotal(guardedMessages);
+  }
+
   return {
     messages: guardedMessages,
+    contextPayload: guardedContextPayload,
     estimatedTotalTokens,
     effectiveContextLimit,
     compressed: true,
