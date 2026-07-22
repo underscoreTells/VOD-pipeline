@@ -701,6 +701,81 @@ describe("agent proposal bulk actions", () => {
     expect(timelineMocks.timelineState.clips).toEqual([targetClip]);
   });
 
+  it("reconciles dependent undo results in backend revert order when refresh fails", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 30,
+      role: null,
+      description: "Original target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    const updatedClip = { ...targetClip, description: "Updated target" };
+    const firstSegment = { ...updatedClip, out_point: 15 };
+    const secondSegment = { ...updatedClip, id: 42, in_point: 25 };
+    timelineMocks.timelineState.clips = [targetClip];
+    clipsApiMocks.getClipsByProject.mockRejectedValue(new Error("refresh unavailable"));
+    agentApiMocks.applySuggestionBatch.mockResolvedValue({
+      success: true,
+      data: {
+        appliedCount: 2,
+        total: 2,
+        results: [
+          { suggestionId: 1, success: true, clip: updatedClip },
+          {
+            suggestionId: 2,
+            success: true,
+            clip: firstSegment,
+            clips: [firstSegment, secondSegment],
+          },
+        ],
+      },
+    });
+    agentApiMocks.revertSuggestionBatch.mockResolvedValue({
+      success: true,
+      data: {
+        appliedCount: 2,
+        total: 2,
+        results: [
+          { suggestionId: 2, success: true, clip: updatedClip },
+          { suggestionId: 1, success: true, clip: targetClip },
+        ],
+      },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [
+      createSuggestion(1, {
+        action_type: "update_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ update: { description: "Updated target" } }),
+      }),
+      createSuggestion(2, {
+        action_type: "split_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({
+          split: {
+            segments: [
+              { inPoint: 10, outPoint: 15 },
+              { inPoint: 25, outPoint: 30 },
+            ],
+          },
+        }),
+      }),
+    ];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const { undo } = await import("../../src/renderer/lib/state/undo-redo.svelte.js");
+    expect(await applyAllSuggestions()).toMatchObject({ success: true, appliedCount: 2, total: 2 });
+    expect(timelineMocks.timelineState.clips).toEqual([firstSegment, secondSegment]);
+
+    expect(await undo()).toBe(true);
+    expect(timelineMocks.timelineState.clips).toEqual([targetClip]);
+  });
+
   it("restores a recreated inherited target to the timeline when undoing rejection", async () => {
     const restoredClip = {
       id: 41,

@@ -494,9 +494,10 @@ class ApplySuggestionBatchCommand implements Command {
     const timelineRefreshed = await refreshProjectTimelineClips();
 
     if (this.isProjectCurrent()) {
-      for (const suggestionId of this.suggestionIds) {
+      for (const result of response.data.results) {
+        const suggestionId = result.suggestionId;
         const appliedClip = this.appliedClips.get(suggestionId);
-        const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;
+        const restored = result.clip;
         if (!timelineRefreshed) {
           for (const clipId of this.appliedClipIds.get(suggestionId) ?? []) {
             if (clipId !== restored?.id) deleteTimelineClip(clipId);
