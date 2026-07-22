@@ -33,7 +33,14 @@ export interface SuggestionActionPayload {
   };
   delete?: boolean;
   split?: {
-    splitPoint: number;
+    segments?: Array<{
+      inPoint: number;
+      outPoint: number;
+      role?: Clip['role'];
+      description?: string | null;
+      isEssential?: boolean;
+    }>;
+    splitPoint?: number;
     leftDescription?: string | null;
     rightDescription?: string | null;
   };

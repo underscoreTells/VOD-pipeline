@@ -7,6 +7,7 @@ import {
 } from '../../database/index.js';
 import type { Clip, Suggestion } from '../../../shared/types/database.js';
 import type {
+  SplitClipSegment,
   TranscriptDetailRequest,
   TimelineAction,
 } from '../../../shared/types/agent-ipc.js';
@@ -52,6 +53,38 @@ function extractThinkingMarkdown(result: Record<string, unknown>): string | null
 
   const sanitized = sanitizeThinkingMarkdown(explicit);
   return sanitized.length > 0 ? sanitized : null;
+}
+
+function normalizeSplitSegments(value: unknown): SplitClipSegment[] | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+
+  const segments: SplitClipSegment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const segment = item as Record<string, unknown>;
+    if (
+      typeof segment.inPoint !== 'number'
+      || !Number.isFinite(segment.inPoint)
+      || typeof segment.outPoint !== 'number'
+      || !Number.isFinite(segment.outPoint)
+      || segment.outPoint <= segment.inPoint
+      || (segments.length > 0 && segment.inPoint < segments[segments.length - 1].outPoint)
+    ) return null;
+
+    segments.push({
+      inPoint: segment.inPoint,
+      outPoint: segment.outPoint,
+      role: typeof segment.role === 'string' || segment.role === null
+        ? segment.role as Clip['role']
+        : undefined,
+      description: typeof segment.description === 'string' || segment.description === null
+        ? segment.description
+        : undefined,
+      isEssential: typeof segment.isEssential === 'boolean' ? segment.isEssential : undefined,
+    });
+  }
+
+  return segments;
 }
 
 export function normalizeTimelineActions(value: unknown): TimelineAction[] {
@@ -142,13 +175,12 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
 
     if (action.type === 'split_clip') {
       if (typeof action.clipId !== 'number' || !Number.isInteger(action.clipId)) continue;
-      if (typeof action.splitPoint !== 'number' || !Number.isFinite(action.splitPoint)) continue;
+      const segments = normalizeSplitSegments(action.segments);
+      if (!segments) continue;
       actions.push({
         type: 'split_clip',
         clipId: action.clipId,
-        splitPoint: action.splitPoint,
-        leftDescription: typeof action.leftDescription === 'string' || action.leftDescription === null ? action.leftDescription : undefined,
-        rightDescription: typeof action.rightDescription === 'string' || action.rightDescription === null ? action.rightDescription : undefined,
+        segments,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
         supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
       });
@@ -234,18 +266,18 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
       }
 
       if (action.type === 'split_clip') {
+        const firstSegment = action.segments[0];
+        const lastSegment = action.segments[action.segments.length - 1];
         return {
           action_type: 'split_clip',
           target_clip_id: action.clipId,
-          in_point: action.splitPoint,
-          out_point: action.splitPoint + 0.01,
-          description: `Split clip #${action.clipId}`,
+          in_point: firstSegment.inPoint,
+          out_point: lastSegment.outPoint,
+          description: `Split clip #${action.clipId} into ${action.segments.length} segments`,
           reasoning: action.reasoning ?? null,
           action_payload_json: JSON.stringify({
             split: {
-              splitPoint: action.splitPoint,
-              leftDescription: action.leftDescription,
-              rightDescription: action.rightDescription,
+              segments: action.segments,
             },
           }),
           supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
@@ -375,10 +407,20 @@ export async function persistAgentSuggestions(
       localInPoint = payloadInPoint ?? baseLocalIn;
       localOutPoint = payloadOutPoint ?? baseLocalOut;
       if (suggestion.action_type === 'split_clip' && typeof suggestion.action_payload_json === 'string') {
-        const payload = JSON.parse(suggestion.action_payload_json) as { split?: { splitPoint?: number } };
-        if (typeof payload.split?.splitPoint === 'number') {
-          localInPoint = payload.split.splitPoint;
-          localOutPoint = payload.split.splitPoint + 0.01;
+        try {
+          const payload = JSON.parse(suggestion.action_payload_json) as {
+            split?: { segments?: unknown; splitPoint?: unknown };
+          };
+          const segments = normalizeSplitSegments(payload.split?.segments);
+          if (segments) {
+            localInPoint = segments[0].inPoint;
+            localOutPoint = segments[segments.length - 1].outPoint;
+          } else if (typeof payload.split?.splitPoint === 'number') {
+            localInPoint = payload.split.splitPoint;
+            localOutPoint = payload.split.splitPoint + 0.01;
+          }
+        } catch {
+          // Keep the target clip fallback when a persisted payload is malformed.
         }
       }
     }

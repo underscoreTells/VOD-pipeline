@@ -13,7 +13,7 @@ import { rangesOverlap } from '../utils/timeline-geometry.js';
 import {
   mergeSuggestionUpdateWindow,
   normalizeSuggestionWindowForChapter,
-  resolveSuggestionWindowForChapter,
+  resolveSuggestionWindowsForChapter,
 } from '../../../shared/utils/clip-timing.js';
 import {
   createClip as createTimelineClip,
@@ -99,6 +99,54 @@ function resolveSuggestionAssetId(suggestion: Suggestion): number | null {
   return videoAssetIds.length === 1 ? videoAssetIds[0] ?? null : null;
 }
 
+function validateSplitSuggestion(
+  suggestion: Suggestion,
+  chapter: { start_time: number },
+  target: Clip
+): string | null {
+  if (!suggestion.action_payload_json) return 'A split suggestion has no segment payload.';
+
+  try {
+    const payload = JSON.parse(suggestion.action_payload_json) as {
+      split?: {
+        segments?: Array<{ inPoint?: unknown; outPoint?: unknown }>;
+        splitPoint?: unknown;
+      };
+    };
+    const split = payload.split;
+    if (!split) return 'A split suggestion has no segment payload.';
+    if (!Array.isArray(split.segments)) {
+      return typeof split.splitPoint === 'number'
+        ? null
+        : 'A split suggestion has no valid segment payload.';
+    }
+    if (split.segments.length < 2) return 'A split suggestion requires at least two segments.';
+
+    let previousOut = Number.NEGATIVE_INFINITY;
+    const targetLocalIn = target.in_point - chapter.start_time;
+    const targetLocalOut = target.out_point - chapter.start_time;
+    for (const segment of split.segments) {
+      const { inPoint, outPoint } = segment;
+      if (
+        typeof inPoint !== 'number'
+        || !Number.isFinite(inPoint)
+        || typeof outPoint !== 'number'
+        || !Number.isFinite(outPoint)
+        || outPoint <= inPoint
+        || inPoint < targetLocalIn
+        || outPoint > targetLocalOut
+        || inPoint < previousOut
+      ) {
+        return 'Split segments must be ordered, non-overlapping ranges inside the target clip.';
+      }
+      previousOut = outPoint;
+    }
+    return null;
+  } catch {
+    return 'A split suggestion has a malformed segment payload.';
+  }
+}
+
 async function refreshProjectTimelineClips(): Promise<void> {
   if (projectDetail.projectId === null) return;
   const response = await getClipsByProject(projectDetail.projectId);
@@ -157,6 +205,10 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     }
     if (suggestion.action_type === 'split_clip') {
       if (!suggestion.target_clip_id) return 'A split suggestion has no target clip.';
+      const target = timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id);
+      if (!target) return 'A split suggestion target clip no longer exists.';
+      const splitError = validateSplitSuggestion(suggestion, chapter, target);
+      if (splitError) return splitError;
       continue;
     }
     const assetId = resolveSuggestionAssetId(suggestion);
@@ -481,12 +533,12 @@ export function focusSuggestion(suggestionId: number): boolean {
   const liveTarget = suggestion.target_clip_id
     ? timelineState.clips.find((clip) => clip.id === suggestion.target_clip_id)
     : null;
-  const window = resolveSuggestionWindowForChapter(
+  const [firstWindow] = resolveSuggestionWindowsForChapter(
     suggestion,
     chapter,
     liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
   );
-  setPlayhead(window.start);
+  setPlayhead(firstWindow.start);
   return true;
 }
 

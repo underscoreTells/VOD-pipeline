@@ -121,7 +121,7 @@ Rules:
 - If the user asks to cut, remove, trim, drop, skip, omit, or delete something, translate that into the kept result window or a clip-boundary update. Do not label the kept window as the removed material.
 - For proposal copy, description must describe what is inside the kept window or updated clip. reasoning may explain what the edit skips, trims, omits, or removes.
 - Chapter clip order is inferred from source timing, so do not propose timeline gaps or manual repositioning.
-- Use create_clip/update_clip to define or revise source windows, delete_clip for committed clip removal, and split_clip for an atomic division.
+- Use create_clip/update_clip to define or revise source windows, delete_clip for committed clip removal, and split_clip to atomically replace one clip with ordered kept segments. Gaps between split_clip segments remove footage.
 - When revising a pending suggestion, set supersedesSuggestionId to its structured suggestion ID so the original remains auditable.
 - Prioritize narrative continuity and story progression over isolated highlight density.
 - Do not invent clip identifiers or asset identifiers.

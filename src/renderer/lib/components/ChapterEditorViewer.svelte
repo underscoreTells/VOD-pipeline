@@ -32,10 +32,13 @@
   import { buildProxyOptions } from '../state/settings-helpers.js';
   import { getChapterReverseProxy } from '../api/chapters.js';
   import { cn } from '../utils/cn';
-  import { resolveChapterPreviewMediaChange } from './chapter-preview-media.js';
+  import {
+    resolveChapterPreviewMediaChange,
+    resolveSegmentedPreviewTime,
+  } from './chapter-preview-media.js';
   import {
     getClipVisibleRangeInChapter,
-    resolveSuggestionWindowForChapter,
+    resolveSuggestionWindowsForChapter,
   } from '../../../shared/utils/clip-timing.js';
   import {
     clampPreviewFps,
@@ -100,8 +103,8 @@
     ) ?? null;
   });
   const viewerMode = $derived(selectedSuggestion ? 'Suggestion' : selectedClip ? 'Cut' : 'Chapter');
-  const viewerRange = $derived.by(() => {
-    if (!chapter) return { start: 0, end: 0.01 };
+  const viewerRanges = $derived.by(() => {
+    if (!chapter) return [{ start: 0, end: 0.01 }];
     if (selectedSuggestion) {
       // Update suggestions merge onto the target's live window at acceptance
       // time, so preview the payload applied to the clip's current range
@@ -109,23 +112,27 @@
       const liveTarget = selectedSuggestion.target_clip_id
         ? clips.find((clip) => clip.id === selectedSuggestion.target_clip_id)
         : null;
-      const suggestionWindow = resolveSuggestionWindowForChapter(
+      return resolveSuggestionWindowsForChapter(
         selectedSuggestion,
         chapter,
         liveTarget ? { start: liveTarget.in_point, end: liveTarget.out_point } : null
-      );
-      return {
-        start: clampToChapter(chapter, suggestionWindow.start),
-        end: clampToChapter(chapter, suggestionWindow.end),
-      };
+      ).map((range) => ({
+        start: clampToChapter(chapter, range.start),
+        end: clampToChapter(chapter, range.end),
+      }));
     }
     if (selectedClip) {
-      return {
+      return [{
         start: clampToChapter(chapter, selectedClip.in_point),
         end: clampToChapter(chapter, selectedClip.out_point),
-      };
+      }];
     }
-    return { start: chapter.start_time, end: chapter.end_time };
+    return [{ start: chapter.start_time, end: chapter.end_time }];
+  });
+  const viewerRange = $derived.by(() => {
+    const first = viewerRanges[0] ?? { start: 0, end: 0.01 };
+    const last = viewerRanges[viewerRanges.length - 1] ?? first;
+    return { start: first.start, end: last.end };
   });
   const viewerDuration = $derived(Math.max(0.01, viewerRange.end - viewerRange.start));
   const viewerLocalTime = $derived(clampNumber(currentTime - viewerRange.start, 0, viewerDuration));
@@ -587,7 +594,13 @@
       let mappedGlobalTime = fromReverseProxyTime(chapter, reverseTime);
       let loopedToRangeEnd = false;
       if (viewerMode !== 'Chapter') {
-        if (mappedGlobalTime > viewerRange.end + 0.01) {
+        if (viewerMode === 'Suggestion' && viewerRanges.length > 1) {
+          const segmentedTime = resolveSegmentedPreviewTime(viewerRanges, mappedGlobalTime, -1);
+          if (Math.abs(segmentedTime - mappedGlobalTime) > 0.01) {
+            mappedGlobalTime = segmentedTime;
+            videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
+          }
+        } else if (mappedGlobalTime > viewerRange.end + 0.01) {
           mappedGlobalTime = viewerRange.end;
           videoRef.currentTime = toReverseProxyTime(chapter, mappedGlobalTime);
         } else if (mappedGlobalTime <= viewerRange.start + 0.01) {
@@ -619,7 +632,13 @@
 
     let next = clampToChapter(chapter, videoRef.currentTime);
     if (viewerMode !== 'Chapter') {
-      if (next < viewerRange.start - 0.01) {
+      if (viewerMode === 'Suggestion' && viewerRanges.length > 1) {
+        const segmentedTime = resolveSegmentedPreviewTime(viewerRanges, next, 1);
+        if (Math.abs(segmentedTime - next) > 0.01) {
+          next = segmentedTime;
+          videoRef.currentTime = next;
+        }
+      } else if (next < viewerRange.start - 0.01) {
         next = viewerRange.start;
         videoRef.currentTime = next;
       } else if (next >= viewerRange.end - 0.01) {

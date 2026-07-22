@@ -19,8 +19,12 @@ export function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void
     if (proposal.type === 'delete_clip') continue;
 
     if (proposal.type === 'split_clip') {
-      validateKeepWindowDescription(proposal.leftDescription, 'split_clip.leftDescription');
-      validateKeepWindowDescription(proposal.rightDescription, 'split_clip.rightDescription');
+      proposal.segments.forEach((segment, index) => {
+        validateKeepWindowDescription(
+          segment.description,
+          `split_clip.segments[${index}].description`
+        );
+      });
       continue;
     }
 
@@ -59,10 +63,14 @@ export function validateProposalGrounding(
       continue;
     }
 
+    if (proposal.type === 'split_clip') {
+      validateSplitClipSegments(input, proposal);
+    }
+
     if (!accumulator.hasSuccessfulVideoEvidence && !hasNonVisualProposalGrounding(input, accumulator, proposal)) {
       if (proposal.type !== "range_suggestion") {
         throw new Error(
-          "update_clip requires transcript context, a selected clip, the playhead region, or matching video evidence."
+          "Timeline edits require transcript context, a selected clip, the playhead region, or matching video evidence."
         );
       }
 
@@ -70,6 +78,30 @@ export function validateProposalGrounding(
         "range_suggestion requires transcript context, detailed transcript windows, the playhead region, or matching video evidence."
       );
     }
+  }
+}
+
+function validateSplitClipSegments(
+  input: ConversationTurnInput,
+  proposal: Extract<ProposalDraft, { type: 'split_clip' }>
+): void {
+  const targetRange = getChapterLocalClipRange(input, proposal.clipId);
+  if (!targetRange) {
+    throw new Error(`split_clip target clip ${proposal.clipId} is not available in this chapter.`);
+  }
+
+  let previousOut = Number.NEGATIVE_INFINITY;
+  for (const segment of proposal.segments) {
+    if (
+      segment.inPoint < targetRange.start
+      || segment.outPoint > targetRange.end
+      || segment.inPoint < previousOut
+    ) {
+      throw new Error(
+        'split_clip segments must be ordered, non-overlapping kept windows inside the target clip.'
+      );
+    }
+    previousOut = segment.outPoint;
   }
 }
 

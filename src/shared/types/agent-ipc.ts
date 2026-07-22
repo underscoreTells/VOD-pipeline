@@ -37,12 +37,18 @@ export interface DeleteClipAction {
   supersedesSuggestionId?: number;
 }
 
+export interface SplitClipSegment {
+  inPoint: number;
+  outPoint: number;
+  role?: Clip['role'];
+  description?: string | null;
+  isEssential?: boolean;
+}
+
 export interface SplitClipAction {
   type: 'split_clip';
   clipId: number;
-  splitPoint: number;
-  leftDescription?: string | null;
-  rightDescription?: string | null;
+  segments: SplitClipSegment[];
   reasoning?: string;
   supersedesSuggestionId?: number;
 }

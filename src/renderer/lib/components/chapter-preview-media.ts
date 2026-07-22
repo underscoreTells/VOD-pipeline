@@ -17,6 +17,34 @@ export interface ResolveChapterPreviewMediaChangeResult {
   normalUrl: string | null;
 }
 
+export interface PreviewPlaybackRange {
+  start: number;
+  end: number;
+}
+
+export function resolveSegmentedPreviewTime(
+  ranges: PreviewPlaybackRange[],
+  time: number,
+  direction: 1 | -1
+): number {
+  if (ranges.length <= 1) return time;
+
+  if (direction === 1) {
+    for (const range of ranges) {
+      if (time < range.start) return range.start;
+      if (time <= range.end) return time;
+    }
+    return ranges[0].start;
+  }
+
+  for (let index = ranges.length - 1; index >= 0; index -= 1) {
+    const range = ranges[index];
+    if (time > range.end) return range.end;
+    if (time >= range.start) return time;
+  }
+  return ranges[ranges.length - 1].end;
+}
+
 export function resolveChapterPreviewMediaChange(
   params: ResolveChapterPreviewMediaChangeParams
 ): ResolveChapterPreviewMediaChangeResult {

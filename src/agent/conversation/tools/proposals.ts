@@ -15,7 +15,7 @@ export function createDraftRoughCutProposalsTool(
   return defineAgentTool<DraftRoughCutProposalsInput>({
     name: "draftRoughCutProposals",
     description:
-      "Create actionable rough-cut proposals. Use range_suggestion/create_clip for kept windows, update_clip for trims or metadata, delete_clip to remove a committed clip, and split_clip to divide one at a chapter-local source time. Set supersedesSuggestionId when revising a pending suggestion; the original remains in audit history. Do not describe actionable edits only in prose.",
+      "Create actionable rough-cut proposals. Use range_suggestion/create_clip for kept windows, update_clip for trims or metadata, delete_clip to remove a committed clip, and split_clip to replace one clip with two or more ordered kept segments. split_clip segments may leave gaps to remove footage and may override metadata independently. Set supersedesSuggestionId when revising a pending suggestion; the original remains in audit history. Do not describe actionable edits only in prose.",
     schema: draftRoughCutProposalsSchema,
     execute: async ({ proposals }) => {
       const accepted = normalizeProposalDrafts(proposals);
@@ -71,7 +71,15 @@ function normalizeProposalDrafts(value: ProposalDraft[]): ProposalDraft[] {
     }
 
     if (item.type === 'split_clip') {
-      if (!Number.isFinite(item.splitPoint)) continue;
+      if (
+        item.segments.length < 2
+        || item.segments.some((segment, index) =>
+          !Number.isFinite(segment.inPoint)
+          || !Number.isFinite(segment.outPoint)
+          || segment.outPoint <= segment.inPoint
+          || (index > 0 && segment.inPoint < item.segments[index - 1].outPoint)
+        )
+      ) continue;
       normalized.push(item);
       continue;
     }

@@ -144,13 +144,26 @@ export const splitClipSchema = s.object(
   {
     type: s.required(s.literalString('split_clip')),
     clipId: s.required(s.integer({ minimum: 1 })),
-    splitPoint: s.required(s.number({ minimum: 0 })),
-    leftDescription: s.optional(s.nullable(s.string({ minLength: 1, maxLength: 240 }))),
-    rightDescription: s.optional(s.nullable(s.string({ minLength: 1, maxLength: 240 }))),
+    segments: s.required(s.array(
+      s.object(
+        {
+          inPoint: s.required(s.number({ minimum: 0 })),
+          outPoint: s.required(s.number({ minimum: 0 })),
+          role: s.optional(s.nullable(s.stringEnum(CLIP_ROLE_VALUES))),
+          description: s.optional(s.nullable(s.string({ minLength: 1, maxLength: 240 }))),
+          isEssential: s.optional(s.boolean()),
+        },
+        { description: 'One kept chapter-local source window derived from the target clip.' }
+      ),
+      { minItems: 2 }
+    )),
     reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
   },
-  { description: 'Split an existing committed clip at a chapter-local source time.' }
+  {
+    description:
+      'Replace an existing committed clip with two or more ordered, non-overlapping kept segments. Gaps remove footage.'
+  }
 );
 
 export const draftRoughCutProposalsSchema = s.object(

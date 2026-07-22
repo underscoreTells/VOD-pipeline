@@ -261,6 +261,89 @@ describeTx("suggestion transactions (withTransaction)", () => {
       ]);
     });
 
+    it('atomically replaces a clip with any number of kept segments and restores it', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential)
+         VALUES (?, ?, 0, 10, 60, 'setup', 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 10, out_point: 52, description: 'Split Original into 3 segments', reasoning: 'Remove dead air',
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({
+          split: {
+            segments: [
+              { inPoint: 10, outPoint: 18, description: 'Setup' },
+              { inPoint: 24, outPoint: 31, role: 'escalation', description: 'Escalation' },
+              { inPoint: 45, outPoint: 52, role: 'payoff', description: 'Payoff', isEssential: false },
+            ],
+          },
+        }),
+        preview_snapshot_json: null, status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect(db.prepare(
+        'SELECT id, in_point, out_point, role, description, is_essential FROM clips ORDER BY in_point'
+      ).all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 18, role: 'setup', description: 'Setup', is_essential: 1 },
+        { id: expect.any(Number), in_point: 24, out_point: 31, role: 'escalation', description: 'Escalation', is_essential: 1 },
+        { id: expect.any(Number), in_point: 45, out_point: 52, role: 'payoff', description: 'Payoff', is_essential: 0 },
+      ]);
+      const previewRow = db.prepare(
+        'SELECT preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(suggestion.id) as { preview_snapshot_json: string };
+      expect(JSON.parse(previewRow.preview_snapshot_json).createdClipIds).toHaveLength(2);
+
+      expect((await cancelSuggestionPreview(suggestion.id)).success).toBe(true);
+      expect(db.prepare(
+        'SELECT id, in_point, out_point, role, description, is_essential FROM clips'
+      ).all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 60, role: 'setup', description: 'Original', is_essential: 1 },
+      ]);
+
+      expect((await applySuggestionWithClip(suggestion.id)).success).toBe(true);
+      expect(db.prepare('SELECT id FROM clips').all()).toHaveLength(3);
+      expect((await revertAppliedSuggestionsBatch([{ suggestionId: suggestion.id }])).success).toBe(true);
+      expect(db.prepare(
+        'SELECT id, in_point, out_point, role, description, is_essential FROM clips'
+      ).all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 60, role: 'setup', description: 'Original', is_essential: 1 },
+      ]);
+    });
+
+    it('rolls back every segment when creating a later segment fails', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential)
+         VALUES (?, ?, 0, 10, 60, 'setup', 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 10, out_point: 50, description: 'Invalid split', reasoning: 'Test rollback',
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({
+          split: {
+            segments: [
+              { inPoint: 10, outPoint: 20 },
+              { inPoint: 30, outPoint: 40 },
+              { inPoint: 45, outPoint: 50, role: 'invalid-role' },
+            ],
+          },
+        }),
+        preview_snapshot_json: null, status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      expect((await previewSuggestionWithClip(suggestion.id)).success).toBe(false);
+      expect(db.prepare('SELECT id, in_point, out_point, role, description FROM clips').all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 60, role: 'setup', description: 'Original' },
+      ]);
+      expect(db.prepare(
+        'SELECT status, clip_id, preview_snapshot_json FROM suggestions WHERE id = ?'
+      ).get(suggestion.id)).toEqual({ status: 'pending', clip_id: null, preview_snapshot_json: null });
+    });
+
     it('links a replacement while retaining the superseded suggestion for audit history', async () => {
       const { projectId, chapterId } = insertFixtures();
       const conversationId = db.prepare(

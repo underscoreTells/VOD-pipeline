@@ -54,6 +54,78 @@ class SuggestionRollback extends Error {
   }
 }
 
+interface ResolvedSplitSegment {
+  in_point: number;
+  out_point: number;
+  role: Clip['role'];
+  description: string | null;
+  is_essential: boolean;
+}
+
+function resolveSplitSegments(
+  suggestion: Suggestion,
+  chapter: Chapter,
+  targetClip: Clip
+): { segments: ResolvedSplitSegment[] } | { error: string } {
+  const split = parseSuggestionActionPayload(suggestion)?.split;
+  if (!split) return { error: 'Missing split payload for split suggestion' };
+
+  const targetLocalIn = targetClip.in_point - chapter.start_time;
+  const targetLocalOut = targetClip.out_point - chapter.start_time;
+  const chapterDuration = chapter.end_time - chapter.start_time;
+  const rawSegments = Array.isArray(split.segments)
+    ? split.segments
+    : typeof split.splitPoint === 'number'
+      ? [
+          {
+            inPoint: targetLocalIn,
+            outPoint: split.splitPoint,
+            description: split.leftDescription,
+          },
+          {
+            inPoint: split.splitPoint,
+            outPoint: targetLocalOut,
+            description: split.rightDescription,
+          },
+        ]
+      : null;
+
+  if (!rawSegments || rawSegments.length < 2) {
+    return { error: 'A split suggestion requires at least two segments' };
+  }
+
+  const segments: ResolvedSplitSegment[] = [];
+  for (const raw of rawSegments) {
+    if (
+      !raw
+      || typeof raw.inPoint !== 'number'
+      || !Number.isFinite(raw.inPoint)
+      || typeof raw.outPoint !== 'number'
+      || !Number.isFinite(raw.outPoint)
+      || raw.outPoint <= raw.inPoint
+      || raw.inPoint < 0
+      || raw.outPoint > chapterDuration
+      || raw.inPoint < targetLocalIn
+      || raw.outPoint > targetLocalOut
+      || (segments.length > 0 && chapter.start_time + raw.inPoint < segments[segments.length - 1].out_point)
+    ) {
+      return {
+        error: 'Split segments must be ordered, non-overlapping kept ranges inside the target clip',
+      };
+    }
+
+    segments.push({
+      in_point: chapter.start_time + raw.inPoint,
+      out_point: chapter.start_time + raw.outPoint,
+      role: raw.role !== undefined ? raw.role : targetClip.role,
+      description: raw.description !== undefined ? raw.description : targetClip.description,
+      is_essential: raw.isEssential ?? targetClip.is_essential,
+    });
+  }
+
+  return { segments };
+}
+
 async function applyUpdateSuggestionToClip(
   suggestion: Suggestion,
   chapter: Chapter,
@@ -508,30 +580,32 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
         .run(JSON.stringify(snapshot), id);
       return { success: true };
     }
-    const splitPayload = parseSuggestionActionPayload(suggestion)?.split;
-    const globalSplitPoint = typeof splitPayload?.splitPoint === 'number'
-      ? chapter.start_time + splitPayload.splitPoint
-      : NaN;
-    if (!Number.isFinite(globalSplitPoint) || globalSplitPoint <= targetClip.in_point || globalSplitPoint >= targetClip.out_point) {
-      return { success: false, error: 'Split point must fall inside the target clip' };
-    }
+    const resolved = resolveSplitSegments(suggestion, chapter, targetClip);
+    if ('error' in resolved) return { success: false, error: resolved.error };
+    const [firstSegment, ...remainingSegments] = resolved.segments;
     if (!await updateClip(targetClip.id, {
-      out_point: globalSplitPoint,
-      description: splitPayload?.leftDescription ?? targetClip.description,
+      in_point: firstSegment.in_point,
+      out_point: firstSegment.out_point,
+      role: firstSegment.role,
+      description: firstSegment.description,
+      is_essential: firstSegment.is_essential,
     })) return { success: false, error: `Failed to split clip ${targetClip.id}` };
-    const rightClip = await createClip({
-      project_id: targetClip.project_id,
-      asset_id: targetClip.asset_id,
-      track_index: targetClip.track_index,
-      in_point: globalSplitPoint,
-      out_point: targetClip.out_point,
-      role: targetClip.role,
-      description: splitPayload?.rightDescription ?? targetClip.description,
-      is_essential: targetClip.is_essential,
-    });
-    snapshot.createdClipIds = [rightClip.id];
+    snapshot.createdClipIds = [];
+    for (const segment of remainingSegments) {
+      const createdClip = await createClip({
+        project_id: targetClip.project_id,
+        asset_id: targetClip.asset_id,
+        track_index: targetClip.track_index,
+        in_point: segment.in_point,
+        out_point: segment.out_point,
+        role: segment.role,
+        description: segment.description,
+        is_essential: segment.is_essential,
+      });
+      snapshot.createdClipIds.push(createdClip.id);
+    }
     database.prepare('UPDATE suggestions SET preview_snapshot_json = ?, clip_id = ? WHERE id = ?')
-      .run(JSON.stringify(snapshot), rightClip.id, id);
+      .run(JSON.stringify(snapshot), targetClip.id, id);
     return { success: true, clip: await getClip(targetClip.id) ?? undefined };
   }
 

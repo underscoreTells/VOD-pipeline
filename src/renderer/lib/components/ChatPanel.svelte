@@ -508,13 +508,25 @@
     return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
-  function formatSuggestionPrimaryLine(suggestion: { action_type?: string; target_clip_id?: number | null; in_point: number; out_point: number }) {
+  function getSplitSegmentCount(actionPayloadJson: string | null | undefined): number {
+    if (!actionPayloadJson) return 2;
+    try {
+      const payload = JSON.parse(actionPayloadJson) as { split?: { segments?: unknown[] } };
+      return Array.isArray(payload.split?.segments) ? payload.split.segments.length : 2;
+    } catch {
+      return 2;
+    }
+  }
+
+  function formatSuggestionPrimaryLine(suggestion: { action_type?: string; target_clip_id?: number | null; action_payload_json?: string | null; in_point: number; out_point: number }) {
     if (suggestion.action_type === 'update_clip') {
       const clipLabel = suggestion.target_clip_id ? `Clip #${suggestion.target_clip_id}` : 'Target clip';
       return `${clipLabel} (${formatDuration(suggestion.in_point, suggestion.out_point)})`;
     }
     if (suggestion.action_type === 'delete_clip') return `Delete clip #${suggestion.target_clip_id ?? '?'}`;
-    if (suggestion.action_type === 'split_clip') return `Split clip #${suggestion.target_clip_id ?? '?'} at ${formatContextTime(suggestion.in_point)}`;
+    if (suggestion.action_type === 'split_clip') {
+      return `Split clip #${suggestion.target_clip_id ?? '?'} into ${getSplitSegmentCount(suggestion.action_payload_json)} segments`;
+    }
     return formatDuration(suggestion.in_point, suggestion.out_point);
   }
 

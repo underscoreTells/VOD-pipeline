@@ -9,6 +9,7 @@ import {
   mergeSuggestionUpdateWindow,
   normalizeSuggestionWindowForChapter,
   resolveSuggestionWindowForChapter,
+  resolveSuggestionWindowsForChapter,
   splitClipAtSourceTime,
 } from '../../src/shared/utils/clip-timing.js';
 
@@ -144,6 +145,47 @@ describe('clip timing helpers', () => {
       start: 120,
       end: 130,
     });
+  });
+
+  it('resolves every kept segment in a multi-split suggestion', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const suggestion = {
+      in_point: 10,
+      out_point: 70,
+      action_type: 'split_clip' as const,
+      target_clip_id: 7,
+      action_payload_json: JSON.stringify({
+        split: {
+          segments: [
+            { inPoint: 10, outPoint: 20 },
+            { inPoint: 30, outPoint: 40 },
+            { inPoint: 60, outPoint: 70 },
+          ],
+        },
+      }),
+    };
+
+    expect(resolveSuggestionWindowsForChapter(suggestion, chapter, { start: 110, end: 170 })).toEqual([
+      { start: 110, end: 120 },
+      { start: 130, end: 140 },
+      { start: 160, end: 170 },
+    ]);
+  });
+
+  it('resolves legacy binary split payloads into two windows', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const suggestion = {
+      in_point: 20,
+      out_point: 50,
+      action_type: 'split_clip' as const,
+      target_clip_id: 7,
+      action_payload_json: JSON.stringify({ split: { splitPoint: 35 } }),
+    };
+
+    expect(resolveSuggestionWindowsForChapter(suggestion, chapter, { start: 120, end: 150 })).toEqual([
+      { start: 120, end: 135 },
+      { start: 135, end: 150 },
+    ]);
   });
 
   it('splits a clip from source time into left and right source windows', () => {
