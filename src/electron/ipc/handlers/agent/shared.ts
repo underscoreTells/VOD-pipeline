@@ -430,13 +430,18 @@ function summarizeSuggestions(
     return '- none';
   }
 
-  const prioritizedSuggestions = [
-    ...suggestions.filter((suggestion) => referencedSuggestionIds.has(suggestion.id)),
-    ...suggestions.filter((suggestion) => !referencedSuggestionIds.has(suggestion.id)),
+  const referencedSuggestions = suggestions.filter((suggestion) =>
+    referencedSuggestionIds.has(suggestion.id)
+  );
+  const unreferencedSuggestions = suggestions.filter(
+    (suggestion) => !referencedSuggestionIds.has(suggestion.id)
+  );
+  const summarizedSuggestions = [
+    ...referencedSuggestions,
+    ...unreferencedSuggestions.slice(0, Math.max(0, 12 - referencedSuggestions.length)),
   ];
 
-  return prioritizedSuggestions
-    .slice(0, 12)
+  return summarizedSuggestions
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'
         ? `update clip #${suggestion.target_clip_id ?? 'unknown'}`

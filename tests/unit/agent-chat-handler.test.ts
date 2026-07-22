@@ -401,7 +401,7 @@ describe("agent chat handler", () => {
       clip_id: null,
     }));
     databaseMocks.getSuggestionsByConversation.mockResolvedValue(suggestions);
-    databaseMocks.getSuggestion.mockResolvedValue(suggestions[12]);
+    databaseMocks.getSuggestion.mockImplementation(async (id: number) => suggestions[id - 1] ?? null);
     bridgeMocks.send.mockResolvedValue({
       type: "turn_complete",
       requestId: "worker-1",
@@ -414,8 +414,12 @@ describe("agent chat handler", () => {
       clientRequestId: "client-mentioned-suggestion",
       projectId: "1",
       conversationId: 2,
-      message: "Revise this suggestion",
-      mentions: [{ type: "suggestion", id: 13, label: "Suggestion 13" }],
+      message: "Revise these suggestions",
+      mentions: suggestions.map((suggestion) => ({
+        type: "suggestion" as const,
+        id: suggestion.id,
+        label: `Suggestion ${suggestion.id}`,
+      })),
     });
 
     const context = handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1];
@@ -424,7 +428,8 @@ describe("agent chat handler", () => {
     );
     expect(context?.suggestionSummary).toContain('reasoning="Preserve the second retained beat."');
     expect(context?.suggestionSummary).toContain('actionPayload={"split":{"segments"');
-    expect(context?.suggestionSummary).not.toContain("suggestion#12 ");
+    expect(context?.suggestionSummary).toContain("suggestion#1 ");
+    expect(context?.suggestionSummary).toContain("suggestion#12 ");
   });
 
   it("reports grounding status through the dedicated IPC handler", async () => {
