@@ -350,6 +350,7 @@ class ApplySuggestionBatchCommand implements Command {
   failureReason: string | null = null;
   private beforeSnapshots: Map<number, SuggestionBeforeSnapshot> | null = null;
   private appliedClips = new Map<number, Clip>();
+  private appliedClipIds = new Map<number, number[]>();
   private readonly conversationId = agentState.selectedConversationId;
   private readonly chapterId = getSelectedChapter()?.id ?? null;
   private readonly projectId = projectDetail.projectId;
@@ -448,6 +449,7 @@ class ApplySuggestionBatchCommand implements Command {
     const timelineRefreshed = await refreshProjectTimelineClips();
 
     this.appliedClips.clear();
+    this.appliedClipIds.clear();
     const isProjectCurrent = this.isProjectCurrent();
     const isChapterCurrent = this.isChapterCurrent();
     const isConversationCurrent = this.isConversationCurrent();
@@ -457,6 +459,10 @@ class ApplySuggestionBatchCommand implements Command {
         for (const clipId of result.removedClipIds ?? []) deleteTimelineClip(clipId);
         for (const clip of result.clips ?? (result.clip ? [result.clip] : [])) upsertTimelineClip(clip);
       }
+      this.appliedClipIds.set(
+        result.suggestionId,
+        (result.clips ?? (result.clip ? [result.clip] : [])).map((clip) => clip.id)
+      );
       if (!result.clip) continue;
       this.appliedClips.set(result.suggestionId, result.clip);
       if (!isConversationCurrent) continue;
@@ -485,12 +491,17 @@ class ApplySuggestionBatchCommand implements Command {
     if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to undo suggested cuts');
     }
-    await refreshProjectTimelineClips();
+    const timelineRefreshed = await refreshProjectTimelineClips();
 
     if (this.isProjectCurrent()) {
       for (const suggestionId of this.suggestionIds) {
         const appliedClip = this.appliedClips.get(suggestionId);
         const restored = response.data.results.find((item) => item.suggestionId === suggestionId)?.clip;
+        if (!timelineRefreshed) {
+          for (const clipId of this.appliedClipIds.get(suggestionId) ?? []) {
+            if (clipId !== restored?.id) deleteTimelineClip(clipId);
+          }
+        }
         if (restored) {
           upsertTimelineClip(restored);
         } else if (appliedClip) {
