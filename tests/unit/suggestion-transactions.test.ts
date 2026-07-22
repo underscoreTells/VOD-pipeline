@@ -406,6 +406,31 @@ describeTx("suggestion transactions (withTransaction)", () => {
       ]);
     });
 
+    it('rejects a malformed structural preview snapshot without changing the target clip', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, description, is_essential)
+         VALUES (?, ?, 0, 10, 30, 'Original', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const suggestion = await createSuggestion({
+        chapter_id: chapterId, conversation_id: null, chat_message_id: null,
+        in_point: 20, out_point: 20.01, description: 'Split Original', reasoning: 'Separate beats',
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({ split: { splitPoint: 20 } }),
+        preview_snapshot_json: '{malformed', status: 'pending', display_order: 0, clip_id: null,
+      });
+
+      const result = await previewSuggestionWithClip(suggestion.id);
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Structural suggestion preview snapshot is invalid',
+      });
+      expect(db.prepare('SELECT id, in_point, out_point, description FROM clips').all()).toEqual([
+        { id: clipId, in_point: 10, out_point: 30, description: 'Original' },
+      ]);
+    });
+
     it('rolls back every segment when creating a later segment fails', async () => {
       const { projectId, assetId, chapterId } = insertFixtures();
       const clipId = db.prepare(

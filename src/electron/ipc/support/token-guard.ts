@@ -199,11 +199,13 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
   ];
   const selectedClips = new Set<unknown>();
   for (const clip of prioritizedClips) {
-    const candidateClips = compactClips.filter((candidate) => selectedClips.has(candidate) || candidate === clip);
+    const candidateClips = prioritizedClips.filter(
+      (candidate) => selectedClips.has(candidate) || candidate === clip
+    );
     const candidateContext = { ...minimalContext, chapterClips: candidateClips };
     if (estimateContextTokens(candidateContext) <= maxTokens) selectedClips.add(clip);
   }
-  minimalContext.chapterClips = compactClips.filter((clip) => selectedClips.has(clip));
+  minimalContext.chapterClips = prioritizedClips.filter((clip) => selectedClips.has(clip));
   return minimalContext;
 }
 

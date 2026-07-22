@@ -205,6 +205,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(compacted.chapterClips.length).toBeGreaterThan(0);
     expect(compacted.chapterClips.length).toBeLessThan(context.chapterClips.length);
     expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.chapterClips[0]?.id).toBe(80);
     expect(compacted.videoAnalysisAssets).toEqual(context.videoAnalysisAssets);
   });
 
@@ -242,6 +243,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
 
     expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
     expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.chapterClips[0]?.id).toBe(80);
     expect(compacted.suggestionSummary).toContain("suggestion#42 action=update_clip update clip #80");
     expect(compacted.suggestionSummary).not.toContain("suggestion#1 ");
   });

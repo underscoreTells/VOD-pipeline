@@ -293,6 +293,45 @@ describe("agent chat handler", () => {
     });
   });
 
+  it("preserves historical mention identities in model history", async () => {
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 9,
+        conversation_id: 2,
+        role: "user",
+        content: "Shorten this",
+        mentions_json: JSON.stringify([{ type: "clip", id: 7, label: "Intro" }]),
+        created_at: "2026-04-18T11:59:00.000Z",
+      },
+    ]);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "Tightened it.", outcome: "chat" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    const result = await chatHandler?.({}, {
+      clientRequestId: "client-history-mention",
+      projectId: "1",
+      conversationId: 2,
+      message: "Make it tighter",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(handlerSupportMocks.applyNearLimitTokenGuard).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: 'Shorten this\n\n[Referenced entities: clip#7 "Intro"]',
+        },
+      ]),
+      expect.any(Object),
+      "gemini"
+    );
+  });
+
   it("passes through a null context produced by the token guard", async () => {
     handlerSupportMocks.applyNearLimitTokenGuard.mockReturnValue({
       messages: [{ role: "user", content: "Please provide new clips for this chapter" }],

@@ -737,6 +737,9 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
     if (targetError) return { success: false, error: targetError };
     if (suggestion.preview_snapshot_json) {
       const snapshot = parseSuggestionPreviewSnapshot(suggestion);
+      if (!snapshot) {
+        return { success: false, error: 'Structural suggestion preview snapshot is invalid' };
+      }
       const snapshotClipId = snapshot?.clip.id;
       const ownedCreatedClipId = snapshot?.ownedCreatedClipId;
       const ownershipOnly = snapshotClipId !== undefined
@@ -744,7 +747,7 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
         && suggestion.clip_id === null
         && await getClip(snapshotClipId) !== null;
       if (!ownershipOnly) {
-        return { success: true, clip: snapshot ? await getClip(snapshot.clip.id) ?? undefined : undefined };
+        return { success: true, clip: await getClip(snapshot.clip.id) ?? undefined };
       }
     }
     const targetClip = suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null;

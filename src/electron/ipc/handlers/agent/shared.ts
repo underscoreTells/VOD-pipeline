@@ -204,12 +204,21 @@ export async function assertChapterGroundingReady(
 export function sanitizeConversationHistory(
   messages: ChatConversationMessage[]
 ): Array<{ role: string; content: string }> {
-  return messages.map((item) => ({
-    role: item.role,
-    content: item.role === 'assistant'
-      ? sanitizeAssistantContent(item.content)
-      : item.content,
-  }));
+  return messages.map((item) => {
+    const mentions = item.role === 'user' ? parseChatMentions(item.mentions_json) : [];
+    const mentionContext = mentions.length > 0
+      ? `\n\n[Referenced entities: ${mentions
+          .map((mention) => `${mention.type}#${mention.id} ${JSON.stringify(mention.label)}`)
+          .join(', ')}]`
+      : '';
+
+    return {
+      role: item.role,
+      content: item.role === 'assistant'
+        ? sanitizeAssistantContent(item.content)
+        : `${item.content}${mentionContext}`,
+    };
+  });
 }
 
 export async function generateConversationTitle(
