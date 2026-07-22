@@ -32,7 +32,7 @@ export function resolveSegmentedPreviewTime(
   if (direction === 1) {
     for (const range of ranges) {
       if (time < range.start) return range.start;
-      if (time <= range.end) return time;
+      if (time < range.end) return time;
     }
     return ranges[0].start;
   }

@@ -90,6 +90,8 @@ describe("chapter preview media decisions", () => {
 
     expect(resolveSegmentedPreviewTime(ranges, 25, 1)).toBe(30);
     expect(resolveSegmentedPreviewTime(ranges, 45, 1)).toBe(50);
+    expect(resolveSegmentedPreviewTime(ranges, 20, 1)).toBe(30);
+    expect(resolveSegmentedPreviewTime(ranges, 60, 1)).toBe(10);
     expect(resolveSegmentedPreviewTime(ranges, 61, 1)).toBe(10);
     expect(resolveSegmentedPreviewTime(ranges, 45, -1)).toBe(40);
     expect(resolveSegmentedPreviewTime(ranges, 25, -1)).toBe(20);

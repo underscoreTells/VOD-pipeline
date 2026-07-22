@@ -703,6 +703,26 @@
     applyTransportState();
   }
 
+  function handleEnded() {
+    if (!videoRef) return;
+
+    if (
+      activeSource === 'normal'
+      && viewerMode === 'Suggestion'
+      && viewerRanges.length > 1
+      && timelineState.isPlaying
+      && timelineState.shuttleDirection === 1
+    ) {
+      handleTimeUpdate();
+      void videoRef.play().catch(() => {
+        setPlaying(false);
+      });
+      return;
+    }
+
+    setPlaying(false);
+  }
+
   function handleVideoError() {
     const error = videoRef?.error;
     console.error('[ChapterPreview] Video playback error', error);
@@ -949,6 +969,7 @@
           onseeking={handleSeeking}
           onseeked={handleSeeked}
           ontimeupdate={handleTimeUpdate}
+          onended={handleEnded}
           onloadedmetadata={handleLoadedMetadata}
           onerror={handleVideoError}
           preload="auto"
