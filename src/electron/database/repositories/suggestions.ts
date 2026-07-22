@@ -527,18 +527,40 @@ export async function supersedeSuggestion(
     || original.status !== 'pending'
     || replacement.supersedes_suggestion_id !== originalId
   ) return false;
-  const inheritedOwnedClipId = parseSuggestionPreviewSnapshot(original)?.ownedCreatedClipId;
+  const originalSnapshot = parseSuggestionPreviewSnapshot(original);
+  const inheritedOwnedClipId = originalSnapshot?.ownedCreatedClipId;
   const ownedPreviewClipId = original.action_type === 'create_clip'
     ? original.clip_id
     : inheritedOwnedClipId;
-  const replacementOwnsPreviewClip = ownedPreviewClipId !== null
+  let replacementOwnsPreviewClip = ownedPreviewClipId !== null
     && ownedPreviewClipId !== undefined
     && replacement.target_clip_id === ownedPreviewClipId;
   let ownershipSnapshotJson: string | null = null;
-  if (!replacementOwnsPreviewClip) {
+  if (isSplitSuggestion(original) && originalSnapshot) {
+    const replacementTargetsCreatedSegment = originalSnapshot.createdClipIds?.includes(
+      replacement.target_clip_id ?? -1
+    ) ?? false;
+    const replacementTargetsSplitPreview = replacement.target_clip_id === originalSnapshot.clip.id
+      || replacementTargetsCreatedSegment;
+    const preserveOwnedTarget = replacementTargetsSplitPreview
+      && inheritedOwnedClipId === originalSnapshot.clip.id;
+    const cleanup = await cleanupPendingSuggestionArtifacts(original, preserveOwnedTarget);
+    if (!cleanup.success) return false;
+
+    if (replacementTargetsCreatedSegment) {
+      const retargetResult = database.prepare(
+        `UPDATE suggestions SET target_clip_id = ?
+         WHERE id = ? AND status = 'pending' AND supersedes_suggestion_id = ?`
+      ).run(originalSnapshot.clip.id, replacementId, originalId);
+      if (retargetResult.changes !== 1) return false;
+    }
+    replacementOwnsPreviewClip = preserveOwnedTarget;
+  } else if (!replacementOwnsPreviewClip) {
     const cleanup = await cleanupPendingSuggestionArtifacts(original);
     if (!cleanup.success) return false;
-  } else {
+  }
+
+  if (replacementOwnsPreviewClip && ownedPreviewClipId !== null && ownedPreviewClipId !== undefined) {
     const previewClip = await getClip(ownedPreviewClipId);
     if (!previewClip) return false;
     const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(

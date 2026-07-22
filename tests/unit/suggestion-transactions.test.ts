@@ -9,6 +9,7 @@ import {
   deleteChatConversation,
   deleteChatMessagesAfter,
   getClip,
+  getSuggestion,
   previewSuggestionWithClip,
   rejectSuggestionsBatch,
   restoreRejectedSuggestionsBatch,
@@ -750,6 +751,93 @@ describeTx("suggestion transactions (withTransaction)", () => {
       });
       expect((await cancelSuggestionPreview(replacement.id)).success).toBe(true);
       expect(await getClip(preview.clip!.id)).toBeNull();
+    });
+
+    it('unwinds split artifacts when superseding a generated segment', async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Split segment revision', 'thread-split-segment-revision')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const clipId = db.prepare(
+        `INSERT INTO clips (project_id, asset_id, track_index, in_point, out_point, role, description, is_essential)
+         VALUES (?, ?, 0, 10, 30, 'setup', 'Original clip', 1)`
+      ).run(projectId, assetId).lastInsertRowid as number;
+      const split = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 30, description: 'Split clip', reasoning: null,
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: clipId,
+        action_payload_json: JSON.stringify({
+          split: { segments: [{ inPoint: 10, outPoint: 18 }, { inPoint: 22, outPoint: 30 }] },
+        }),
+        preview_snapshot_json: null, status: 'pending', display_order: 0, clip_id: null,
+      });
+      expect((await previewSuggestionWithClip(split.id)).success).toBe(true);
+      const splitSnapshot = JSON.parse((await getSuggestion(split.id))!.preview_snapshot_json!);
+      const generatedClipId = splitSnapshot.createdClipIds[0] as number;
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 23, out_point: 29, description: 'Revise second segment', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: generatedClipId,
+        action_payload_json: JSON.stringify({ update: { inPoint: 23, outPoint: 29 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: split.id,
+      });
+
+      expect(await supersedeSuggestion(split.id, replacement.id, conversationId, chapterId)).toBe(true);
+
+      expect(await getClip(generatedClipId)).toBeNull();
+      expect(await getClip(clipId)).toMatchObject({ in_point: 10, out_point: 30 });
+      expect(await getSuggestion(replacement.id)).toMatchObject({ target_clip_id: clipId });
+      expect((await previewSuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(await getClip(clipId)).toMatchObject({ in_point: 23, out_point: 29 });
+    });
+
+    it('removes extra split segments when transferring an inherited preview', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Owned split revision', 'thread-owned-split-revision')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 30, description: 'Owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const ownedPreview = await previewSuggestionWithClip(original.id);
+      const split = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 30, description: 'Split owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'split_clip', target_clip_id: ownedPreview.clip!.id,
+        action_payload_json: JSON.stringify({
+          split: { segments: [{ inPoint: 10, outPoint: 18 }, { inPoint: 22, outPoint: 30 }] },
+        }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, split.id, conversationId, chapterId)).toBe(true);
+      expect((await previewSuggestionWithClip(split.id)).success).toBe(true);
+      const splitSnapshot = JSON.parse((await getSuggestion(split.id))!.preview_snapshot_json!);
+      const generatedClipId = splitSnapshot.createdClipIds[0] as number;
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 12, out_point: 28, description: 'Revise owned preview', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: ownedPreview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 28 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 2, clip_id: null,
+        supersedes_suggestion_id: split.id,
+      });
+
+      expect(await supersedeSuggestion(split.id, replacement.id, conversationId, chapterId)).toBe(true);
+
+      expect(await getClip(generatedClipId)).toBeNull();
+      expect(await getClip(ownedPreview.clip!.id)).toMatchObject({ in_point: 10, out_point: 30 });
+      expect(await getSuggestion(replacement.id)).toMatchObject({
+        target_clip_id: ownedPreview.clip!.id,
+        preview_snapshot_json: expect.stringContaining('ownedCreatedClipId'),
+      });
     });
 
     it('recreates an inherited target when undoing rejection', async () => {

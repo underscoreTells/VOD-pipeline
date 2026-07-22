@@ -788,8 +788,13 @@
     const focusStart = viewerRange.start;
     const focusEnd = viewerRange.end;
     void focusEnd;
-    if (currentTime >= focusStart - 0.01 && currentTime <= focusEnd + 0.01) return;
-    pendingGlobalSeekTime = focusStart;
+    const focusedTime = viewerMode === 'Suggestion' && viewerRanges.length > 1
+      ? resolveSegmentedPreviewTime(viewerRanges, currentTime, 1)
+      : currentTime >= focusStart - 0.01 && currentTime <= focusEnd + 0.01
+        ? currentTime
+        : focusStart;
+    if (Math.abs(focusedTime - currentTime) <= 0.01) return;
+    pendingGlobalSeekTime = focusedTime;
     if (videoRef.readyState >= 1) applyPendingSeek();
   });
 
