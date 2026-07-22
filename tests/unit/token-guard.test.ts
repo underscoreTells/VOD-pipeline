@@ -195,7 +195,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(compacted.videoAnalysisAssets).toEqual(context.videoAnalysisAssets);
   });
 
-  it("prioritizes selected clips and details for mentioned suggestions during hard compaction", () => {
+  it("prioritizes target clips and details for mentioned suggestions during hard compaction", () => {
     const context = {
       chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
       chapterAssetIds: [11],
@@ -212,7 +212,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
       detailedTranscripts: [],
       videoAnalysisAssets: [{ assetId: 11, proxyPath: "/tmp/chapter-proxy.mp4" }],
       referencedEntities: [{ type: "suggestion", id: 42, label: "Trim payoff" }],
-      selectedClipIds: [80],
+      selectedClipIds: [],
       suggestionSummary: [
         "- suggestion#1 action=create_clip keep window 1.00-2.00s status=pending desc=Opening",
         "- suggestion#42 action=update_clip update clip #80 79.00-80.00s status=pending desc=Trim payoff",
@@ -220,7 +220,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     };
 
     const result = applyNearLimitTokenGuard(
-      [{ role: "user", content: "Revise @suggestion 42 using the selected clip." }],
+      [{ role: "user", content: "Revise @suggestion 42." }],
       context,
       "openaiCompatible",
       8192

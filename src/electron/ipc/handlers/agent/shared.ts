@@ -268,9 +268,14 @@ export async function runConversationTurn(
     ensureChapterProxyReady: false,
   });
   options.signal?.throwIfAborted();
+  const referencedSuggestionIds = new Set(
+    (options.mentions ?? [])
+      .filter((mention) => mention.type === 'suggestion')
+      .map((mention) => mention.id)
+  );
   const contextWithSuggestions = {
     ...initialContext,
-    suggestionSummary: summarizeSuggestions(existingSuggestions),
+    suggestionSummary: summarizeSuggestions(existingSuggestions, referencedSuggestionIds),
     referencedEntities: options.mentions ?? [],
     selectedClipIds: options.selectedClipIds,
   };
@@ -417,12 +422,20 @@ function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
-function summarizeSuggestions(suggestions: Suggestion[]): string {
+function summarizeSuggestions(
+  suggestions: Suggestion[],
+  referencedSuggestionIds: ReadonlySet<number> = new Set()
+): string {
   if (suggestions.length === 0) {
     return '- none';
   }
 
-  return suggestions
+  const prioritizedSuggestions = [
+    ...suggestions.filter((suggestion) => referencedSuggestionIds.has(suggestion.id)),
+    ...suggestions.filter((suggestion) => !referencedSuggestionIds.has(suggestion.id)),
+  ];
+
+  return prioritizedSuggestions
     .slice(0, 12)
     .map((suggestion) => {
       const prefix = suggestion.action_type === 'update_clip'

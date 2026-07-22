@@ -78,6 +78,11 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
         .filter((line) => referencedSuggestionIds.some((id) => line.includes(`suggestion#${id} `)))
         .join('\n')
     : '';
+  const referencedSuggestionTargetClipIds = referencedSuggestionSummary
+    .split('\n')
+    .map((line) => line.match(/\b(?:update|delete|split) clip #(\d+)\b/)?.[1])
+    .filter((id): id is string => id !== undefined)
+    .map(Number);
   const chapterClips = Array.isArray(context.chapterClips)
     ? context.chapterClips.map((clip) => {
         if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return clip;
@@ -169,6 +174,7 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
         (Array.isArray(context.selectedClipIds) ? context.selectedClipIds : [])
           .filter((id): id is number => typeof id === 'number' && Number.isFinite(id))
       )
+      .concat(referencedSuggestionTargetClipIds)
   );
   const prioritizedClips = [
     ...compactClips.filter((clip) => (

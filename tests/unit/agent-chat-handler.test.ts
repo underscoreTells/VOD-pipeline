@@ -376,6 +376,53 @@ describe("agent chat handler", () => {
     );
   });
 
+  it("includes explicitly mentioned suggestions beyond the normal summary limit", async () => {
+    const suggestions = Array.from({ length: 13 }, (_, index) => ({
+      id: index + 1,
+      chapter_id: 3,
+      conversation_id: 2,
+      chat_message_id: 101,
+      in_point: index,
+      out_point: index + 1,
+      description: `Suggestion ${index + 1}`,
+      reasoning: null,
+      provider: "gemini",
+      action_type: index === 12 ? "update_clip" : "create_clip",
+      target_clip_id: index === 12 ? 80 : null,
+      action_payload_json: null,
+      preview_snapshot_json: null,
+      status: "pending",
+      supersedes_suggestion_id: null,
+      display_order: index,
+      created_at: "2026-04-18T12:00:00.000Z",
+      applied_at: null,
+      clip_id: null,
+    }));
+    databaseMocks.getSuggestionsByConversation.mockResolvedValue(suggestions);
+    databaseMocks.getSuggestion.mockResolvedValue(suggestions[12]);
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "Revised it.", outcome: "proposal" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    await chatHandler?.({}, {
+      clientRequestId: "client-mentioned-suggestion",
+      projectId: "1",
+      conversationId: 2,
+      message: "Revise this suggestion",
+      mentions: [{ type: "suggestion", id: 13, label: "Suggestion 13" }],
+    });
+
+    const context = handlerSupportMocks.applyNearLimitTokenGuard.mock.calls[0]?.[1];
+    expect(context?.suggestionSummary).toContain(
+      "suggestion#13 action=update_clip update clip #80"
+    );
+    expect(context?.suggestionSummary).not.toContain("suggestion#12 ");
+  });
+
   it("reports grounding status through the dedicated IPC handler", async () => {
     handlerSupportMocks.getAgentGroundingStatus.mockResolvedValue({
       status: "ready",
