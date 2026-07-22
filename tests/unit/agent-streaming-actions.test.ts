@@ -170,6 +170,7 @@ describe("agent streaming message actions", () => {
     }));
     const request = agentApiMocks.agentChat.mock.calls[0]?.[0];
     expect(() => structuredClone(request)).not.toThrow();
+    expect(proposalMocks.loadSuggestions).toHaveBeenCalledWith("3", 2);
   });
 
   it("reconciles edited history against persisted message metadata", async () => {

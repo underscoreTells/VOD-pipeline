@@ -102,8 +102,9 @@ export function mergeSuggestionUpdateWindow(
 /**
  * Resolve the window a pending suggestion would produce. Update suggestions
  * merge their payload onto the live target window (acceptance reads the
- * target's current range, not the proposal-time stored range); everything
- * else falls back to the stored proposal range.
+ * target's current range, not the proposal-time stored range). Delete
+ * suggestions also resolve to the live target because their stored range is
+ * only a placeholder. Everything else falls back to the stored proposal range.
  */
 export function resolveSuggestionWindowForChapter(
   suggestion: SuggestionUpdateFields,
@@ -112,6 +113,9 @@ export function resolveSuggestionWindowForChapter(
 ): ClipSourceRange {
   if (suggestion.action_type === 'update_clip' && suggestion.target_clip_id && targetWindow) {
     return mergeSuggestionUpdateWindow(suggestion, targetWindow, chapter);
+  }
+  if (suggestion.action_type === 'delete_clip' && suggestion.target_clip_id && targetWindow) {
+    return targetWindow;
   }
   return normalizeSuggestionWindowForChapter(suggestion, chapter);
 }

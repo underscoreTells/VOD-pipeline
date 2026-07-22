@@ -147,6 +147,21 @@ describe('clip timing helpers', () => {
     });
   });
 
+  it('resolves delete suggestions against the live target window', () => {
+    const chapter = createChapter({ start_time: 100, end_time: 200 });
+    const suggestion = {
+      in_point: 0,
+      out_point: 1,
+      action_type: 'delete_clip' as const,
+      target_clip_id: 7,
+      action_payload_json: null,
+    };
+
+    expect(
+      resolveSuggestionWindowForChapter(suggestion, chapter, { start: 140, end: 150 })
+    ).toEqual({ start: 140, end: 150 });
+  });
+
   it('resolves every kept segment in a multi-split suggestion', () => {
     const chapter = createChapter({ start_time: 100, end_time: 200 });
     const suggestion = {

@@ -29,6 +29,7 @@ export function createDraftRoughCutProposalsTool(
             out_point: draft.out_point,
             description: draft.description,
             reasoning: draft.reasoning,
+            supersedesSuggestionId: draft.supersedesSuggestionId,
           });
           continue;
         }

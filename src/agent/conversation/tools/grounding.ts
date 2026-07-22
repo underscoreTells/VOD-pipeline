@@ -63,6 +63,10 @@ export function validateProposalGrounding(
       continue;
     }
 
+    if (proposal.type === 'delete_clip') {
+      validateTargetClipInChapter(input, proposal.clipId, proposal.type);
+    }
+
     if (proposal.type === 'split_clip') {
       validateSplitClipSegments(input, proposal);
     }
@@ -81,14 +85,23 @@ export function validateProposalGrounding(
   }
 }
 
+function validateTargetClipInChapter(
+  input: ConversationTurnInput,
+  clipId: number,
+  proposalType: 'delete_clip' | 'split_clip'
+): { start: number; end: number } {
+  const targetRange = getChapterLocalClipRange(input, clipId);
+  if (!targetRange) {
+    throw new Error(`${proposalType} target clip ${clipId} is not available in this chapter.`);
+  }
+  return targetRange;
+}
+
 function validateSplitClipSegments(
   input: ConversationTurnInput,
   proposal: Extract<ProposalDraft, { type: 'split_clip' }>
 ): void {
-  const targetRange = getChapterLocalClipRange(input, proposal.clipId);
-  if (!targetRange) {
-    throw new Error(`split_clip target clip ${proposal.clipId} is not available in this chapter.`);
-  }
+  const targetRange = validateTargetClipInChapter(input, proposal.clipId, proposal.type);
 
   let previousOut = Number.NEGATIVE_INFINITY;
   for (const segment of proposal.segments) {

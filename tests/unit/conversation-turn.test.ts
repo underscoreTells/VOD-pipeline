@@ -811,6 +811,7 @@ describe("conversation turn runner", () => {
                     out_point: 131,
                     description: "Keep the reaction after the eating beat",
                     reasoning: "This skips the silent eating stretch and lands on the reaction.",
+                    supersedesSuggestionId: 17,
                   },
                 ],
               },
@@ -841,6 +842,7 @@ describe("conversation turn runner", () => {
       in_point: 123,
       out_point: 131,
       description: "Keep the reaction after the eating beat",
+      supersedesSuggestionId: 17,
     });
   });
 

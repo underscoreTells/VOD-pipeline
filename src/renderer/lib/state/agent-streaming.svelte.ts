@@ -310,13 +310,7 @@ async function runStreamingMutation(options: {
         response.data
       );
 
-      if (options.kind === "send") {
-        if (Array.isArray(response.data.suggestions) && response.data.suggestions.length > 0) {
-          agentState.suggestions.push(...response.data.suggestions);
-        }
-      } else {
-        await refreshSuggestions(options.conversationId);
-      }
+      await refreshSuggestions(options.conversationId);
 
       return true;
     }

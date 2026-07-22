@@ -222,12 +222,17 @@
     if (composerKey === previousComposerKey) return;
     previousComposerKey = composerKey;
     message = agentState.composerDrafts[composerKey] ?? '';
-    composerMentions = [];
+    composerMentions = (agentState.composerMentionDrafts[composerKey] ?? []).map(
+      (mention) => ({ ...mention })
+    );
   });
 
   $effect(() => {
     if (!composerKey) return;
     agentState.composerDrafts[composerKey] = message;
+    agentState.composerMentionDrafts[composerKey] = composerMentions.map(
+      (mention) => ({ ...mention })
+    );
   });
 
   $effect(() => {
@@ -360,6 +365,7 @@
     message = "";
     composerMentions = [];
     agentState.composerDrafts[composerKey] = '';
+    agentState.composerMentionDrafts[composerKey] = [];
     autoResizeMessageInput();
     await sendChatMessage(msg, mentions);
   }

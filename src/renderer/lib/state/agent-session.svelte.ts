@@ -76,6 +76,7 @@ export interface AgentState {
   suggestions: Suggestion[];
   selectedSuggestionId: number | null;
   composerDrafts: Record<string, string>;
+  composerMentionDrafts: Record<string, ChatEntityMention[]>;
   timelineProposals: TimelineActionProposal[];
   selectedProvider: LLMProviderType;
   isStreaming: boolean;
@@ -100,6 +101,7 @@ export const agentState = $state<AgentState>({
   suggestions: [],
   selectedSuggestionId: null,
   composerDrafts: {},
+  composerMentionDrafts: {},
   timelineProposals: [],
   selectedProvider: "gemini",
   isStreaming: false,
