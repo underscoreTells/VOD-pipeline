@@ -320,6 +320,96 @@ describe("agent proposal bulk actions", () => {
     expect(agentApiMocks.applySuggestionBatch).toHaveBeenCalledWith({ suggestionIds: [1, 2] });
   });
 
+  it("rejects split ranges that overlap a surviving clip after an earlier update", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [
+      targetClip,
+      { ...targetClip, id: 42, in_point: 25, out_point: 35, description: "Survivor" },
+    ];
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [
+      createSuggestion(1, {
+        action_type: "update_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ update: { outPoint: 30 } }),
+      }),
+      createSuggestion(2, {
+        action_type: "split_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({
+          split: {
+            segments: [
+              { inPoint: 10, outPoint: 20 },
+              { inPoint: 20, outPoint: 30 },
+            ],
+          },
+        }),
+      }),
+    ];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const result = await applyAllSuggestions();
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "Resolve the overlapping suggested cut before accepting it.",
+    });
+    expect(agentApiMocks.applySuggestionBatch).not.toHaveBeenCalled();
+  });
+
+  it("allows an overlapping update when its target is deleted later in the batch", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [
+      targetClip,
+      { ...targetClip, id: 42, in_point: 25, out_point: 35, description: "Survivor" },
+    ];
+    agentApiMocks.applySuggestionBatch.mockResolvedValue({
+      success: true,
+      data: { appliedCount: 2, total: 2, results: [] },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [
+      createSuggestion(1, {
+        action_type: "update_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ update: { outPoint: 30 } }),
+      }),
+      createSuggestion(2, {
+        action_type: "delete_clip",
+        target_clip_id: targetClip.id,
+        action_payload_json: JSON.stringify({ delete: true }),
+      }),
+    ];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const result = await applyAllSuggestions();
+
+    expect(result).toMatchObject({ success: true, appliedCount: 2, total: 2 });
+    expect(agentApiMocks.applySuggestionBatch).toHaveBeenCalledWith({ suggestionIds: [1, 2] });
+  });
+
   it("rejects a later action targeting a clip split earlier in the batch", async () => {
     const targetClip = {
       id: 41,
@@ -432,5 +522,46 @@ describe("agent proposal bulk actions", () => {
     expect(agentState.suggestions[0]?.status).toBe("applied");
     expect(canUndo()).toBe(true);
     expect(getLastCommandDescription()).toBe("Apply suggested cut");
+  });
+
+  it("restores a recreated inherited target to the timeline when undoing rejection", async () => {
+    const restoredClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Restored target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    agentApiMocks.rejectSuggestionBatch.mockResolvedValue({
+      success: true,
+      data: { appliedCount: 1, total: 1, results: [{ suggestionId: 1, success: true }] },
+    });
+    agentApiMocks.restoreSuggestionBatch.mockResolvedValue({
+      success: true,
+      data: {
+        appliedCount: 1,
+        total: 1,
+        results: [{ suggestionId: 1, success: true, clip: restoredClip }],
+      },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [createSuggestion(1, {
+      action_type: "update_clip",
+      target_clip_id: restoredClip.id,
+    })];
+
+    const { rejectSuggestion } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const { undo } = await import("../../src/renderer/lib/state/undo-redo.svelte.js");
+    expect(await rejectSuggestion(1)).toBe(true);
+    timelineMocks.timelineState.clips = [];
+
+    expect(await undo()).toBe(true);
+    expect(timelineMocks.timelineState.clips).toContainEqual(restoredClip);
+    expect(agentState.suggestions[0]?.status).toBe("pending");
   });
 });

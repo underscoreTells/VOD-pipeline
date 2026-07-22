@@ -111,12 +111,23 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
     ...(context.chapter && typeof context.chapter === 'object' ? { chapter: context.chapter } : {}),
     chapterAssetIds: Array.isArray(context.chapterAssetIds) ? context.chapterAssetIds : [],
     chapterClips: [],
+    videoAnalysisAssets: [],
     ...(Array.isArray(context.referencedEntities) ? { referencedEntities: context.referencedEntities } : {}),
   };
   if (estimateContextTokens(minimalContext) > maxTokens) {
     // Returning the original payload forces the caller's final size check to
     // reject the turn instead of silently running without chapter grounding.
     return contextPayload;
+  }
+
+  if (Array.isArray(context.videoAnalysisAssets)) {
+    for (const asset of context.videoAnalysisAssets) {
+      const candidateAssets = [...(minimalContext.videoAnalysisAssets as unknown[]), asset];
+      const candidateContext = { ...minimalContext, videoAnalysisAssets: candidateAssets };
+      if (estimateContextTokens(candidateContext) <= maxTokens) {
+        minimalContext.videoAnalysisAssets = candidateAssets;
+      }
+    }
   }
 
   const compactClips = Array.isArray(context.chapterClips)

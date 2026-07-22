@@ -174,7 +174,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
       })),
       transcript: "t".repeat(30_000),
       detailedTranscripts: [],
-      videoAnalysisAssets: [],
+      videoAnalysisAssets: [{ assetId: 11, proxyPath: "/tmp/chapter-proxy.mp4" }],
       referencedEntities: [{ type: "clip", id: 80 }],
     };
 
@@ -192,6 +192,7 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(compacted.chapterClips.length).toBeGreaterThan(0);
     expect(compacted.chapterClips.length).toBeLessThan(context.chapterClips.length);
     expect(compacted.chapterClips.some((clip) => clip.id === 80)).toBe(true);
+    expect(compacted.videoAnalysisAssets).toEqual(context.videoAnalysisAssets);
   });
 
   it("drops additional older messages when the retained recent set is still too large", () => {

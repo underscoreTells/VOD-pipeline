@@ -294,13 +294,19 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
     rangesByAsset.set(clip.asset_id, ranges);
   }
   for (const proposal of finalProposals) {
-    if (proposal.targetClipId !== null && splitTargetIds.has(proposal.targetClipId)) continue;
+    if (
+      proposal.targetClipId !== null
+      && (splitTargetIds.has(proposal.targetClipId) || removedTargetIds.has(proposal.targetClipId))
+    ) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     ranges.push({ ...proposal.proposed, owner: proposal.owner });
     rangesByAsset.set(proposal.assetId, ranges);
   }
   for (const proposal of finalProposals) {
-    if (proposal.targetClipId !== null && splitTargetIds.has(proposal.targetClipId)) continue;
+    if (
+      proposal.targetClipId !== null
+      && (splitTargetIds.has(proposal.targetClipId) || removedTargetIds.has(proposal.targetClipId))
+    ) continue;
     const ranges = rangesByAsset.get(proposal.assetId) ?? [];
     for (const range of ranges) {
       if (range.owner === proposal.owner) continue;
@@ -310,6 +316,22 @@ function validateSuggestionBatch(suggestionIds: number[]): string | null {
         return range.owner.startsWith('clip:')
           ? 'Resolve the overlapping suggested cut before accepting it.'
           : 'Suggested cuts in this batch overlap each other.';
+      }
+    }
+  }
+  for (const [targetClipId, splitRanges] of splitRangesByTarget) {
+    const target = timelineState.clips.find((clip) => clip.id === targetClipId);
+    if (!target) continue;
+    const ranges = rangesByAsset.get(target.asset_id) ?? [];
+    const splitOwnerPrefix = `clip:${targetClipId}:split:`;
+    for (const splitRange of splitRanges) {
+      for (const range of ranges) {
+        if (range.owner.startsWith(splitOwnerPrefix)) continue;
+        if (rangesOverlap(splitRange, range, 0.001)) {
+          return range.owner.startsWith('clip:')
+            ? 'Resolve the overlapping suggested cut before accepting it.'
+            : 'Suggested cuts in this batch overlap each other.';
+        }
       }
     }
   }
@@ -543,8 +565,14 @@ class RejectSuggestionBatchCommand implements Command {
   async undo(isCurrent?: () => boolean): Promise<void> {
     if (isCurrent && !isCurrent()) return;
     const response = await restoreSuggestionBatch({ suggestionIds: this.suggestionIds });
-    if (!response.success) {
+    if (!response.success || !response.data) {
       throw new Error(response.error || 'Failed to restore suggested cuts');
+    }
+    await refreshProjectTimelineClips();
+    if (this.isProjectCurrent()) {
+      for (const result of response.data.results) {
+        if (result.success) upsertTimelineClip(result.clip);
+      }
     }
     if (!this.isConversationCurrent()) return;
     setSuggestionStatus(this.suggestionIds, 'pending');
