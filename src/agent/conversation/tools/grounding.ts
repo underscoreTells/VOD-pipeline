@@ -204,18 +204,24 @@ function hasSelectedClipGrounding(
   proposal: ProposalDraft,
   range: { start: number; end: number } | null
 ): boolean {
+  const groundedClipIds = new Set([
+    ...input.selectedClipIds,
+    ...(input.context.referencedEntities ?? [])
+      .filter((entity) => entity.type === 'clip')
+      .map((entity) => entity.id),
+  ]);
   if (
     proposal.type !== "range_suggestion" && proposal.type !== 'create_clip' &&
-    input.selectedClipIds.includes(proposal.clipId)
+    groundedClipIds.has(proposal.clipId)
   ) {
     return true;
   }
 
-  if (!range || input.selectedClipIds.length === 0) {
+  if (!range || groundedClipIds.size === 0) {
     return false;
   }
 
-  return input.selectedClipIds.some((clipId) => {
+  return [...groundedClipIds].some((clipId) => {
     const selectedRange = getChapterLocalClipRange(input, clipId);
     return selectedRange
       ? rangesOverlap(range.start, range.end, selectedRange.start, selectedRange.end)

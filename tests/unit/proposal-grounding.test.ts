@@ -54,4 +54,16 @@ describe('proposal grounding', () => {
       reasoning: 'Remove the current chapter clip',
     }])).not.toThrow();
   });
+
+  it('accepts a structural target grounded by an explicit clip mention', () => {
+    const input = createInput();
+    input.context.transcript = '';
+    input.context.referencedEntities = [{ type: 'clip', id: 7, label: 'Clip 7' }];
+
+    expect(() => validateProposalGrounding(input, createAccumulator(), [{
+      type: 'delete_clip',
+      clipId: 7,
+      reasoning: 'Remove the explicitly mentioned clip',
+    }])).not.toThrow();
+  });
 });

@@ -18,6 +18,10 @@ const agentApiMocks = vi.hoisted(() => ({
   revertSuggestionBatch: vi.fn(),
 }));
 
+const clipsApiMocks = vi.hoisted(() => ({
+  getClipsByProject: vi.fn(),
+}));
+
 const timelineMocks = vi.hoisted(() => {
   const timelineState = {
     clips: [] as Array<{ id: number; start_time: number }>,
@@ -44,6 +48,7 @@ const timelineMocks = vi.hoisted(() => {
 });
 
 vi.mock("../../src/renderer/lib/api/agent.js", () => agentApiMocks);
+vi.mock("../../src/renderer/lib/api/clips.js", () => clipsApiMocks);
 vi.mock("../../src/renderer/lib/state/timeline.svelte", () => timelineMocks);
 
 function createSuggestion(
@@ -90,12 +95,17 @@ describe("agent proposal bulk actions", () => {
     agentApiMocks.rejectSuggestionBatch.mockReset();
     agentApiMocks.restoreSuggestionBatch.mockReset();
     agentApiMocks.revertSuggestionBatch.mockReset();
+    clipsApiMocks.getClipsByProject.mockReset();
     timelineMocks.createClip.mockReset();
     timelineMocks.deleteClip.mockReset();
     timelineMocks.selectClip.mockReset();
     timelineMocks.setPlayhead.mockReset();
     timelineMocks.updateClip.mockReset();
     timelineMocks.timelineState.clips = [];
+    clipsApiMocks.getClipsByProject.mockImplementation(async () => ({
+      success: true,
+      data: timelineMocks.timelineState.clips,
+    }));
 
     agentApiMocks.rejectSuggestion.mockResolvedValue({
       success: true,
@@ -133,6 +143,7 @@ describe("agent proposal bulk actions", () => {
 
     const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
     const { chaptersState } = await import("../../src/renderer/lib/state/chapters.svelte.js");
+    const { projectDetail } = await import("../../src/renderer/lib/state/project-media.svelte.js");
     agentState.currentProjectId = "1";
     agentState.currentChapterId = "2";
     agentState.selectedConversationId = 12;
@@ -156,6 +167,7 @@ describe("agent proposal bulk actions", () => {
     }];
     chaptersState.selectedChapterId = 2;
     chaptersState.chapterAssets = new Map([[2, [11]]]);
+    projectDetail.projectId = 1;
   });
 
   it("reviews pending suggestions as renderer-only ghosts without preview IPC", async () => {
@@ -353,5 +365,26 @@ describe("agent proposal bulk actions", () => {
       error: "A suggested cut targets a clip split earlier in this batch.",
     });
     expect(agentApiMocks.applySuggestionBatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a committed apply undoable when the post-commit timeline refresh fails", async () => {
+    clipsApiMocks.getClipsByProject.mockRejectedValue(new Error("refresh unavailable"));
+    agentApiMocks.applySuggestionBatch.mockResolvedValue({
+      success: true,
+      data: { appliedCount: 1, total: 1, results: [] },
+    });
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [createSuggestion(1, {
+      action_payload_json: JSON.stringify({ create: { assetId: 11 } }),
+    })];
+
+    const { applySuggestion } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const { canUndo, getLastCommandDescription } = await import("../../src/renderer/lib/state/undo-redo.svelte.js");
+    const result = await applySuggestion(1);
+
+    expect(result).toEqual({ success: true });
+    expect(agentState.suggestions[0]?.status).toBe("applied");
+    expect(canUndo()).toBe(true);
+    expect(getLastCommandDescription()).toBe("Apply suggested cut");
   });
 });

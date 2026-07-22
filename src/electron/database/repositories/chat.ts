@@ -7,7 +7,8 @@ import type {
   UpdateChatConversationInput,
 } from '../../../shared/types/database.js';
 import { DEFAULT_CONVERSATION_TITLE } from '../../../shared/utils/conversation-title.js';
-import { getDatabase } from '../client.js';
+import { getDatabase, withTransaction } from '../client.js';
+import { cleanupPendingSuggestionsForMessages } from './suggestions.js';
 
 function touchConversation(
   database: Awaited<ReturnType<typeof getDatabase>>,
@@ -207,11 +208,19 @@ export async function deleteChatMessagesAfter(
     return 0;
   }
 
-  const result = database.prepare(
-    `DELETE FROM chat_messages
-     WHERE conversation_id = ?
-       AND (created_at > ? OR (created_at = ? AND id > ?))`
-  ).run(conversationId, target.created_at, target.created_at, messageId);
+  const result = await withTransaction(async () => {
+    const messageIds = (database.prepare(
+      `SELECT id FROM chat_messages
+       WHERE conversation_id = ?
+         AND (created_at > ? OR (created_at = ? AND id > ?))`
+    ).all(conversationId, target.created_at, target.created_at, messageId) as Array<{ id: number }>)
+      .map(({ id }) => id);
+    await cleanupPendingSuggestionsForMessages(messageIds);
+    return database.prepare(
+      `DELETE FROM chat_messages
+       WHERE id IN (${messageIds.map(() => '?').join(', ') || 'NULL'})`
+    ).run(...messageIds);
+  });
 
   if (result.changes > 0) {
     touchConversation(database, conversationId);

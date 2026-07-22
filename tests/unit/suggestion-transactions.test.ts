@@ -6,6 +6,7 @@ import {
   applySuggestionWithClip,
   cancelSuggestionPreview,
   createSuggestion,
+  deleteChatMessagesAfter,
   getClip,
   previewSuggestionWithClip,
   revertAppliedSuggestionsBatch,
@@ -488,6 +489,54 @@ describeTx("suggestion transactions (withTransaction)", () => {
       expect(db.prepare('SELECT target_clip_id FROM suggestions WHERE id = ?').get(replacement.id)).toEqual({
         target_clip_id: preview.clip!.id,
       });
+      expect((await previewSuggestionWithClip(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toMatchObject({ in_point: 12, out_point: 18 });
+      expect((await cancelSuggestionPreview(replacement.id)).success).toBe(true);
+      expect(await getClip(preview.clip!.id)).toBeNull();
+    });
+
+    it('restores a superseded suggestion and cleans transferred preview ownership when its replacement message is deleted', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Replacement lifecycle', 'thread-replacement-lifecycle')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const originalMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Original', '2026-04-18T12:00:00.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const retainedUserMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'user', 'Revise it', '2026-04-18T12:00:01.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const replacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Replacement', '2026-04-18T12:00:02.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: originalMessageId,
+        in_point: 10, out_point: 20, description: 'Original preview', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const preview = await previewSuggestionWithClip(original.id);
+      expect(preview.success).toBe(true);
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: replacementMessageId,
+        in_point: 12, out_point: 18, description: 'Trim preview', reasoning: null,
+        provider: 'gemini', action_type: 'update_clip', target_clip_id: preview.clip!.id,
+        action_payload_json: JSON.stringify({ update: { inPoint: 12, outPoint: 18 } }),
+        preview_snapshot_json: null, status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+
+      expect(await deleteChatMessagesAfter(conversationId, retainedUserMessageId)).toBe(1);
+
+      expect(db.prepare('SELECT status FROM suggestions WHERE id = ?').get(original.id)).toEqual({ status: 'pending' });
+      expect(db.prepare('SELECT id FROM suggestions WHERE id = ?').get(replacement.id)).toBeUndefined();
+      expect(await getClip(preview.clip!.id)).toBeNull();
     });
   });
 });

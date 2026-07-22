@@ -213,31 +213,36 @@ async function restoreClipFromSuggestionSnapshot(
   const snapshot = parseSuggestionPreviewSnapshot(suggestion);
   const targetClipId = suggestion.target_clip_id ?? suggestion.clip_id;
 
-  if (!snapshot || !targetClipId) {
+  if (!snapshot) {
     return { success: true };
   }
 
-  const targetClip = await getClip(targetClipId);
-  if (!targetClip) {
-    return { success: true };
+  let refreshed: Clip | null = null;
+  if (targetClipId) {
+    const targetClip = await getClip(targetClipId);
+    if (targetClip) {
+      const restored = await updateClip(targetClip.id, {
+        in_point: snapshot.clip.in_point,
+        out_point: snapshot.clip.out_point,
+        role: snapshot.clip.role,
+        description: snapshot.clip.description,
+        is_essential: snapshot.clip.is_essential,
+      });
+
+      if (!restored) {
+        return {
+          success: false,
+          error: `Failed to restore clip ${targetClip.id} from preview snapshot`,
+        };
+      }
+      refreshed = await getClip(targetClip.id);
+    }
   }
 
-  const restored = await updateClip(targetClip.id, {
-    in_point: snapshot.clip.in_point,
-    out_point: snapshot.clip.out_point,
-    role: snapshot.clip.role,
-    description: snapshot.clip.description,
-    is_essential: snapshot.clip.is_essential,
-  });
-
-  if (!restored) {
-    return {
-      success: false,
-      error: `Failed to restore clip ${targetClip.id} from preview snapshot`,
-    };
+  if (snapshot.ownedCreatedClipId) {
+    await deleteClip(snapshot.ownedCreatedClipId);
+    if (refreshed?.id === snapshot.ownedCreatedClipId) refreshed = null;
   }
-
-  const refreshed = await getClip(targetClip.id);
   return { success: true, clip: refreshed ?? undefined };
 }
 
@@ -250,6 +255,11 @@ async function restoreStructuralSuggestionSnapshot(
 
   for (const createdClipId of snapshot.createdClipIds ?? []) {
     await deleteClip(createdClipId);
+  }
+
+  if (snapshot.ownedCreatedClipId === snapshot.clip.id) {
+    await deleteClip(snapshot.ownedCreatedClipId);
+    return { success: true };
   }
 
   let clip = await getClip(snapshot.clip.id);
@@ -517,20 +527,67 @@ export async function supersedeSuggestion(
   const replacementOwnsPreviewClip = original.action_type === 'create_clip'
     && original.clip_id !== null
     && replacement.target_clip_id === original.clip_id;
+  let ownershipSnapshotJson: string | null = null;
   if (!replacementOwnsPreviewClip) {
     const cleanup = await cleanupPendingSuggestionArtifacts(original);
     if (!cleanup.success) return false;
+  } else {
+    const previewClip = await getClip(original.clip_id!);
+    if (!previewClip) return false;
+    const ownershipSnapshot = parseSuggestionPreviewSnapshotJson(
+      serializeSuggestionPreviewSnapshot(previewClip)
+    );
+    if (!ownershipSnapshot) return false;
+    ownershipSnapshot.ownedCreatedClipId = previewClip.id;
+    ownershipSnapshotJson = JSON.stringify(ownershipSnapshot);
   }
-  const result = database.prepare(
-    `UPDATE suggestions
-     SET status = 'superseded', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL
-     WHERE id = ? AND conversation_id = ? AND chapter_id = ? AND status = 'pending'
-        AND EXISTS (
-          SELECT 1 FROM suggestions replacement
-          WHERE replacement.id = ? AND replacement.supersedes_suggestion_id = suggestions.id
-        )`
-  ).run(originalId, conversationId, chapterId, replacementId);
-  return result.changes === 1;
+  const transfer = database.transaction(() => {
+    if (ownershipSnapshotJson) {
+      const replacementResult = database.prepare(
+        `UPDATE suggestions SET preview_snapshot_json = ?
+         WHERE id = ? AND status = 'pending' AND supersedes_suggestion_id = ?`
+      ).run(ownershipSnapshotJson, replacementId, originalId);
+      if (replacementResult.changes !== 1) return false;
+    }
+    const result = database.prepare(
+      `UPDATE suggestions
+       SET status = 'superseded', applied_at = NULL, clip_id = NULL, preview_snapshot_json = NULL
+       WHERE id = ? AND conversation_id = ? AND chapter_id = ? AND status = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM suggestions replacement
+            WHERE replacement.id = ? AND replacement.supersedes_suggestion_id = suggestions.id
+          )`
+    ).run(originalId, conversationId, chapterId, replacementId);
+    return result.changes === 1;
+  });
+  return transfer();
+}
+
+export async function cleanupPendingSuggestionsForMessages(messageIds: number[]): Promise<void> {
+  if (messageIds.length === 0) return;
+  const database = await getDatabase();
+  const placeholders = messageIds.map(() => '?').join(', ');
+  const suggestions = (database.prepare(
+    `SELECT id, chapter_id, conversation_id, chat_message_id, in_point, out_point, description, reasoning, provider,
+            action_type, target_clip_id, action_payload_json, preview_snapshot_json,
+            status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
+     FROM suggestions
+     WHERE chat_message_id IN (${placeholders}) AND status = 'pending'
+     ORDER BY id DESC`
+  ).all(...messageIds) as Suggestion[]).map(normalizeSuggestionRecord);
+
+  for (const suggestion of suggestions) {
+    const cleanup = await cleanupPendingSuggestionArtifacts(suggestion);
+    if (!cleanup.success) {
+      throw new Error(cleanup.error || `Failed to clean up suggestion ${suggestion.id}`);
+    }
+    if (suggestion.supersedes_suggestion_id) {
+      database.prepare(
+        `UPDATE suggestions SET status = 'pending'
+         WHERE id = ? AND status = 'superseded'`
+      ).run(suggestion.supersedes_suggestion_id);
+    }
+  }
 }
 
 export async function getSuggestionsByChapter(
@@ -613,12 +670,24 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
     if (targetError) return { success: false, error: targetError };
     if (suggestion.preview_snapshot_json) {
       const snapshot = parseSuggestionPreviewSnapshot(suggestion);
-      return { success: true, clip: snapshot ? await getClip(snapshot.clip.id) ?? undefined : undefined };
+      const snapshotClipId = snapshot?.clip.id;
+      const ownedCreatedClipId = snapshot?.ownedCreatedClipId;
+      const ownershipOnly = snapshotClipId !== undefined
+        && ownedCreatedClipId === snapshotClipId
+        && suggestion.clip_id === null
+        && await getClip(snapshotClipId) !== null;
+      if (!ownershipOnly) {
+        return { success: true, clip: snapshot ? await getClip(snapshot.clip.id) ?? undefined : undefined };
+      }
     }
     const targetClip = suggestion.target_clip_id ? await getClip(suggestion.target_clip_id) : null;
     if (!targetClip) return { success: false, error: 'Structural suggestion target clip was not found' };
     const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
     if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (existingSnapshot?.ownedCreatedClipId) {
+      snapshot.ownedCreatedClipId = existingSnapshot.ownedCreatedClipId;
+    }
     if (isDeleteSuggestion(suggestion)) {
       snapshot.beatIds = (database.prepare(
         'SELECT id FROM beats WHERE clip_id = ?'
@@ -679,11 +748,17 @@ async function previewSuggestionWithClipTx(id: number): Promise<ApplySuggestionR
       return { success: false, error: `Target clip ${targetClipId} not found` };
     }
 
-    if (suggestion.preview_snapshot_json) {
+    if (suggestion.preview_snapshot_json && suggestion.clip_id) {
       return { success: true, clip: targetClip };
     }
 
-    const snapshotJson = serializeSuggestionPreviewSnapshot(targetClip);
+    const snapshot = parseSuggestionPreviewSnapshotJson(serializeSuggestionPreviewSnapshot(targetClip));
+    if (!snapshot) return { success: false, error: 'Failed to snapshot target clip' };
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (existingSnapshot?.ownedCreatedClipId) {
+      snapshot.ownedCreatedClipId = existingSnapshot.ownedCreatedClipId;
+    }
+    const snapshotJson = JSON.stringify(snapshot);
     const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
     if (!applyResult.success || !applyResult.clip) {
       return applyResult;
@@ -842,7 +917,14 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
   if (isDeleteSuggestion(suggestion) || isSplitSuggestion(suggestion)) {
     const targetError = await validateStructuralSuggestionTarget(suggestion, chapter);
     if (targetError) return { success: false, error: targetError };
-    if (!suggestion.preview_snapshot_json) {
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    const snapshotClipId = existingSnapshot?.clip.id;
+    const ownedCreatedClipId = existingSnapshot?.ownedCreatedClipId;
+    const ownershipOnly = snapshotClipId !== undefined
+      && ownedCreatedClipId === snapshotClipId
+      && suggestion.clip_id === null
+      && await getClip(snapshotClipId) !== null;
+    if (!existingSnapshot || ownershipOnly) {
       const previewResult = await previewSuggestionWithClipTx(id);
       if (!previewResult.success) return previewResult;
     }
@@ -869,7 +951,8 @@ async function applySuggestionWithClipTx(id: number): Promise<ApplySuggestionRes
     }
 
     let updatedClip = targetClip;
-    if (!suggestion.preview_snapshot_json) {
+    const existingSnapshot = parseSuggestionPreviewSnapshot(suggestion);
+    if (!existingSnapshot || (existingSnapshot.ownedCreatedClipId && !suggestion.clip_id)) {
       const applyResult = await applyUpdateSuggestionToClip(suggestion, chapter, targetClip);
       if (!applyResult.success || !applyResult.clip) {
         return applyResult;

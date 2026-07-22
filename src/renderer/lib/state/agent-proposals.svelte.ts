@@ -150,14 +150,23 @@ function validateSplitSuggestion(
 async function refreshProjectTimelineClips(): Promise<void> {
   const projectId = projectDetail.projectId;
   if (projectId === null) return;
-  const response = await getClipsByProject(projectId);
-  if (projectDetail.projectId !== projectId) return;
-  if (!response.success || !response.data) return;
-  timelineState.clips = response.data;
-  const liveIds = new Set(response.data.map((clip) => clip.id));
-  timelineState.selectedClipIds = new Set(
-    [...timelineState.selectedClipIds].filter((id) => liveIds.has(id))
-  );
+  try {
+    const response = await getClipsByProject(projectId);
+    if (projectDetail.projectId !== projectId) return;
+    if (!response.success || !response.data) {
+      console.error('Failed to refresh timeline clips after a committed suggestion mutation:', response.error);
+      return;
+    }
+    timelineState.clips = response.data;
+    const liveIds = new Set(response.data.map((clip) => clip.id));
+    timelineState.selectedClipIds = new Set(
+      [...timelineState.selectedClipIds].filter((id) => liveIds.has(id))
+    );
+  } catch (error) {
+    // The backend mutation is already committed. Keep the command undoable
+    // and use its result payload for best-effort local reconciliation.
+    console.error('Failed to refresh timeline clips after a committed suggestion mutation:', error);
+  }
 }
 
 function resolveProposedWindow(

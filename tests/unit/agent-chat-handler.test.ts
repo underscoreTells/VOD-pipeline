@@ -293,6 +293,33 @@ describe("agent chat handler", () => {
     });
   });
 
+  it("passes through a null context produced by the token guard", async () => {
+    handlerSupportMocks.applyNearLimitTokenGuard.mockReturnValue({
+      messages: [{ role: "user", content: "Please provide new clips for this chapter" }],
+      contextPayload: null,
+      estimatedTotalTokens: 1_024,
+      effectiveContextLimit: 1_024,
+      compressed: true,
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-1",
+      result: { assistantResponse: "No context fit.", outcome: "chat" },
+    });
+
+    const chatHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_CHAT);
+    const result = await chatHandler?.({}, {
+      clientRequestId: "client-null-context",
+      projectId: "1",
+      conversationId: 2,
+      message: "Please provide new clips for this chapter",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(bridgeMocks.send.mock.calls[0]?.[0]?.metadata?.context).toBeNull();
+  });
+
   it("summarizes keep-window suggestions with keep-oriented wording in follow-up context", async () => {
     devRuntimeMocks.getBackendRuntimeStaleness.mockResolvedValue(null);
     databaseMocks.getSuggestionsByConversation.mockResolvedValue([
