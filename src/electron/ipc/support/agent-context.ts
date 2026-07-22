@@ -250,6 +250,7 @@ export async function buildAgentChatContext(
   const localTranscriptSegments = transcriptSegments
     .map((segment) => normalizeChapterLocalTranscriptSegment(segment, chapter.start_time, chapterDuration))
     .filter((segment): segment is NonNullable<typeof segment> => segment !== null);
+  const transcriptAssetId = chapterAssetIds[0];
   const sortedClips = [...baseChapterClips].sort(
     (left, right) => left.inPoint - right.inPoint || left.id - right.id
   );
@@ -269,13 +270,15 @@ export async function buildAgentChatContext(
     return {
       ...clip,
       visibleDuration: Math.max(0, localEnd - localStart),
-      transcriptExcerpt: localTranscriptSegments
-        .filter((segment) => segment.end > localStart && segment.start < localEnd)
-        .map((segment) => segment.text)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 1200),
+      transcriptExcerpt: clip.assetId === transcriptAssetId
+        ? localTranscriptSegments
+            .filter((segment) => segment.end > localStart && segment.start < localEnd)
+            .map((segment) => segment.text)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 1200)
+        : '',
       previousClipId: sortedClips[index - 1]?.id ?? null,
       nextClipId: sortedClips[index + 1]?.id ?? null,
       omittedBeforeDuration: Math.max(

@@ -541,6 +541,44 @@ describeTx("suggestion transactions (withTransaction)", () => {
       expect(await getClip(preview.clip!.id)).toBeNull();
     });
 
+    it('restores a superseded suggestion when its rejected replacement message is deleted', async () => {
+      const { projectId, chapterId } = insertFixtures();
+      const conversationId = db.prepare(
+        `INSERT INTO chat_conversations (project_id, chapter_id, title, thread_id)
+         VALUES (?, ?, 'Rejected replacement', 'thread-rejected-replacement')`
+      ).run(projectId, chapterId).lastInsertRowid as number;
+      const retainedMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'user', 'Revise it', '2026-04-18T12:00:00.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const replacementMessageId = db.prepare(
+        `INSERT INTO chat_messages (conversation_id, role, content, created_at)
+         VALUES (?, 'assistant', 'Replacement', '2026-04-18T12:00:01.000Z')`
+      ).run(conversationId).lastInsertRowid as number;
+      const original = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: null,
+        in_point: 10, out_point: 20, description: 'Original', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 0, clip_id: null,
+      });
+      const replacement = await createSuggestion({
+        chapter_id: chapterId, conversation_id: conversationId, chat_message_id: replacementMessageId,
+        in_point: 12, out_point: 18, description: 'Replacement', reasoning: null,
+        provider: 'gemini', action_type: 'create_clip', target_clip_id: null,
+        action_payload_json: null, preview_snapshot_json: null,
+        status: 'pending', display_order: 1, clip_id: null,
+        supersedes_suggestion_id: original.id,
+      });
+      expect(await supersedeSuggestion(original.id, replacement.id, conversationId, chapterId)).toBe(true);
+      expect((await rejectSuggestionsBatch([replacement.id])).success).toBe(true);
+
+      expect(await deleteChatMessagesAfter(conversationId, retainedMessageId)).toBe(1);
+
+      expect(db.prepare('SELECT status FROM suggestions WHERE id = ?').get(original.id)).toEqual({ status: 'pending' });
+      expect(db.prepare('SELECT id FROM suggestions WHERE id = ?').get(replacement.id)).toBeUndefined();
+    });
+
     it('recreates an owned preview target when undoing an applied structural replacement', async () => {
       const { projectId, chapterId } = insertFixtures();
       const conversationId = db.prepare(

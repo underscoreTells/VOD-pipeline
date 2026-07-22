@@ -320,6 +320,37 @@ describe("agent proposal bulk actions", () => {
     expect(agentApiMocks.applySuggestionBatch).toHaveBeenCalledWith({ suggestionIds: [1, 2] });
   });
 
+  it("rejects a legacy split point at the target boundary", async () => {
+    const targetClip = {
+      id: 41,
+      project_id: 1,
+      asset_id: 11,
+      track_index: 0,
+      in_point: 10,
+      out_point: 20,
+      role: null,
+      description: "Target",
+      is_essential: true,
+      created_at: "2026-04-18T12:00:00.000Z",
+    };
+    timelineMocks.timelineState.clips = [targetClip];
+    const { agentState } = await import("../../src/renderer/lib/state/agent-session.svelte.js");
+    agentState.suggestions = [createSuggestion(1, {
+      action_type: "split_clip",
+      target_clip_id: targetClip.id,
+      action_payload_json: JSON.stringify({ split: { splitPoint: 20 } }),
+    })];
+
+    const { applyAllSuggestions } = await import("../../src/renderer/lib/state/agent-proposals.svelte.js");
+    const result = await applyAllSuggestions();
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "A split suggestion has no valid interior split point.",
+    });
+    expect(agentApiMocks.applySuggestionBatch).not.toHaveBeenCalled();
+  });
+
   it("rejects split ranges that overlap a surviving clip after an earlier update", async () => {
     const targetClip = {
       id: 41,

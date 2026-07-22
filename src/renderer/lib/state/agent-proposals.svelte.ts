@@ -116,9 +116,14 @@ function validateSplitSuggestion(
     const split = payload.split;
     if (!split) return 'A split suggestion has no segment payload.';
     if (!Array.isArray(split.segments)) {
+      const targetLocalIn = target.in_point - chapter.start_time;
+      const targetLocalOut = target.out_point - chapter.start_time;
       return typeof split.splitPoint === 'number'
-        ? null
-        : 'A split suggestion has no valid segment payload.';
+        && Number.isFinite(split.splitPoint)
+        && split.splitPoint > targetLocalIn
+        && split.splitPoint < targetLocalOut
+          ? null
+          : 'A split suggestion has no valid interior split point.';
     }
     if (split.segments.length < 2) return 'A split suggestion requires at least two segments.';
 

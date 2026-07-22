@@ -579,7 +579,7 @@ export async function cleanupPendingSuggestionsForMessages(messageIds: number[])
             action_type, target_clip_id, action_payload_json, preview_snapshot_json,
             status, supersedes_suggestion_id, display_order, created_at, applied_at, clip_id
      FROM suggestions
-     WHERE chat_message_id IN (${placeholders}) AND status IN ('pending', 'superseded')
+     WHERE chat_message_id IN (${placeholders}) AND status IN ('pending', 'rejected', 'superseded')
      ORDER BY id DESC`
   ).all(...messageIds) as Suggestion[]).map(normalizeSuggestionRecord);
 
