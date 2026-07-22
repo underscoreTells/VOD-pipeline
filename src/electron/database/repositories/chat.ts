@@ -6,6 +6,7 @@ import type {
   CreateChatConversationMessageInput,
   UpdateChatConversationInput,
 } from '../../../shared/types/database.js';
+import { parseChatMentions, serializeChatMentions } from '../../../shared/utils/chat-mentions.js';
 import { DEFAULT_CONVERSATION_TITLE } from '../../../shared/utils/conversation-title.js';
 import { getDatabase, withTransaction } from '../client.js';
 import { cleanupPendingSuggestionsForMessages } from './suggestions.js';
@@ -248,13 +249,16 @@ export async function cloneChatMessagesThrough(
   );
   const cloneMessages = database.transaction((messages: ChatConversationMessage[]) => {
     for (const message of messages) {
+      const mentionsJson = serializeChatMentions(
+        parseChatMentions(message.mentions_json).filter((mention) => mention.type === 'clip')
+      );
       insertMessage.run(
         targetConversationId,
         message.role,
         message.content,
         message.thinking_markdown ?? null,
         message.trace_json ?? null,
-        message.mentions_json ?? null,
+        mentionsJson,
         message.created_at
       );
     }

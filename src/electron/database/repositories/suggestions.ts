@@ -591,7 +591,8 @@ export async function cleanupPendingSuggestionsForMessages(messageIds: number[])
       ? await getSuggestion(suggestion.supersedes_suggestion_id)
       : null;
     const ownedCreatedClipId = parseSuggestionPreviewSnapshot(suggestion)?.ownedCreatedClipId;
-    const transferOwnership = ownedCreatedClipId !== undefined
+    const transferOwnership = suggestion.status === 'pending'
+      && ownedCreatedClipId !== undefined
       && ancestor?.status === 'superseded'
       && ancestor.action_type !== 'create_clip';
     const cleanup = await cleanupPendingSuggestionArtifacts(suggestion, transferOwnership);

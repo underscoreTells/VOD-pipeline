@@ -260,7 +260,7 @@ export async function buildAgentChatContext(
     clips.push(clip);
     clipsByAsset.set(clip.assetId, clips);
   }
-  const chapterClips = sortedClips.map((clip, index) => {
+  const chapterClips = sortedClips.map((clip) => {
     const localStart = Math.max(0, clip.inPoint - chapter.start_time);
     const localEnd = Math.min(chapterDuration, clip.outPoint - chapter.start_time);
     const assetClips = clipsByAsset.get(clip.assetId) ?? [];
@@ -279,8 +279,8 @@ export async function buildAgentChatContext(
             .trim()
             .slice(0, 1200)
         : '',
-      previousClipId: sortedClips[index - 1]?.id ?? null,
-      nextClipId: sortedClips[index + 1]?.id ?? null,
+      previousClipId: previousAssetClip?.id ?? null,
+      nextClipId: nextAssetClip?.id ?? null,
       omittedBeforeDuration: Math.max(
         0,
         localStart - (previousAssetClip ? previousAssetClip.outPoint - chapter.start_time : 0)
