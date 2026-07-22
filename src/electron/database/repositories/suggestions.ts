@@ -1070,7 +1070,7 @@ export async function applySuggestionsBatch(
     return await withTransaction(async () => {
       for (const id of suggestionIds) {
         const result = await applySuggestionWithClipTx(id);
-        if (!result.success || !result.clip) {
+        if (!result.success) {
           throw new SuggestionBatchAbort(
             id,
             result.error ?? 'Suggestion operation failed',
@@ -1081,7 +1081,7 @@ export async function applySuggestionsBatch(
         collected.push({
           suggestionId: id,
           success: true,
-          clip: result.clip,
+          ...(result.clip ? { clip: result.clip } : {}),
         });
       }
       return {

@@ -137,6 +137,30 @@ describeBatch("suggestion batch transactions", () => {
     return suggestion.id;
   }
 
+  async function insertPendingDeleteSuggestion(
+    chapterId: number,
+    targetClipId: number
+  ): Promise<number> {
+    const suggestion = await createSuggestion({
+      chapter_id: chapterId,
+      conversation_id: null,
+      chat_message_id: null,
+      in_point: 10,
+      out_point: 20,
+      description: "batch delete",
+      reasoning: "batch",
+      provider: "gemini",
+      action_type: "delete_clip",
+      target_clip_id: targetClipId,
+      action_payload_json: JSON.stringify({ delete: true }),
+      preview_snapshot_json: null,
+      status: "pending",
+      display_order: 0,
+      clip_id: null,
+    });
+    return suggestion.id;
+  }
+
   function snapshotClip(clip: { in_point: number; out_point: number; role: string | null; description: string | null; is_essential: boolean }): SuggestionRevertSnapshot {
     return {
       clip: {
@@ -242,6 +266,30 @@ describeBatch("suggestion batch transactions", () => {
       expect(updateRow.status).toBe("applied");
       expect(updateRow.clip_id).toBe(existingClip.id);
       expect(updateRow.preview_snapshot_json).toBeNull();
+    });
+
+    it("applies delete suggestions without requiring a surviving clip", async () => {
+      const { projectId, assetId, chapterId } = insertFixtures();
+      const targetClip = await createClip({
+        project_id: projectId,
+        asset_id: assetId,
+        track_index: 0,
+        in_point: 10,
+        out_point: 20,
+        role: null,
+        description: "remove me",
+        is_essential: false,
+      });
+      const deleteId = await insertPendingDeleteSuggestion(chapterId, targetClip.id);
+      const createId = await insertPendingCreateSuggestion(chapterId, 30, 40, 1);
+
+      const result = await applySuggestionsBatch([deleteId, createId]);
+
+      expect(result.success).toBe(true);
+      expect(result.appliedCount).toBe(2);
+      expect(result.results[0]).toEqual({ suggestionId: deleteId, success: true });
+      expect(await getClip(targetClip.id)).toBeNull();
+      expect(db.prepare("SELECT status FROM suggestions WHERE id = ?").get(deleteId)).toEqual({ status: "applied" });
     });
   });
 

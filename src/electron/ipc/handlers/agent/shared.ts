@@ -448,7 +448,8 @@ export async function validateConversationMentions(
   mentions: ChatEntityMention[],
   projectId: number,
   chapterId: number,
-  conversationId: number
+  conversationId: number,
+  historicalSuggestionIds: ReadonlySet<number> = new Set()
 ): Promise<ChatEntityMention[]> {
   const chapterAssetIds = new Set(await getAssetsForChapter(chapterId));
   const chapter = await getChapter(chapterId);
@@ -480,7 +481,7 @@ export async function validateConversationMentions(
       !suggestion
       || suggestion.chapter_id !== chapterId
       || suggestion.conversation_id !== conversationId
-      || suggestion.status !== 'pending'
+      || (suggestion.status !== 'pending' && !historicalSuggestionIds.has(suggestion.id))
     ) {
       throw new AgentHandlerError(`Referenced suggestion ${mention.id} is not pending in this conversation`, IPC_ERROR_CODES.VALIDATION_ERROR);
     }

@@ -13,7 +13,7 @@ import {
   deriveConversationTitle,
 } from '../../../../shared/utils/conversation-title.js';
 import { toNumberOrNull } from '../../handler-support.js';
-import { serializeChatMentions } from '../../../../shared/utils/chat-mentions.js';
+import { parseChatMentions, serializeChatMentions } from '../../../../shared/utils/chat-mentions.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES } from '../../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../../shared.js';
 import {
@@ -77,12 +77,6 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
         { requireFreshRuntime: true }
       );
       const syncedConversation = await syncConversationProvider(conversation, provider);
-      const validatedMentions = await validateConversationMentions(
-        mentions,
-        normalizedProjectId,
-        chapter.id,
-        syncedConversation.id
-      );
       const targetMessage = await getChatMessageByConversation(
         syncedConversation.id,
         normalizedMessageId
@@ -96,6 +90,18 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
           IPC_ERROR_CODES.VALIDATION_ERROR
         );
       }
+      const historicalSuggestionIds = new Set(
+        parseChatMentions(targetMessage.mentions_json)
+          .filter((mention) => mention.type === 'suggestion')
+          .map((mention) => mention.id)
+      );
+      const validatedMentions = await validateConversationMentions(
+        mentions,
+        normalizedProjectId,
+        chapter.id,
+        syncedConversation.id,
+        historicalSuggestionIds
+      );
 
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === targetMessage.id);

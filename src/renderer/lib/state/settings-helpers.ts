@@ -12,6 +12,7 @@ import {
 import {
   PROVIDER_IDS,
   VIDEO_CAPABLE_PROVIDERS,
+  getProviderModelContextTokenLimit,
   getProviderLabel as getRegistryProviderLabel,
   providerSupportsVideo,
   validateProviderApiKey,
@@ -133,15 +134,23 @@ export function buildProviderConfig(
       : {}),
     ...(activeProfile ? { openaiCompatible: activeProfile.baseURL } : {}),
   };
+  const contextTokenLimits: NonNullable<ProviderConfigPayload['contextTokenLimits']> = {};
+  for (const provider of providerOrder) {
+    const model = models[provider];
+    if (model) {
+      contextTokenLimits[provider] = getProviderModelContextTokenLimit(provider, model);
+    }
+  }
+  if (activeProfile) {
+    contextTokenLimits.openaiCompatible = activeProfile.contextTokenLimit;
+  }
 
   return {
     defaultProvider,
     providers,
     ...(Object.keys(models).length > 0 ? { models } : {}),
     ...(Object.keys(baseURLs).length > 0 ? { baseURLs } : {}),
-    ...(activeProfile
-      ? { contextTokenLimits: { openaiCompatible: activeProfile.contextTokenLimit } }
-      : {}),
+    ...(Object.keys(contextTokenLimits).length > 0 ? { contextTokenLimits } : {}),
   };
 }
 

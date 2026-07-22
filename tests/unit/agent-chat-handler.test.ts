@@ -36,6 +36,7 @@ const databaseMocks = vi.hoisted(() => ({
   getChatMessagesByConversation: vi.fn(),
   getClip: vi.fn(),
   getProject: vi.fn(),
+  getSuggestion: vi.fn(),
   getSuggestionsByConversation: vi.fn(),
   updateUserChatMessageContent: vi.fn(),
   updateChatConversation: vi.fn(),
@@ -896,6 +897,68 @@ describe("agent chat handler", () => {
     });
     expect(databaseMocks.updateUserChatMessageContent).not.toHaveBeenCalled();
     expect(bridgeMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("allows an edit to retain its historical suggestion mention", async () => {
+    const mention = { type: "suggestion" as const, id: 77, label: "Original suggestion" };
+    databaseMocks.getChatMessageByConversation.mockResolvedValue({
+      id: 10,
+      conversation_id: 2,
+      role: "user",
+      content: "Use this suggestion",
+      mentions_json: JSON.stringify([mention]),
+      created_at: "2026-04-18T12:00:00.000Z",
+    });
+    databaseMocks.getChatMessagesByConversation.mockResolvedValue([
+      {
+        id: 10,
+        conversation_id: 2,
+        role: "user",
+        content: "Use this suggestion",
+        mentions_json: JSON.stringify([mention]),
+        created_at: "2026-04-18T12:00:00.000Z",
+      },
+    ]);
+    databaseMocks.getSuggestion.mockResolvedValue({
+      id: 77,
+      chapter_id: 3,
+      conversation_id: 2,
+      status: "applied",
+      target_clip_id: null,
+      description: "Applied suggestion",
+    });
+    databaseMocks.createChatMessage.mockReset();
+    databaseMocks.createChatMessage.mockResolvedValue({
+      id: 204,
+      created_at: "2026-04-18T12:05:00.000Z",
+    });
+    bridgeMocks.send.mockResolvedValue({
+      type: "turn_complete",
+      requestId: "worker-1",
+      threadId: "thread-2",
+      result: {
+        assistantResponse: "Updated response.",
+        outcome: "proposal",
+      },
+    });
+
+    const editHandler = registeredHandlers.get(IPC_CHANNELS.AGENT_EDIT_MESSAGE);
+    const result = await editHandler?.({}, {
+      clientRequestId: "client-edit",
+      projectId: "1",
+      conversationId: 2,
+      messageId: 10,
+      message: "Use this suggestion with a tighter setup",
+      mentions: [mention],
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(databaseMocks.updateUserChatMessageContent).toHaveBeenCalledWith(
+      2,
+      10,
+      "Use this suggestion with a tighter setup",
+      JSON.stringify([{ ...mention, label: "Applied suggestion" }])
+    );
   });
 
   it("branches a conversation through the selected message", async () => {

@@ -75,6 +75,19 @@ describe("settings helpers", () => {
     expect(getNamingModelApiKey(settings, "kimi-k2.5")).toBe("sk-kimi");
   });
 
+  it("includes the selected model context limit in provider config", () => {
+    const settings = {
+      ...defaultSettings,
+      kimiApiKey: "sk-kimi",
+      providerModels: { kimi: "kimi-k2.7-code" } as const,
+    };
+
+    expect(buildProviderConfig(settings, "kimi")).toMatchObject({
+      models: { kimi: "kimi-k2.7-code" },
+      contextTokenLimits: { kimi: 262_144 },
+    });
+  });
+
   it("builds proxy options directly from settings", () => {
     expect(buildProxyOptions(defaultSettings)).toEqual({
       encodingMode: "auto",
