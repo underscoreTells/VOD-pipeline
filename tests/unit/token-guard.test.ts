@@ -246,6 +246,53 @@ describe("applyNearLimitTokenGuard: contextPayload contributes to the estimate",
     expect(compacted.suggestionSummary).not.toContain("suggestion#1 ");
   });
 
+  it("preserves every mentioned suggestion before truncating the summary", () => {
+    const referencedSuggestionIds = Array.from({ length: 8 }, (_, index) => index + 41);
+    const referencedSuggestionLines = referencedSuggestionIds.map((id) => (
+      `- suggestion#${id} action=update_clip update clip #1 10.00-11.00s status=pending `
+      + `desc=${`required-${id}-`.repeat(8)}`
+    ));
+    const context = {
+      chapter: { id: "2", title: "Structural edit", startTime: 10, endTime: 110 },
+      chapterAssetIds: [11],
+      chapterClips: Array.from({ length: 14 }, (_, index) => ({
+        id: index + 1,
+        assetId: 11,
+        trackIndex: 0,
+        inPoint: 10 + index,
+        outPoint: 11 + index,
+        description: "d".repeat(80),
+        transcriptExcerpt: "c".repeat(1_200),
+      })),
+      transcript: "t".repeat(30_000),
+      detailedTranscripts: [],
+      referencedEntities: referencedSuggestionIds.map((id) => ({
+        type: "suggestion",
+        id,
+        label: `Suggestion ${id}`,
+      })),
+      selectedClipIds: [],
+      suggestionSummary: [
+        ...referencedSuggestionLines,
+        ...Array.from({ length: 20 }, (_, index) => (
+          `- suggestion#${index + 1} action=create_clip keep window 1.00-2.00s `
+          + `status=pending desc=${"optional".repeat(100)}`
+        )),
+      ].join("\n"),
+    };
+
+    const result = applyNearLimitTokenGuard(
+      [{ role: "user", content: "Revise all mentioned suggestions." }],
+      context,
+      "openaiCompatible",
+      8192
+    );
+    const compacted = result.contextPayload as typeof context;
+
+    expect(result.estimatedTotalTokens).toBeLessThanOrEqual(Math.floor(4096 * 0.97));
+    expect(compacted.suggestionSummary).toBe(referencedSuggestionLines.join("\n"));
+  });
+
   it("drops additional older messages when the retained recent set is still too large", () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",

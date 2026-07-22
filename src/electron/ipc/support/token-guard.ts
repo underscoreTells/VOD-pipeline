@@ -120,8 +120,14 @@ function compactContextPayload(contextPayload: unknown, maxTokens: number): unkn
   }
 
   if (estimateContextTokens(compacted) > maxTokens && typeof compacted.suggestionSummary === 'string') {
-    const suggestionSummary = compacted.suggestionSummary;
-    fitStringField(compacted, 'suggestionSummary', suggestionSummary, maxTokens);
+    if (referencedSuggestionSummary) {
+      compacted.suggestionSummary = referencedSuggestionSummary;
+      if (typeof context.transcript === 'string') compacted.transcript = '';
+      fitTranscript();
+    } else {
+      const suggestionSummary = compacted.suggestionSummary;
+      fitStringField(compacted, 'suggestionSummary', suggestionSummary, maxTokens);
+    }
   }
 
   if (estimateContextTokens(compacted) <= maxTokens) return compacted;
