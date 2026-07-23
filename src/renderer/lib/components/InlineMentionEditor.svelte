@@ -304,9 +304,17 @@
 ></div>
 
 <style>
+  .inline-mention-editor {
+    position: relative;
+  }
+
   .inline-mention-editor.is-empty::before {
+    box-sizing: border-box;
     color: var(--text-tertiary);
     content: attr(data-placeholder);
+    inset: 0;
+    padding: inherit;
     pointer-events: none;
+    position: absolute;
   }
 </style>
