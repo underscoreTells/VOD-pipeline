@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
   chapter_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   provider TEXT,
+  model TEXT,
+  reasoning_effort TEXT,
   thread_id TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,

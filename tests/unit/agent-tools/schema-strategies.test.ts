@@ -154,4 +154,26 @@ describe("provider-aware tool schema strategies", () => {
       expect.arrayContaining(["draftRoughCutProposals", "finalizeConversationTurn"])
     );
   });
+
+  it("does not expose video analysis to a text-only selected model", () => {
+    const toolDefinitions = createConversationTools(
+      {
+        ...createConversationInput(),
+        selectedProvider: 'gemini',
+        selectedModelSupportsVideo: false,
+      },
+      undefined,
+      {
+        suggestionDrafts: [],
+        timelineActions: [],
+        transcriptDetailRequests: [],
+        loadedDetailedTranscripts: [],
+        hasSuccessfulVideoEvidence: false,
+        videoEvidenceAssetIds: new Set<number>(),
+      },
+      {}
+    );
+
+    expect(toolDefinitions.map((tool) => tool.name)).not.toContain('analyzeChapterVideo');
+  });
 });

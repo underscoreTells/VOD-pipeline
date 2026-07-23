@@ -48,6 +48,26 @@ describe("settings helpers", () => {
     expect(getConfiguredVideoProviders(settings)).toEqual(["gemini", "kimi"]);
   });
 
+  it("requires a URL and model for an OpenAI-compatible profile", () => {
+    const profile = {
+      id: "local",
+      name: "Local model",
+      baseURL: "http://localhost:11434/v1",
+      model: "",
+      apiKey: "",
+      contextTokenLimit: 128_000,
+    };
+    const settings = {
+      ...defaultSettings,
+      activeOpenAICompatibleProfileId: profile.id,
+      openAICompatibleProfiles: [profile],
+    };
+
+    expect(isProviderConfigured(settings, "openaiCompatible")).toBe(false);
+    profile.model = "llama3.2";
+    expect(isProviderConfigured(settings, "openaiCompatible")).toBe(true);
+  });
+
   it("validates provider-specific api key prefixes", () => {
     expect(validateApiKey("gemini", "AIzaSyTest")).toBe(true);
     expect(validateApiKey("openai", "sk-test")).toBe(true);

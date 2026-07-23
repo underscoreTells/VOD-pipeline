@@ -6,8 +6,6 @@
   import {
     PROVIDER_IDS,
     VIDEO_CAPABLE_PROVIDERS,
-    getProviderMetadata,
-    getProviderModels,
   } from '../../../shared/llm/provider-registry.js';
   import {
     settingsState, 
@@ -96,13 +94,6 @@
     testResults[provider] = null;
   }
 
-  function handleProviderModelChange(provider: LLMProviderType, model: string) {
-    settingsState.settings.providerModels = {
-      ...settingsState.settings.providerModels,
-      [provider]: model,
-    };
-  }
-  
   async function handleSave() {
     await saveSettings();
     closeSettings();
@@ -225,8 +216,8 @@
                         </div>
                         <div class="grid gap-2 sm:grid-cols-2">
                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" bind:value={profile.baseURL} aria-label="Base URL" placeholder="http://localhost:11434/v1" />
-                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" bind:value={profile.model} aria-label="Model ID" placeholder="Model ID" />
                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" type="password" bind:value={profile.apiKey} aria-label="API key" placeholder="API key (optional)" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" bind:value={profile.model} aria-label="Model ID" placeholder="Model ID" />
                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" type="number" min="8192" step="1024" bind:value={profile.contextTokenLimit} aria-label="Context token limit" />
                         </div>
                       </div>
@@ -248,14 +239,6 @@
                     <span class="key-status text-app-sm text-text-tertiary"><Icon icon={Circle} size={12} /></span>
                   {/if}
                 </div>
-                {@const models = getProviderModels(provider)}
-                {#if models.length > 0}
-                  <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" value={settingsState.settings.providerModels[provider] ?? getProviderMetadata(provider).defaultModel} onchange={(event) => handleProviderModelChange(provider, event.currentTarget.value)} aria-label={`${getProviderLabel(provider)} model`}>
-                    {#each models as model (model.id)}
-                      <option value={model.id}>{model.label}</option>
-                    {/each}
-                  </select>
-                {/if}
                 {#if provider === 'kimi'}
                   <select class="mt-2 w-full rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 text-app-sm text-text-primary" bind:value={settingsState.settings.kimiBaseURL} aria-label="Kimi Platform endpoint">
                     <option value="https://api.moonshot.ai/v1">Global Platform</option>

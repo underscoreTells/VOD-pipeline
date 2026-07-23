@@ -57,6 +57,7 @@ export const IPC_CHANNELS = {
   AGENT_CONVERSATION_LIST: 'agent:conversation-list',
   AGENT_CONVERSATION_MESSAGES: 'agent:conversation-messages',
   AGENT_CONVERSATION_DELETE: 'agent:conversation-delete',
+  AGENT_CONVERSATION_UPDATE: 'agent:conversation-update',
 
   // Timeline / Clip channels
   CLIP_CREATE: 'clip:create',
@@ -97,6 +98,7 @@ export const IPC_CHANNELS = {
   // Settings channels (API key encryption)
   SETTINGS_ENCRYPT: 'settings:encrypt',
   SETTINGS_DECRYPT: 'settings:decrypt',
+  SETTINGS_LIST_PROVIDER_MODELS: 'settings:list-provider-models',
 
   // Dialog channels
   DIALOG_SHOW_SAVE_DIALOG: 'dialog:showSaveDialog',

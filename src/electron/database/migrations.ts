@@ -540,6 +540,8 @@ export function ensureChatConversationTables(database: Database.Database): void 
       chapter_id INTEGER NOT NULL,
       title TEXT NOT NULL,
       provider TEXT,
+      model TEXT,
+      reasoning_effort TEXT,
       thread_id TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -572,6 +574,8 @@ export function ensureChatConversationTables(database: Database.Database): void 
   ensureColumn(database, 'chat_messages', 'thinking_markdown', 'TEXT');
   ensureColumn(database, 'chat_messages', 'trace_json', 'TEXT');
   ensureColumn(database, 'chat_messages', 'mentions_json', 'TEXT');
+  ensureColumn(database, 'chat_conversations', 'model', 'TEXT');
+  ensureColumn(database, 'chat_conversations', 'reasoning_effort', 'TEXT');
 }
 
 export function ensureChapterProxyTable(database: Database.Database): void {

@@ -12,6 +12,7 @@ import type {
   AgentConversationListParams,
   AgentConversationListResult,
   AgentConversationMessagesResult,
+  AgentConversationUpdateParams,
   AgentEditMessageParams,
   AgentRerollMessageParams,
   ApplyAllSuggestionsResult,
@@ -106,6 +107,12 @@ export async function deleteAgentConversation(
   conversationId: number
 ): Promise<{ success: boolean; error?: string }> {
   return await getElectronApi().agent.deleteConversation(conversationId);
+}
+
+export async function updateAgentConversation(
+  params: AgentConversationUpdateParams
+): Promise<AgentConversationCreateResult> {
+  return await getElectronApi().agent.updateConversation(params);
 }
 
 export async function applyAgentActions(

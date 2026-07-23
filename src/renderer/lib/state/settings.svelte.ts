@@ -7,6 +7,7 @@ import {
   getProviderMetadata,
   validateProviderApiKey,
   type LLMProviderType,
+  type ReasoningEffort,
 } from '../../../shared/llm/provider-registry.js';
 import { decryptSettings, encryptSettings } from '../api/settings.js';
 import {
@@ -46,6 +47,7 @@ export interface Settings {
   openrouterApiKey: string;
   kimiCodeApiKey: string;
   providerModels: Partial<Record<LLMProviderType, string>>;
+  providerReasoningEfforts: Partial<Record<LLMProviderType, ReasoningEffort>>;
   kimiBaseURL: string;
   openAICompatibleProfiles: OpenAICompatibleProfile[];
   activeOpenAICompatibleProfileId: string | null;
@@ -150,6 +152,9 @@ export async function loadSettings(): Promise<void> {
     if (parsed.providerModels && typeof parsed.providerModels === 'object') {
       settingsState.settings.providerModels = parsed.providerModels;
     }
+    if (parsed.providerReasoningEfforts && typeof parsed.providerReasoningEfforts === 'object') {
+      settingsState.settings.providerReasoningEfforts = parsed.providerReasoningEfforts;
+    }
     if (typeof parsed.kimiBaseURL === 'string' && parsed.kimiBaseURL.trim()) {
       settingsState.settings.kimiBaseURL = parsed.kimiBaseURL;
     }
@@ -239,6 +244,7 @@ export async function saveSettings(): Promise<void> {
       autoThreadNamingModel: normalizeNamingModel(settingsState.settings.autoThreadNamingModel),
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
       providerModels: settingsState.settings.providerModels,
+      providerReasoningEfforts: settingsState.settings.providerReasoningEfforts,
       kimiBaseURL: settingsState.settings.kimiBaseURL,
       activeOpenAICompatibleProfileId: settingsState.settings.activeOpenAICompatibleProfileId,
       openAICompatibleProfiles: settingsState.settings.openAICompatibleProfiles.map(

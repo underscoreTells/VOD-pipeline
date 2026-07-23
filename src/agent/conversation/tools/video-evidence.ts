@@ -19,7 +19,8 @@ export async function analyzeChapterVideoEvidence(
 ): Promise<z.infer<typeof videoEvidenceSchema>> {
   if (
     !input.selectedProvider ||
-    !VIDEO_CAPABLE_PROVIDERS.includes(input.selectedProvider)
+    !VIDEO_CAPABLE_PROVIDERS.includes(input.selectedProvider) ||
+    input.selectedModelSupportsVideo === false
   ) {
     return {
       summary: `Video analysis is unavailable for provider ${input.selectedProvider || "undefined"}.`,

@@ -1,4 +1,9 @@
 import type { ChatConversation } from "../../../shared/types/database.js";
+import {
+  getProviderMetadata,
+  type LLMProviderType,
+  type ReasoningEffort,
+} from "../../../shared/llm/provider-registry.js";
 
 export interface ConversationSelectionState {
   sortedConversations: ChatConversation[];
@@ -16,6 +21,49 @@ export interface ResolveConversationSelectionOptions {
 export interface ConversationContextRequest {
   token: number;
   contextKey: string;
+}
+
+export interface ChatModelConfiguration {
+  provider: LLMProviderType;
+  model: string;
+  reasoningEffort: ReasoningEffort | null;
+}
+
+export function resolveChatModelConfiguration(options: {
+  conversation?: ChatConversation;
+  configuredProviders: readonly LLMProviderType[];
+  defaultProvider: LLMProviderType;
+  providerModels: Partial<Record<LLMProviderType, string>>;
+  providerReasoningEfforts: Partial<Record<LLMProviderType, ReasoningEffort>>;
+}): ChatModelConfiguration {
+  const conversationProvider = options.conversation?.provider;
+  const provider = conversationProvider
+    && options.configuredProviders.includes(conversationProvider)
+    ? conversationProvider
+    : options.configuredProviders.includes(options.defaultProvider)
+      ? options.defaultProvider
+      : options.configuredProviders[0] ?? options.defaultProvider;
+  const conversationModel = conversationProvider === provider
+    ? options.conversation?.model
+    : null;
+  const preferredModel = conversationModel || options.providerModels[provider];
+  const model = preferredModel || getProviderMetadata(provider).defaultModel;
+  const reasoningEffort = conversationModel === model
+    ? options.conversation?.reasoning_effort ?? null
+    : options.providerReasoningEfforts[provider] ?? null;
+
+  return { provider, model, reasoningEffort };
+}
+
+export function setProviderReasoningEffort(
+  efforts: Partial<Record<LLMProviderType, ReasoningEffort>>,
+  provider: LLMProviderType,
+  reasoningEffort: ReasoningEffort | null
+): Partial<Record<LLMProviderType, ReasoningEffort>> {
+  const nextEfforts = { ...efforts };
+  if (reasoningEffort) nextEfforts[provider] = reasoningEffort;
+  else delete nextEfforts[provider];
+  return nextEfforts;
 }
 
 export function shouldChangeChapterContext(

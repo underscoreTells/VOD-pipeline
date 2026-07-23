@@ -46,6 +46,8 @@ export function registerAgentBranchHandler(): void {
         chapter_id: chapter.id,
         title: `${conversation.title} (Branch)`,
         provider: conversation.provider,
+        model: conversation.model,
+        reasoning_effort: conversation.reasoning_effort,
         thread_id: randomUUID(),
       });
       const clonedCount = await cloneChatMessagesThrough(

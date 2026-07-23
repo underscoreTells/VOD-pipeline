@@ -29,6 +29,8 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
       projectId,
       conversationId,
       provider,
+      model,
+      reasoningEffort,
       selectedClipIds,
       playheadTime,
       proxyOptions,
@@ -60,7 +62,7 @@ export function registerAgentRerollHandler(agentBridge: ReturnType<typeof getAge
         provider,
         { requireFreshRuntime: true }
       );
-      const syncedConversation = await syncConversationProvider(conversation, provider);
+      const syncedConversation = await syncConversationProvider(conversation, provider, model, reasoningEffort);
       const existingMessages = await getChatMessagesByConversation(syncedConversation.id);
       const targetIndex = existingMessages.findIndex((item) => item.id === normalizedMessageId);
       if (targetIndex < 0) {

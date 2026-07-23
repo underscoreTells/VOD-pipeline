@@ -31,6 +31,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('agent:conversation-messages', { conversationId }),
     deleteConversation: (conversationId) =>
       ipcRenderer.invoke('agent:conversation-delete', { conversationId }),
+    updateConversation: (params) => ipcRenderer.invoke('agent:conversation-update', params),
     applyActions: (params) => ipcRenderer.invoke('agent:apply-actions', params),
     onStream: (callback) => {
       const handler = (_event: unknown, data: AgentStreamEvent) => callback(data);
@@ -72,6 +73,7 @@ const electronAPI: ElectronAPI = {
         return { success: false, error: message };
       }
     },
+    listProviderModels: (params) => ipcRenderer.invoke('settings:list-provider-models', params),
   },
   assets: {
     get: (id) => ipcRenderer.invoke('asset:get', { id }),

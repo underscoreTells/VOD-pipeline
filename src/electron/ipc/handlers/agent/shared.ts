@@ -24,6 +24,7 @@ import type {
   ProxyOptions,
 } from '../../../../shared/contracts/electron-api.js';
 import { normalizeNamingModel } from '../../../../shared/llm/naming-models.js';
+import { normalizeReasoningEffort, type ReasoningEffort } from '../../../../shared/llm/provider-registry.js';
 import type { getAgentBridge } from '../../../agent-bridge.js';
 import { getBackendRuntimeStaleness } from '../../../dev-runtime.js';
 import { createLogger } from '../../../logger.js';
@@ -34,7 +35,7 @@ import {
 } from '../../../../shared/utils/execution-trace.js';
 import { sanitizeAssistantContent } from '../../../../shared/utils/assistant-content.js';
 import { deriveConversationTitle } from '../../../../shared/utils/conversation-title.js';
-import { parseChatMentions } from '../../../../shared/utils/chat-mentions.js';
+import { formatMessageWithInlineMentions, parseChatMentions } from '../../../../shared/utils/chat-mentions.js';
 import { clipOverlapsChapterSourceRange } from '../../../../shared/utils/clip-timing.js';
 import { IPC_ERROR_CODES } from '../../channels.js';
 import {
@@ -145,20 +146,36 @@ export async function resolveConversationContext(
 
 export async function syncConversationProvider(
   conversation: ChatConversation,
-  provider?: string
+  provider?: string,
+  model?: string,
+  reasoningEffort?: ReasoningEffort | null
 ): Promise<ChatConversation> {
-  if (!provider || provider === conversation.provider) {
+  const normalizedProvider = provider
+    ? normalizeConversationProvider(provider)
+    : conversation.provider;
+  const normalizedModel = model?.trim() || conversation.model;
+  const normalizedEffort = reasoningEffort === undefined
+    ? conversation.reasoning_effort
+    : reasoningEffort;
+  if (
+    normalizedProvider === conversation.provider
+    && normalizedModel === conversation.model
+    && normalizedEffort === conversation.reasoning_effort
+  ) {
     return conversation;
   }
 
-  const normalizedProvider = normalizeConversationProvider(provider);
   await updateChatConversation(conversation.id, {
     provider: normalizedProvider,
+    model: normalizedModel,
+    reasoning_effort: normalizedEffort,
   });
 
   return {
     ...conversation,
     provider: normalizedProvider,
+    model: normalizedModel,
+    reasoning_effort: normalizedEffort,
   };
 }
 
@@ -206,17 +223,11 @@ export function sanitizeConversationHistory(
 ): Array<{ role: string; content: string }> {
   return messages.map((item) => {
     const mentions = item.role === 'user' ? parseChatMentions(item.mentions_json) : [];
-    const mentionContext = mentions.length > 0
-      ? `\n\n[Referenced entities: ${mentions
-          .map((mention) => `${mention.type}#${mention.id} ${JSON.stringify(mention.label)}`)
-          .join(', ')}]`
-      : '';
-
     return {
       role: item.role,
       content: item.role === 'assistant'
         ? sanitizeAssistantContent(item.content)
-        : `${item.content}${mentionContext}`,
+        : formatMessageWithInlineMentions(item.content, mentions),
     };
   });
 }
@@ -314,6 +325,11 @@ export async function runConversationTurn(
     metadata: {
       projectId: String(options.projectId),
       provider: options.effectiveProvider,
+      selectedModelSupportsVideo: options.effectiveProvider
+        ? options.agentConfig?.modelSupportsVideo?.[
+          options.effectiveProvider as keyof typeof options.agentConfig.modelSupportsVideo
+        ]
+        : undefined,
       chapterId: String(options.chapter.id),
       selectedClipIds: options.selectedClipIds,
       playheadTime: options.playheadTime,
@@ -484,6 +500,8 @@ export interface ConversationTurnPayload {
   projectId: number | null;
   conversationId: number | null;
   provider: string | undefined;
+  model: string | undefined;
+  reasoningEffort: ReasoningEffort | null | undefined;
   selectedClipIds: number[];
   playheadTime: number | undefined;
   proxyOptions: ProxyOptions | undefined;
@@ -493,6 +511,7 @@ export interface ConversationTurnPayload {
 
 export async function validateConversationMentions(
   mentions: ChatEntityMention[],
+  content: string,
   projectId: number,
   chapterId: number,
   conversationId: number,
@@ -504,8 +523,23 @@ export async function validateConversationMentions(
     throw new AgentHandlerError('Chapter not found', IPC_ERROR_CODES.NOT_FOUND);
   }
   const validated: ChatEntityMention[] = [];
+  let previousEnd = 0;
 
-  for (const mention of mentions) {
+  for (const mention of [...mentions].sort((a, b) => (a.start ?? Number.MAX_SAFE_INTEGER) - (b.start ?? Number.MAX_SAFE_INTEGER))) {
+    if (mention.start !== undefined || mention.end !== undefined) {
+      if (
+        mention.start === undefined
+        || mention.end === undefined
+        || !Number.isInteger(mention.start)
+        || !Number.isInteger(mention.end)
+        || mention.start < previousEnd
+        || mention.end <= mention.start
+        || mention.end > content.length
+      ) {
+        throw new AgentHandlerError('Referenced entity position is invalid', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      previousEnd = mention.end;
+    }
     if (mention.type === 'clip') {
       const clip = await getClip(mention.id);
       if (
@@ -550,6 +584,12 @@ export function parseConversationTurnPayload(payload: unknown): ConversationTurn
   const projectId = toNumberOrNull(value.projectId);
   const conversationId = toNumberOrNull(value.conversationId);
   const provider = typeof value.provider === 'string' ? value.provider : undefined;
+  const model = typeof value.model === 'string' && value.model.trim() ? value.model.trim() : undefined;
+  const reasoningEffort = value.reasoningEffort === null
+    ? null
+    : value.reasoningEffort === undefined
+      ? undefined
+      : normalizeReasoningEffort(value.reasoningEffort) ?? undefined;
   const selectedClipIds = Array.isArray(value.selectedClipIds)
     ? value.selectedClipIds.filter(
       (item: unknown): item is number => typeof item === 'number' && Number.isFinite(item)
@@ -570,6 +610,8 @@ export function parseConversationTurnPayload(payload: unknown): ConversationTurn
     projectId,
     conversationId,
     provider,
+    model,
+    reasoningEffort,
     selectedClipIds,
     playheadTime,
     proxyOptions,

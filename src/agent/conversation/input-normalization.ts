@@ -46,6 +46,10 @@ export function normalizeReferencedEntities(value: unknown): ChatEntityMention[]
         type: mention.type,
         id: mention.id,
         label: mention.label,
+        ...(typeof mention.occurrenceId === 'string' ? { occurrenceId: mention.occurrenceId } : {}),
+        ...(isFiniteNumber(mention.start) && isFiniteNumber(mention.end)
+          ? { start: mention.start, end: mention.end }
+          : {}),
       };
     })
     .filter((mention): mention is ChatEntityMention => mention !== null);

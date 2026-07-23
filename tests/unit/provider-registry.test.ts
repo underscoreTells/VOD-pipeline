@@ -7,6 +7,7 @@ import {
   getProviderMetadata,
   isLLMProvider,
   normalizeProvider,
+  providerModelSupportsVideo,
   providerSupportsVideo,
   resolveProviderModel,
   validateProviderApiKey,
@@ -69,6 +70,13 @@ describe("provider-registry: VIDEO_CAPABLE_PROVIDERS", () => {
     expect(VIDEO_CAPABLE_PROVIDERS).not.toContain("anthropic");
     expect(VIDEO_CAPABLE_PROVIDERS).not.toContain("openrouter");
   });
+
+  it("requires video support at both provider and curated-model level", () => {
+    expect(providerModelSupportsVideo("gemini", "gemini-3.6-flash")).toBe(true);
+    expect(providerModelSupportsVideo("gemini", "gemini-3.6-flash-001")).toBe(true);
+    expect(providerModelSupportsVideo("gemini", "gemini-experimental")).toBe(false);
+    expect(providerModelSupportsVideo("openai", "gpt-5.6-terra")).toBe(false);
+  });
 });
 
 describe("provider-registry: resolveProviderModel", () => {
@@ -110,6 +118,15 @@ describe("provider-registry: resolveProviderModel", () => {
     expect(resolveProviderModel("gemini", "gemini-3.1-pro-preview")).toBe(
       "gemini-3.1-pro-preview"
     );
+  });
+
+  it('uses the current balanced OpenAI model as the default', () => {
+    expect(PROVIDER_METADATA.openai.defaultModel).toBe('gpt-5.6-terra');
+    expect(PROVIDER_METADATA.openai.models.slice(0, 3).map((model) => model.id)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]);
   });
 
   it("returns the canonical model when the alias maps to the default", () => {
@@ -160,7 +177,7 @@ describe("provider-registry: context token limits", () => {
         PROVIDER_METADATA[id].contextTokenLimit
       );
     }
-    expect(getProviderContextTokenLimit("openai")).toBe(128_000);
+    expect(getProviderContextTokenLimit("openai")).toBe(1_048_576);
     expect(getProviderContextTokenLimit("gemini")).toBe(1_000_000);
   });
 });

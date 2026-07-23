@@ -39,6 +39,8 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
       projectId,
       conversationId,
       provider,
+      model,
+      reasoningEffort,
       selectedClipIds,
       playheadTime,
       proxyOptions,
@@ -46,7 +48,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
       mentions,
     } = parseConversationTurnPayload(payload);
     const messageId = toNumberOrNull(payload?.messageId);
-    const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+    const message = typeof payload?.message === 'string' ? payload.message : '';
     const threadNamingModel = normalizeNamingModel(payload?.threadNamingModel);
 
     logger.info('agent:edit-message', projectId, conversationId, messageId, provider);
@@ -59,7 +61,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
           IPC_ERROR_CODES.VALIDATION_ERROR
         );
       }
-      if (!message) {
+      if (!message.trim()) {
         throw new AgentHandlerError('Message is required', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
 
@@ -76,7 +78,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
         provider,
         { requireFreshRuntime: true }
       );
-      const syncedConversation = await syncConversationProvider(conversation, provider);
+      const syncedConversation = await syncConversationProvider(conversation, provider, model, reasoningEffort);
       const targetMessage = await getChatMessageByConversation(
         syncedConversation.id,
         normalizedMessageId
@@ -97,6 +99,7 @@ export function registerAgentEditHandler(agentBridge: ReturnType<typeof getAgent
       );
       const validatedMentions = await validateConversationMentions(
         mentions,
+        message,
         normalizedProjectId,
         chapter.id,
         syncedConversation.id,

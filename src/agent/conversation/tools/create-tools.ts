@@ -73,7 +73,9 @@ export function createConversationTools(
     dependencies.loadDetailedTranscriptWindows ?? loadDetailedTranscriptToolEvidence;
 
   const tools: AgentToolDefinition[] = [
-    createAnalyzeChapterVideoTool(input, writer, accumulator, analyzeChapterVideoImpl),
+    ...(input.selectedModelSupportsVideo === false
+      ? []
+      : [createAnalyzeChapterVideoTool(input, writer, accumulator, analyzeChapterVideoImpl)]),
     createLoadDetailedTranscriptWindowsTool(
       input,
       writer,

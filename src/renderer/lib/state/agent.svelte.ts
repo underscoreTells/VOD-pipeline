@@ -15,6 +15,7 @@ export {
   setChapterContext,
   setProjectContext,
   setProvider,
+  setChatModelConfiguration,
   syncAgentContext,
 } from './agent-session.svelte.js';
 export {

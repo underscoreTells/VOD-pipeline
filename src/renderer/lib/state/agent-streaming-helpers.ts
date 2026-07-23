@@ -1,7 +1,7 @@
 import type { AgentStreamStatusEvent } from "../../../shared/types/agent-ipc.js";
 import {
   appendExecutionTraceEntry,
-  getLatestExecutionTraceEntry,
+  getExecutionActivityStatus,
 } from "../../../shared/utils/execution-trace.js";
 import type { ChatMessage } from "./agent-session.svelte.js";
 
@@ -52,7 +52,7 @@ export function getVisibleStreamingStatusLabel(
     return null;
   }
 
-  return getLatestExecutionTraceEntry(message.trace)?.label ?? "Thinking...";
+  return getExecutionActivityStatus(message.trace);
 }
 
 export function finalizeDraftMessage(

@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import type { LLMConfig, LLMProviderType } from "./providers/index.js";
 import { getProviderMetadata, PROVIDER_IDS, PROVIDER_METADATA } from "../shared/llm/provider-registry.js";
+import type { ReasoningEffort } from '../shared/llm/provider-registry.js';
 
 export interface AgentConfig {
   defaultProvider: LLMProviderType;
@@ -9,6 +10,7 @@ export interface AgentConfig {
   maxTokens?: number;
   models?: Partial<Record<LLMProviderType, string>>;
   baseURLs?: Partial<Record<LLMProviderType, string>>;
+  reasoningEfforts?: Partial<Record<LLMProviderType, ReasoningEffort>>;
 }
 
 export let ipcConfig: Partial<AgentConfig> | null = null;
@@ -40,6 +42,7 @@ export async function loadConfig(): Promise<AgentConfig> {
           ...getEnvironmentBaseURLs(),
           ...ipcConfig.baseURLs,
         },
+        reasoningEfforts: ipcConfig.reasoningEfforts ?? {},
       };
 
       if (Object.keys(config.providers).length === 0) {
@@ -78,6 +81,7 @@ export async function loadConfig(): Promise<AgentConfig> {
     maxTokens: undefined,
     models: {},
     baseURLs: getEnvironmentBaseURLs(),
+    reasoningEfforts: {},
   };
 }
 
@@ -99,6 +103,7 @@ export function getProviderLLMConfig(
     temperature: agentConfig.temperature,
     maxTokens: agentConfig.maxTokens,
     model: agentConfig.models?.[providerType],
+    reasoningEffort: agentConfig.reasoningEfforts?.[providerType],
   };
 
   if (metadata.defaultBaseURL || agentConfig.baseURLs?.[providerType]) {

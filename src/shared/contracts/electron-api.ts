@@ -14,7 +14,7 @@ import type {
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
 import type { NamingModelId } from '../llm/naming-models.js';
-import type { LLMProviderType } from '../llm/provider-registry.js';
+import type { LLMProviderType, ReasoningEffort } from '../llm/provider-registry.js';
 import type { ProjectAsset } from './ipc.js';
 
 export type ProxyEncodingMode = 'cpu' | 'gpu' | 'auto';
@@ -27,6 +27,8 @@ export interface ProviderConfigPayload {
   models?: Partial<Record<ProviderConfigProvider, string>>;
   baseURLs?: Partial<Record<ProviderConfigProvider, string>>;
   contextTokenLimits?: Partial<Record<ProviderConfigProvider, number>>;
+  modelSupportsVideo?: Partial<Record<ProviderConfigProvider, boolean>>;
+  reasoningEfforts?: Partial<Record<ProviderConfigProvider, ReasoningEffort>>;
 }
 
 export interface ProxyOptions {
@@ -73,6 +75,8 @@ export interface AgentChatParams {
   message: string;
   mentions?: ChatEntityMention[];
   provider?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
   proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
@@ -121,6 +125,8 @@ export interface AgentRerollMessageParams {
   conversationId: number;
   messageId: number;
   provider?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
   proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
@@ -135,6 +141,8 @@ export interface AgentEditMessageParams {
   message: string;
   mentions?: ChatEntityMention[];
   provider?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
   proxyOptions?: ProxyOptions;
   selectedClipIds?: number[];
   playheadTime?: number;
@@ -174,7 +182,38 @@ export interface AgentConversationCreateParams {
   projectId: string;
   chapterId: string;
   provider?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
   title?: string;
+}
+
+export interface AgentConversationUpdateParams {
+  conversationId: number;
+  provider: LLMProviderType;
+  model: string;
+  reasoningEffort: ReasoningEffort | null;
+}
+
+export interface ProviderModelInfo {
+  id: string;
+  label: string;
+  contextTokenLimit: number;
+  supportsVideo: boolean;
+  reasoningEfforts: ReasoningEffort[];
+  source: 'live' | 'fallback';
+  compatibility: 'supported' | 'unknown';
+}
+
+export interface ProviderModelsListParams {
+  provider: LLMProviderType;
+  agentConfig: ProviderConfigPayload;
+  refresh?: boolean;
+}
+
+export interface ProviderModelsListResult {
+  success: boolean;
+  data?: ProviderModelInfo[];
+  error?: string;
 }
 
 export interface AgentConversationCreateResult {
@@ -633,6 +672,7 @@ export interface ElectronAPI {
     listConversations: (params: AgentConversationListParams) => Promise<AgentConversationListResult>;
     getConversationMessages: (conversationId: number) => Promise<AgentConversationMessagesResult>;
     deleteConversation: (conversationId: number) => Promise<{ success: boolean; error?: string }>;
+    updateConversation: (params: AgentConversationUpdateParams) => Promise<AgentConversationCreateResult>;
     applyActions: (params: AgentApplyActionsParams) => Promise<AgentApplyActionsResult>;
     onStream: (callback: (data: AgentStreamEvent) => void) => () => void;
     onError: (callback: (data: { error: string }) => void) => () => void;
@@ -648,6 +688,7 @@ export interface ElectronAPI {
   settings: {
     encrypt: (text: string) => Promise<SettingsEncryptResult>;
     decrypt: (encrypted: string) => Promise<SettingsDecryptResult>;
+    listProviderModels: (params: ProviderModelsListParams) => Promise<ProviderModelsListResult>;
   };
   assets: {
     get: (id: number) => Promise<GetAssetResult>;
