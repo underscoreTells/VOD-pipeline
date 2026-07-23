@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ChatConversation } from "../../src/shared/types/database.js";
 import {
   resolveConversationSelection,
-  resolveVideoModelConfiguration,
+  resolveChatModelConfiguration,
+  setProviderReasoningEffort,
   shouldChangeChapterContext,
   sortChatConversations,
 } from "../../src/renderer/lib/state/agent-session-helpers.js";
@@ -89,7 +90,7 @@ describe("agent session conversation helpers", () => {
     expect(shouldChangeChapterContext("123", null)).toBe(true);
   });
 
-  it("keeps a conversation's configured video model and reasoning effort", () => {
+  it("keeps a conversation's configured chat model and reasoning effort", () => {
     const conversation = {
       ...createConversation(1, "2026-04-17T12:00:00.000Z"),
       provider: "kimi" as const,
@@ -97,7 +98,7 @@ describe("agent session conversation helpers", () => {
       reasoning_effort: "high" as const,
     };
 
-    expect(resolveVideoModelConfiguration({
+    expect(resolveChatModelConfiguration({
       conversation,
       configuredProviders: ["gemini", "kimi"],
       defaultProvider: "gemini",
@@ -110,7 +111,7 @@ describe("agent session conversation helpers", () => {
     });
   });
 
-  it("falls back from a text-only conversation to the configured default video provider", () => {
+  it("keeps a configured text-only conversation provider", () => {
     const conversation = {
       ...createConversation(1, "2026-04-17T12:00:00.000Z"),
       provider: "openai" as const,
@@ -118,29 +119,37 @@ describe("agent session conversation helpers", () => {
       reasoning_effort: "high" as const,
     };
 
-    expect(resolveVideoModelConfiguration({
+    expect(resolveChatModelConfiguration({
       conversation,
-      configuredProviders: ["gemini", "kimi"],
+      configuredProviders: ["gemini", "openai", "kimi"],
       defaultProvider: "kimi",
       providerModels: { kimi: "kimi-k2.7-code" },
       providerReasoningEfforts: { kimi: "low" },
     })).toEqual({
-      provider: "kimi",
-      model: "kimi-k2.7-code",
-      reasoningEffort: "low",
+      provider: "openai",
+      model: "gpt-5.6-terra",
+      reasoningEffort: "high",
     });
   });
 
-  it("replaces an unsupported configured model with the provider's video default", () => {
-    expect(resolveVideoModelConfiguration({
-      configuredProviders: ["gemini"],
-      defaultProvider: "openai",
-      providerModels: { gemini: "unknown-gemini-model" },
-      providerReasoningEfforts: { gemini: "medium" },
+  it("keeps configured custom chat models", () => {
+    expect(resolveChatModelConfiguration({
+      configuredProviders: ["openaiCompatible"],
+      defaultProvider: "openaiCompatible",
+      providerModels: { openaiCompatible: "local-custom-model" },
+      providerReasoningEfforts: {},
     })).toEqual({
-      provider: "gemini",
-      model: "gemini-3.6-flash",
-      reasoningEffort: "medium",
+      provider: "openaiCompatible",
+      model: "local-custom-model",
+      reasoningEffort: null,
     });
+  });
+
+  it("removes a provider's stale reasoning effort when none is selected", () => {
+    expect(setProviderReasoningEffort(
+      { openai: "high", kimiCode: "medium" },
+      "openai",
+      null
+    )).toEqual({ kimiCode: "medium" });
   });
 });

@@ -5,9 +5,9 @@
     type ReasoningEffort,
   } from '../../../shared/llm/provider-registry.js';
   import { openSettings, settingsState } from '../state/settings.svelte.js';
-  import { getConfiguredVideoProviders } from '../state/settings-helpers.js';
+  import { getConfiguredProviders } from '../state/settings-helpers.js';
   import {
-    getVideoModelsForProvider,
+    getModelsForProvider,
     loadProviderModels,
     modelCatalogState,
   } from '../state/model-catalog.svelte.js';
@@ -30,10 +30,10 @@
   let query = $state('');
   let browsingProvider = $state<LLMProviderType>('gemini');
   let pickerStyle = $state('');
-  const availableProviders = $derived(getConfiguredVideoProviders(settingsState.settings));
+  const availableProviders = $derived(getConfiguredProviders(settingsState.settings));
   const browsingModels = $derived(
     availableProviders.includes(browsingProvider)
-      ? getVideoModelsForProvider(browsingProvider)
+      ? getModelsForProvider(browsingProvider)
       : []
   );
   const filteredModels = $derived(
@@ -42,7 +42,7 @@
     )
   );
   const selectedModel = $derived(
-    getVideoModelsForProvider(provider).find((candidate) => candidate.id === model)
+    getModelsForProvider(provider).find((candidate) => candidate.id === model)
   );
   const reasoningEfforts = $derived(selectedModel?.reasoningEfforts ?? []);
   const displayedReasoningEffort = $derived(
@@ -129,7 +129,7 @@
   }
 
   function chooseModel(nextProvider: LLMProviderType, nextModel: string) {
-    const candidate = getVideoModelsForProvider(nextProvider).find((item) => item.id === nextModel);
+    const candidate = getModelsForProvider(nextProvider).find((item) => item.id === nextModel);
     const efforts = candidate?.reasoningEfforts ?? [];
     const nextEffort = reasoningEffort && efforts.includes(reasoningEffort)
       ? reasoningEffort
@@ -181,12 +181,12 @@
     style={pickerStyle}
     class="model-picker z-[var(--z-float)] min-h-0 flex-col overflow-hidden rounded-lg border border-border-default bg-surface-elevated p-0 text-text-primary shadow-[0_12px_36px_rgba(0,0,0,0.32)]"
     role="dialog"
-    aria-label="Choose a video model"
+    aria-label="Choose a chat model"
   >
     {#if availableProviders.length === 0}
       <div class="px-4 py-8 text-center">
-        <div class="text-app-sm font-medium text-text-primary">No video provider configured</div>
-        <div class="mt-1 text-app-xs text-text-tertiary">Configure Google Gemini or Kimi Platform to choose a model.</div>
+        <div class="text-app-sm font-medium text-text-primary">No chat provider configured</div>
+        <div class="mt-1 text-app-xs text-text-tertiary">Configure a provider to choose a model.</div>
       </div>
     {:else}
       <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border-subtle p-2">
@@ -195,7 +195,7 @@
         {/each}
       </div>
       <div class="shrink-0 border-b border-border-subtle p-2">
-        <input class="h-8 w-full rounded-md border border-border-default bg-surface-base px-2.5 text-app-sm text-text-primary outline-none focus:border-border-strong" bind:this={searchInput} bind:value={query} placeholder="Search video models" aria-label="Search video models" />
+        <input class="h-8 w-full rounded-md border border-border-default bg-surface-base px-2.5 text-app-sm text-text-primary outline-none focus:border-border-strong" bind:this={searchInput} bind:value={query} placeholder="Search chat models" aria-label="Search chat models" />
       </div>
       <div class="scrollbar-thin min-h-20 flex-1 overflow-y-auto p-1.5">
         {#if modelCatalogState.loadingProvider === browsingProvider && browsingModels.length === 0}

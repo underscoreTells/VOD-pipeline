@@ -21,13 +21,14 @@ import {
   buildConversationContextKey,
   isConversationContextRequestCurrent,
   resolveConversationSelection,
-  resolveVideoModelConfiguration,
+  resolveChatModelConfiguration,
+  setProviderReasoningEffort,
   shouldChangeChapterContext,
 } from "./agent-session-helpers.js";
 import {
   buildProviderConfig,
   buildProxyOptions,
-  getConfiguredVideoProviders,
+  getConfiguredProviders,
 } from "./settings-helpers.js";
 import {
   createAgentConversation,
@@ -42,8 +43,6 @@ import { onProxyProgress } from "../api/proxies.js";
 import { saveSettings, settingsState } from "./settings.svelte";
 import {
   getProviderMetadata,
-  providerModelSupportsVideo,
-  providerSupportsVideo,
   type LLMProviderType,
   type ReasoningEffort,
 } from "../../../shared/llm/provider-registry.js";
@@ -196,19 +195,18 @@ export function buildProviderEnvFromSettings() {
     ...config.models,
     [agentState.selectedProvider]: agentState.selectedModel,
   };
-  config.reasoningEfforts = {
-    ...config.reasoningEfforts,
-    ...(agentState.selectedReasoningEffort
-      ? { [agentState.selectedProvider]: agentState.selectedReasoningEffort }
-      : {}),
-  };
+  config.reasoningEfforts = setProviderReasoningEffort(
+    config.reasoningEfforts ?? {},
+    agentState.selectedProvider,
+    agentState.selectedReasoningEffort
+  );
   return config;
 }
 
 function applyConversationModelConfiguration(conversation: ChatConversation | undefined): void {
-  const configuration = resolveVideoModelConfiguration({
+  const configuration = resolveChatModelConfiguration({
     conversation,
-    configuredProviders: getConfiguredVideoProviders(settingsState.settings),
+    configuredProviders: getConfiguredProviders(settingsState.settings),
     defaultProvider: settingsState.settings.defaultVideoProvider ?? 'gemini',
     providerModels: settingsState.settings.providerModels ?? {},
     providerReasoningEfforts: settingsState.settings.providerReasoningEfforts ?? {},
@@ -683,7 +681,7 @@ export async function removeConversation(conversationId: number) {
 }
 
 export function setProvider(provider: LLMProviderType) {
-  if (isStreamingBlocked() || !providerSupportsVideo(provider)) {
+  if (isStreamingBlocked()) {
     return;
   }
 
@@ -701,8 +699,6 @@ export async function setChatModelConfiguration(
   if (
     isStreamingBlocked()
     || !model.trim()
-    || !providerSupportsVideo(provider)
-    || !providerModelSupportsVideo(provider, model)
   ) return false;
   agentState.selectedProvider = provider;
   agentState.selectedModel = model.trim();
@@ -711,10 +707,11 @@ export async function setChatModelConfiguration(
     ...settingsState.settings.providerModels,
     [provider]: model.trim(),
   };
-  settingsState.settings.providerReasoningEfforts = {
-    ...settingsState.settings.providerReasoningEfforts,
-    ...(reasoningEffort ? { [provider]: reasoningEffort } : {}),
-  };
+  settingsState.settings.providerReasoningEfforts = setProviderReasoningEffort(
+    settingsState.settings.providerReasoningEfforts,
+    provider,
+    reasoningEffort
+  );
   void saveSettings().catch((error) => console.error('[AgentSession] Failed to save model default:', error));
 
   const conversationId = agentState.selectedConversationId;

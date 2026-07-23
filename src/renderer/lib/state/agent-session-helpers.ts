@@ -1,8 +1,6 @@
 import type { ChatConversation } from "../../../shared/types/database.js";
 import {
   getProviderMetadata,
-  providerModelSupportsVideo,
-  providerSupportsVideo,
   type LLMProviderType,
   type ReasoningEffort,
 } from "../../../shared/llm/provider-registry.js";
@@ -25,42 +23,47 @@ export interface ConversationContextRequest {
   contextKey: string;
 }
 
-export interface VideoModelConfiguration {
+export interface ChatModelConfiguration {
   provider: LLMProviderType;
   model: string;
   reasoningEffort: ReasoningEffort | null;
 }
 
-export function resolveVideoModelConfiguration(options: {
+export function resolveChatModelConfiguration(options: {
   conversation?: ChatConversation;
   configuredProviders: readonly LLMProviderType[];
   defaultProvider: LLMProviderType;
   providerModels: Partial<Record<LLMProviderType, string>>;
   providerReasoningEfforts: Partial<Record<LLMProviderType, ReasoningEffort>>;
-}): VideoModelConfiguration {
-  const configuredVideoProviders = options.configuredProviders.filter(providerSupportsVideo);
-  const preferredDefault = providerSupportsVideo(options.defaultProvider)
-    ? options.defaultProvider
-    : 'gemini';
+}): ChatModelConfiguration {
   const conversationProvider = options.conversation?.provider;
   const provider = conversationProvider
-    && configuredVideoProviders.includes(conversationProvider)
+    && options.configuredProviders.includes(conversationProvider)
     ? conversationProvider
-    : configuredVideoProviders.includes(preferredDefault)
-      ? preferredDefault
-      : configuredVideoProviders[0] ?? preferredDefault;
+    : options.configuredProviders.includes(options.defaultProvider)
+      ? options.defaultProvider
+      : options.configuredProviders[0] ?? options.defaultProvider;
   const conversationModel = conversationProvider === provider
     ? options.conversation?.model
     : null;
   const preferredModel = conversationModel || options.providerModels[provider];
-  const model = preferredModel && providerModelSupportsVideo(provider, preferredModel)
-    ? preferredModel
-    : getProviderMetadata(provider).defaultModel;
+  const model = preferredModel || getProviderMetadata(provider).defaultModel;
   const reasoningEffort = conversationModel === model
     ? options.conversation?.reasoning_effort ?? null
     : options.providerReasoningEfforts[provider] ?? null;
 
   return { provider, model, reasoningEffort };
+}
+
+export function setProviderReasoningEffort(
+  efforts: Partial<Record<LLMProviderType, ReasoningEffort>>,
+  provider: LLMProviderType,
+  reasoningEffort: ReasoningEffort | null
+): Partial<Record<LLMProviderType, ReasoningEffort>> {
+  const nextEfforts = { ...efforts };
+  if (reasoningEffort) nextEfforts[provider] = reasoningEffort;
+  else delete nextEfforts[provider];
+  return nextEfforts;
 }
 
 export function shouldChangeChapterContext(
