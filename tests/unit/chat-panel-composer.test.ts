@@ -4,6 +4,8 @@ import {
   filterComposerMentionCandidates,
   getComposerMentionQuery,
   insertComposerMention,
+  materializeComposerMentions,
+  removeComposerMention,
   removeComposerMentionQuery,
   shouldInterceptComposerEnter,
   updateComposerMentionRanges,
@@ -91,5 +93,43 @@ describe("chat panel composer helpers", () => {
     expect(updateComposerMentionRanges('Use @Setup here', 'Use @Set here', [{
       type: 'clip', id: 2, label: 'Setup', occurrenceId: 'one', start: 4, end: 10,
     }])).toEqual([]);
+  });
+
+  it('materializes legacy mentions at matching inline tokens', () => {
+    const result = materializeComposerMentions('Compare @Setup with @Setup', [
+      { type: 'clip', id: 2, label: 'Setup' },
+      { type: 'clip', id: 2, label: 'Setup' },
+    ]);
+
+    expect(result.message).toBe('Compare @Setup with @Setup');
+    expect(result.mentions).toEqual([
+      expect.objectContaining({ id: 2, start: 8, end: 14, occurrenceId: expect.any(String) }),
+      expect.objectContaining({ id: 2, start: 20, end: 26, occurrenceId: expect.any(String) }),
+    ]);
+  });
+
+  it('prepends legacy cards that have no token and shifts positioned ranges', () => {
+    const result = materializeComposerMentions('Keep @Payoff', [
+      { type: 'clip', id: 1, label: 'Setup' },
+      { type: 'clip', id: 2, label: 'Payoff', occurrenceId: 'payoff', start: 5, end: 12 },
+    ]);
+
+    expect(result.message).toBe('@Setup Keep @Payoff');
+    expect(result.mentions).toEqual([
+      expect.objectContaining({ id: 1, start: 0, end: 6 }),
+      expect.objectContaining({ id: 2, occurrenceId: 'payoff', start: 12, end: 19 }),
+    ]);
+  });
+
+  it('removes one mention occurrence and shifts later ranges', () => {
+    const result = removeComposerMention('Use @Setup then @Payoff', [
+      { type: 'clip', id: 1, label: 'Setup', occurrenceId: 'setup', start: 4, end: 10 },
+      { type: 'clip', id: 2, label: 'Payoff', occurrenceId: 'payoff', start: 16, end: 23 },
+    ], 'setup');
+
+    expect(result.message).toBe('Use then @Payoff');
+    expect(result.mentions).toEqual([
+      expect.objectContaining({ occurrenceId: 'payoff', start: 9, end: 16 }),
+    ]);
   });
 });

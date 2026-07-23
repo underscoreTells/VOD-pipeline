@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatConversation } from "../../src/shared/types/database.js";
 import {
   resolveConversationSelection,
+  resolveVideoModelConfiguration,
   shouldChangeChapterContext,
   sortChatConversations,
 } from "../../src/renderer/lib/state/agent-session-helpers.js";
@@ -86,5 +87,60 @@ describe("agent session conversation helpers", () => {
     expect(shouldChangeChapterContext("123", "123")).toBe(false);
     expect(shouldChangeChapterContext("123", "456")).toBe(true);
     expect(shouldChangeChapterContext("123", null)).toBe(true);
+  });
+
+  it("keeps a conversation's configured video model and reasoning effort", () => {
+    const conversation = {
+      ...createConversation(1, "2026-04-17T12:00:00.000Z"),
+      provider: "kimi" as const,
+      model: "kimi-k2.6",
+      reasoning_effort: "high" as const,
+    };
+
+    expect(resolveVideoModelConfiguration({
+      conversation,
+      configuredProviders: ["gemini", "kimi"],
+      defaultProvider: "gemini",
+      providerModels: {},
+      providerReasoningEfforts: {},
+    })).toEqual({
+      provider: "kimi",
+      model: "kimi-k2.6",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("falls back from a text-only conversation to the configured default video provider", () => {
+    const conversation = {
+      ...createConversation(1, "2026-04-17T12:00:00.000Z"),
+      provider: "openai" as const,
+      model: "gpt-5.6-terra",
+      reasoning_effort: "high" as const,
+    };
+
+    expect(resolveVideoModelConfiguration({
+      conversation,
+      configuredProviders: ["gemini", "kimi"],
+      defaultProvider: "kimi",
+      providerModels: { kimi: "kimi-k2.7-code" },
+      providerReasoningEfforts: { kimi: "low" },
+    })).toEqual({
+      provider: "kimi",
+      model: "kimi-k2.7-code",
+      reasoningEffort: "low",
+    });
+  });
+
+  it("replaces an unsupported configured model with the provider's video default", () => {
+    expect(resolveVideoModelConfiguration({
+      configuredProviders: ["gemini"],
+      defaultProvider: "openai",
+      providerModels: { gemini: "unknown-gemini-model" },
+      providerReasoningEfforts: { gemini: "medium" },
+    })).toEqual({
+      provider: "gemini",
+      model: "gemini-3.6-flash",
+      reasoningEffort: "medium",
+    });
   });
 });

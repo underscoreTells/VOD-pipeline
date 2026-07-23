@@ -68,6 +68,17 @@ function isOpenAIChatModel(id: string): boolean {
   return !/(realtime|audio|transcribe|tts|image|embedding|moderation)/.test(normalized);
 }
 
+function findCuratedModel(
+  provider: LLMProviderType,
+  id: string,
+  fallbackById: Map<string, ProviderModelInfo>
+): ProviderModelInfo | undefined {
+  const resolvedId = resolveProviderModel(provider, id);
+  return fallbackById.get(id)
+    ?? fallbackById.get(resolvedId)
+    ?? [...fallbackById.values()].find((candidate) => resolvedId.startsWith(`${candidate.id}-`));
+}
+
 function parseReasoningEfforts(value: unknown): ReasoningEffort[] {
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
@@ -193,23 +204,21 @@ export async function listProviderModels(
   const payload = await fetchJson(endpoint, headers);
   const liveModels = normalizeLiveModels(provider, payload);
   const fallbackById = new Map(getFallbackProviderModels(provider).map((model) => [model.id, model]));
-  const models = liveModels.map((model): ProviderModelInfo => {
-    const resolvedId = resolveProviderModel(provider, model.id);
-    const fallback = fallbackById.get(model.id)
-      ?? fallbackById.get(resolvedId)
-      ?? [...fallbackById.values()].find((candidate) => model.id.startsWith(`${candidate.id}-`));
-    return {
+  const models = liveModels.flatMap((model): ProviderModelInfo[] => {
+    const fallback = findCuratedModel(provider, model.id, fallbackById);
+    if (provider === 'openai' && !fallback) return [];
+    return [{
       id: model.id,
       label: model.label || fallback?.label || humanizeModelId(model.id),
       contextTokenLimit: model.contextTokenLimit
         || fallback?.contextTokenLimit
         || getProviderMetadata(provider).unknownModelContextTokenLimit
         || getProviderMetadata(provider).contextTokenLimit,
-      supportsVideo: fallback?.supportsVideo ?? getProviderMetadata(provider).supportsVideo,
+      supportsVideo: fallback?.supportsVideo ?? false,
       reasoningEfforts: model.reasoningEfforts ?? fallback?.reasoningEfforts ?? [],
       source: 'live',
-      compatibility: fallback || provider !== 'openai' ? 'supported' : 'unknown',
-    };
+      compatibility: fallback ? 'supported' : 'unknown',
+    }];
   }).sort((a, b) => a.label.localeCompare(b.label));
 
   if (models.length === 0) throw new Error('No compatible chat models were returned by this provider');

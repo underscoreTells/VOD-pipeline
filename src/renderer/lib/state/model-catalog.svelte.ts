@@ -33,6 +33,12 @@ export function getModelsForProvider(provider: LLMProviderType): ProviderModelIn
   return modelCatalogState.models[provider] ?? getFallbackModels(provider);
 }
 
+export function getVideoModelsForProvider(provider: LLMProviderType): ProviderModelInfo[] {
+  return getModelsForProvider(provider).filter(
+    (model) => model.compatibility === 'supported' && model.supportsVideo
+  );
+}
+
 export async function loadProviderModels(provider: LLMProviderType, refresh = false): Promise<void> {
   if (modelCatalogState.loadingProvider === provider) return;
   if (!refresh && modelCatalogState.models[provider]) return;

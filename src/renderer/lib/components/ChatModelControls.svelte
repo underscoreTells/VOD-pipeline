@@ -5,9 +5,9 @@
     type ReasoningEffort,
   } from '../../../shared/llm/provider-registry.js';
   import { openSettings, settingsState } from '../state/settings.svelte.js';
-  import { getConfiguredProviders } from '../state/settings-helpers.js';
+  import { getConfiguredVideoProviders } from '../state/settings-helpers.js';
   import {
-    getModelsForProvider,
+    getVideoModelsForProvider,
     loadProviderModels,
     modelCatalogState,
   } from '../state/model-catalog.svelte.js';
@@ -22,20 +22,27 @@
     onchange: (provider: LLMProviderType, model: string, reasoningEffort: ReasoningEffort | null) => void;
   } = $props();
 
-  let root = $state<HTMLDivElement | null>(null);
+  const PICKER_ID = 'chat-model-picker';
+  let trigger = $state<HTMLButtonElement | null>(null);
+  let picker = $state<HTMLDivElement | null>(null);
+  let searchInput = $state<HTMLInputElement | null>(null);
   let open = $state(false);
   let query = $state('');
   let browsingProvider = $state<LLMProviderType>('gemini');
-  const configuredProviders = $derived(getConfiguredProviders(settingsState.settings));
-  const availableProviders = $derived(configuredProviders.length > 0 ? configuredProviders : [provider]);
-  const browsingModels = $derived(getModelsForProvider(browsingProvider));
+  let pickerStyle = $state('');
+  const availableProviders = $derived(getConfiguredVideoProviders(settingsState.settings));
+  const browsingModels = $derived(
+    availableProviders.includes(browsingProvider)
+      ? getVideoModelsForProvider(browsingProvider)
+      : []
+  );
   const filteredModels = $derived(
     browsingModels.filter((candidate) =>
       !query.trim() || `${candidate.label} ${candidate.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
     )
   );
   const selectedModel = $derived(
-    getModelsForProvider(provider).find((candidate) => candidate.id === model)
+    getVideoModelsForProvider(provider).find((candidate) => candidate.id === model)
   );
   const reasoningEfforts = $derived(selectedModel?.reasoningEfforts ?? []);
   const displayedReasoningEffort = $derived(
@@ -45,19 +52,74 @@
 
   $effect(() => {
     if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (root && event.target instanceof Node && !root.contains(event.target)) open = false;
+    const reposition = () => positionPicker();
+    const dismissOnPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || picker?.contains(target) || trigger?.contains(target)) return;
+      closePicker();
     };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closePicker(true);
+    };
+    window.addEventListener('resize', reposition);
+    document.addEventListener('scroll', reposition, true);
+    document.addEventListener('pointerdown', dismissOnPointerDown, true);
+    document.addEventListener('keydown', dismissOnEscape, true);
+    requestAnimationFrame(() => {
+      positionPicker();
+      searchInput?.focus();
+    });
+    return () => {
+      window.removeEventListener('resize', reposition);
+      document.removeEventListener('scroll', reposition, true);
+      document.removeEventListener('pointerdown', dismissOnPointerDown, true);
+      document.removeEventListener('keydown', dismissOnEscape, true);
+    };
   });
 
+  function positionPicker() {
+    if (!trigger) return;
+    const viewportMargin = 8;
+    const gap = 8;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.max(0, Math.min(352, window.innerWidth - viewportMargin * 2));
+    const left = Math.min(
+      Math.max(viewportMargin, rect.left),
+      Math.max(viewportMargin, window.innerWidth - width - viewportMargin)
+    );
+    const spaceAbove = Math.max(0, rect.top - gap - viewportMargin);
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportMargin);
+    const placeAbove = spaceAbove >= 240 || spaceAbove >= spaceBelow;
+    const maxHeight = Math.min(416, placeAbove ? spaceAbove : spaceBelow);
+    const verticalPosition = placeAbove
+      ? `bottom:${Math.max(viewportMargin, window.innerHeight - rect.top + gap)}px;top:auto;`
+      : `top:${Math.min(window.innerHeight - viewportMargin, rect.bottom + gap)}px;bottom:auto;`;
+    pickerStyle = `position:fixed;left:${left}px;right:auto;${verticalPosition}width:${width}px;max-height:${maxHeight}px;margin:0;`;
+  }
+
+  function handlePickerToggle(event: ToggleEvent) {
+    open = event.newState === 'open';
+  }
+
+  function closePicker(restoreFocus = false) {
+    if (picker?.matches(':popover-open')) picker.hidePopover();
+    if (restoreFocus) requestAnimationFrame(() => trigger?.focus());
+  }
+
   function togglePicker() {
-    if (disabled) return;
-    open = !open;
-    browsingProvider = provider;
+    if (disabled || !picker) return;
+    if (picker.matches(':popover-open')) {
+      closePicker();
+      return;
+    }
+    browsingProvider = availableProviders.includes(provider)
+      ? provider
+      : availableProviders[0] ?? settingsState.settings.defaultVideoProvider;
     query = '';
-    if (open) void loadProviderModels(provider);
+    if (availableProviders.includes(browsingProvider)) void loadProviderModels(browsingProvider);
+    picker.showPopover();
   }
 
   function browse(nextProvider: LLMProviderType) {
@@ -67,7 +129,7 @@
   }
 
   function chooseModel(nextProvider: LLMProviderType, nextModel: string) {
-    const candidate = getModelsForProvider(nextProvider).find((item) => item.id === nextModel);
+    const candidate = getVideoModelsForProvider(nextProvider).find((item) => item.id === nextModel);
     const efforts = candidate?.reasoningEfforts ?? [];
     const nextEffort = reasoningEffort && efforts.includes(reasoningEffort)
       ? reasoningEffort
@@ -75,16 +137,20 @@
         ? 'medium'
         : efforts[0] ?? null;
     onchange(nextProvider, nextModel, nextEffort);
-    open = false;
+    closePicker(true);
   }
 </script>
 
-<div class="relative flex min-w-0 items-center gap-1.5" bind:this={root} data-chat-model-controls>
+<div class="relative flex min-w-0 items-center gap-1.5" data-chat-model-controls>
   <button
     type="button"
     class="inline-flex min-w-0 max-w-[14rem] items-center gap-1.5 rounded-md px-2 py-1.5 text-app-xs font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
     onclick={togglePicker}
+    bind:this={trigger}
     {disabled}
+    aria-expanded={open}
+    aria-controls={PICKER_ID}
+    aria-haspopup="dialog"
     title={`${getProviderLabel(provider)} · ${modelLabel}`}
   >
     <span class="truncate">{getProviderLabel(provider)} · {modelLabel}</span>
@@ -107,15 +173,29 @@
     </select>
   {/if}
 
-  {#if open}
-    <div class="absolute bottom-[calc(100%+8px)] left-0 z-[var(--z-float)] flex max-h-[26rem] w-[min(32rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-border-default bg-surface-elevated shadow-[0_12px_36px_rgba(0,0,0,0.32)]">
-      <div class="flex gap-1 overflow-x-auto border-b border-border-subtle p-2">
+  <div
+    id={PICKER_ID}
+    popover="manual"
+    bind:this={picker}
+    ontoggle={handlePickerToggle}
+    style={pickerStyle}
+    class="model-picker z-[var(--z-float)] min-h-0 flex-col overflow-hidden rounded-lg border border-border-default bg-surface-elevated p-0 text-text-primary shadow-[0_12px_36px_rgba(0,0,0,0.32)]"
+    role="dialog"
+    aria-label="Choose a video model"
+  >
+    {#if availableProviders.length === 0}
+      <div class="px-4 py-8 text-center">
+        <div class="text-app-sm font-medium text-text-primary">No video provider configured</div>
+        <div class="mt-1 text-app-xs text-text-tertiary">Configure Google Gemini or Kimi Platform to choose a model.</div>
+      </div>
+    {:else}
+      <div class="flex shrink-0 gap-1 overflow-x-auto border-b border-border-subtle p-2">
         {#each availableProviders as candidateProvider (candidateProvider)}
           <button type="button" class="shrink-0 rounded-md px-2 py-1 text-app-xs" class:bg-accent-primary-subtle={candidateProvider === browsingProvider} class:text-accent-primary={candidateProvider === browsingProvider} class:text-text-tertiary={candidateProvider !== browsingProvider} onclick={() => browse(candidateProvider)}>{getProviderLabel(candidateProvider)}</button>
         {/each}
       </div>
-      <div class="border-b border-border-subtle p-2">
-        <input class="h-8 w-full rounded-md border border-border-default bg-surface-base px-2.5 text-app-sm text-text-primary outline-none focus:border-border-strong" bind:value={query} placeholder="Search models" aria-label="Search models" />
+      <div class="shrink-0 border-b border-border-subtle p-2">
+        <input class="h-8 w-full rounded-md border border-border-default bg-surface-base px-2.5 text-app-sm text-text-primary outline-none focus:border-border-strong" bind:this={searchInput} bind:value={query} placeholder="Search video models" aria-label="Search video models" />
       </div>
       <div class="scrollbar-thin min-h-20 flex-1 overflow-y-auto p-1.5">
         {#if modelCatalogState.loadingProvider === browsingProvider && browsingModels.length === 0}
@@ -126,18 +206,27 @@
           {#each filteredModels as candidate (candidate.id)}
             <button type="button" class="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-hover" class:bg-accent-primary-subtle={provider === browsingProvider && model === candidate.id} onclick={() => chooseModel(browsingProvider, candidate.id)}>
               <span class="min-w-0"><span class="block truncate text-app-sm font-medium text-text-primary">{candidate.label}</span><span class="block truncate font-mono text-[10px] text-text-disabled">{candidate.id}</span></span>
-              {#if candidate.compatibility === 'unknown'}<span class="shrink-0 text-[10px] text-accent-warning">Compatibility unknown</span>{/if}
             </button>
           {/each}
         {/if}
       </div>
-      <div class="flex items-center justify-between border-t border-border-subtle px-2 py-1.5">
+    {/if}
+      <div class="flex shrink-0 items-center justify-between border-t border-border-subtle px-2 py-1.5">
         <span class="truncate text-[10px] text-accent-warning">{modelCatalogState.errors[browsingProvider] ?? ''}</span>
         <div class="flex shrink-0 items-center gap-1">
-          <button type="button" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-app-xs text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => void loadProviderModels(browsingProvider, true)}><Icon icon={RotateCcw} size={11} /> Refresh</button>
-          <button type="button" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-app-xs text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => { open = false; void openSettings(); }}><Icon icon={Settings} size={11} /> Providers</button>
+          {#if availableProviders.length > 0}<button type="button" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-app-xs text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => void loadProviderModels(browsingProvider, true)}><Icon icon={RotateCcw} size={11} /> Refresh</button>{/if}
+          <button type="button" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-app-xs text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => { closePicker(); void openSettings(); }}><Icon icon={Settings} size={11} /> Providers</button>
         </div>
       </div>
-    </div>
-  {/if}
+  </div>
 </div>
+
+<style>
+  .model-picker:not(:popover-open) {
+    display: none !important;
+  }
+
+  .model-picker:popover-open {
+    display: flex !important;
+  }
+</style>

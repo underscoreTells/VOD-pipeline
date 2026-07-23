@@ -43,9 +43,10 @@
   {#each segments as segment (segment.key)}
     {#if segment.type === 'text'}{segment.value}{:else}<button
       type="button"
-      class="mx-0.5 inline-flex max-w-[16rem] translate-y-[1px] items-center rounded-md border border-[color:color-mix(in_srgb,var(--accent-primary)_40%,var(--border-default))] bg-accent-primary-subtle px-1.5 py-0.5 text-app-xs font-medium text-accent-primary transition-colors hover:border-accent-primary hover:bg-surface-hover"
+      class="mx-0.5 inline-flex items-center rounded-sm border border-[color:color-mix(in_srgb,var(--accent-primary)_35%,var(--border-default))] bg-accent-primary-subtle px-1 py-px text-[10px] font-medium leading-4 text-accent-primary transition-colors hover:border-accent-primary hover:bg-surface-hover"
       onclick={() => onmention?.(segment.mention)}
-      title={`${segment.mention.type === 'clip' ? 'Open clip' : 'Open suggestion'}: ${segment.mention.label}`}
-    >@{segment.mention.label}</button>{/if}
+      title={segment.mention.label}
+      aria-label={`${segment.mention.type === 'clip' ? 'Open clip' : 'Open suggestion'}: ${segment.mention.label}`}
+    >{segment.mention.type}</button>{/if}
   {/each}
 </div>

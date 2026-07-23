@@ -104,9 +104,9 @@ describe("chat panel thinking disclosure", () => {
     expect(body).toContain("1/2 video assets ready");
     expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<div[^>]*contenteditable="true"[^>]*role="textbox"[^>]*aria-label="Message the AI editor"[^>]*>/);
     expect(composerMatch?.[0]).toBeDefined();
-    expect(composerMatch?.[0]).not.toContain("disabled");
+    expect(composerMatch?.[0]).not.toContain('aria-disabled="true"');
 
     const sendButtonMatch = body.match(/<button[^>]*title="Send message"[^>]*>/);
     expect(sendButtonMatch?.[0]).toContain("disabled");
@@ -124,9 +124,9 @@ describe("chat panel thinking disclosure", () => {
     expect(body).not.toContain("video assets ready");
     expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<div[^>]*contenteditable="true"[^>]*role="textbox"[^>]*aria-label="Message the AI editor"[^>]*>/);
     expect(composerMatch?.[0]).toBeDefined();
-    expect(composerMatch?.[0]).not.toContain("disabled");
+    expect(composerMatch?.[0]).not.toContain('aria-disabled="true"');
 
     const sendButtonMatch = body.match(/<button[^>]*title="Send message"[^>]*>/);
     expect(sendButtonMatch?.[0]).toContain("disabled");
@@ -145,9 +145,9 @@ describe("chat panel thinking disclosure", () => {
     expect(body).toContain("ffmpeg exited with status 1");
     expect(body).toContain("Ask the AI editor about this chapter...");
 
-    const composerMatch = body.match(/<textarea[^>]*placeholder="Ask the AI editor about this chapter\.\.\."[^>]*><\/textarea>/);
+    const composerMatch = body.match(/<div[^>]*contenteditable="true"[^>]*role="textbox"[^>]*aria-label="Message the AI editor"[^>]*>/);
     expect(composerMatch?.[0]).toBeDefined();
-    expect(composerMatch?.[0]).not.toContain("disabled");
+    expect(composerMatch?.[0]).not.toContain('aria-disabled="true"');
   });
 
   it("renders the final answer without exposing raw reasoning or internal trace details", () => {

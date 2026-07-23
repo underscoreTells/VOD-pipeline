@@ -19,6 +19,7 @@
   import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
   import MarkdownContent from "./MarkdownContent.svelte";
   import InlineMentionContent from './InlineMentionContent.svelte';
+  import InlineMentionEditor from './InlineMentionEditor.svelte';
   import ChatModelControls from './ChatModelControls.svelte';
   import {
     collapseChat,
@@ -35,10 +36,11 @@
     filterComposerMentionCandidates,
     getComposerMentionQuery,
     insertComposerMention,
+    materializeComposerMentions,
+    removeComposerMention,
     removeComposerMentionQuery,
     shouldInterceptComposerEnter,
     type ComposerMentionCandidate,
-    updateComposerMentionRanges,
   } from './chat-panel-composer.js';
   import {
     summarizeExecutionActivity,
@@ -60,7 +62,7 @@
   let mentionMenuIndex = $state(0);
   let chatPanelElement = $state<HTMLDivElement | null>(null);
   let chatContainer = $state<HTMLDivElement | null>(null);
-  let messageInput = $state<HTMLTextAreaElement | null>(null);
+  let messageInput = $state<InlineMentionEditor | null>(null);
   let messageCursor = $state(0);
   let suggestionsWrapper = $state<HTMLDivElement | null>(null);
   let suggestionsPanel = $state<HTMLDivElement | null>(null);
@@ -72,12 +74,11 @@
   let editingMessageId = $state<string | null>(null);
   let editingMessageValue = $state("");
   let editingMessageMentions = $state<ChatEntityMention[]>([]);
+  let editingMessageInput = $state<InlineMentionEditor | null>(null);
   let messageActionPending = $state(false);
   let previousComposerKey = '';
   let copyResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const MESSAGE_INPUT_MIN_HEIGHT = 80;
-  const MESSAGE_INPUT_MAX_HEIGHT = 180;
   const SUGGESTIONS_TRAY_RESIZE_HANDLE_HEIGHT = 6;
   const MIN_SUGGESTIONS_TRAY_MAX_HEIGHT = 140;
   const MIN_VISIBLE_MESSAGES_HEIGHT = 160;
@@ -207,25 +208,16 @@
     };
   });
 
-  function autoResizeMessageInput() {
-    if (!messageInput) return;
-    messageInput.style.height = 'auto';
-    const nextHeight = Math.min(
-      MESSAGE_INPUT_MAX_HEIGHT,
-      Math.max(MESSAGE_INPUT_MIN_HEIGHT, messageInput.scrollHeight)
-    );
-    messageInput.style.height = `${nextHeight}px`;
-    messageInput.style.overflowY = messageInput.scrollHeight > MESSAGE_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
-  }
-
   $effect(() => {
     if (composerKey === previousComposerKey) return;
     previousComposerKey = composerKey;
-    message = agentState.composerDrafts[composerKey] ?? '';
-    messageCursor = message.length;
-    composerMentions = (agentState.composerMentionDrafts[composerKey] ?? []).map(
-      (mention) => ({ ...mention })
+    const draft = materializeComposerMentions(
+      agentState.composerDrafts[composerKey] ?? '',
+      agentState.composerMentionDrafts[composerKey] ?? []
     );
+    message = draft.message;
+    messageCursor = message.length;
+    composerMentions = draft.mentions;
   });
 
   $effect(() => {
@@ -234,12 +226,6 @@
     agentState.composerMentionDrafts[composerKey] = composerMentions.map(
       (mention) => ({ ...mention })
     );
-  });
-
-  $effect(() => {
-    message;
-    if (!messageInput) return;
-    autoResizeMessageInput();
   });
 
   $effect(() => {
@@ -371,10 +357,6 @@
     if (suggestionsPanel) {
       observer.observe(suggestionsPanel);
     }
-    if (messageInput) {
-      observer.observe(messageInput);
-    }
-
     return () => observer.disconnect();
   });
 
@@ -388,7 +370,6 @@
     composerMentions = [];
     agentState.composerDrafts[composerKey] = '';
     agentState.composerMentionDrafts[composerKey] = [];
-    autoResizeMessageInput();
     await sendChatMessage(msg, mentions);
   }
 
@@ -417,6 +398,7 @@
           const removed = removeComposerMentionQuery(message, query);
           message = removed.message;
           messageCursor = removed.cursor;
+          requestAnimationFrame(() => messageInput?.setSelectionRange(removed.cursor));
         }
         return;
       }
@@ -431,20 +413,11 @@
     }
   }
 
-  function trackMessageCursor(event: Event) {
-    messageCursor = event.currentTarget instanceof HTMLTextAreaElement
-      ? event.currentTarget.selectionStart
-      : message.length;
-  }
-
-  function handleComposerInput(event: Event) {
-    if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
-    const nextMessage = event.currentTarget.value;
-    composerMentions = updateComposerMentionRanges(message, nextMessage, composerMentions);
+  function handleComposerInput(nextMessage: string, nextMentions: ChatEntityMention[], cursor: number) {
     message = nextMessage;
+    composerMentions = nextMentions;
+    messageCursor = cursor;
     mentionMenuIndex = 0;
-    trackMessageCursor(event);
-    autoResizeMessageInput();
   }
 
   function selectMention(candidate: ComposerMentionCandidate | undefined) {
@@ -461,6 +434,19 @@
     requestAnimationFrame(() => {
       messageInput?.focus();
       messageInput?.setSelectionRange(inserted.cursor, inserted.cursor);
+    });
+  }
+
+  function removeComposerMentionCard(mention: ChatEntityMention) {
+    if (!mention.occurrenceId) return;
+    const cursor = mention.start ?? messageCursor;
+    const removed = removeComposerMention(message, composerMentions, mention.occurrenceId);
+    message = removed.message;
+    composerMentions = removed.mentions;
+    messageCursor = cursor;
+    requestAnimationFrame(() => {
+      messageInput?.focus();
+      messageInput?.setSelectionRange(cursor);
     });
   }
 
@@ -482,9 +468,10 @@
 
   function startEditingMessage(message: ChatMessage) {
     if (!canEditMessage(message)) return;
+    const editable = materializeComposerMentions(message.content, message.mentions);
     editingMessageId = message.id;
-    editingMessageValue = message.content;
-    editingMessageMentions = message.mentions.map((mention) => ({ ...mention }));
+    editingMessageValue = editable.message;
+    editingMessageMentions = editable.mentions;
   }
 
   function cancelEditingMessage() {
@@ -493,11 +480,21 @@
     editingMessageMentions = [];
   }
 
-  function handleEditingInput(event: Event) {
-    if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
-    const nextValue = event.currentTarget.value;
-    editingMessageMentions = updateComposerMentionRanges(editingMessageValue, nextValue, editingMessageMentions);
+  function handleEditingInput(nextValue: string, nextMentions: ChatEntityMention[]) {
     editingMessageValue = nextValue;
+    editingMessageMentions = nextMentions;
+  }
+
+  function removeEditingMentionCard(mention: ChatEntityMention) {
+    if (!mention.occurrenceId) return;
+    const cursor = mention.start ?? editingMessageValue.length;
+    const removed = removeComposerMention(editingMessageValue, editingMessageMentions, mention.occurrenceId);
+    editingMessageValue = removed.message;
+    editingMessageMentions = removed.mentions;
+    requestAnimationFrame(() => {
+      editingMessageInput?.focus();
+      editingMessageInput?.setSelectionRange(cursor);
+    });
   }
 
   function handleInlineMention(mention: ChatEntityMention) {
@@ -790,11 +787,15 @@
 
             {#if editingMessageId === msg.id}
               <div class="message-edit flex flex-col gap-2 rounded-lg bg-surface-elevated px-4 py-3">
-                <textarea
-                  class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
-                  value={editingMessageValue}
-                  oninput={handleEditingInput}
-                ></textarea>
+                <InlineMentionEditor
+                  bind:this={editingMessageInput}
+                  content={editingMessageValue}
+                  mentions={editingMessageMentions}
+                  class="min-h-[112px] max-h-[180px] w-full overflow-y-auto rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary transition-colors focus-visible:border-border-strong"
+                  ariaLabel="Edit message"
+                  onchange={(content, mentions) => handleEditingInput(content, mentions)}
+                  onremove={removeEditingMentionCard}
+                />
                 <div class="message-edit-actions flex items-center justify-end gap-1">
                   <TooltipIconButton
                     class="h-7 w-7 rounded-[6px] border border-border-default bg-surface-base text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary"
@@ -1074,19 +1075,19 @@
           </div>
         {/if}
         <div class="min-w-0 w-full flex-1">
-          <textarea
-            class="min-h-20 max-h-[180px] w-full resize-none overflow-y-hidden bg-transparent px-1 py-2 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
-            rows="1"
-            value={message}
+          <InlineMentionEditor
             bind:this={messageInput}
+            content={message}
+            mentions={composerMentions}
+            class="min-h-20 max-h-[180px] w-full overflow-y-auto bg-transparent px-1 py-2 text-app-base leading-[1.5] text-text-primary focus-visible:shadow-none"
             placeholder={composerPlaceholder}
             disabled={isComposerDisabled}
-            oninput={handleComposerInput}
-            onselect={trackMessageCursor}
-            onclick={trackMessageCursor}
-            onkeyup={trackMessageCursor}
+            ariaLabel="Message the AI editor"
+            onchange={handleComposerInput}
+            oncursor={(cursor) => messageCursor = cursor}
             onkeydown={handleInputKeydown}
-          ></textarea>
+            onremove={removeComposerMentionCard}
+          />
         </div>
         <div class="flex w-full min-w-0 items-center justify-between gap-2 border-t border-border-subtle pt-1.5">
           <ChatModelControls

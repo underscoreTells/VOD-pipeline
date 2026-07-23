@@ -7,6 +7,7 @@ import {
   getProviderMetadata,
   isLLMProvider,
   normalizeProvider,
+  providerModelSupportsVideo,
   providerSupportsVideo,
   resolveProviderModel,
   validateProviderApiKey,
@@ -68,6 +69,13 @@ describe("provider-registry: VIDEO_CAPABLE_PROVIDERS", () => {
     expect(VIDEO_CAPABLE_PROVIDERS).not.toContain("openai");
     expect(VIDEO_CAPABLE_PROVIDERS).not.toContain("anthropic");
     expect(VIDEO_CAPABLE_PROVIDERS).not.toContain("openrouter");
+  });
+
+  it("requires video support at both provider and curated-model level", () => {
+    expect(providerModelSupportsVideo("gemini", "gemini-3.6-flash")).toBe(true);
+    expect(providerModelSupportsVideo("gemini", "gemini-3.6-flash-001")).toBe(true);
+    expect(providerModelSupportsVideo("gemini", "gemini-experimental")).toBe(false);
+    expect(providerModelSupportsVideo("openai", "gpt-5.6-terra")).toBe(false);
   });
 });
 

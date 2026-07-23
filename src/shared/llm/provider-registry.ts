@@ -217,6 +217,24 @@ export function getProviderModels(provider: LLMProviderType): readonly ProviderM
   return PROVIDER_METADATA[provider].models;
 }
 
+export function getProviderModelMetadata(
+  provider: LLMProviderType,
+  model?: string | null
+): ProviderModelMetadata | undefined {
+  const resolved = resolveProviderModel(provider, model);
+  const models = PROVIDER_METADATA[provider].models as readonly ProviderModelMetadata[];
+  return models.find((candidate) =>
+    candidate.id === resolved || resolved.startsWith(`${candidate.id}-`)
+  );
+}
+
+export function providerModelSupportsVideo(
+  provider: LLMProviderType,
+  model?: string | null
+): boolean {
+  return getProviderModelMetadata(provider, model)?.supportsVideo === true;
+}
+
 export function normalizeReasoningEffort(value: unknown): ReasoningEffort | null {
   return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
     ? value as ReasoningEffort
@@ -228,8 +246,7 @@ export function getModelReasoningEfforts(
   model?: string | null
 ): readonly ReasoningEffort[] {
   const resolved = resolveProviderModel(provider, model);
-  return (PROVIDER_METADATA[provider].models as readonly ProviderModelMetadata[])
-    .find((candidate) => candidate.id === resolved)?.reasoningEfforts ?? [];
+  return getProviderModelMetadata(provider, resolved)?.reasoningEfforts ?? [];
 }
 
 export function getProviderModelContextTokenLimit(
@@ -237,7 +254,7 @@ export function getProviderModelContextTokenLimit(
   model?: string | null
 ): number {
   const resolved = resolveProviderModel(provider, model);
-  return PROVIDER_METADATA[provider].models.find((candidate) => candidate.id === resolved)?.contextTokenLimit
+  return getProviderModelMetadata(provider, resolved)?.contextTokenLimit
     ?? getProviderMetadata(provider).unknownModelContextTokenLimit
     ?? PROVIDER_METADATA[provider].contextTokenLimit;
 }

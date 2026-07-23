@@ -91,6 +91,69 @@ export function insertComposerMention(
   };
 }
 
+export function materializeComposerMentions(
+  message: string,
+  mentions: readonly import('../../../shared/types/database.js').ChatEntityMention[]
+): { message: string; mentions: import('../../../shared/types/database.js').ChatEntityMention[] } {
+  const positioned = mentions
+    .filter((mention) => mention.start !== undefined && mention.end !== undefined)
+    .map((mention) => ({
+      ...mention,
+      occurrenceId: mention.occurrenceId ?? crypto.randomUUID(),
+    }));
+  const occupied = positioned.map((mention) => ({ start: mention.start!, end: mention.end! }));
+  const missing: import('../../../shared/types/database.js').ChatEntityMention[] = [];
+
+  for (const mention of mentions) {
+    if (mention.start !== undefined && mention.end !== undefined) continue;
+    const token = `@${mention.label}`;
+    let start = message.indexOf(token);
+    while (start >= 0 && occupied.some((range) => start < range.end && start + token.length > range.start)) {
+      start = message.indexOf(token, start + token.length);
+    }
+    if (start < 0) {
+      missing.push(mention);
+      continue;
+    }
+    occupied.push({ start, end: start + token.length });
+    positioned.push({
+      ...mention,
+      occurrenceId: mention.occurrenceId ?? crypto.randomUUID(),
+      start,
+      end: start + token.length,
+    });
+  }
+
+  if (missing.length === 0) {
+    return { message, mentions: positioned.sort((a, b) => a.start! - b.start!) };
+  }
+
+  const prefix = `${missing.map((mention) => `@${mention.label}`).join(' ')}${message ? ' ' : ''}`;
+  let cursor = 0;
+  const prefixed = missing.map((mention) => {
+    const token = `@${mention.label}`;
+    const start = cursor;
+    cursor += token.length + 1;
+    return {
+      ...mention,
+      occurrenceId: mention.occurrenceId ?? crypto.randomUUID(),
+      start,
+      end: start + token.length,
+    };
+  });
+  return {
+    message: `${prefix}${message}`,
+    mentions: [
+      ...prefixed,
+      ...positioned.map((mention) => ({
+        ...mention,
+        start: mention.start! + prefix.length,
+        end: mention.end! + prefix.length,
+      })),
+    ].sort((a, b) => a.start! - b.start!),
+  };
+}
+
 export function updateComposerMentionRanges(
   previous: string,
   next: string,
@@ -123,13 +186,19 @@ export function removeComposerMention(
   if (!target || target.start === undefined || target.end === undefined) {
     return { message, mentions: mentions.filter((mention) => mention.occurrenceId !== occurrenceId) };
   }
-  const nextMessage = `${message.slice(0, target.start)}${message.slice(target.end)}`;
-  const removedLength = target.end - target.start;
+  const removeStart = target.end === message.length && message[target.start - 1] === ' '
+    ? target.start - 1
+    : target.start;
+  const removeEnd = message[target.end] === ' '
+    ? target.end + 1
+    : target.end;
+  const nextMessage = `${message.slice(0, removeStart)}${message.slice(removeEnd)}`;
+  const removedLength = removeEnd - removeStart;
   return {
     message: nextMessage,
     mentions: mentions
       .filter((mention) => mention.occurrenceId !== occurrenceId)
-      .map((mention) => mention.start !== undefined && mention.end !== undefined && mention.start >= target.end!
+      .map((mention) => mention.start !== undefined && mention.end !== undefined && mention.start >= removeEnd
         ? { ...mention, start: mention.start - removedLength, end: mention.end - removedLength }
         : mention),
   };

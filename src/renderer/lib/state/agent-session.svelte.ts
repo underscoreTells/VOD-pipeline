@@ -21,9 +21,14 @@ import {
   buildConversationContextKey,
   isConversationContextRequestCurrent,
   resolveConversationSelection,
+  resolveVideoModelConfiguration,
   shouldChangeChapterContext,
 } from "./agent-session-helpers.js";
-import { buildProviderConfig, buildProxyOptions } from "./settings-helpers.js";
+import {
+  buildProviderConfig,
+  buildProxyOptions,
+  getConfiguredVideoProviders,
+} from "./settings-helpers.js";
 import {
   createAgentConversation,
   deleteAgentConversation,
@@ -37,6 +42,8 @@ import { onProxyProgress } from "../api/proxies.js";
 import { saveSettings, settingsState } from "./settings.svelte";
 import {
   getProviderMetadata,
+  providerModelSupportsVideo,
+  providerSupportsVideo,
   type LLMProviderType,
   type ReasoningEffort,
 } from "../../../shared/llm/provider-registry.js";
@@ -199,14 +206,16 @@ export function buildProviderEnvFromSettings() {
 }
 
 function applyConversationModelConfiguration(conversation: ChatConversation | undefined): void {
-  const provider = conversation?.provider ?? settingsState.settings.defaultTextProvider ?? 'gemini';
-  agentState.selectedProvider = provider;
-  agentState.selectedModel = conversation?.model
-    || settingsState.settings.providerModels?.[provider]
-    || getProviderMetadata(provider).defaultModel;
-  agentState.selectedReasoningEffort = conversation?.reasoning_effort
-    ?? settingsState.settings.providerReasoningEfforts?.[provider]
-    ?? null;
+  const configuration = resolveVideoModelConfiguration({
+    conversation,
+    configuredProviders: getConfiguredVideoProviders(settingsState.settings),
+    defaultProvider: settingsState.settings.defaultVideoProvider ?? 'gemini',
+    providerModels: settingsState.settings.providerModels ?? {},
+    providerReasoningEfforts: settingsState.settings.providerReasoningEfforts ?? {},
+  });
+  agentState.selectedProvider = configuration.provider;
+  agentState.selectedModel = configuration.model;
+  agentState.selectedReasoningEffort = configuration.reasoningEffort;
 }
 
 export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
@@ -674,7 +683,7 @@ export async function removeConversation(conversationId: number) {
 }
 
 export function setProvider(provider: LLMProviderType) {
-  if (isStreamingBlocked()) {
+  if (isStreamingBlocked() || !providerSupportsVideo(provider)) {
     return;
   }
 
@@ -689,7 +698,12 @@ export async function setChatModelConfiguration(
   model: string,
   reasoningEffort: ReasoningEffort | null
 ): Promise<boolean> {
-  if (isStreamingBlocked() || !model.trim()) return false;
+  if (
+    isStreamingBlocked()
+    || !model.trim()
+    || !providerSupportsVideo(provider)
+    || !providerModelSupportsVideo(provider, model)
+  ) return false;
   agentState.selectedProvider = provider;
   agentState.selectedModel = model.trim();
   agentState.selectedReasoningEffort = reasoningEffort;
