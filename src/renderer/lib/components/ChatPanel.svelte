@@ -422,6 +422,7 @@
 
   function selectMention(candidate: ComposerMentionCandidate | undefined) {
     if (!candidate || !activeMentionQuery) return;
+    const previousMessage = message;
     const inserted = insertComposerMention(message, activeMentionQuery, {
       type: candidate.type,
       id: candidate.id,
@@ -429,7 +430,10 @@
     });
     message = inserted.message;
     messageCursor = inserted.cursor;
-    composerMentions = [...composerMentions, inserted.mention];
+    composerMentions = [
+      ...updateComposerMentionRanges(previousMessage, inserted.message, composerMentions),
+      inserted.mention,
+    ];
     mentionMenuIndex = 0;
     requestAnimationFrame(() => {
       messageInput?.focus();

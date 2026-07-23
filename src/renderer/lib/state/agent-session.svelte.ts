@@ -42,6 +42,9 @@ import {
 import { onProxyProgress } from "../api/proxies.js";
 import { saveSettings, settingsState } from "./settings.svelte";
 import {
+  getModelsForProvider,
+} from "./model-catalog.svelte.js";
+import {
   getProviderModelContextTokenLimit,
   getProviderMetadata,
   type LLMProviderType,
@@ -192,6 +195,8 @@ function isStreamingBlocked(): boolean {
 
 export function buildProviderEnvFromSettings() {
   const config = buildProviderConfig(settingsState.settings, agentState.selectedProvider) as ProviderConfigPayload;
+  const selectedModel = getModelsForProvider(agentState.selectedProvider)
+    .find((model) => model.id === agentState.selectedModel);
   config.models = {
     ...config.models,
     [agentState.selectedProvider]: agentState.selectedModel,
@@ -202,6 +207,10 @@ export function buildProviderEnvFromSettings() {
       ? config.contextTokenLimits?.openaiCompatible
         ?? getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel)
       : getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel),
+  };
+  config.modelSupportsVideo = {
+    [agentState.selectedProvider]: selectedModel?.compatibility === 'supported'
+      && selectedModel.supportsVideo,
   };
   config.reasoningEfforts = setProviderReasoningEffort(
     config.reasoningEfforts ?? {},

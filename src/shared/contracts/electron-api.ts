@@ -27,6 +27,7 @@ export interface ProviderConfigPayload {
   models?: Partial<Record<ProviderConfigProvider, string>>;
   baseURLs?: Partial<Record<ProviderConfigProvider, string>>;
   contextTokenLimits?: Partial<Record<ProviderConfigProvider, number>>;
+  modelSupportsVideo?: Partial<Record<ProviderConfigProvider, boolean>>;
   reasoningEfforts?: Partial<Record<ProviderConfigProvider, ReasoningEffort>>;
 }
 

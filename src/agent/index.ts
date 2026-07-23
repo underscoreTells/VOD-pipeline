@@ -260,6 +260,9 @@ function buildConversationInput(message: Extract<AgentInputMessage, { type: "cha
   return {
     messages: normalizeConversationMessages(message.messages || []),
     selectedProvider: normalizeProvider(metadata.provider) ?? undefined,
+    selectedModelSupportsVideo: typeof metadata.selectedModelSupportsVideo === 'boolean'
+      ? metadata.selectedModelSupportsVideo
+      : undefined,
     selectedClipIds: asNumberArray(metadata.selectedClipIds),
     playheadTime:
       typeof metadata.playheadTime === "number" && Number.isFinite(metadata.playheadTime)

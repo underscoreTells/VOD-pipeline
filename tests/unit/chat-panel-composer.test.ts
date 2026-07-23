@@ -89,6 +89,37 @@ describe("chat panel composer helpers", () => {
       .toEqual([expect.objectContaining({ start: 9, end: 16 })]);
   });
 
+  it('closes an inserted mention query at the end of the message', () => {
+    const query = getComposerMentionQuery('Trim @pay', 9)!;
+    const inserted = insertComposerMention('Trim @pay', query, {
+      type: 'clip',
+      id: 7,
+      label: 'Payoff',
+    });
+
+    expect(inserted.message).toBe('Trim @Payoff ');
+    expect(inserted.cursor).toBe(inserted.message.length);
+    expect(getComposerMentionQuery(inserted.message, inserted.cursor)).toBeNull();
+  });
+
+  it('shifts later mention ranges when inserting a mention before them', () => {
+    const message = 'Use @pay before @Setup';
+    const query = getComposerMentionQuery(message, 8)!;
+    const inserted = insertComposerMention(message, query, {
+      type: 'suggestion',
+      id: 7,
+      label: 'Payoff',
+    });
+    const mentions = updateComposerMentionRanges(message, inserted.message, [{
+      type: 'clip', id: 2, label: 'Setup', occurrenceId: 'setup', start: 16, end: 22,
+    }]);
+
+    expect(inserted.message).toBe('Use @Payoff before @Setup');
+    expect(mentions).toEqual([
+      expect.objectContaining({ occurrenceId: 'setup', start: 19, end: 25 }),
+    ]);
+  });
+
   it('drops structured identity when the mention token itself is edited', () => {
     expect(updateComposerMentionRanges('Use @Setup here', 'Use @Set here', [{
       type: 'clip', id: 2, label: 'Setup', occurrenceId: 'one', start: 4, end: 10,

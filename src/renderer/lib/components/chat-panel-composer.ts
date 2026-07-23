@@ -77,7 +77,7 @@ export function insertComposerMention(
   const token = `@${mention.label}`;
   const prefix = message.slice(0, mentionQuery.start);
   const suffix = message.slice(mentionQuery.end);
-  const trailingSpace = suffix.startsWith(' ') || suffix.length === 0 ? '' : ' ';
+  const trailingSpace = suffix.startsWith(' ') ? '' : ' ';
   const nextMessage = `${prefix}${token}${trailingSpace}${suffix}`;
   return {
     message: nextMessage,

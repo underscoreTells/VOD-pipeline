@@ -64,6 +64,7 @@ export interface ConversationContextPayload {
 export interface ConversationTurnInput {
   messages: BaseMessage[];
   selectedProvider?: LLMProviderType;
+  selectedModelSupportsVideo?: boolean;
   selectedClipIds: number[];
   playheadTime?: number;
   context: ConversationContextPayload;

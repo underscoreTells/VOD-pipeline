@@ -325,6 +325,11 @@ export async function runConversationTurn(
     metadata: {
       projectId: String(options.projectId),
       provider: options.effectiveProvider,
+      selectedModelSupportsVideo: options.effectiveProvider
+        ? options.agentConfig?.modelSupportsVideo?.[
+          options.effectiveProvider as keyof typeof options.agentConfig.modelSupportsVideo
+        ]
+        : undefined,
       chapterId: String(options.chapter.id),
       selectedClipIds: options.selectedClipIds,
       playheadTime: options.playheadTime,
