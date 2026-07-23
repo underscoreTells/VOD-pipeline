@@ -45,9 +45,6 @@
     getModelsForProvider(provider).find((candidate) => candidate.id === model)
   );
   const reasoningEfforts = $derived(selectedModel?.reasoningEfforts ?? []);
-  const displayedReasoningEffort = $derived(
-    reasoningEffort ?? (reasoningEfforts.includes('medium') ? 'medium' : reasoningEfforts[0])
-  );
   const modelLabel = $derived(selectedModel?.label ?? model);
 
   $effect(() => {
@@ -162,11 +159,16 @@
     <select
       id="chat-reasoning-effort"
       class="h-7 rounded-md border-0 bg-transparent px-1.5 text-app-xs text-text-tertiary outline-none hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-      value={displayedReasoningEffort}
-      onchange={(event) => onchange(provider, model, event.currentTarget.value as ReasoningEffort)}
+      value={reasoningEffort ?? ''}
+      onchange={(event) => onchange(
+        provider,
+        model,
+        event.currentTarget.value ? event.currentTarget.value as ReasoningEffort : null
+      )}
       {disabled}
       title="Reasoning level"
     >
+      <option value="">Reasoning: Default</option>
       {#each reasoningEfforts as effort (effort)}
         <option value={effort}>Reasoning: {effort[0].toUpperCase()}{effort.slice(1)}</option>
       {/each}

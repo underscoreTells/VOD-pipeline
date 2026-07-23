@@ -142,7 +142,12 @@ export function summarizeExecutionActivity(entries: ExecutionTraceEntry[]): stri
     if (entry.nodeName && entry.status === 'tool_error' && TOOL_FAILURE_LABELS[entry.nodeName]) {
       labels.delete(TOOL_ACTIVITY_LABELS[entry.nodeName]);
       labels.add(TOOL_FAILURE_LABELS[entry.nodeName]);
-    } else if (entry.nodeName && TOOL_ACTIVITY_LABELS[entry.nodeName] && !labels.has(TOOL_FAILURE_LABELS[entry.nodeName])) {
+    } else if (
+      entry.nodeName
+      && entry.status === 'tool_completed'
+      && TOOL_ACTIVITY_LABELS[entry.nodeName]
+      && !labels.has(TOOL_FAILURE_LABELS[entry.nodeName])
+    ) {
       labels.add(TOOL_ACTIVITY_LABELS[entry.nodeName]);
     }
   }
