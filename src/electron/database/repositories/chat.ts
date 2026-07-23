@@ -30,13 +30,15 @@ export async function createChatConversation(
   const title = input.title?.trim() || DEFAULT_CONVERSATION_TITLE;
 
   const result = database.prepare(
-    `INSERT INTO chat_conversations (project_id, chapter_id, title, provider, thread_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chat_conversations (project_id, chapter_id, title, provider, model, reasoning_effort, thread_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.project_id,
     input.chapter_id,
     title,
     input.provider ?? null,
+    input.model ?? null,
+    input.reasoning_effort ?? null,
     threadId,
     now,
     now
@@ -48,6 +50,8 @@ export async function createChatConversation(
     chapter_id: input.chapter_id,
     title,
     provider: input.provider ?? null,
+    model: input.model ?? null,
+    reasoning_effort: input.reasoning_effort ?? null,
     thread_id: threadId,
     created_at: now,
     updated_at: now,
@@ -57,7 +61,7 @@ export async function createChatConversation(
 export async function getChatConversation(id: number): Promise<ChatConversation | null> {
   const database = await getDatabase();
   const result = database.prepare(
-    `SELECT id, project_id, chapter_id, title, provider, thread_id, created_at, updated_at
+    `SELECT id, project_id, chapter_id, title, provider, model, reasoning_effort, thread_id, created_at, updated_at
      FROM chat_conversations
      WHERE id = ?`
   ).get(id) as ChatConversation | undefined;
@@ -71,7 +75,7 @@ export async function getChatConversationsByChapter(
 ): Promise<ChatConversation[]> {
   const database = await getDatabase();
   return database.prepare(
-    `SELECT id, project_id, chapter_id, title, provider, thread_id, created_at, updated_at
+    `SELECT id, project_id, chapter_id, title, provider, model, reasoning_effort, thread_id, created_at, updated_at
      FROM chat_conversations
      WHERE project_id = ? AND chapter_id = ?
      ORDER BY updated_at DESC, created_at DESC`
@@ -93,6 +97,14 @@ export async function updateChatConversation(
   if (updates.provider !== undefined) {
     fields.push('provider = ?');
     values.push(updates.provider ?? null);
+  }
+  if (updates.model !== undefined) {
+    fields.push('model = ?');
+    values.push(updates.model?.trim() || null);
+  }
+  if (updates.reasoning_effort !== undefined) {
+    fields.push('reasoning_effort = ?');
+    values.push(updates.reasoning_effort ?? null);
   }
   if (updates.thread_id !== undefined) {
     fields.push('thread_id = ?');

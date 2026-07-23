@@ -4,6 +4,7 @@ import {
   countExecutionTraceSteps,
   getExecutionTraceStepIndex,
   parseExecutionTraceJson,
+  summarizeExecutionActivity,
 } from "../../src/shared/utils/execution-trace.js";
 import type { ExecutionTraceEntry } from "../../src/shared/types/database.js";
 
@@ -110,5 +111,14 @@ describe("execution trace utilities", () => {
     );
 
     expect(parsed[0]?.stepIndex).toBe(3);
+  });
+
+  it('deduplicates activity and reports a safe tool failure label', () => {
+    const entries: ExecutionTraceEntry[] = [
+      { id: 'running', status: 'tool_running', label: 'internal', nodeName: 'analyzeChapterVideo', createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'error', status: 'tool_error', label: 'secret provider error', nodeName: 'analyzeChapterVideo', createdAt: '2026-01-01T00:00:01.000Z' },
+    ];
+
+    expect(summarizeExecutionActivity(entries)).toEqual(['Could not analyze chapter video']);
   });
 });

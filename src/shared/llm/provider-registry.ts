@@ -29,6 +29,8 @@ export interface ProviderMetadata {
   modelAliases: Record<string, string>;
   /** Approximate context window used by the near-limit token guard. */
   contextTokenLimit: number;
+  /** Conservative fallback for live models that are not in the curated catalog. */
+  unknownModelContextTokenLimit?: number;
   /** Whether the provider can analyze video evidence. */
   supportsVideo: boolean;
   /** Whether the provider's chat model supports native token streaming. */
@@ -48,7 +50,11 @@ export interface ProviderModelMetadata {
   label: string;
   contextTokenLimit: number;
   supportsVideo: boolean;
+  reasoningEfforts?: readonly ReasoningEffort[];
 }
+
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 
 export const PROVIDER_METADATA = {
   gemini: {
@@ -75,14 +81,20 @@ export const PROVIDER_METADATA = {
     label: 'OpenAI',
     envVar: 'OPENAI_API_KEY',
     apiKeyPrefixes: ['sk-'],
-    defaultModel: 'gpt-4o',
-    modelAliases: {},
-    contextTokenLimit: 128_000,
+    defaultModel: 'gpt-5.6-terra',
+    modelAliases: {
+      'gpt-5.6': 'gpt-5.6-sol',
+    },
+    contextTokenLimit: 1_048_576,
+    unknownModelContextTokenLimit: 128_000,
     supportsVideo: false,
     nativeStreaming: true,
     models: [
-      { id: 'gpt-5', label: 'GPT-5', contextTokenLimit: 400_000, supportsVideo: false },
-      { id: 'gpt-5-mini', label: 'GPT-5 Mini', contextTokenLimit: 400_000, supportsVideo: false },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextTokenLimit: 1_048_576, supportsVideo: false, reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextTokenLimit: 1_048_576, supportsVideo: false, reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextTokenLimit: 1_048_576, supportsVideo: false, reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'gpt-5', label: 'GPT-5', contextTokenLimit: 400_000, supportsVideo: false, reasoningEfforts: ['minimal', 'low', 'medium', 'high'] },
+      { id: 'gpt-5-mini', label: 'GPT-5 Mini', contextTokenLimit: 400_000, supportsVideo: false, reasoningEfforts: ['minimal', 'low', 'medium', 'high'] },
       { id: 'gpt-4o', label: 'GPT-4o', contextTokenLimit: 128_000, supportsVideo: false },
     ],
   },
@@ -145,9 +157,9 @@ export const PROVIDER_METADATA = {
     defaultBaseURL: 'https://api.kimi.com/coding/v1',
     baseURLEnvVar: 'KIMI_CODE_BASE_URL',
     models: [
-      { id: 'k3', label: 'Kimi K3', contextTokenLimit: 1_048_576, supportsVideo: false },
-      { id: 'kimi-for-coding', label: 'Kimi K2.7 Code', contextTokenLimit: 262_144, supportsVideo: false },
-      { id: 'kimi-for-coding-highspeed', label: 'Kimi K2.7 Code HighSpeed', contextTokenLimit: 262_144, supportsVideo: false },
+      { id: 'k3', label: 'Kimi K3', contextTokenLimit: 1_048_576, supportsVideo: false, reasoningEfforts: ['low', 'medium', 'high'] },
+      { id: 'kimi-for-coding', label: 'Kimi K2.7 Code', contextTokenLimit: 262_144, supportsVideo: false, reasoningEfforts: ['low', 'medium', 'high'] },
+      { id: 'kimi-for-coding-highspeed', label: 'Kimi K2.7 Code HighSpeed', contextTokenLimit: 262_144, supportsVideo: false, reasoningEfforts: ['low', 'medium', 'high'] },
     ],
   },
   openaiCompatible: {
@@ -205,12 +217,28 @@ export function getProviderModels(provider: LLMProviderType): readonly ProviderM
   return PROVIDER_METADATA[provider].models;
 }
 
+export function normalizeReasoningEffort(value: unknown): ReasoningEffort | null {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
+    ? value as ReasoningEffort
+    : null;
+}
+
+export function getModelReasoningEfforts(
+  provider: LLMProviderType,
+  model?: string | null
+): readonly ReasoningEffort[] {
+  const resolved = resolveProviderModel(provider, model);
+  return (PROVIDER_METADATA[provider].models as readonly ProviderModelMetadata[])
+    .find((candidate) => candidate.id === resolved)?.reasoningEfforts ?? [];
+}
+
 export function getProviderModelContextTokenLimit(
   provider: LLMProviderType,
   model?: string | null
 ): number {
   const resolved = resolveProviderModel(provider, model);
   return PROVIDER_METADATA[provider].models.find((candidate) => candidate.id === resolved)?.contextTokenLimit
+    ?? getProviderMetadata(provider).unknownModelContextTokenLimit
     ?? PROVIDER_METADATA[provider].contextTokenLimit;
 }
 

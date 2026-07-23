@@ -31,10 +31,15 @@ import {
   getAgentConversationMessages,
   getSuggestions,
   listAgentConversations,
+  updateAgentConversation,
 } from "../api/agent.js";
 import { onProxyProgress } from "../api/proxies.js";
-import { settingsState } from "./settings.svelte";
-import type { LLMProviderType } from "../../../shared/llm/provider-registry.js";
+import { saveSettings, settingsState } from "./settings.svelte";
+import {
+  getProviderMetadata,
+  type LLMProviderType,
+  type ReasoningEffort,
+} from "../../../shared/llm/provider-registry.js";
 
 export type { LLMProviderType };
 
@@ -79,6 +84,8 @@ export interface AgentState {
   composerMentionDrafts: Record<string, ChatEntityMention[]>;
   timelineProposals: TimelineActionProposal[];
   selectedProvider: LLMProviderType;
+  selectedModel: string;
+  selectedReasoningEffort: ReasoningEffort | null;
   isStreaming: boolean;
   activeTurn: ActiveAgentTurn | null;
   currentProjectId: string | null;
@@ -104,6 +111,8 @@ export const agentState = $state<AgentState>({
   composerMentionDrafts: {},
   timelineProposals: [],
   selectedProvider: "gemini",
+  selectedModel: getProviderMetadata('gemini').defaultModel,
+  selectedReasoningEffort: null,
   isStreaming: false,
   activeTurn: null,
   currentProjectId: null,
@@ -175,7 +184,29 @@ function isStreamingBlocked(): boolean {
 }
 
 export function buildProviderEnvFromSettings() {
-  return buildProviderConfig(settingsState.settings, agentState.selectedProvider) as ProviderConfigPayload;
+  const config = buildProviderConfig(settingsState.settings, agentState.selectedProvider) as ProviderConfigPayload;
+  config.models = {
+    ...config.models,
+    [agentState.selectedProvider]: agentState.selectedModel,
+  };
+  config.reasoningEfforts = {
+    ...config.reasoningEfforts,
+    ...(agentState.selectedReasoningEffort
+      ? { [agentState.selectedProvider]: agentState.selectedReasoningEffort }
+      : {}),
+  };
+  return config;
+}
+
+function applyConversationModelConfiguration(conversation: ChatConversation | undefined): void {
+  const provider = conversation?.provider ?? settingsState.settings.defaultTextProvider ?? 'gemini';
+  agentState.selectedProvider = provider;
+  agentState.selectedModel = conversation?.model
+    || settingsState.settings.providerModels?.[provider]
+    || getProviderMetadata(provider).defaultModel;
+  agentState.selectedReasoningEffort = conversation?.reasoning_effort
+    ?? settingsState.settings.providerReasoningEfforts?.[provider]
+    ?? null;
 }
 
 export function mapConversationMessages(messages: ChatConversationMessage[]): ChatMessage[] {
@@ -432,6 +463,7 @@ async function loadChapterConversations(options: {
     agentState.messages = [];
     agentState.timelineProposals = [];
     agentState.suggestions = [];
+    applyConversationModelConfiguration(undefined);
     return;
   }
 
@@ -444,6 +476,9 @@ async function loadChapterConversations(options: {
   }
 
   agentState.selectedConversationId = selectionState.targetConversationId;
+  applyConversationModelConfiguration(
+    selectionState.sortedConversations.find((conversation) => conversation.id === selectionState.targetConversationId)
+  );
 }
 
 async function createConversation(title?: string): Promise<ChatConversation | null> {
@@ -461,6 +496,8 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
     projectId: agentState.currentProjectId,
     chapterId: agentState.currentChapterId,
     provider: agentState.selectedProvider,
+    model: agentState.selectedModel,
+    reasoningEffort: agentState.selectedReasoningEffort,
     title,
   });
 
@@ -476,6 +513,7 @@ async function createConversation(title?: string): Promise<ChatConversation | nu
 
   insertConversation(conversation);
   agentState.selectedConversationId = conversation.id;
+  applyConversationModelConfiguration(conversation);
   agentState.messages = [];
   agentState.timelineProposals = [];
   agentState.suggestions = [];
@@ -587,6 +625,9 @@ export async function selectConversation(
   }
 
   agentState.selectedConversationId = conversationId;
+  applyConversationModelConfiguration(
+    agentState.conversations.find((conversation) => conversation.id === conversationId)
+  );
   agentState.messages = mapConversationMessages(response.data);
   agentState.timelineProposals = [];
   agentState.suggestions = [];
@@ -638,6 +679,46 @@ export function setProvider(provider: LLMProviderType) {
   }
 
   agentState.selectedProvider = provider;
+  agentState.selectedModel = settingsState.settings.providerModels[provider]
+    || getProviderMetadata(provider).defaultModel;
+  agentState.selectedReasoningEffort = settingsState.settings.providerReasoningEfforts?.[provider] ?? null;
+}
+
+export async function setChatModelConfiguration(
+  provider: LLMProviderType,
+  model: string,
+  reasoningEffort: ReasoningEffort | null
+): Promise<boolean> {
+  if (isStreamingBlocked() || !model.trim()) return false;
+  agentState.selectedProvider = provider;
+  agentState.selectedModel = model.trim();
+  agentState.selectedReasoningEffort = reasoningEffort;
+  settingsState.settings.providerModels = {
+    ...settingsState.settings.providerModels,
+    [provider]: model.trim(),
+  };
+  settingsState.settings.providerReasoningEfforts = {
+    ...settingsState.settings.providerReasoningEfforts,
+    ...(reasoningEffort ? { [provider]: reasoningEffort } : {}),
+  };
+  void saveSettings().catch((error) => console.error('[AgentSession] Failed to save model default:', error));
+
+  const conversationId = agentState.selectedConversationId;
+  if (!conversationId) return true;
+  const response = await updateAgentConversation({
+    conversationId,
+    provider,
+    model: model.trim(),
+    reasoningEffort,
+  });
+  if (!response.success || !response.data) {
+    agentState.error = response.error || 'Failed to update conversation model';
+    return false;
+  }
+  agentState.conversations = agentState.conversations.map((conversation) =>
+    conversation.id === conversationId ? response.data! : conversation
+  );
+  return true;
 }
 
 export async function setChapterContext(chapterId: string | null, _proxyPath: string | null) {

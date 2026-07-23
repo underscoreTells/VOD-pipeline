@@ -16,6 +16,7 @@ import {
   getProviderMetadata,
   resolveProviderModel,
   type LLMProviderType,
+  type ReasoningEffort,
 } from "../../shared/llm/provider-registry.js";
 import { KimiChatModel } from "./kimi.js";
 import { AnthropicToolStrategy } from "../tools/strategies/anthropic.js";
@@ -32,6 +33,7 @@ export interface LLMConfig {
   temperature?: number;
   maxTokens?: number;
   baseURL?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ProviderRuntime {
@@ -71,6 +73,7 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         model,
         ...getOpenAITemperatureConfig(model, config.temperature),
         maxTokens: config.maxTokens,
+        ...(config.reasoningEffort ? { modelKwargs: { reasoning_effort: config.reasoningEffort } } : {}),
       });
     },
   },
@@ -82,6 +85,7 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         model,
         temperature: config.temperature ?? 0.7,
         maxTokens: config.maxTokens,
+        ...(config.reasoningEffort ? { modelKwargs: { reasoning: { effort: config.reasoningEffort } } } : {}),
         configuration: {
           baseURL:
             config.baseURL || getProviderMetadata("openrouter").defaultBaseURL,
@@ -97,6 +101,7 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         model,
         temperature: config.temperature ?? 0.2,
         maxTokens: config.maxTokens,
+        ...(config.reasoningEffort ? { modelKwargs: { reasoning_effort: config.reasoningEffort } } : {}),
         configuration: { baseURL: config.baseURL },
       }) as BaseChatModel;
     },
@@ -120,6 +125,9 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         model,
         temperature: config.temperature ?? 0.7,
         maxTokens: config.maxTokens,
+        ...(config.reasoningEffort
+          ? { invocationKwargs: { output_config: { effort: config.reasoningEffort } } }
+          : {}),
       });
     },
   },
@@ -142,7 +150,7 @@ const PROVIDER_RUNTIMES: Record<LLMProviderType, ProviderRuntime> = {
         apiKey: config.apiKey,
         model,
         maxTokens: config.maxTokens,
-        modelKwargs: { reasoning_effort: 'high' },
+        ...(config.reasoningEffort ? { modelKwargs: { reasoning_effort: config.reasoningEffort } } : {}),
         configuration: {
           baseURL: config.baseURL || getProviderMetadata('kimiCode').defaultBaseURL,
         },

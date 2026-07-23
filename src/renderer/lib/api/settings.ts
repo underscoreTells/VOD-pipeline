@@ -1,6 +1,8 @@
 import type {
   SettingsDecryptResult,
   SettingsEncryptResult,
+  ProviderModelsListParams,
+  ProviderModelsListResult,
 } from '../../../shared/contracts/electron-api.js';
 import { getElectronApi } from './client.js';
 
@@ -15,4 +17,8 @@ export async function encryptSettings(text: string): Promise<SettingsEncryptResu
 
 export async function decryptSettings(encrypted: string): Promise<SettingsDecryptResult> {
   return await getElectronApi().settings.decrypt(encrypted);
+}
+
+export async function listProviderModels(params: ProviderModelsListParams): Promise<ProviderModelsListResult> {
+  return await getElectronApi().settings.listProviderModels(params);
 }

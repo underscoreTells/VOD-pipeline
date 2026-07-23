@@ -3,8 +3,10 @@ import {
   canSubmitComposerMessage,
   filterComposerMentionCandidates,
   getComposerMentionQuery,
+  insertComposerMention,
   removeComposerMentionQuery,
   shouldInterceptComposerEnter,
+  updateComposerMentionRanges,
 } from "../../src/renderer/lib/components/chat-panel-composer.js";
 
 describe("chat panel composer helpers", () => {
@@ -69,5 +71,25 @@ describe("chat panel composer helpers", () => {
       message: 'Trim  please',
       cursor: 5,
     });
+  });
+
+  it('inserts a positioned mention and shifts it when text is added before it', () => {
+    const query = getComposerMentionQuery('Trim @pay please', 9)!;
+    const inserted = insertComposerMention('Trim @pay please', query, {
+      type: 'clip',
+      id: 7,
+      label: 'Payoff',
+    });
+
+    expect(inserted.message).toBe('Trim @Payoff please');
+    expect(inserted.mention).toMatchObject({ start: 5, end: 12, id: 7 });
+    expect(updateComposerMentionRanges(inserted.message, `Now ${inserted.message}`, [inserted.mention]))
+      .toEqual([expect.objectContaining({ start: 9, end: 16 })]);
+  });
+
+  it('drops structured identity when the mention token itself is edited', () => {
+    expect(updateComposerMentionRanges('Use @Setup here', 'Use @Set here', [{
+      type: 'clip', id: 2, label: 'Setup', occurrenceId: 'one', start: 4, end: 10,
+    }])).toEqual([]);
   });
 });

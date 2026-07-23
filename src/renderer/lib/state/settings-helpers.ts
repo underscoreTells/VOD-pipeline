@@ -43,6 +43,7 @@ export const defaultSettings: Settings = {
   openrouterApiKey: '',
   kimiCodeApiKey: '',
   providerModels: {},
+  providerReasoningEfforts: {},
   kimiBaseURL: 'https://api.moonshot.ai/v1',
   openAICompatibleProfiles: [],
   activeOpenAICompatibleProfileId: null,
@@ -94,7 +95,7 @@ export function isProviderConfigured(settings: Settings, provider: LLMProviderTy
     const profile = (settings.openAICompatibleProfiles ?? []).find(
       (candidate) => candidate.id === settings.activeOpenAICompatibleProfileId
     );
-    return Boolean(profile?.baseURL.trim() && profile.model.trim());
+    return Boolean(profile?.baseURL.trim());
   }
   return getApiKey(settings, provider).length > 0;
 }
@@ -151,6 +152,9 @@ export function buildProviderConfig(
     ...(Object.keys(models).length > 0 ? { models } : {}),
     ...(Object.keys(baseURLs).length > 0 ? { baseURLs } : {}),
     ...(Object.keys(contextTokenLimits).length > 0 ? { contextTokenLimits } : {}),
+    ...(Object.keys(settings.providerReasoningEfforts ?? {}).length > 0
+      ? { reasoningEfforts: settings.providerReasoningEfforts }
+      : {}),
   };
 }
 

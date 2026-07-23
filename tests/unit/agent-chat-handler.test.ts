@@ -324,7 +324,7 @@ describe("agent chat handler", () => {
       expect.arrayContaining([
         {
           role: "user",
-          content: 'Shorten this\n\n[Referenced entities: clip#7 "Intro"]',
+          content: '<clip-ref id="7">@Intro</clip-ref>\n\nShorten this',
         },
       ]),
       expect.any(Object),

@@ -3,7 +3,7 @@
  * Mirrors the SQLite schema
  */
 
-import type { LLMProviderType } from '../llm/provider-registry.js';
+import type { LLMProviderType, ReasoningEffort } from '../llm/provider-registry.js';
 
 export interface Project {
   id: number;
@@ -116,6 +116,8 @@ export interface ChatConversation {
   chapter_id: number;
   title: string;
   provider: LLMProviderType | null;
+  model: string | null;
+  reasoning_effort: ReasoningEffort | null;
   thread_id: string;
   created_at: string;
   updated_at: string;
@@ -136,6 +138,9 @@ export interface ChatEntityMention {
   type: 'clip' | 'suggestion';
   id: number;
   label: string;
+  occurrenceId?: string;
+  start?: number;
+  end?: number;
 }
 
 export interface ExecutionTraceEntry {
@@ -158,7 +163,7 @@ export type CreateChatConversationInput = Omit<ChatConversation, 'id' | 'thread_
   thread_id?: string;
 };
 export type CreateChatConversationMessageInput = Omit<ChatConversationMessage, 'id' | 'created_at'>;
-export type UpdateChatConversationInput = Partial<Pick<ChatConversation, 'title' | 'provider' | 'thread_id'>>;
+export type UpdateChatConversationInput = Partial<Pick<ChatConversation, 'title' | 'provider' | 'model' | 'reasoning_effort' | 'thread_id'>>;
 
 export interface Clip {
   id: number;

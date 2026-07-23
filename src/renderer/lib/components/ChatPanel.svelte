@@ -7,7 +7,7 @@
     rejectAllSuggestions,
     rerollMessage,
     sendChatMessage,
-    setProvider,
+    setChatModelConfiguration,
     type ChatMessage,
     createNewConversation,
     selectConversation,
@@ -18,6 +18,8 @@
   } from "../state/agent.svelte";
   import { getVisibleStreamingStatusLabel } from "../state/agent-streaming-helpers.js";
   import MarkdownContent from "./MarkdownContent.svelte";
+  import InlineMentionContent from './InlineMentionContent.svelte';
+  import ChatModelControls from './ChatModelControls.svelte';
   import {
     collapseChat,
     layoutState,
@@ -32,18 +34,18 @@
     canSubmitComposerMessage,
     filterComposerMentionCandidates,
     getComposerMentionQuery,
+    insertComposerMention,
     removeComposerMentionQuery,
     shouldInterceptComposerEnter,
     type ComposerMentionCandidate,
+    updateComposerMentionRanges,
   } from './chat-panel-composer.js';
   import {
-    countExecutionTraceSteps,
-    getExecutionTraceStepIndex,
+    summarizeExecutionActivity,
   } from "../../../shared/utils/execution-trace.js";
   import { cn } from "../utils/cn";
-  import { PROVIDER_IDS, getProviderLabel } from '../../../shared/llm/provider-registry.js';
   import { getAssetsForChapter, getSelectedChapter } from '../state/chapters.svelte.js';
-  import { timelineState } from '../state/timeline.svelte.js';
+  import { setPlayhead, timelineState } from '../state/timeline.svelte.js';
   import { clipOverlapsChapterSourceRange } from '../../../shared/utils/clip-timing.js';
   import type { ChatEntityMention } from '../../../shared/types/database.js';
 
@@ -74,14 +76,12 @@
   let previousComposerKey = '';
   let copyResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const MESSAGE_INPUT_MIN_HEIGHT = 112;
+  const MESSAGE_INPUT_MIN_HEIGHT = 80;
   const MESSAGE_INPUT_MAX_HEIGHT = 180;
   const SUGGESTIONS_TRAY_RESIZE_HANDLE_HEIGHT = 6;
   const MIN_SUGGESTIONS_TRAY_MAX_HEIGHT = 140;
   const MIN_VISIBLE_MESSAGES_HEIGHT = 160;
   const SUGGESTION_ACTION_BUTTON_CLASS = 'border border-[color:color-mix(in_srgb,var(--accent-primary)_18%,transparent)] bg-accent-primary-subtle text-accent-primary hover:border-accent-primary hover:bg-accent-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50';
-
-  const providers = PROVIDER_IDS.map((value) => ({ value, label: getProviderLabel(value) }));
 
   let currentConversation = $derived(
     agentState.conversations.find(c => c.id === agentState.selectedConversationId)
@@ -148,9 +148,7 @@
               ? 'Pending split'
               : 'Pending clip update',
       }));
-    return [...clips, ...suggestions].filter(
-      (candidate) => !composerMentions.some((mention) => mention.type === candidate.type && mention.id === candidate.id)
-    );
+    return [...clips, ...suggestions];
   });
   let activeMentionQuery = $derived(getComposerMentionQuery(message, messageCursor));
   let visibleMentionCandidates = $derived(
@@ -274,6 +272,26 @@
 
     requestAnimationFrame(() => document.addEventListener('click', onClickOutside, true));
     return () => document.removeEventListener('click', onClickOutside, true);
+  });
+
+  $effect(() => {
+    if (!chatPanelElement) return;
+    const releaseChatFocus = (event: PointerEvent) => {
+      const active = document.activeElement;
+      if (
+        !(active instanceof HTMLTextAreaElement)
+        && !(active instanceof HTMLInputElement)
+        && !(active instanceof HTMLElement && active.isContentEditable)
+      ) return;
+      if (!chatPanelElement?.contains(active)) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const editorSurface = active.closest('.composer, .message-edit');
+      if (editorSurface?.contains(target)) return;
+      active.blur();
+    };
+    document.addEventListener('pointerdown', releaseChatFocus, true);
+    return () => document.removeEventListener('pointerdown', releaseChatFocus, true);
   });
 
   $effect(() => {
@@ -419,27 +437,31 @@
       : message.length;
   }
 
+  function handleComposerInput(event: Event) {
+    if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
+    const nextMessage = event.currentTarget.value;
+    composerMentions = updateComposerMentionRanges(message, nextMessage, composerMentions);
+    message = nextMessage;
+    mentionMenuIndex = 0;
+    trackMessageCursor(event);
+    autoResizeMessageInput();
+  }
+
   function selectMention(candidate: ComposerMentionCandidate | undefined) {
     if (!candidate || !activeMentionQuery) return;
-    const removed = removeComposerMentionQuery(message, activeMentionQuery);
-    message = removed.message;
-    messageCursor = removed.cursor;
-    composerMentions = [...composerMentions, {
+    const inserted = insertComposerMention(message, activeMentionQuery, {
       type: candidate.type,
       id: candidate.id,
       label: candidate.label,
-    }];
+    });
+    message = inserted.message;
+    messageCursor = inserted.cursor;
+    composerMentions = [...composerMentions, inserted.mention];
     mentionMenuIndex = 0;
     requestAnimationFrame(() => {
       messageInput?.focus();
-      messageInput?.setSelectionRange(removed.cursor, removed.cursor);
+      messageInput?.setSelectionRange(inserted.cursor, inserted.cursor);
     });
-  }
-
-  function removeComposerMention(mention: ChatEntityMention) {
-    composerMentions = composerMentions.filter(
-      (candidate) => candidate.type !== mention.type || candidate.id !== mention.id
-    );
   }
 
   function formatTime(date: Date) {
@@ -471,10 +493,22 @@
     editingMessageMentions = [];
   }
 
-  function removeEditingMention(mention: ChatEntityMention) {
-    editingMessageMentions = editingMessageMentions.filter(
-      (candidate) => candidate.type !== mention.type || candidate.id !== mention.id
-    );
+  function handleEditingInput(event: Event) {
+    if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
+    const nextValue = event.currentTarget.value;
+    editingMessageMentions = updateComposerMentionRanges(editingMessageValue, nextValue, editingMessageMentions);
+    editingMessageValue = nextValue;
+  }
+
+  function handleInlineMention(mention: ChatEntityMention) {
+    if (mention.type === 'suggestion') {
+      focusSuggestion(mention.id);
+      return;
+    }
+    const clip = timelineState.clips.find((candidate) => candidate.id === mention.id);
+    if (!clip) return;
+    timelineState.selectedClipIds = new Set([clip.id]);
+    setPlayhead(clip.in_point);
   }
 
   async function handleSaveEditedMessage(message: ChatMessage) {
@@ -563,38 +597,8 @@
     return message ? `From response at ${formatTime(message.timestamp)}` : 'From an earlier response';
   }
 
-  function getTraceStepCount(message: { trace: Array<{ label: string; stepIndex?: number }> }) {
-    return countExecutionTraceSteps(message.trace);
-  }
-
-  function formatTraceMeta(message: { label: string; nodeName?: string; passIndex?: number; stepIndex?: number }) {
-    const parts: string[] = [];
-    const stepIndex = getExecutionTraceStepIndex(message);
-    if (typeof stepIndex === "number") {
-      parts.push(`Step ${stepIndex}`);
-    }
-    if (typeof message.passIndex === "number") {
-      parts.push(`Pass ${message.passIndex}`);
-    }
-    if (message.nodeName) {
-      parts.push(message.nodeName);
-    }
-    return parts.join(" · ");
-  }
-
-  function hasThinkingDetails(message: { trace: unknown[]; thinkingMarkdown?: string | null }) {
-    return message.trace.length > 0 || Boolean(message.thinkingMarkdown?.trim());
-  }
-
-  function getVisibleStreamingStatusMeta(message: {
-    isStreaming?: boolean;
-    trace: Array<{ label: string; nodeName?: string; passIndex?: number; stepIndex?: number }>;
-  }) {
-    if (!message.isStreaming || message.trace.length === 0) {
-      return null;
-    }
-
-    return formatTraceMeta(message.trace[message.trace.length - 1] ?? {});
+  function getActivity(message: { trace: ChatMessage['trace'] }): string[] {
+    return summarizeExecutionActivity(message.trace);
   }
 
   async function handleCreateConversation() {
@@ -741,21 +745,6 @@
     </div>
 
     <div class="header-right flex shrink-0 items-center gap-2">
-      <div class="relative">
-        <select
-          class="provider-pill h-7 appearance-none rounded-[6px] border border-border-default bg-surface-base pl-2.5 pr-8 text-app-xs font-medium text-text-secondary outline-none transition-colors hover:border-border-strong hover:text-text-primary focus-visible:border-border-strong disabled:opacity-50"
-          value={agentState.selectedProvider}
-          onchange={(e) => setProvider(e.currentTarget.value as any)}
-          disabled={agentState.isStreaming}
-        >
-          {#each providers as provider (provider.value)}
-            <option value={provider.value}>{provider.label}</option>
-          {/each}
-        </select>
-        <span class="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-text-tertiary">
-          <Icon icon={ChevronDown} size={12} />
-        </span>
-      </div>
       <button class="close-btn inline-flex h-7 w-7 items-center justify-center rounded-sm bg-transparent text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary" onclick={collapseChat} title="Hide chat">
         <Icon icon={X} size={16} />
       </button>
@@ -796,34 +785,15 @@
               <div class="message-live-status streaming-pill mb-2 inline-flex items-center gap-2 rounded-[6px] border border-[color:color-mix(in_srgb,var(--accent-primary)_20%,transparent)] bg-accent-primary-subtle px-2.5 py-1 text-app-xs font-medium text-accent-primary" aria-live="polite">
                 <span class="streaming-dot h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary animate-pulse"></span>
                 <span>{getVisibleStreamingStatusLabel(msg)}</span>
-                {#if getVisibleStreamingStatusMeta(msg)}
-                  <span class="streaming-meta text-app-xs text-text-tertiary">{getVisibleStreamingStatusMeta(msg)}</span>
-                {/if}
               </div>
             {/if}
 
             {#if editingMessageId === msg.id}
               <div class="message-edit flex flex-col gap-2 rounded-lg bg-surface-elevated px-4 py-3">
-                {#if editingMessageMentions.length > 0}
-                  <div class="flex flex-wrap gap-1.5" aria-label="Message mentions">
-                    {#each editingMessageMentions as mention (`${mention.type}:${mention.id}`)}
-                      <span class="inline-flex max-w-full items-center gap-1 rounded-md border border-accent-primary bg-accent-primary-subtle py-0.5 pl-2 pr-1 text-app-xs font-medium text-accent-primary">
-                        <span class="truncate">@{mention.label}</span>
-                        <button
-                          class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent-primary hover:bg-accent-primary hover:text-white"
-                          type="button"
-                          aria-label={`Remove @${mention.label}`}
-                          onclick={() => removeEditingMention(mention)}
-                        >
-                          <Icon icon={X} size={10} />
-                        </button>
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
                 <textarea
                   class="min-h-[112px] w-full resize-y rounded-md border border-border-default bg-surface-base px-3 py-2 text-app-sm leading-[1.6] text-text-primary outline-none transition-colors focus-visible:border-border-strong"
-                  bind:value={editingMessageValue}
+                  value={editingMessageValue}
+                  oninput={handleEditingInput}
                 ></textarea>
                 <div class="message-edit-actions flex items-center justify-end gap-1">
                   <TooltipIconButton
@@ -853,47 +823,28 @@
                 )}
               >
                 {#if msg.role === 'user' && (msg.mentions?.length ?? 0) > 0}
-                  <div class="mb-2 flex flex-wrap gap-1.5">
-                    {#each msg.mentions ?? [] as mention (`${mention.type}:${mention.id}`)}
-                      <span class="inline-flex max-w-full items-center rounded-md border border-accent-primary bg-accent-primary-subtle px-2 py-0.5 text-app-xs font-medium text-accent-primary">
-                        <span class="truncate">@{mention.label}</span>
-                      </span>
-                    {/each}
-                  </div>
+                  <InlineMentionContent content={msg.content} mentions={msg.mentions ?? []} onmention={handleInlineMention} />
+                {:else}
+                  <MarkdownContent content={msg.content} role={msg.role} />
                 {/if}
-                <MarkdownContent content={msg.content} role={msg.role} />
               </div>
             {/if}
 
-            {#if msg.role === 'assistant' && hasThinkingDetails(msg)}
-              <details class="thinking group/thinking mt-2" open={Boolean(msg.isStreaming)}>
-                <summary class="ui-summary-reset flex list-none items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
+            {#if msg.role === 'assistant' && !msg.isStreaming && getActivity(msg).length > 0}
+              <details class="thinking group/thinking mt-2">
+                <summary class="ui-summary-reset flex list-none cursor-pointer items-center gap-1 py-0.5 text-app-xs text-text-tertiary select-none">
                   <span class="thinking-chevron inline-flex items-center text-text-disabled transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-open/thinking:rotate-90"><Icon icon={ChevronRight} size={12} /></span>
-                  {#if msg.isStreaming}
-                    Thinking{msg.trace.length > 0 ? ` (${getTraceStepCount(msg)})` : ''}...
-                  {:else}
-                    {@const traceStepCount = getTraceStepCount(msg)}
-                    Thought for {traceStepCount} step{traceStepCount !== 1 ? 's' : ''}
-                  {/if}
+                  Activity · {getActivity(msg).length} item{getActivity(msg).length !== 1 ? 's' : ''}
                 </summary>
                 <div class="thinking-body ml-4 pt-2">
-                  {#if msg.trace.length > 0}
-                    <div class="thinking-steps flex flex-col gap-[3px]">
-                      {#each msg.trace as entry (entry.id)}
-                        <div class="thinking-step text-app-xs text-text-tertiary">
-                          <span class="step-label text-text-tertiary">{entry.label}</span>
-                          {#if formatTraceMeta(entry)}
-                            <span class="step-meta ml-2 font-mono text-app-xs text-text-disabled">{formatTraceMeta(entry)}</span>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                  {#if msg.thinkingMarkdown}
-                    <div class="thinking-reasoning thinking-markdown mt-2">
-                      <MarkdownContent content={msg.thinkingMarkdown} role="assistant" />
-                    </div>
-                  {/if}
+                  <div class="thinking-steps flex flex-col gap-1.5">
+                    {#each getActivity(msg) as activity (activity)}
+                      <div class="thinking-step flex items-center gap-2 text-app-xs text-text-tertiary">
+                        <span class="h-1 w-1 rounded-full bg-text-disabled"></span>
+                        <span>{activity}</span>
+                      </div>
+                    {/each}
+                  </div>
                 </div>
               </details>
             {/if}
@@ -1111,7 +1062,7 @@
           {/if}
         </div>
       {/if}
-      <form class="composer relative flex items-end gap-3 rounded-xl border border-border-default bg-surface-raised px-3 py-3 pl-4 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
+      <form class="composer relative flex flex-col rounded-xl border border-border-default bg-surface-raised px-3 py-2 transition-colors focus-within:border-border-strong" onsubmit={handleSubmit}>
         {#if visibleMentionCandidates.length > 0}
           <div class="absolute bottom-[calc(100%+6px)] left-0 right-0 z-20 overflow-hidden rounded-lg border border-border-default bg-surface-elevated p-1 shadow-xl" role="listbox" aria-label="Mention a clip or suggestion">
             {#each visibleMentionCandidates as candidate, index (`${candidate.type}:${candidate.id}`)}
@@ -1122,39 +1073,38 @@
             {/each}
           </div>
         {/if}
-        <div class="min-w-0 flex-1">
-          {#if composerMentions.length > 0}
-            <div class="flex flex-wrap gap-1.5 pt-1">
-              {#each composerMentions as mention (`${mention.type}:${mention.id}`)}
-                <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-accent-primary bg-accent-primary-subtle px-2 py-1 text-app-xs font-medium text-accent-primary" onclick={() => removeComposerMention(mention)} title={`Remove ${mention.label} mention`}>
-                  <span class="truncate">@{mention.label}</span>
-                  <Icon icon={X} size={10} />
-                </button>
-              {/each}
-            </div>
-          {/if}
+        <div class="min-w-0 w-full flex-1">
           <textarea
-            class="min-h-28 max-h-[180px] w-full resize-none overflow-y-hidden bg-transparent py-2.5 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
+            class="min-h-20 max-h-[180px] w-full resize-none overflow-y-hidden bg-transparent px-1 py-2 text-app-base leading-[1.5] text-text-primary outline-none placeholder:text-text-tertiary focus-visible:shadow-none"
             rows="1"
-            bind:value={message}
+            value={message}
             bind:this={messageInput}
             placeholder={composerPlaceholder}
             disabled={isComposerDisabled}
-            oninput={(event) => { mentionMenuIndex = 0; trackMessageCursor(event); autoResizeMessageInput(); }}
+            oninput={handleComposerInput}
             onselect={trackMessageCursor}
             onclick={trackMessageCursor}
             onkeyup={trackMessageCursor}
             onkeydown={handleInputKeydown}
           ></textarea>
         </div>
-        <button
-          type="submit"
-          class="send-btn inline-flex h-10 w-10 shrink-0 items-center justify-center self-end rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
-          disabled={isSendDisabled}
-          title="Send message"
-        >
-          <Icon icon={ArrowUp} size={16} />
-        </button>
+        <div class="flex w-full min-w-0 items-center justify-between gap-2 border-t border-border-subtle pt-1.5">
+          <ChatModelControls
+            provider={agentState.selectedProvider}
+            model={agentState.selectedModel}
+            reasoningEffort={agentState.selectedReasoningEffort}
+            disabled={agentState.isStreaming}
+            onchange={(provider, model, reasoningEffort) => void setChatModelConfiguration(provider, model, reasoningEffort)}
+          />
+          <button
+            type="submit"
+            class="send-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent bg-accent-primary text-white transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-105 hover:bg-accent-primary-hover active:scale-95 disabled:cursor-not-allowed disabled:border-border-default disabled:bg-surface-hover disabled:text-text-disabled disabled:transform-none"
+            disabled={isSendDisabled}
+            title="Send message"
+          >
+            <Icon icon={ArrowUp} size={15} />
+          </button>
+        </div>
       </form>
     </div>
   {/if}

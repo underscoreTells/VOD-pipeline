@@ -106,13 +106,13 @@ describe("agent streaming helpers", () => {
       stepIndex: 1,
     });
 
-    expect(getVisibleStreamingStatusLabel(updated[1]!)).toBe("Drafting rough-cut proposals...");
+    expect(getVisibleStreamingStatusLabel(updated[1]!)).toBe("Drafting cut suggestions…");
   });
 
-  it("falls back to a generic thinking label before trace events arrive", () => {
+  it("falls back to a generic working label before trace events arrive", () => {
     const draft = createDraftAssistantMessage("request-1", new Date());
 
-    expect(getVisibleStreamingStatusLabel(draft)).toBe("Thinking...");
+    expect(getVisibleStreamingStatusLabel(draft)).toBe("Working on your request…");
   });
 
   it("finalizes by overwriting streamed text with the final assistant text", () => {

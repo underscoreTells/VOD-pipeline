@@ -141,7 +141,7 @@ function buildUserMessage(message: string, mentions: ChatEntityMention[]): ChatM
 }
 
 function cloneMentions(mentions: ChatEntityMention[]): ChatEntityMention[] {
-  return mentions.map(({ type, id, label }) => ({ type, id, label }));
+  return mentions.map((mention) => ({ ...mention }));
 }
 
 function updateConversationTitle(conversationId: number, title: string): void {
@@ -450,6 +450,8 @@ export async function sendChatMessage(message: string, mentions: ChatEntityMenti
       message,
       mentions: plainMentions,
       provider: agentState.selectedProvider,
+      model: agentState.selectedModel,
+      reasoningEffort: agentState.selectedReasoningEffort,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
       proxyOptions: buildProxyOptions(settingsState.settings),
@@ -516,6 +518,8 @@ export async function rerollMessage(targetMessage: ChatMessage) {
       conversationId,
       messageId: targetMessage.databaseId,
       provider: agentState.selectedProvider,
+      model: agentState.selectedModel,
+      reasoningEffort: agentState.selectedReasoningEffort,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
       proxyOptions: buildProxyOptions(settingsState.settings),
@@ -587,6 +591,8 @@ export async function editMessage(
       message,
       mentions: plainMentions,
       provider: agentState.selectedProvider,
+      model: agentState.selectedModel,
+      reasoningEffort: agentState.selectedReasoningEffort,
       selectedClipIds: mutationContext.selectedClipIds,
       playheadTime: mutationContext.playheadTime,
       proxyOptions: buildProxyOptions(settingsState.settings),

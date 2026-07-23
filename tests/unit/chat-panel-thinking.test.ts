@@ -150,7 +150,7 @@ describe("chat panel thinking disclosure", () => {
     expect(composerMatch?.[0]).not.toContain("disabled");
   });
 
-  it("renders final answer in the bubble and detailed reasoning inside the thinking disclosure", () => {
+  it("renders the final answer without exposing raw reasoning or internal trace details", () => {
     resetAgentState();
     agentState.conversations = [createConversation()];
     agentState.selectedConversationId = 12;
@@ -179,10 +179,10 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toMatch(/message-content[\s\S]*?Keep the intro and tighten the reset\./);
-    expect(body).toContain("Thought for 1 step");
-    expect(body).toContain(">Thinking...</span>");
-    expect(body).toMatch(/<h2>[\s\S]*Reasoning[\s\S]*<\/h2>/);
-    expect(body).toMatch(/thinking-markdown[\s\S]*?The intro sets up the goal/);
+    expect(body).not.toContain("Thought for");
+    expect(body).not.toContain("Thinking...");
+    expect(body).not.toContain("The intro sets up the goal");
+    expect(body).not.toContain("chat_node");
     expect(body).not.toContain("message-live-status");
   });
 
@@ -216,12 +216,12 @@ describe("chat panel thinking disclosure", () => {
     const { body } = render(ChatPanel);
 
     expect(body).toContain("message-live-status");
-    expect(body).toContain("Thinking (1)...");
-    expect(body).toContain("Drafting rough-cut proposals...");
-    expect(body).toContain("Step 1 · Pass 1 · draftRoughCutProposals");
+    expect(body).toContain("Drafting cut suggestions…");
+    expect(body).not.toContain("Step 1");
+    expect(body).not.toContain("draftRoughCutProposals");
   });
 
-  it("counts unique execution steps instead of raw trace events in the disclosure summary", () => {
+  it("deduplicates completed tool events into a user-facing activity summary", () => {
     resetAgentState();
     agentState.conversations = [createConversation()];
     agentState.selectedConversationId = 12;
@@ -253,8 +253,10 @@ describe("chat panel thinking disclosure", () => {
 
     const { body } = render(ChatPanel);
 
-    expect(body).toContain("Thought for 4 steps");
-    expect(body).not.toContain("Thought for 20 steps");
+    expect(body).toContain("Activity · 1 item");
+    expect(body).toContain("Drafted rough-cut suggestions");
+    expect(body).not.toContain("Tool event");
+    expect(body).not.toContain("conversation_runner");
   });
 
   it("omits the suggestions tray when no pending suggestions remain", () => {

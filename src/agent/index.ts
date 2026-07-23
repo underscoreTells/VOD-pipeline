@@ -5,7 +5,7 @@ import type {
   AgentInputMessage,
   DetailedTranscriptWindow,
 } from "../shared/types/agent-ipc.js";
-import { normalizeProvider, PROVIDER_IDS } from "../shared/llm/provider-registry.js";
+import { normalizeProvider, normalizeReasoningEffort, PROVIDER_IDS } from "../shared/llm/provider-registry.js";
 import { runConversationTurn } from "./conversation/runner.js";
 import {
   normalizeConversationMessages,
@@ -39,9 +39,11 @@ function normalizeAgentConfig(value: unknown): Partial<AgentConfig> | null {
   const providersRaw = isRecord(value.providers) ? value.providers : {};
   const modelsRaw = isRecord(value.models) ? value.models : {};
   const baseURLsRaw = isRecord(value.baseURLs) ? value.baseURLs : {};
+  const reasoningEffortsRaw = isRecord(value.reasoningEfforts) ? value.reasoningEfforts : {};
   const providers: NonNullable<Partial<AgentConfig>["providers"]> = {};
   const models: NonNullable<Partial<AgentConfig>["models"]> = {};
   const baseURLs: NonNullable<Partial<AgentConfig>["baseURLs"]> = {};
+  const reasoningEfforts: NonNullable<Partial<AgentConfig>["reasoningEfforts"]> = {};
 
   for (const provider of PROVIDER_IDS) {
     const apiKey = providersRaw[provider];
@@ -52,10 +54,12 @@ function normalizeAgentConfig(value: unknown): Partial<AgentConfig> | null {
     if (typeof model === 'string' && model.trim()) models[provider] = model.trim();
     const baseURL = baseURLsRaw[provider];
     if (typeof baseURL === 'string' && baseURL.trim()) baseURLs[provider] = baseURL.trim();
+    const reasoningEffort = normalizeReasoningEffort(reasoningEffortsRaw[provider]);
+    if (reasoningEffort) reasoningEfforts[provider] = reasoningEffort;
   }
 
   const defaultProvider = normalizeProvider(value.defaultProvider);
-  const normalized: Partial<AgentConfig> = { providers, models, baseURLs };
+  const normalized: Partial<AgentConfig> = { providers, models, baseURLs, reasoningEfforts };
 
   if (defaultProvider) {
     normalized.defaultProvider = defaultProvider;

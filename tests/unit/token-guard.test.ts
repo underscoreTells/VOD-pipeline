@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyNearLimitTokenGuard } from "../../src/electron/ipc/support/token-guard.js";
 
-const OPENAI_EFFECTIVE_LIMIT = 123904; // max(8192, 128_000 - 4096)
-const OPENAI_SOFT_THRESHOLD = Math.floor(OPENAI_EFFECTIVE_LIMIT * 0.92); // 113991
+const OPENAI_EFFECTIVE_LIMIT = 1_044_480; // max(8192, 1_048_576 - 4096)
+const OPENAI_SOFT_THRESHOLD = Math.floor(OPENAI_EFFECTIVE_LIMIT * 0.92);
 
 describe("applyNearLimitTokenGuard: below soft limit", () => {
   it("leaves messages unchanged and reports compressed=false", () => {
@@ -61,7 +61,7 @@ describe("applyNearLimitTokenGuard: above soft limit (archive summary)", () => {
     // One very large archived message whose token footprint pushes the total
     // past the soft threshold. recentCount = max(8, min(24, 11)) = 11, so
     // splitIndex = 1: the huge message is archived, the 11 recent are kept.
-    const archivedMessage = { role: "user", content: "x".repeat(500_000) };
+    const archivedMessage = { role: "user", content: "x".repeat(4_000_000) };
     const messages = [archivedMessage, ...recentMessages];
 
     const result = applyNearLimitTokenGuard(messages, null, "openai");
@@ -88,7 +88,7 @@ describe("applyNearLimitTokenGuard: above soft limit (archive summary)", () => {
 describe("applyNearLimitTokenGuard: per-provider limits come from the registry", () => {
   it("effectiveContextLimit derives from each provider's contextTokenLimit", () => {
     const small = [{ role: "user", content: "hi" }];
-    expect(applyNearLimitTokenGuard(small, null, "openai").effectiveContextLimit).toBe(123904);
+    expect(applyNearLimitTokenGuard(small, null, "openai").effectiveContextLimit).toBe(1_044_480);
     expect(applyNearLimitTokenGuard(small, null, "anthropic").effectiveContextLimit).toBe(195904);
     expect(applyNearLimitTokenGuard(small, null, "gemini").effectiveContextLimit).toBe(995904);
     expect(applyNearLimitTokenGuard(small, null, "kimi").effectiveContextLimit).toBe(1_044_480);

@@ -112,6 +112,15 @@ describe("provider-registry: resolveProviderModel", () => {
     );
   });
 
+  it('uses the current balanced OpenAI model as the default', () => {
+    expect(PROVIDER_METADATA.openai.defaultModel).toBe('gpt-5.6-terra');
+    expect(PROVIDER_METADATA.openai.models.slice(0, 3).map((model) => model.id)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]);
+  });
+
   it("returns the canonical model when the alias maps to the default", () => {
     expect(resolveProviderModel("gemini", "gemini-3-flash")).toBe(
       PROVIDER_METADATA.gemini.defaultModel
@@ -160,7 +169,7 @@ describe("provider-registry: context token limits", () => {
         PROVIDER_METADATA[id].contextTokenLimit
       );
     }
-    expect(getProviderContextTokenLimit("openai")).toBe(128_000);
+    expect(getProviderContextTokenLimit("openai")).toBe(1_048_576);
     expect(getProviderContextTokenLimit("gemini")).toBe(1_000_000);
   });
 });

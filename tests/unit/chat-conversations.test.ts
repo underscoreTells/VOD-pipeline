@@ -7,6 +7,7 @@ import {
   cloneChatMessagesThrough,
   setDatabaseForTesting,
   createChatConversation,
+  getChatConversation,
   getChatConversationsByChapter,
   createChatMessage,
   deleteChatMessagesAfter,
@@ -14,6 +15,7 @@ import {
   getChatMessagesByConversation,
   deleteChatConversation,
   updateUserChatMessageContent,
+  updateChatConversation,
   createChapterProxy,
   getChapterProxyByChapterAsset,
   updateChapterProxyStatus,
@@ -90,6 +92,8 @@ describeNative("Chat conversation persistence", () => {
       chapter_id: chapterId,
       title: "First",
       provider: "gemini",
+      model: "gemini-3.6-flash",
+      reasoning_effort: null,
       thread_id: "thread-1",
     });
 
@@ -102,6 +106,7 @@ describeNative("Chat conversation persistence", () => {
     });
 
     expect(one.chapter_id).toBe(chapterId);
+    expect(one.model).toBe('gemini-3.6-flash');
     expect(two.chapter_id).toBe(chapterId);
 
     const listed = await getChatConversationsByChapter(projectId, chapterId);
@@ -149,6 +154,30 @@ describeNative("Chat conversation persistence", () => {
     expect(messages[1].content).toBe("world");
     expect(messages[1].thinking_markdown).toBe("## Reasoning\n\nThe response is grounded in the chapter context.");
     expect(messages[1].trace_json).toContain("trace-1");
+  });
+
+  it('persists per-conversation model and reasoning configuration', async () => {
+    const conversation = await createChatConversation({
+      project_id: projectId,
+      chapter_id: chapterId,
+      title: 'Configured',
+      provider: 'gemini',
+      model: 'gemini-3.6-flash',
+      reasoning_effort: null,
+      thread_id: 'thread-configured',
+    });
+
+    await updateChatConversation(conversation.id, {
+      provider: 'openai',
+      model: 'gpt-5.6-terra',
+      reasoning_effort: 'high',
+    });
+
+    expect(await getChatConversation(conversation.id)).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.6-terra',
+      reasoning_effort: 'high',
+    });
   });
 
   it("updates a persisted user message in place", async () => {

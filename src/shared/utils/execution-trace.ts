@@ -103,6 +103,52 @@ export function countExecutionTraceSteps(entries: ExecutionTraceEntry[]): number
   return uniqueSteps.size > 0 ? uniqueSteps.size : 1;
 }
 
+const TOOL_ACTIVITY_LABELS: Record<string, string> = {
+  loadChapterCutMap: 'Reviewed the chapter cut map',
+  loadDetailedTranscriptWindows: 'Loaded detailed transcript context',
+  analyzeChapterVideo: 'Analyzed chapter video',
+  draftRoughCutProposals: 'Drafted rough-cut suggestions',
+};
+
+const TOOL_FAILURE_LABELS: Record<string, string> = {
+  loadChapterCutMap: 'Could not review the chapter cut map',
+  loadDetailedTranscriptWindows: 'Could not load detailed transcript context',
+  analyzeChapterVideo: 'Could not analyze chapter video',
+  draftRoughCutProposals: 'Could not draft rough-cut suggestions',
+};
+
+const TOOL_LIVE_LABELS: Record<string, string> = {
+  loadChapterCutMap: 'Reviewing the chapter cut…',
+  loadDetailedTranscriptWindows: 'Checking the detailed transcript…',
+  analyzeChapterVideo: 'Analyzing chapter video…',
+  draftRoughCutProposals: 'Drafting cut suggestions…',
+  finalizeConversationTurn: 'Finishing the response…',
+};
+
+export function getExecutionActivityStatus(entries: ExecutionTraceEntry[]): string {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.nodeName && TOOL_LIVE_LABELS[entry.nodeName]) return TOOL_LIVE_LABELS[entry.nodeName];
+    if (entry.status === 'analyzing_video') return 'Analyzing chapter video…';
+    if (entry.status === 'loading_detailed_transcript_context') return 'Checking the detailed transcript…';
+    if (entry.status === 'planning_timeline_edits') return 'Drafting cut suggestions…';
+  }
+  return 'Working on your request…';
+}
+
+export function summarizeExecutionActivity(entries: ExecutionTraceEntry[]): string[] {
+  const labels = new Set<string>();
+  for (const entry of entries) {
+    if (entry.nodeName && entry.status === 'tool_error' && TOOL_FAILURE_LABELS[entry.nodeName]) {
+      labels.delete(TOOL_ACTIVITY_LABELS[entry.nodeName]);
+      labels.add(TOOL_FAILURE_LABELS[entry.nodeName]);
+    } else if (entry.nodeName && TOOL_ACTIVITY_LABELS[entry.nodeName] && !labels.has(TOOL_FAILURE_LABELS[entry.nodeName])) {
+      labels.add(TOOL_ACTIVITY_LABELS[entry.nodeName]);
+    }
+  }
+  return [...labels];
+}
+
 export function parseExecutionTraceJson(value: string | null | undefined): ExecutionTraceEntry[] {
   if (!value) {
     return [];

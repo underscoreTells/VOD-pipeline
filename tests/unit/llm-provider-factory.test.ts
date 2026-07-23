@@ -72,6 +72,22 @@ describe("createLLM", () => {
     });
   });
 
+  it("passes selected reasoning effort to OpenAI-compatible model kwargs", async () => {
+    const { createLLM } = await import("../../src/agent/providers/index.js");
+
+    createLLM({
+      provider: "openai",
+      apiKey: "sk-openai",
+      model: "gpt-5.6-terra",
+      reasoningEffort: "high",
+    } satisfies LLMConfig);
+
+    expect(openAIMocks.ChatOpenAI).toHaveBeenCalledWith(expect.objectContaining({
+      model: "gpt-5.6-terra",
+      modelKwargs: { reasoning_effort: "high" },
+    }));
+  });
+
   it("preserves explicit temperature for non-GPT-5 OpenAI models", async () => {
     const { createLLM } = await import("../../src/agent/providers/index.js");
 
