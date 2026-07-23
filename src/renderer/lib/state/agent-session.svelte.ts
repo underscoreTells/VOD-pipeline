@@ -42,6 +42,7 @@ import {
 import { onProxyProgress } from "../api/proxies.js";
 import { saveSettings, settingsState } from "./settings.svelte";
 import {
+  getProviderModelContextTokenLimit,
   getProviderMetadata,
   type LLMProviderType,
   type ReasoningEffort,
@@ -194,6 +195,13 @@ export function buildProviderEnvFromSettings() {
   config.models = {
     ...config.models,
     [agentState.selectedProvider]: agentState.selectedModel,
+  };
+  config.contextTokenLimits = {
+    ...config.contextTokenLimits,
+    [agentState.selectedProvider]: agentState.selectedProvider === 'openaiCompatible'
+      ? config.contextTokenLimits?.openaiCompatible
+        ?? getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel)
+      : getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel),
   };
   config.reasoningEfforts = setProviderReasoningEffort(
     config.reasoningEfforts ?? {},

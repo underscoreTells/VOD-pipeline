@@ -95,7 +95,7 @@ export function isProviderConfigured(settings: Settings, provider: LLMProviderTy
     const profile = (settings.openAICompatibleProfiles ?? []).find(
       (candidate) => candidate.id === settings.activeOpenAICompatibleProfileId
     );
-    return Boolean(profile?.baseURL.trim());
+    return Boolean(profile?.baseURL.trim() && profile.model.trim());
   }
   return getApiKey(settings, provider).length > 0;
 }

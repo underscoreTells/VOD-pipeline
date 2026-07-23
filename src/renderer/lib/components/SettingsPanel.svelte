@@ -216,7 +216,8 @@
                         </div>
                         <div class="grid gap-2 sm:grid-cols-2">
                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" bind:value={profile.baseURL} aria-label="Base URL" placeholder="http://localhost:11434/v1" />
-                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" type="password" bind:value={profile.apiKey} aria-label="API key" placeholder="API key (optional)" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" type="password" bind:value={profile.apiKey} aria-label="API key" placeholder="API key (optional)" />
+                          <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary" bind:value={profile.model} aria-label="Model ID" placeholder="Model ID" />
                           <input class="rounded-[4px] border border-border-default bg-surface-base px-2.5 py-2 font-mono text-app-xs text-text-primary sm:col-span-2" type="number" min="8192" step="1024" bind:value={profile.contextTokenLimit} aria-label="Context token limit" />
                         </div>
                       </div>
