@@ -47,6 +47,7 @@ import {
 import {
   getProviderModelContextTokenLimit,
   getProviderMetadata,
+  providerModelSupportsVideo,
   type LLMProviderType,
   type ReasoningEffort,
 } from "../../../shared/llm/provider-registry.js";
@@ -203,14 +204,16 @@ export function buildProviderEnvFromSettings() {
   };
   config.contextTokenLimits = {
     ...config.contextTokenLimits,
-    [agentState.selectedProvider]: agentState.selectedProvider === 'openaiCompatible'
-      ? config.contextTokenLimits?.openaiCompatible
-        ?? getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel)
-      : getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel),
+    [agentState.selectedProvider]: selectedModel?.contextTokenLimit
+      ?? (agentState.selectedProvider === 'openaiCompatible'
+        ? config.contextTokenLimits?.openaiCompatible
+        : undefined)
+      ?? getProviderModelContextTokenLimit(agentState.selectedProvider, agentState.selectedModel),
   };
   config.modelSupportsVideo = {
-    [agentState.selectedProvider]: selectedModel?.compatibility === 'supported'
-      && selectedModel.supportsVideo,
+    [agentState.selectedProvider]: selectedModel
+      ? selectedModel.compatibility === 'supported' && selectedModel.supportsVideo
+      : providerModelSupportsVideo(agentState.selectedProvider, agentState.selectedModel),
   };
   config.reasoningEfforts = setProviderReasoningEffort(
     config.reasoningEfforts ?? {},
