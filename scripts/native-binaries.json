@@ -8,8 +8,13 @@
         "url": "https://github.com/bbc/audiowaveform/releases/download/1.10.2/audiowaveform-1.10.2-win64.zip",
         "archiveType": "zip",
         "sha256": "17ab4657b9482ffa063d88d367598208060400af91c2c3e2b04723f98b418ad1",
+        "binarySha256": "a5de21b75fe2d9f5e1ac756b7dd7a14bfd18918821f3a389097521354c7c418c",
         "binaryName": "audiowaveform.exe",
         "archiveBinaryPath": "audiowaveform.exe"
+      },
+      "win32-arm64": {
+        "source": "ffmpeg-fallback",
+        "binaryName": "audiowaveform.exe"
       },
       "linux-x64": {
         "source": "ffmpeg-fallback",

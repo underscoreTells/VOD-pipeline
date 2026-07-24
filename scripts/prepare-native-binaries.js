@@ -151,6 +151,9 @@ export function verifyNativeBinaries(
     verifyBinaryArchitecture(path.join(outputDir, name), platform, arch);
   }
   if (options.verifyChecksums) {
+    if (audiowaveform.source === 'download') {
+      verifyChecksum(path.join(outputDir, audiowaveform.binaryName), audiowaveform.binarySha256);
+    }
     for (const binary of getFFmpegTarget(platform, arch)) {
       verifyChecksum(path.join(outputDir, binary.name), binary.sha256);
     }

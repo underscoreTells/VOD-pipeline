@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getAudiowaveformTarget,
   verifyChecksum,
+  verifyInstalledBinary,
 } from "../../scripts/install-audiowaveform.js";
 import { verifyNativeBinaries } from "../../scripts/prepare-native-binaries.js";
 
@@ -27,7 +28,7 @@ describe("native binary target manifest", () => {
     ) as {
       audiowaveform: {
         version: string;
-        targets: Record<string, { source: string; url?: string; sha256?: string }>;
+        targets: Record<string, { source: string; url?: string; sha256?: string; binarySha256?: string }>;
       };
     };
 
@@ -36,6 +37,7 @@ describe("native binary target manifest", () => {
       if (target.source !== "download") continue;
       expect(target.url).toContain("/download/1.10.2/");
       expect(target.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(target.binarySha256).toMatch(/^[a-f0-9]{64}$/);
     }
   });
 
@@ -45,11 +47,15 @@ describe("native binary target manifest", () => {
       binaryName: "audiowaveform",
     });
     expect(getAudiowaveformTarget("darwin", "arm64")).not.toHaveProperty("url");
+    expect(getAudiowaveformTarget("win32", "arm64")).toMatchObject({
+      source: "ffmpeg-fallback",
+      binaryName: "audiowaveform.exe",
+    });
   });
 
   it("rejects unsupported platform and architecture combinations", () => {
-    expect(() => getAudiowaveformTarget("win32", "arm64")).toThrow(
-      "Unsupported audiowaveform target: win32-arm64",
+    expect(() => getAudiowaveformTarget("linux", "ia32")).toThrow(
+      "Unsupported audiowaveform target: linux-ia32",
     );
   });
 
@@ -62,6 +68,17 @@ describe("native binary target manifest", () => {
     const checksum = createHash("sha256").update("known content").digest("hex");
     expect(() => verifyChecksum(archivePath, checksum)).not.toThrow();
     expect(() => verifyChecksum(archivePath, "0".repeat(64))).toThrow("Checksum mismatch");
+  });
+
+  it("rejects a cached audiowaveform executable that does not match the pinned binary", () => {
+    const directory = mkdtempSync(join(tmpdir(), "vod-native-binary-"));
+    temporaryDirectories.push(directory);
+    const binaryPath = join(directory, "audiowaveform.exe");
+    writeFileSync(binaryPath, "stale executable");
+
+    expect(() => verifyInstalledBinary(binaryPath, "win32", "x64", "0".repeat(64))).toThrow(
+      "Checksum mismatch",
+    );
   });
 
   it.skipIf(process.platform === "win32")("verifies non-empty executable target files", () => {

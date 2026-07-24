@@ -137,4 +137,26 @@ describe('vod cut state', () => {
     setVodCutPlayhead(121);
     expect(vodCutState.dirty).toBe(true);
   });
+
+  it('restores a persisted playhead after duration metadata becomes available', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: Number.NaN,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        view: { playheadTime: 120, pixelsPerSecond: 16, scrollLeft: 800 },
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.playheadTime).toBe(120);
+
+    setVodCutDuration(100);
+
+    expect(vodCutState.playheadTime).toBe(100);
+    expect(vodCutState.dirty).toBe(false);
+  });
 });

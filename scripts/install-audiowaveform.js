@@ -111,11 +111,12 @@ async function extractArchive(archivePath, archiveType, destination) {
   throw new Error(`Unsupported audiowaveform archive type: ${archiveType}`);
 }
 
-function verifyInstalledBinary(binaryPath, targetPlatform, targetArch) {
+export function verifyInstalledBinary(binaryPath, targetPlatform, targetArch, expectedSha256) {
   if (!fs.existsSync(binaryPath) || !fs.statSync(binaryPath).isFile()) {
     throw new Error(`audiowaveform was not installed for ${targetPlatform}-${targetArch}: ${binaryPath}`);
   }
 
+  if (expectedSha256) verifyChecksum(binaryPath, expectedSha256);
   if (targetPlatform !== 'win32') fs.chmodSync(binaryPath, 0o755);
 }
 
@@ -135,9 +136,13 @@ export async function installAudiowaveform(options = {}) {
   }
 
   if (fs.existsSync(binaryPath)) {
-    verifyInstalledBinary(binaryPath, platform, arch);
-    console.log(`audiowaveform already prepared for ${target.key}: ${binaryPath}`);
-    return binaryPath;
+    try {
+      verifyInstalledBinary(binaryPath, platform, arch, target.binarySha256);
+      console.log(`audiowaveform already prepared for ${target.key}: ${binaryPath}`);
+      return binaryPath;
+    } catch {
+      fs.rmSync(binaryPath, { force: true });
+    }
   }
 
   if (target.source === 'download') {
@@ -163,7 +168,7 @@ export async function installAudiowaveform(options = {}) {
     }
   } else throw new Error(`Unsupported audiowaveform source: ${target.source}`);
 
-  verifyInstalledBinary(binaryPath, platform, arch);
+  verifyInstalledBinary(binaryPath, platform, arch, target.binarySha256);
   console.log(`Prepared audiowaveform for ${target.key}: ${binaryPath}`);
   return binaryPath;
 }

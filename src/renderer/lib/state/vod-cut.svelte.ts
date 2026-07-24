@@ -34,6 +34,7 @@ let nextRangeId = 1;
 let undoStack: VodCutSnapshot[] = [];
 let redoStack: VodCutSnapshot[] = [];
 let pendingDraftRanges: VodCutRange[] | null = null;
+let pendingDraftPlayhead: number | null = null;
 
 export const vodCutState = $state<VodCutState>({
   projectId: null,
@@ -166,11 +167,15 @@ export function initializeVodCut(options: {
   pendingDraftRanges = draftRanges.length > 0 && vodCutState.duration <= 0
     ? cloneRanges(draftRanges)
     : null;
+  const draftPlayhead = options.draft?.view?.playheadTime ?? 0;
+  pendingDraftPlayhead = vodCutState.duration <= 0 && Number.isFinite(draftPlayhead)
+    ? Math.max(0, draftPlayhead)
+    : null;
   vodCutState.ranges = [];
   vodCutState.selectedRangeId = null;
   vodCutState.pendingIn = null;
   vodCutState.pendingOut = null;
-  vodCutState.playheadTime = clampTime(options.draft?.view?.playheadTime ?? 0);
+  vodCutState.playheadTime = pendingDraftPlayhead ?? clampTime(draftPlayhead);
   vodCutState.pixelsPerSecond = options.draft?.view?.pixelsPerSecond ?? 1;
   vodCutState.scrollLeft = options.draft?.view?.scrollLeft ?? 0;
   vodCutState.dirty = false;
@@ -192,6 +197,7 @@ export function clearVodCut(): void {
 
 export function setVodCutPlayhead(time: number): void {
   const next = clampTime(time);
+  pendingDraftPlayhead = null;
   if (Math.abs(next - vodCutState.playheadTime) < 1e-6) return;
   vodCutState.playheadTime = next;
   vodCutState.dirty = true;
@@ -201,7 +207,8 @@ export function setVodCutPlayhead(time: number): void {
 export function setVodCutDuration(duration: number): void {
   if (!Number.isFinite(duration) || duration <= 0) return;
   vodCutState.duration = duration;
-  vodCutState.playheadTime = clampTime(vodCutState.playheadTime);
+  vodCutState.playheadTime = clampTime(pendingDraftPlayhead ?? vodCutState.playheadTime);
+  pendingDraftPlayhead = null;
   if (pendingDraftRanges) applyDraftRanges(pendingDraftRanges);
 }
 
