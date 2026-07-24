@@ -24,6 +24,7 @@ interface VodCutState {
   revision: number;
   isLoading: boolean;
   isSaving: boolean;
+  hasPersistedView: boolean;
   lastSavedAt: string | null;
   error: string | null;
 }
@@ -52,6 +53,7 @@ export const vodCutState = $state<VodCutState>({
   revision: 0,
   isLoading: false,
   isSaving: false,
+  hasPersistedView: false,
   lastSavedAt: null,
   error: null,
 });
@@ -182,6 +184,7 @@ export function initializeVodCut(options: {
   vodCutState.revision = 0;
   vodCutState.isLoading = pendingDraftRanges !== null;
   vodCutState.isSaving = false;
+  vodCutState.hasPersistedView = options.draft?.view !== undefined;
   vodCutState.lastSavedAt = options.draft?.updated_at ?? null;
   vodCutState.error = null;
   if (!pendingDraftRanges) applyDraftRanges(draftRanges);

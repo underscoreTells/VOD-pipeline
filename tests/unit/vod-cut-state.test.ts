@@ -132,10 +132,28 @@ describe('vod cut state', () => {
     expect(vodCutState.playheadTime).toBe(120);
     expect(vodCutState.pixelsPerSecond).toBe(16);
     expect(vodCutState.scrollLeft).toBe(800);
+    expect(vodCutState.hasPersistedView).toBe(true);
     expect(vodCutState.dirty).toBe(false);
 
     setVodCutPlayhead(121);
     expect(vodCutState.dirty).toBe(true);
+  });
+
+  it('does not treat a migrated draft without view state as a persisted viewport', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: 3600,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.lastSavedAt).toBe('2026-07-18T00:00:00.000Z');
+    expect(vodCutState.hasPersistedView).toBe(false);
   });
 
   it('restores a persisted playhead after duration metadata becomes available', () => {

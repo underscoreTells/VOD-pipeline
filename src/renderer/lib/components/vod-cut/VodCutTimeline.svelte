@@ -473,10 +473,10 @@
       resizeObserver.observe(viewportRef);
       viewportWidth = viewportRef.clientWidth;
       const initialPps = Math.max(viewportWidth / Math.max(1, vodCutState.duration), 8);
-      const restoredPps = vodCutState.lastSavedAt
+      const restoredPps = vodCutState.hasPersistedView
         ? clampNumber(vodCutState.pixelsPerSecond, MIN_PPS, maxPps)
         : initialPps;
-      const restoredScroll = vodCutState.lastSavedAt
+      const restoredScroll = vodCutState.hasPersistedView
         ? clampNumber(vodCutState.scrollLeft, 0, Math.max(0, vodCutState.duration * restoredPps - viewportWidth))
         : 0;
       setVodCutView(restoredPps, restoredScroll);
