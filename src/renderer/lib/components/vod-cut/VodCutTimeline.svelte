@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import type { VodCutRange } from '$shared/types/database';
-  import { generateWaveform, getWaveform, onWaveformProgress } from '../../api/waveforms.js';
+  import type { WaveformBlock } from '$shared/contracts/electron-api';
+  import { WAVEFORM_BLOCK_DURATION_SECONDS } from '$shared/utils/waveform-blocks';
   import {
     addVodCutRange,
     clearVodCutPendingRange,
+    deleteVodCutRange,
     selectVodCutRange,
     setVodCutPendingRange,
     setVodCutPlayhead,
@@ -18,7 +21,13 @@
     getAdaptiveRulerStep,
     pointerToVodTime,
   } from '../../utils/vod-cut-timeline.js';
-  import { formatTime } from '../../utils/time.js';
+  import { formatTime, formatTimecode as formatFpsTimecode } from '../../utils/time.js';
+  import { settingsState } from '../../state/settings.svelte.js';
+  import { getArrowNavigationDelta } from '../../utils/transport-shortcuts.js';
+  import {
+    getWaveformPeakAtTime,
+    loadProgressiveWaveformRange,
+  } from '../../utils/progressive-waveform.js';
 
   interface Props {
     assetId: number;
@@ -32,12 +41,12 @@
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
   let viewportWidth = $state(0);
-  let waveformPeaks = $state<Array<{ min: number; max: number }>>([]);
-  let waveformDuration = $state(0);
+  const waveformBlocks = new SvelteMap<number, WaveformBlock>();
   let waveformStatus = $state<'loading' | 'ready' | 'unavailable'>('loading');
-  let waveformLoadInFlight = false;
   let resizeObserver: ResizeObserver | null = null;
-  let unsubscribeWaveform: (() => void) | null = null;
+  let visibleWaveformController: AbortController | null = null;
+  let backgroundWaveformController: AbortController | null = null;
+  let waveformRequestTimer: number | null = null;
   let drag = $state<{
     mode: 'scrub' | 'create' | 'resize' | 'overview';
     pointerId: number;
@@ -79,16 +88,10 @@
     }
     return ticks;
   });
+  const waveformBlockCount = $derived(Math.ceil(vodCutState.duration / WAVEFORM_BLOCK_DURATION_SECONDS));
 
   function formatTimecode(seconds: number): string {
-    const fps = Math.max(1, Math.round(vodCutState.fps));
-    const frames = Math.round(clampNumber(seconds, 0, vodCutState.duration) * fps);
-    const frame = frames % fps;
-    const totalSeconds = Math.floor(frames / fps);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frame).padStart(2, '0')}`;
+    return formatFpsTimecode(clampNumber(seconds, 0, vodCutState.duration), vodCutState.fps);
   }
 
   function getPointerTime(event: PointerEvent): number {
@@ -252,10 +255,38 @@
     scrubTo(range.start_time, true);
   }
 
+  function handleRangeKeydown(event: KeyboardEvent, range: VodCutRange): void {
+    if (event.key === 'Enter' || event.code === 'Space') {
+      event.preventDefault();
+      event.stopPropagation();
+      handleRangeClick(range);
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteVodCutRange(range.id);
+    }
+  }
+
+  function handleResizeKeydown(event: KeyboardEvent, range: VodCutRange, edge: 'start' | 'end'): void {
+    const delta = getArrowNavigationDelta({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      fps: vodCutState.fps,
+      coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+    });
+    if (delta === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateVodCutRange(range.id, edge === 'start'
+      ? { start_time: range.start_time + delta }
+      : { end_time: range.end_time + delta });
+  }
+
   function handleScroll(): void {
     if (!viewportRef) return;
     setVodCutView(vodCutState.pixelsPerSecond, viewportRef.scrollLeft);
     drawWaveform();
+    scheduleVisibleWaveformRequest();
   }
 
   function setZoom(nextPixelsPerSecond: number, pointerX?: number): void {
@@ -276,6 +307,7 @@
       if (!viewportRef) return;
       viewportRef.scrollLeft = nextScroll;
       drawWaveform();
+      scheduleVisibleWaveformRequest();
     });
   }
 
@@ -295,13 +327,18 @@
     setVodCutView(fit, 0);
     viewportRef.scrollLeft = 0;
     requestAnimationFrame(drawWaveform);
+    scheduleVisibleWaveformRequest();
   }
 
   function handlePlayheadKeydown(event: KeyboardEvent): void {
-    const frame = 1 / Math.max(1, vodCutState.fps);
     let next: number | null = null;
-    if (event.key === 'ArrowLeft') next = vodCutState.playheadTime - (event.shiftKey ? 1 : frame);
-    if (event.key === 'ArrowRight') next = vodCutState.playheadTime + (event.shiftKey ? 1 : frame);
+    const delta = getArrowNavigationDelta({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      fps: vodCutState.fps,
+      coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+    });
+    if (delta !== null) next = vodCutState.playheadTime + delta;
     if (event.key === 'Home') next = 0;
     if (event.key === 'End') next = vodCutState.duration;
     if (next === null) return;
@@ -311,7 +348,7 @@
   }
 
   function drawWaveform(): void {
-    if (!waveformCanvas || !viewportRef || waveformPeaks.length === 0) return;
+    if (!waveformCanvas || !viewportRef) return;
     const width = Math.max(1, viewportRef.clientWidth);
     const height = 88;
     const dpr = window.devicePixelRatio || 1;
@@ -328,14 +365,10 @@
     context.globalAlpha = 0.7;
     context.beginPath();
     const visibleStart = viewportRef.scrollLeft / vodCutState.pixelsPerSecond;
-    const sourceDuration = waveformDuration || vodCutState.duration;
     for (let x = 0; x < width; x += 1) {
       const time = visibleStart + x / vodCutState.pixelsPerSecond;
-      const index = Math.min(
-        waveformPeaks.length - 1,
-        Math.max(0, Math.floor((time / sourceDuration) * waveformPeaks.length)),
-      );
-      const peak = waveformPeaks[index];
+      const peak = getWaveformPeakAtTime(waveformBlocks, time);
+      if (!peak) continue;
       const center = height / 2;
       context.moveTo(x + 0.5, center + peak.min * center);
       context.lineTo(x + 0.5, center + peak.max * center);
@@ -343,30 +376,59 @@
     context.stroke();
   }
 
-  async function loadWaveform(): Promise<void> {
-    if (waveformLoadInFlight) return;
-    waveformLoadInFlight = true;
-    waveformStatus = 'loading';
-    try {
-      let result = await getWaveform(assetId, -1, 1);
-      if (!result.success || !result.data) {
-        const generated = await generateWaveform(assetId, -1, { playbackActive: false });
-        if (generated.success) result = await getWaveform(assetId, -1, 1);
-      }
-      if (!result.success || !result.data) {
-        waveformStatus = 'unavailable';
-        return;
-      }
-      waveformPeaks = result.data.peaks;
-      waveformDuration = result.data.duration;
-      waveformStatus = 'ready';
-      requestAnimationFrame(drawWaveform);
-    } catch (error) {
-      console.warn('[VodCutTimeline] Waveform unavailable:', error);
-      waveformStatus = 'unavailable';
-    } finally {
-      waveformLoadInFlight = false;
-    }
+  function installWaveformBlock(block: WaveformBlock): void {
+    if (waveformBlocks.has(block.index)) return;
+    waveformBlocks.set(block.index, block);
+    waveformStatus = 'ready';
+    requestAnimationFrame(drawWaveform);
+  }
+
+  function scheduleVisibleWaveformRequest(delay = 100): void {
+    if (waveformRequestTimer !== null) window.clearTimeout(waveformRequestTimer);
+    waveformRequestTimer = window.setTimeout(() => {
+      waveformRequestTimer = null;
+      void loadVisibleWaveform();
+    }, delay);
+  }
+
+  async function loadVisibleWaveform(): Promise<void> {
+    if (!viewportRef || vodCutState.duration <= 0) return;
+    visibleWaveformController?.abort();
+    const controller = new AbortController();
+    visibleWaveformController = controller;
+    const visibleStart = viewportRef.scrollLeft / vodCutState.pixelsPerSecond;
+    const visibleEnd = Math.min(vodCutState.duration, visibleStart + visibleDuration);
+    const result = await loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: visibleStart,
+      endTime: visibleEnd,
+      sourceDuration: vodCutState.duration,
+      requestMode: 'interactive',
+      loadedIndexes: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: installWaveformBlock,
+    });
+    if (controller.signal.aborted) return;
+    if (waveformBlocks.size === 0 && result.failed > 0) waveformStatus = 'unavailable';
+    startBackgroundWaveformLoad();
+  }
+
+  function startBackgroundWaveformLoad(): void {
+    if (backgroundWaveformController || vodCutState.duration <= 0) return;
+    const controller = new AbortController();
+    backgroundWaveformController = controller;
+    void loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: 0,
+      endTime: vodCutState.duration,
+      sourceDuration: vodCutState.duration,
+      requestMode: 'background',
+      loadedIndexes: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: installWaveformBlock,
+    });
   }
 
   onMount(() => {
@@ -376,20 +438,27 @@
         viewportWidth = viewportRef.clientWidth;
         if (vodCutState.pixelsPerSecond < MIN_PPS) fitTimeline();
         drawWaveform();
+        scheduleVisibleWaveformRequest();
       });
       resizeObserver.observe(viewportRef);
       viewportWidth = viewportRef.clientWidth;
       const initialPps = Math.max(viewportWidth / Math.max(1, vodCutState.duration), 8);
-      setVodCutView(initialPps, 0);
+      const restoredPps = vodCutState.lastSavedAt
+        ? clampNumber(vodCutState.pixelsPerSecond, MIN_PPS, maxPps)
+        : initialPps;
+      const restoredScroll = vodCutState.lastSavedAt
+        ? clampNumber(vodCutState.scrollLeft, 0, Math.max(0, vodCutState.duration * restoredPps - viewportWidth))
+        : 0;
+      setVodCutView(restoredPps, restoredScroll);
+      viewportRef.scrollLeft = restoredScroll;
     }
-    unsubscribeWaveform = onWaveformProgress((event) => {
-      if (event.assetId === assetId && event.progress.percent >= 100) void loadWaveform();
-    });
-    void loadWaveform();
+    scheduleVisibleWaveformRequest(0);
 
     return () => {
       resizeObserver?.disconnect();
-      unsubscribeWaveform?.();
+      visibleWaveformController?.abort();
+      backgroundWaveformController?.abort();
+      if (waveformRequestTimer !== null) window.clearTimeout(waveformRequestTimer);
       endWindowDrag();
     };
   });
@@ -400,7 +469,7 @@
     <div class="flex items-center gap-3">
       <span class="font-mono text-app-base tabular-nums text-text-primary">{formatTimecode(vodCutState.playheadTime)}</span>
       <span class="text-app-xs text-text-tertiary">{formatTime(vodCutState.playheadTime)} / {formatTime(vodCutState.duration)}</span>
-      <span class="text-app-xs text-text-disabled">{waveformStatus === 'loading' ? 'Building waveform...' : waveformStatus === 'unavailable' ? 'Waveform unavailable' : 'Waveform ready'}</span>
+      <span class="text-app-xs text-text-disabled">{waveformStatus === 'loading' ? 'Loading visible waveform...' : waveformStatus === 'unavailable' ? 'Waveform unavailable' : `Waveform ${waveformBlocks.size}/${waveformBlockCount}`}</span>
     </div>
     <div class="flex items-center gap-1.5">
       <button class="h-7 rounded-sm border border-border-default px-2 text-app-sm text-text-secondary hover:bg-surface-hover" onclick={() => setZoom(vodCutState.pixelsPerSecond / 1.25)} aria-label="Zoom out">-</button>
@@ -477,7 +546,7 @@
         {/if}
         {#each vodCutState.ranges as range, index (range.id)}
           {@const visual = rangeVisual(range)}
-          <button
+          <div
             class="group absolute inset-y-2 overflow-visible rounded-sm border text-left transition-colors"
             class:border-accent-primary={vodCutState.selectedRangeId === range.id}
             class:bg-accent-primary-subtle={vodCutState.selectedRangeId === range.id}
@@ -485,25 +554,42 @@
             class:bg-surface-active={vodCutState.selectedRangeId !== range.id}
             style={`left: ${visual.start * vodCutState.pixelsPerSecond}px; width: ${Math.max(2, (visual.end - visual.start) * vodCutState.pixelsPerSecond)}px;`}
             data-range-id={range.id}
+            role="button"
+            tabindex="0"
             onclick={() => handleRangeClick(range)}
+            onkeydown={(event) => handleRangeKeydown(event, range)}
             title={`${range.title}: ${formatTime(range.start_time)} - ${formatTime(range.end_time)}`}
           >
             <span class="pointer-events-none block truncate px-2 text-app-xs font-medium text-text-primary">{index + 1}. {range.title}</span>
-            <span
+            <button
+              type="button"
               class="absolute inset-y-0 -left-1.5 w-3 cursor-ew-resize rounded-l-sm bg-accent-primary opacity-0 transition-opacity group-hover:opacity-80"
               class:opacity-80={vodCutState.selectedRangeId === range.id}
-              role="separator"
+              role="slider"
               aria-label={`Trim start of ${range.title}`}
+              aria-orientation="horizontal"
+              aria-valuemin={0}
+              aria-valuemax={range.end_time}
+              aria-valuenow={range.start_time}
               onpointerdown={(event) => handleResizePointerDown(event, range, 'start')}
-            ></span>
-            <span
+              onclick={(event) => event.stopPropagation()}
+              onkeydown={(event) => handleResizeKeydown(event, range, 'start')}
+            ></button>
+            <button
+              type="button"
               class="absolute inset-y-0 -right-1.5 w-3 cursor-ew-resize rounded-r-sm bg-accent-primary opacity-0 transition-opacity group-hover:opacity-80"
               class:opacity-80={vodCutState.selectedRangeId === range.id}
-              role="separator"
+              role="slider"
               aria-label={`Trim end of ${range.title}`}
+              aria-orientation="horizontal"
+              aria-valuemin={range.start_time}
+              aria-valuemax={vodCutState.duration}
+              aria-valuenow={range.end_time}
               onpointerdown={(event) => handleResizePointerDown(event, range, 'end')}
-            ></span>
-          </button>
+              onclick={(event) => event.stopPropagation()}
+              onkeydown={(event) => handleResizeKeydown(event, range, 'end')}
+            ></button>
+          </div>
         {/each}
       </div>
 

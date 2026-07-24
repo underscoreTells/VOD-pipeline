@@ -1,5 +1,6 @@
 import type { Clip, TimelineState } from '../../../shared/types/database';
 import { getClipDuration } from '../../../shared/utils/clip-timing';
+import { nextShuttleSpeed } from '../utils/transport-shortcuts.js';
 
 interface TimelineNotice {
   message: string;
@@ -49,17 +50,6 @@ export const timelineState = $state<TimelineStateStore>({
   notice: null as TimelineNotice | null,
   error: null as string | null,
 });
-
-const SHUTTLE_SPEED_TIERS = [1, 2, 4, 8] as const;
-
-function nextShuttleSpeed(current: number): number {
-  for (const speed of SHUTTLE_SPEED_TIERS) {
-    if (current < speed) {
-      return speed;
-    }
-  }
-  return SHUTTLE_SPEED_TIERS[SHUTTLE_SPEED_TIERS.length - 1];
-}
 
 // Derived state
 export function getSelectedClips(): Clip[] {

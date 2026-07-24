@@ -1,18 +1,24 @@
 import * as fs from 'node:fs';
 import { ipcMain } from 'electron';
 import { getAsset, getWaveform, saveWaveform } from '../../database/index.js';
+import { getAudiowaveformPath } from '../../audiowaveformDetector.js';
+import { getFFmpegPath, getFFprobePath } from '../../ffmpegDetector.js';
+import { getWaveformCacheDirectoryPath } from '../../paths.js';
 import {
   generateWaveformTiers,
   WaveformError,
 } from '../../../pipeline/waveform.js';
+import { requestProgressiveWaveformBlocks } from '../../../pipeline/progressive-waveform.js';
 import { createLogger } from '../../logger.js';
 import { IPC_CHANNELS, IPC_ERROR_CODES, type IPCErrorCode } from '../channels.js';
 import { createErrorResponse, createSuccessResponse } from '../shared.js';
 import {
   waveformGenerateSchema,
   waveformGenerateTierSchema,
+  waveformBlocksRequestSchema,
   waveformGetSchema,
 } from '../schemas.js';
+import { enqueueHeavyMediaJob } from '../support/heavy-media-queue.js';
 
 const logger = createLogger('WaveformHandlers');
 
@@ -20,6 +26,7 @@ export const WAVEFORM_HANDLER_CHANNELS = [
   IPC_CHANNELS.WAVEFORM_GENERATE,
   IPC_CHANNELS.WAVEFORM_GET,
   IPC_CHANNELS.WAVEFORM_GENERATE_TIER,
+  IPC_CHANNELS.WAVEFORM_BLOCKS_REQUEST,
 ];
 
 export function registerWaveformHandlers(): void {
@@ -163,6 +170,73 @@ export function registerWaveformHandlers(): void {
           : IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED;
         return createErrorResponse(error.message, errorCode);
       }
+      return createErrorResponse(error, IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_BLOCKS_REQUEST, async (event, payload) => {
+    logger.info(
+      'waveform:blocks-request',
+      payload?.assetId,
+      payload?.trackIndex,
+      payload?.startTime,
+      payload?.endTime
+    );
+    try {
+      const parsed = waveformBlocksRequestSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.endTime <= parsed.data.startTime) {
+        return createErrorResponse('Invalid waveform block range', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const { assetId, trackIndex, startTime, endTime, pixelsPerSecond, requestMode } = parsed.data;
+      const asset = await getAsset(assetId);
+      if (!asset) {
+        return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
+      }
+      if (!fs.existsSync(asset.file_path)) {
+        return createErrorResponse('Asset file not found', IPC_ERROR_CODES.FILE_NOT_FOUND);
+      }
+      if (asset.duration !== null && startTime >= asset.duration) {
+        return createErrorResponse('Waveform range starts after the asset ends', IPC_ERROR_CODES.VALIDATION_ERROR);
+      }
+      const ffmpeg = getFFmpegPath();
+      if (!ffmpeg) {
+        return createErrorResponse('FFmpeg not found for waveform generation', IPC_ERROR_CODES.FFMPEG_NOT_FOUND);
+      }
+
+      const result = await requestProgressiveWaveformBlocks({
+        sourcePath: asset.file_path,
+        sourceDuration: asset.duration,
+        cacheRoot: getWaveformCacheDirectoryPath(),
+        trackIndex,
+        startTime,
+        endTime,
+        pixelsPerSecond,
+        ffmpegPath: ffmpeg.path,
+        ffprobePath: getFFprobePath(ffmpeg.path),
+        audiowaveform: getAudiowaveformPath(),
+        scheduleBlock: (key, run) => enqueueHeavyMediaJob(
+          key,
+          'waveformBlock',
+          requestMode ?? 'interactive',
+          run,
+          { resourceClass: 'cpu' }
+        ),
+        onProgress: (progress) => {
+          event.sender.send(IPC_CHANNELS.WAVEFORM_BLOCK_PROGRESS, {
+            assetId,
+            trackIndex,
+            ...progress,
+          });
+        },
+      });
+
+      return createSuccessResponse({
+        assetId,
+        trackIndex,
+        ...result,
+        status: 'ready' as const,
+      });
+    } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
     }
   });

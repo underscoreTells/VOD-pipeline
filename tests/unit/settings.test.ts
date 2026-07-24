@@ -24,6 +24,7 @@ describe("settings helpers", () => {
     expect(defaultSettings.autoClipNamingModel).toBe("gpt-5-nano");
     expect(defaultSettings.autoThreadNamingModel).toBe("gpt-5-nano");
     expect(defaultSettings.autoTranscribeOnImport).toBe(true);
+    expect(defaultSettings.coarseJumpSeconds).toBe(10);
   });
 
   it("returns provider labels and video support flags", () => {

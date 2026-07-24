@@ -105,6 +105,25 @@ afterEach(async () => {
 });
 
 describe("heavy media scheduler resource pools", () => {
+  it("schedules waveform blocks in the shared CPU media pool", async () => {
+    configure({ cpuProxy: 1, interactiveOverflow: 0 });
+    const proxy = trackedJob("cpu:proxy", "proxy", []);
+    const waveform = trackedJob("waveform:block", "waveform", []);
+
+    const proxyPromise = enqueueHeavyMediaJob(proxy.key, "chapterProxy", "background", proxy.run);
+    const waveformPromise = enqueueHeavyMediaJob(waveform.key, "waveformBlock", "interactive", waveform.run);
+
+    expect(proxy.isStarted).toBe(true);
+    expect(waveform.isStarted).toBe(false);
+    proxy.finish();
+    await proxyPromise;
+    await flushPending();
+    expect(waveform.isStarted).toBe(true);
+
+    waveform.finish();
+    await waveformPromise;
+  });
+
   it("limits cpu proxy jobs to the cpu proxy pool size", async () => {
     configure({ cpuProxy: 2 });
     const a = trackedJob("cpu:a", "a", []);

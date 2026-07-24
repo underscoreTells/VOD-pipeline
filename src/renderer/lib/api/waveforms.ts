@@ -1,6 +1,9 @@
 import type {
   WaveformGenerateOptions,
   WaveformGenerationResult,
+  WaveformBlockProgressEvent,
+  WaveformBlocksRequest,
+  WaveformBlocksResult,
   WaveformProgressEvent,
   WaveformResult,
 } from '../../../shared/contracts/electron-api.js';
@@ -9,6 +12,9 @@ import { getElectronApi } from './client.js';
 export type {
   WaveformGenerateOptions,
   WaveformGenerationResult,
+  WaveformBlockProgressEvent,
+  WaveformBlocksRequest,
+  WaveformBlocksResult,
   WaveformProgressEvent,
   WaveformResult,
 } from '../../../shared/contracts/electron-api.js';
@@ -33,4 +39,16 @@ export function onWaveformProgress(
   callback: (data: WaveformProgressEvent) => void
 ): () => void {
   return getElectronApi().waveforms.onProgress(callback);
+}
+
+export async function requestWaveformBlocks(
+  request: WaveformBlocksRequest
+): Promise<WaveformBlocksResult> {
+  return await getElectronApi().waveforms.requestBlocks(request);
+}
+
+export function onWaveformBlockProgress(
+  callback: (data: WaveformBlockProgressEvent) => void
+): () => void {
+  return getElectronApi().waveforms.onBlockProgress(callback);
 }

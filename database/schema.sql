@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS vod_cut_drafts (
   project_id INTEGER NOT NULL,
   asset_id INTEGER NOT NULL,
   ranges_json TEXT NOT NULL,
+  view_json TEXT,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (project_id, asset_id),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,

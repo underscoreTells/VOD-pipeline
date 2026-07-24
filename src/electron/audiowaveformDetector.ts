@@ -8,6 +8,11 @@ export interface AudiowaveformPathResult {
   version: string;
 }
 
+interface DetectionCandidate {
+  path: string;
+  source: AudiowaveformPathResult['source'];
+}
+
 let cachedResult: AudiowaveformPathResult | null = null;
 
 /**
@@ -24,31 +29,14 @@ export async function detectAudiowaveform(): Promise<AudiowaveformPathResult | n
 
   try {
     const platform = process.platform;
-    const binaryName = platform === 'win32' ? 'audiowaveform.exe' : 'audiowaveform';
-    const resourcesPath = process.resourcesPath || process.cwd();
-
     const userDataPath = await getElectronUserDataPath();
-    const detectionOrder: Array<{ path: string; source: AudiowaveformPathResult['source'] }> = [
-      {
-        path: path.join(resourcesPath, 'binaries', platform, binaryName),
-        source: 'bundled',
-      },
-      {
-        path: path.join(process.cwd(), 'binaries', platform, binaryName),
-        source: 'development',
-      },
-      {
-        path: binaryName,
-        source: 'system',
-      },
-    ];
-
-    if (userDataPath) {
-      detectionOrder.splice(2, 0, {
-        path: path.join(userDataPath, 'binaries', binaryName),
-        source: 'userData',
-      });
-    }
+    const detectionOrder = getAudiowaveformDetectionCandidates({
+      platform,
+      arch: process.arch,
+      resourcesPath: process.resourcesPath || process.cwd(),
+      cwd: process.cwd(),
+      userDataPath,
+    });
 
     for (const { path: testPath, source } of detectionOrder) {
       if (await isExecutable(testPath)) {
@@ -62,7 +50,7 @@ export async function detectAudiowaveform(): Promise<AudiowaveformPathResult | n
     }
 
     console.warn('[Audiowaveform] No audiowaveform installation found');
-    console.warn('[Audiowaveform] Waveform generation will be disabled');
+    console.warn('[Audiowaveform] The FFmpeg streaming waveform backend will be used');
     return null;
   } catch (error) {
     console.error('[Audiowaveform] Detection failed:', error);
@@ -125,6 +113,10 @@ export async function getAudiowaveformVersion(executablePath: string): Promise<s
       output += data.toString();
     });
 
+    proc.stderr.on('data', (data) => {
+      output += data.toString();
+    });
+
     proc.on('error', () => resolve(null));
 
     proc.on('exit', (code) => {
@@ -138,6 +130,33 @@ export async function getAudiowaveformVersion(executablePath: string): Promise<s
       resolve(match ? match[1] : null);
     });
   });
+}
+
+export function getAudiowaveformDetectionCandidates(options: {
+  platform: NodeJS.Platform;
+  arch: string;
+  resourcesPath: string;
+  cwd: string;
+  userDataPath: string | null;
+}): DetectionCandidate[] {
+  const { platform, arch, resourcesPath, cwd, userDataPath } = options;
+  const binaryName = platform === 'win32' ? 'audiowaveform.exe' : 'audiowaveform';
+  const candidates: DetectionCandidate[] = [
+    { path: path.join(resourcesPath, 'binaries', platform, arch, binaryName), source: 'bundled' },
+    { path: path.join(resourcesPath, 'binaries', platform, binaryName), source: 'bundled' },
+    { path: path.join(cwd, 'binaries', platform, arch, binaryName), source: 'development' },
+    { path: path.join(cwd, 'binaries', platform, binaryName), source: 'development' },
+  ];
+
+  if (userDataPath) {
+    candidates.push(
+      { path: path.join(userDataPath, 'binaries', platform, arch, binaryName), source: 'userData' },
+      { path: path.join(userDataPath, 'binaries', binaryName), source: 'userData' },
+    );
+  }
+
+  candidates.push({ path: binaryName, source: 'system' });
+  return candidates;
 }
 
 /**

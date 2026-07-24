@@ -74,6 +74,7 @@ export interface Settings {
   autoThreadNamingModel: NamingModelId;
 
   autoTranscribeOnImport: boolean;
+  coarseJumpSeconds: number;
 }
 
 export interface ProviderStatus {
@@ -149,6 +150,9 @@ export async function loadSettings(): Promise<void> {
     if (parsed.autoTranscribeOnImport !== undefined) {
       settingsState.settings.autoTranscribeOnImport = parsed.autoTranscribeOnImport;
     }
+    if (typeof parsed.coarseJumpSeconds === 'number' && Number.isFinite(parsed.coarseJumpSeconds)) {
+      settingsState.settings.coarseJumpSeconds = Math.max(1, Math.min(300, parsed.coarseJumpSeconds));
+    }
     if (parsed.providerModels && typeof parsed.providerModels === 'object') {
       settingsState.settings.providerModels = parsed.providerModels;
     }
@@ -212,6 +216,9 @@ export async function loadSettings(): Promise<void> {
  */
 export async function saveSettings(): Promise<void> {
   try {
+    settingsState.settings.coarseJumpSeconds = Number.isFinite(settingsState.settings.coarseJumpSeconds)
+      ? Math.max(1, Math.min(300, settingsState.settings.coarseJumpSeconds))
+      : defaultSettings.coarseJumpSeconds;
     // Encrypt API keys
     const keysToEncrypt = {
       geminiApiKey: settingsState.settings.geminiApiKey,
@@ -243,6 +250,7 @@ export async function saveSettings(): Promise<void> {
       autoClipNamingModel: normalizeNamingModel(settingsState.settings.autoClipNamingModel),
       autoThreadNamingModel: normalizeNamingModel(settingsState.settings.autoThreadNamingModel),
       autoTranscribeOnImport: settingsState.settings.autoTranscribeOnImport,
+      coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
       providerModels: settingsState.settings.providerModels,
       providerReasoningEfforts: settingsState.settings.providerReasoningEfforts,
       kimiBaseURL: settingsState.settings.kimiBaseURL,

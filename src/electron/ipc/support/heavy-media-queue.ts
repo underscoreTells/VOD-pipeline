@@ -2,16 +2,20 @@ import * as os from 'node:os';
 
 import { getDefaultCpuProxyLimit } from '../../media-resource-limits.js';
 
-export type HeavyMediaJobType = 'chapterProxy' | 'transcription' | 'reverseQuickWarm' | 'reverseFullWarm';
+export type HeavyMediaJobType =
+  | 'chapterProxy'
+  | 'transcription'
+  | 'reverseQuickWarm'
+  | 'reverseFullWarm'
+  | 'waveformBlock';
 export type HeavyMediaJobPriority = 'background' | 'interactive';
 export type HeavyMediaResourceClass = 'cpu' | 'gpu';
 export type HeavyMediaResourcePool = 'cpuProxy' | 'gpuProxy' | 'transcription';
 
 export interface HeavyMediaEnqueueOptions<T = unknown> {
   /**
-   * Hardware resource class the job targets. Proxy-generating jobs
-   * (`chapterProxy`, `reverseQuickWarm`, `reverseFullWarm`) are routed to the
-   * matching proxy pool (`cpuProxy` or `gpuProxy`). `transcription` jobs use
+   * Hardware resource class the job targets. Media-generating jobs are routed
+   * to the matching proxy/media pool (`cpuProxy` or `gpuProxy`). `transcription` jobs use
    * the dedicated transcription pool and ignore this value.
    *
    * Defaults to `'cpu'` for backward compatibility with existing callers that

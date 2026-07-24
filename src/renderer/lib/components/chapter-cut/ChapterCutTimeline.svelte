@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import type { Chapter, Clip, Suggestion } from '$shared/types/database';
   import type { ProjectAsset } from '$shared/contracts/ipc';
-  import { getWaveform, onWaveformProgress } from '../../api/waveforms.js';
+  import type { WaveformBlock } from '$shared/contracts/electron-api';
   import {
     createProjectClip,
     executeDeleteClip,
@@ -24,7 +25,6 @@
   import { canRedo, canUndo, redo, undo } from '../../state/undo-redo.svelte.js';
   import { agentState, focusSuggestion } from '../../state/agent.svelte.js';
   import { chaptersState, loadAssetsForChapter } from '../../state/chapters.svelte.js';
-  import { generateAssetWaveform } from '../../state/project-waveforms.svelte.js';
   import {
     calculateZoomAroundPointer,
     clampNumber,
@@ -41,12 +41,15 @@
   import Icon from '../ui/Icon.svelte';
   import { Minus, Pause, Play } from '../../constants.js';
   import { cn } from '../../utils/cn.js';
-  import {
-    shouldReloadWaveformOnProgress,
-    shouldRequestChapterWaveform,
-    type ChapterWaveformStatus,
-  } from './chapter-cut-waveform.js';
+  import type { ChapterWaveformStatus } from './chapter-cut-waveform.js';
   import { resolveSuggestionWindowsForChapter } from '../../../../shared/utils/clip-timing.js';
+  import { formatTimecode as formatFpsTimecode } from '../../utils/time.js';
+  import { settingsState } from '../../state/settings.svelte.js';
+  import { getArrowNavigationDelta } from '../../utils/transport-shortcuts.js';
+  import {
+    getWaveformPeakAtTime,
+    loadProgressiveWaveformRange,
+  } from '../../utils/progressive-waveform.js';
 
   interface Props {
     projectId: number;
@@ -80,11 +83,11 @@
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
   let viewportWidth = $state(0);
-  let waveformPeaks = $state<Array<{ min: number; max: number }>>([]);
-  let waveformDuration = $state(0);
+  const waveformBlocks = new SvelteMap<number, WaveformBlock>();
   let waveformStatus = $state<ChapterWaveformStatus>('loading');
-  let waveformAssetId = $state<number | null>(null);
-  const waveformLoadsInFlight = new Set<number>();
+  let visibleWaveformController: AbortController | null = null;
+  let backgroundWaveformController: AbortController | null = null;
+  let waveformRequestTimer: number | null = null;
   let drag = $state<DragState | null>(null);
   let dragPreview = $state<{ start: number; end: number } | null>(null);
   let dragMoved = false;
@@ -105,7 +108,7 @@
   });
 
   const CREATE_DRAG_THRESHOLD_PX = 4;
-  const WAVEFORM_HEIGHT = 104;
+  const WAVEFORM_HEIGHT = 72;
 
   const duration = $derived(Math.max(0.01, chapter.end_time - chapter.start_time));
   // The asset shown in the editor viewer drives the waveform and new-cut
@@ -145,14 +148,7 @@
   }
 
   function formatTimecode(local: number): string {
-    const roundedFps = Math.max(1, Math.round(fps));
-    const frames = Math.round(clampNumber(local, 0, duration) * roundedFps);
-    const frame = frames % roundedFps;
-    const seconds = Math.floor(frames / roundedFps);
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frame).padStart(2, '0')}`;
+    return formatFpsTimecode(clampNumber(local, 0, duration), fps);
   }
 
   function pointerTime(event: PointerEvent): number {
@@ -396,6 +392,20 @@
     clipContextMenu.clipId = null;
   }
 
+  function handleClipKeydown(event: KeyboardEvent, clip: Clip): void {
+    if (event.key === 'Enter' || event.code === 'Space') {
+      event.preventDefault();
+      event.stopPropagation();
+      agentState.selectedSuggestionId = null;
+      selectClip(clip.id, event.ctrlKey || event.metaKey);
+      scrubTo(localTime(clip.in_point));
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      event.stopPropagation();
+      void executeDeleteClip(clip.id);
+    }
+  }
+
   function deleteContextClip(): void {
     if (clipContextMenu.clipId !== null) void executeDeleteClip(clipContextMenu.clipId);
   }
@@ -580,6 +590,7 @@
       if (!viewportRef) return;
       viewportRef.scrollLeft = scrollLeft;
       drawWaveform();
+      scheduleVisibleWaveformRequest();
     });
   }
 
@@ -589,6 +600,7 @@
     setScroll(0);
     viewportRef.scrollLeft = 0;
     requestAnimationFrame(drawWaveform);
+    scheduleVisibleWaveformRequest();
   }
 
   function handleWheel(event: WheelEvent): void {
@@ -605,6 +617,7 @@
     if (!viewportRef) return;
     setScroll(viewportRef.scrollLeft / timelineState.zoomLevel);
     drawWaveform();
+    scheduleVisibleWaveformRequest();
   }
 
   function overviewTime(event: PointerEvent): number {
@@ -634,8 +647,13 @@
   function handlePlayheadKeydown(event: KeyboardEvent): void {
     let next: number | null = null;
     const current = localTime(timelineState.playheadTime);
-    if (event.key === 'ArrowLeft') next = current - (event.shiftKey ? 10 / fps : 1 / fps);
-    if (event.key === 'ArrowRight') next = current + (event.shiftKey ? 10 / fps : 1 / fps);
+    const delta = getArrowNavigationDelta({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      fps,
+      coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+    });
+    if (delta !== null) next = current + delta;
     if (event.key === 'Home') next = 0;
     if (event.key === 'End') next = duration;
     if (next === null) return;
@@ -645,7 +663,7 @@
   }
 
   function drawWaveform(): void {
-    if (!waveformCanvas || !viewportRef || waveformPeaks.length === 0) return;
+    if (!waveformCanvas || !viewportRef) return;
     const width = Math.max(1, viewportRef.clientWidth);
     const height = WAVEFORM_HEIGHT;
     const dpr = window.devicePixelRatio || 1;
@@ -662,15 +680,11 @@
     context.globalAlpha = 0.72;
     context.beginPath();
     const visibleStart = viewportRef.scrollLeft / timelineState.zoomLevel;
-    const sourceDuration = waveformDuration || activeAsset?.duration || duration;
     for (let x = 0; x < width; x += 1) {
       const chapterLocal = visibleStart + x / timelineState.zoomLevel;
       const source = chapter.start_time + chapterLocal;
-      const index = Math.min(
-        waveformPeaks.length - 1,
-        Math.max(0, Math.floor(source / sourceDuration * waveformPeaks.length))
-      );
-      const peak = waveformPeaks[index];
+      const peak = getWaveformPeakAtTime(waveformBlocks, source);
+      if (!peak) continue;
       const center = height / 2;
       context.moveTo(x + 0.5, center + peak.min * center);
       context.lineTo(x + 0.5, center + peak.max * center);
@@ -678,46 +692,62 @@
     context.stroke();
   }
 
-  async function loadWaveform(assetId: number): Promise<void> {
-    if (!shouldRequestChapterWaveform({
-      assetId,
-      waveformAssetId,
-      waveformStatus,
-      isInFlight: waveformLoadsInFlight.has(assetId),
-    })) return;
+  function installWaveformBlock(assetId: number, block: WaveformBlock): void {
+    if (activeAsset?.id !== assetId || waveformBlocks.has(block.index)) return;
+    waveformBlocks.set(block.index, block);
+    waveformStatus = 'ready';
+    requestAnimationFrame(drawWaveform);
+  }
 
-    waveformLoadsInFlight.add(assetId);
-    waveformAssetId = assetId;
-    waveformStatus = 'loading';
-    waveformPeaks = [];
-    waveformDuration = 0;
-    const context = waveformCanvas?.getContext('2d');
-    if (context && waveformCanvas) context.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
-    try {
-      let result = await getWaveform(assetId, -1, 1);
-      if (!result.success || !result.data) {
-        await generateAssetWaveform(assetId, -1, { playbackActive: false }, { uiMode: 'background' });
-        result = await getWaveform(assetId, -1, 1);
-      }
-      if (activeAsset?.id !== assetId) return;
-      waveformAssetId = assetId;
-      if (!result.success || !result.data) {
-        waveformStatus = 'unavailable';
-        return;
-      }
-      waveformPeaks = result.data.peaks;
-      waveformDuration = result.data.duration;
-      waveformStatus = 'ready';
-      requestAnimationFrame(drawWaveform);
-    } catch (error) {
-      if (activeAsset?.id === assetId) {
-        waveformAssetId = assetId;
-        waveformStatus = 'unavailable';
-      }
-      console.warn(`[ChapterCutTimeline] Waveform unavailable for asset ${assetId}`, error);
-    } finally {
-      waveformLoadsInFlight.delete(assetId);
-    }
+  function scheduleVisibleWaveformRequest(delay = 100): void {
+    if (waveformRequestTimer !== null) window.clearTimeout(waveformRequestTimer);
+    waveformRequestTimer = window.setTimeout(() => {
+      waveformRequestTimer = null;
+      const assetId = activeAsset?.id;
+      if (assetId) void loadVisibleWaveform(assetId);
+    }, delay);
+  }
+
+  async function loadVisibleWaveform(assetId: number): Promise<void> {
+    const waveformAsset = activeAsset;
+    if (!viewportRef || waveformAsset?.id !== assetId) return;
+    visibleWaveformController?.abort();
+    const controller = new AbortController();
+    visibleWaveformController = controller;
+    const sourceDuration = Math.max(chapter.end_time, waveformAsset.duration ?? chapter.end_time);
+    const visibleStart = chapter.start_time + viewportRef.scrollLeft / timelineState.zoomLevel;
+    const visibleEnd = Math.min(chapter.end_time, visibleStart + visibleDuration);
+    const result = await loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: visibleStart,
+      endTime: visibleEnd,
+      sourceDuration,
+      requestMode: 'interactive',
+      loadedIndexes: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: (block) => installWaveformBlock(assetId, block),
+    });
+    if (controller.signal.aborted || activeAsset?.id !== assetId) return;
+    if (waveformBlocks.size === 0 && result.failed > 0) waveformStatus = 'unavailable';
+    startBackgroundWaveformLoad(assetId, sourceDuration);
+  }
+
+  function startBackgroundWaveformLoad(assetId: number, sourceDuration: number): void {
+    if (backgroundWaveformController || activeAsset?.id !== assetId) return;
+    const controller = new AbortController();
+    backgroundWaveformController = controller;
+    void loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: chapter.start_time,
+      endTime: chapter.end_time,
+      sourceDuration,
+      requestMode: 'background',
+      loadedIndexes: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: (block) => installWaveformBlock(assetId, block),
+    });
   }
 
   onMount(() => {
@@ -726,28 +756,30 @@
       viewportWidth = viewportRef.clientWidth;
       setMinZoom(viewportWidth / duration);
       requestAnimationFrame(drawWaveform);
+      scheduleVisibleWaveformRequest();
     });
     if (viewportRef) resizeObserver.observe(viewportRef);
-    const unsubscribe = onWaveformProgress((event) => {
-      if (!shouldReloadWaveformOnProgress({
-        eventAssetId: event.assetId,
-        activeAssetId: activeAsset?.id ?? null,
-        percent: event.progress.percent,
-        isInFlight: waveformLoadsInFlight.has(event.assetId),
-      })) return;
-      waveformAssetId = null;
-      void loadWaveform(event.assetId);
-    });
     return () => {
       resizeObserver.disconnect();
-      unsubscribe();
+      visibleWaveformController?.abort();
+      backgroundWaveformController?.abort();
+      if (waveformRequestTimer !== null) window.clearTimeout(waveformRequestTimer);
       endDrag();
     };
   });
 
   $effect(() => {
     const assetId = activeAsset?.id;
-    if (assetId) void untrack(() => loadWaveform(assetId));
+    untrack(() => {
+      visibleWaveformController?.abort();
+      backgroundWaveformController?.abort();
+      visibleWaveformController = null;
+      backgroundWaveformController = null;
+      waveformBlocks.clear();
+      waveformStatus = assetId ? 'loading' : 'unavailable';
+      requestAnimationFrame(drawWaveform);
+      if (assetId) scheduleVisibleWaveformRequest(0);
+    });
   });
 
   $effect(() => {
@@ -845,7 +877,7 @@
         {/each}
       </div>
 
-      <div class="chapter-waveform-track relative h-[104px] cursor-crosshair overflow-hidden border-b border-border-subtle bg-surface-page text-text-tertiary" onpointerdown={handleTimelinePointerDown} role="slider" tabindex="0" aria-label="Chapter waveform and retained ranges" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
+      <div class="chapter-waveform-track relative h-[72px] cursor-ew-resize overflow-hidden border-b border-border-subtle bg-surface-page text-text-tertiary" onpointerdown={handleScrubPointerDown} role="slider" tabindex="0" aria-label="Chapter waveform scrubber" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={localTime(timelineState.playheadTime)} aria-valuetext={formatTimecode(localTime(timelineState.playheadTime))} onkeydown={handlePlayheadKeydown}>
         {#if activeAsset}
           <div class="pointer-events-none sticky left-0 z-10 flex h-6 w-fit max-w-56 items-center gap-2 rounded-br-md border-r border-b border-border-subtle bg-surface-raised/95 px-2 text-app-xs text-text-tertiary">
             <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-primary"></span>
@@ -857,8 +889,10 @@
         {:else if waveformStatus === 'unavailable'}
           <div class="pointer-events-none absolute right-3 top-2 z-[1] text-app-xs text-text-disabled">Waveform unavailable · timeline editing still works</div>
         {/if}
-        <canvas class="pointer-events-none absolute top-0 z-0 h-[104px] text-text-tertiary" bind:this={waveformCanvas}></canvas>
+        <canvas class="pointer-events-none absolute top-0 z-0 h-[72px] text-text-tertiary" bind:this={waveformCanvas}></canvas>
+      </div>
 
+      <div class="chapter-retained-clips-track relative h-[82px] cursor-crosshair border-b border-border-subtle bg-surface-raised/45" onpointerdown={handleTimelinePointerDown} role="button" tabindex="0" aria-label="Retained clips lane. Drag empty space to create a cut." onkeydown={handlePlayheadKeydown}>
         {#each clips as clip (clip.id)}
           {@const visual = drag?.clipId === clip.id && dragPreview ? dragPreview : { start: localTime(clip.in_point), end: localTime(clip.out_point) }}
           {@const role = clip.role || 'unassigned'}
@@ -866,13 +900,14 @@
           {@const editable = clip.asset_id === activeAsset?.id}
           <div
             class={cn(
-              'chapter-clip-overlay group/cut absolute bottom-3 top-7 flex items-center overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)]',
+              'chapter-clip-overlay group/cut absolute inset-y-3 flex items-center overflow-visible rounded-md border border-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.18)]',
               editable ? 'z-[5] cursor-grab active:cursor-grabbing' : 'z-[4] cursor-pointer opacity-60'
             )}
             class:ring-2={timelineState.selectedClipIds.has(clip.id)}
             class:ring-accent-primary={timelineState.selectedClipIds.has(clip.id)}
             data-clip-id={clip.id}
             oncontextmenu={(event) => openClipContextMenu(event, clip)}
+            onkeydown={(event) => handleClipKeydown(event, clip)}
             role="button"
             tabindex="0"
             aria-label={`${clip.description || 'Untitled cut'}, right-click for actions`}
@@ -898,7 +933,7 @@
             <button
               type="button"
               class={cn(
-                'chapter-suggestion-overlay absolute bottom-3 top-7 z-[6] overflow-hidden rounded-md border-2 border-dashed px-2 text-left text-app-xs font-medium transition-[filter,opacity] hover:brightness-125',
+                'chapter-suggestion-overlay absolute inset-y-3 z-[6] overflow-hidden rounded-md border-2 border-dashed px-2 text-left text-app-xs font-medium transition-[filter,opacity] hover:brightness-125',
                 conflict
                   ? 'border-accent-destructive bg-accent-destructive/10 text-accent-destructive'
                   : 'border-accent-warning bg-accent-warning-subtle text-accent-warning'
@@ -915,7 +950,7 @@
         {/each}
 
         {#if drag?.mode === 'create' && dragPreview}
-          <div class="chapter-create-overlay pointer-events-none absolute bottom-3 top-7 z-[7] rounded-md border-2 border-dashed border-accent-primary bg-accent-primary-subtle" style={`left:${Math.min(dragPreview.start, dragPreview.end) * timelineState.zoomLevel}px;width:${Math.max(3, Math.abs(dragPreview.end - dragPreview.start) * timelineState.zoomLevel)}px`}>
+          <div class="chapter-create-overlay pointer-events-none absolute inset-y-3 z-[7] rounded-md border-2 border-dashed border-accent-primary bg-accent-primary-subtle" style={`left:${Math.min(dragPreview.start, dragPreview.end) * timelineState.zoomLevel}px;width:${Math.max(3, Math.abs(dragPreview.end - dragPreview.start) * timelineState.zoomLevel)}px`}>
             <span class="absolute -top-6 left-0 whitespace-nowrap rounded-sm bg-surface-elevated px-1.5 py-0.5 font-mono text-[10px] text-text-primary">{formatTimecode(Math.min(dragPreview.start, dragPreview.end))} · {formatTimecode(Math.abs(dragPreview.end - dragPreview.start))}</span>
           </div>
         {/if}
@@ -928,7 +963,7 @@
   </div>
 
   <div class="shrink-0 border-t border-border-default bg-surface-raised px-3 py-2">
-    <div class="relative h-7 cursor-pointer overflow-hidden rounded-md border border-border-default bg-surface-page" bind:this={overviewRef} onpointerdown={handleOverviewPointerDown} role="slider" tabindex="0" aria-label="Timeline overview" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={timelineState.scrollPosition}>
+    <div class="relative h-7 cursor-pointer overflow-hidden rounded-md border border-border-default bg-surface-page" bind:this={overviewRef} onpointerdown={handleOverviewPointerDown} onkeydown={handlePlayheadKeydown} role="slider" tabindex="0" aria-label="Timeline overview" aria-valuemin="0" aria-valuemax={duration} aria-valuenow={timelineState.scrollPosition}>
       {#each clips as clip (clip.id)}
         <div class="absolute top-1.5 h-4 rounded-sm bg-accent-primary/45" style={`left:${localTime(clip.in_point) / duration * 100}%;width:${Math.max(0.2, (localTime(clip.out_point) - localTime(clip.in_point)) / duration * 100)}%`}></div>
       {/each}

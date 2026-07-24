@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "audiowaveform": {
+    "version": "1.10.2",
+    "targets": {
+      "win32-x64": {
+        "source": "download",
+        "url": "https://github.com/bbc/audiowaveform/releases/download/1.10.2/audiowaveform-1.10.2-win64.zip",
+        "archiveType": "zip",
+        "sha256": "17ab4657b9482ffa063d88d367598208060400af91c2c3e2b04723f98b418ad1",
+        "binaryName": "audiowaveform.exe",
+        "archiveBinaryPath": "audiowaveform.exe"
+      },
+      "linux-x64": {
+        "source": "ffmpeg-fallback",
+        "binaryName": "audiowaveform"
+      },
+      "linux-arm64": {
+        "source": "ffmpeg-fallback",
+        "binaryName": "audiowaveform"
+      },
+      "darwin-x64": {
+        "source": "ffmpeg-fallback",
+        "binaryName": "audiowaveform"
+      },
+      "darwin-arm64": {
+        "source": "ffmpeg-fallback",
+        "binaryName": "audiowaveform"
+      }
+    }
+  },
+  "ffmpeg": {
+    "version": "6.1.1",
+    "targets": {
+      "win32-x64": [
+        { "name": "ffmpeg.exe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-win32-x64", "sha256": "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00" },
+        { "name": "ffprobe.exe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-win32-x64", "sha256": "3a7e2dc003dc2cd1472827e4c7c4f056ae1ae0ae7c5bbc580c99b49827351ba4" }
+      ],
+      "darwin-x64": [
+        { "name": "ffmpeg", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-x64", "sha256": "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894" },
+        { "name": "ffprobe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-x64", "sha256": "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0" }
+      ],
+      "darwin-arm64": [
+        { "name": "ffmpeg", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64", "sha256": "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584" },
+        { "name": "ffprobe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64", "sha256": "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64" }
+      ],
+      "linux-x64": [
+        { "name": "ffmpeg", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64", "sha256": "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99" },
+        { "name": "ffprobe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-x64", "sha256": "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d" }
+      ],
+      "linux-arm64": [
+        { "name": "ffmpeg", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-arm64", "sha256": "6bb182d0d75d23028db82e9e4f723ca69b853d055698486e6984ddb2c06fb8ce" },
+        { "name": "ffprobe", "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-arm64", "sha256": "d17ae9b4c297d48e2521ba14e417bb0537c6ff77c584cdbcd6bb0d8d0307a2e8" }
+      ]
+    }
+  }
+}

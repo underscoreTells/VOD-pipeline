@@ -41,7 +41,7 @@ describe('VOD cut commit integration', () => {
     await saveVodCutDraft(1, 2, [
       { id: 'later', title: 'Later', start_time: 600, end_time: 720 },
       { id: 'intro', title: 'Intro', start_time: 20, end_time: 80 },
-    ]);
+    ], { playheadTime: 640, pixelsPerSecond: 12, scrollLeft: 3200 });
 
     const created = await commitVodCut(1, 2, [
       { title: 'Later', startTime: 600, endTime: 720 },

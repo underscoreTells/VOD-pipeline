@@ -170,9 +170,9 @@ export function initializeVodCut(options: {
   vodCutState.selectedRangeId = null;
   vodCutState.pendingIn = null;
   vodCutState.pendingOut = null;
-  vodCutState.playheadTime = 0;
-  vodCutState.pixelsPerSecond = 1;
-  vodCutState.scrollLeft = 0;
+  vodCutState.playheadTime = clampTime(options.draft?.view?.playheadTime ?? 0);
+  vodCutState.pixelsPerSecond = options.draft?.view?.pixelsPerSecond ?? 1;
+  vodCutState.scrollLeft = options.draft?.view?.scrollLeft ?? 0;
   vodCutState.dirty = false;
   vodCutState.revision = 0;
   vodCutState.isLoading = pendingDraftRanges !== null;
@@ -191,7 +191,11 @@ export function clearVodCut(): void {
 }
 
 export function setVodCutPlayhead(time: number): void {
-  vodCutState.playheadTime = clampTime(time);
+  const next = clampTime(time);
+  if (Math.abs(next - vodCutState.playheadTime) < 1e-6) return;
+  vodCutState.playheadTime = next;
+  vodCutState.dirty = true;
+  vodCutState.revision += 1;
 }
 
 export function setVodCutDuration(duration: number): void {
@@ -202,11 +206,19 @@ export function setVodCutDuration(duration: number): void {
 }
 
 export function setVodCutView(pixelsPerSecond: number, scrollLeft: number): void {
+  let changed = false;
   if (Number.isFinite(pixelsPerSecond) && pixelsPerSecond > 0) {
+    changed ||= Math.abs(vodCutState.pixelsPerSecond - pixelsPerSecond) >= 1e-6;
     vodCutState.pixelsPerSecond = pixelsPerSecond;
   }
   if (Number.isFinite(scrollLeft)) {
-    vodCutState.scrollLeft = Math.max(0, scrollLeft);
+    const nextScrollLeft = Math.max(0, scrollLeft);
+    changed ||= Math.abs(vodCutState.scrollLeft - nextScrollLeft) >= 0.5;
+    vodCutState.scrollLeft = nextScrollLeft;
+  }
+  if (changed) {
+    vodCutState.dirty = true;
+    vodCutState.revision += 1;
   }
 }
 

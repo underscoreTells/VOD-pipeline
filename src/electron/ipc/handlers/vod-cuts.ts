@@ -35,6 +35,7 @@ export function registerVodCutHandlers(): void {
         parsed.data.projectId,
         parsed.data.assetId,
         parsed.data.ranges,
+        parsed.data.view,
       ));
     } catch (error) {
       logger.error('Failed to save VOD cut draft', error);

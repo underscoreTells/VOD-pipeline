@@ -114,4 +114,27 @@ describe('vod cut state', () => {
     expect(vodCutState.isLoading).toBe(false);
     expect(vodCutState.error).toBe('Some invalid saved chapter ranges were removed.');
   });
+
+  it('restores and tracks the persisted VOD viewport', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: 3600,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        view: { playheadTime: 120, pixelsPerSecond: 16, scrollLeft: 800 },
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.playheadTime).toBe(120);
+    expect(vodCutState.pixelsPerSecond).toBe(16);
+    expect(vodCutState.scrollLeft).toBe(800);
+    expect(vodCutState.dirty).toBe(false);
+
+    setVodCutPlayhead(121);
+    expect(vodCutState.dirty).toBe(true);
+  });
 });

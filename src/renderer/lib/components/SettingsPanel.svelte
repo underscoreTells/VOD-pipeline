@@ -388,6 +388,26 @@
             <p class="help-text ml-6 mt-1 text-app-xs leading-[1.4] text-text-tertiary">If enabled, chapter-range proxies are prepared as chapters are linked during import. If disabled, they are generated only when chat analysis or preview requests them.</p>
           </div>
         </section>
+
+        <section class="settings-section mb-8 last:mb-0">
+          <h3 class="mb-3 mt-0 text-app-base font-semibold text-text-primary">Editing</h3>
+          <div class="select-group mb-4">
+            <label for="coarse-jump-seconds" class="mb-2 block text-app-sm font-medium text-text-secondary">Shift + Arrow jump:</label>
+            <div class="flex items-center gap-2">
+              <input
+                id="coarse-jump-seconds"
+                class="w-24 rounded-[4px] border border-border-default bg-surface-raised px-2.5 py-2 font-mono text-app-sm text-text-primary focus:border-accent-primary"
+                type="number"
+                min="1"
+                max="300"
+                step="1"
+                bind:value={settingsState.settings.coarseJumpSeconds}
+              />
+              <span class="text-app-sm text-text-tertiary">seconds</span>
+            </div>
+            <p class="help-text mt-1 text-app-xs leading-[1.4] text-text-tertiary">Left and Right move one frame. Hold Shift for this larger navigation step.</p>
+          </div>
+        </section>
         
         <!-- Naming and Transcription -->
         <section class="settings-section mb-8 last:mb-0">

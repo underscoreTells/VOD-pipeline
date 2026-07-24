@@ -79,6 +79,8 @@ export const IPC_CHANNELS = {
   WAVEFORM_GET: 'waveform:get',
   WAVEFORM_GENERATE_TIER: 'waveform:generate-tier',
   WAVEFORM_PROGRESS: 'waveform:progress',
+  WAVEFORM_BLOCKS_REQUEST: 'waveform:blocks-request',
+  WAVEFORM_BLOCK_PROGRESS: 'waveform:block-progress',
 
   // Export channels
   EXPORT_GENERATE: 'export:generate',

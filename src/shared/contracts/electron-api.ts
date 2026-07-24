@@ -11,6 +11,7 @@ import type {
   TimelineState,
   VodCutDraft,
   VodCutRange,
+  VodCutViewState,
 } from '../types/database.js';
 import type { AgentChatData, AgentStreamEvent, TimelineAction } from '../types/agent-ipc.js';
 import type { NamingModelId } from '../llm/naming-models.js';
@@ -433,6 +434,7 @@ export interface SaveVodCutDraftInput {
   projectId: number;
   assetId: number;
   ranges: VodCutRange[];
+  view?: VodCutViewState;
 }
 
 export interface CommitVodCutInput {
@@ -562,6 +564,60 @@ export interface WaveformProgressEvent {
   assetId: number;
   trackIndex?: number;
   progress: { tier: number; percent: number; status: string; trackIndex?: number };
+}
+
+export interface WaveformBlocksRequest {
+  assetId: number;
+  trackIndex: number;
+  startTime: number;
+  endTime: number;
+  pixelsPerSecond?: number;
+  requestMode?: 'background' | 'interactive';
+}
+
+export type WaveformBlockStatus =
+  | 'queued'
+  | 'generating'
+  | 'fallback'
+  | 'cached'
+  | 'ready'
+  | 'error';
+
+export interface WaveformBlock {
+  index: number;
+  startTime: number;
+  duration: number;
+  pixelsPerSecond: number;
+  peakCount: number;
+  encoding: 'int8-min-max';
+  peaks: Int8Array;
+}
+
+export interface WaveformBlocksResult {
+  success: boolean;
+  data?: {
+    assetId: number;
+    trackIndex: number;
+    sourceFingerprint: string;
+    cacheVersion: number;
+    blockDuration: number;
+    pixelsPerSecond: number;
+    status: 'ready';
+    blocks: WaveformBlock[];
+  };
+  error?: string;
+}
+
+export interface WaveformBlockProgressEvent {
+  assetId: number;
+  trackIndex: number;
+  blockIndex: number;
+  completedBlocks: number;
+  totalBlocks: number;
+  percent: number;
+  status: WaveformBlockStatus;
+  backend?: 'audiowaveform' | 'typescript';
+  message?: string;
 }
 
 export interface ExportResult {
@@ -740,6 +796,8 @@ export interface ElectronAPI {
       options?: WaveformGenerateOptions
     ) => Promise<WaveformGenerationResult>;
     onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
+    requestBlocks: (request: WaveformBlocksRequest) => Promise<WaveformBlocksResult>;
+    onBlockProgress: (callback: (data: WaveformBlockProgressEvent) => void) => () => void;
   };
   transcription: {
     getStatus: (options?: { autoSetup?: boolean }) => Promise<{

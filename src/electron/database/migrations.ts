@@ -280,12 +280,17 @@ export function ensureVodCutDraftTable(database: Database.Database): void {
       project_id INTEGER NOT NULL,
       asset_id INTEGER NOT NULL,
       ranges_json TEXT NOT NULL,
+      view_json TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (project_id, asset_id),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
       FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
     );
   `);
+  const columns = database.prepare('PRAGMA table_info(vod_cut_drafts)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'view_json')) {
+    database.exec('ALTER TABLE vod_cut_drafts ADD COLUMN view_json TEXT');
+  }
 }
 
 export function ensureClipsTableWithoutStartTime(database: Database.Database): void {
