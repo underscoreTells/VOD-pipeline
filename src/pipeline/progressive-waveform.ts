@@ -538,7 +538,13 @@ async function generateWithAudiowaveform(options: {
     '--bits', '8',
     '--quiet',
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
-  ffmpeg.stdout?.pipe(audiowaveform.stdin!);
+  const ffmpegOutput = ffmpeg.stdout;
+  const audiowaveformInput = audiowaveform.stdin;
+  if (!ffmpegOutput || !audiowaveformInput) {
+    ffmpeg.kill('SIGKILL');
+    audiowaveform.kill('SIGKILL');
+    throw new Error('Failed to open the audiowaveform input pipe');
+  }
 
   const output: Buffer[] = [];
   let ffmpegError = '';
@@ -546,11 +552,22 @@ async function generateWithAudiowaveform(options: {
   audiowaveform.stdout?.on('data', (chunk: Buffer) => output.push(Buffer.from(chunk)));
   ffmpeg.stderr?.on('data', (chunk) => { ffmpegError += chunk.toString(); });
   audiowaveform.stderr?.on('data', (chunk) => { audiowaveformError += chunk.toString(); });
+  const ffmpegCompletion = waitForProcess(ffmpeg, 'FFmpeg');
+  const audiowaveformCompletion = waitForProcess(audiowaveform, 'audiowaveform');
+  let rejectInputPipe: ((error: Error) => void) | null = null;
+  const inputPipeFailure = new Promise<never>((_resolve, reject) => {
+    rejectInputPipe = reject;
+  });
+  const handleInputPipeError = (error: Error): void => {
+    rejectInputPipe?.(new Error(`audiowaveform input pipe failed: ${error.message}`));
+  };
+  audiowaveformInput.once('error', handleInputPipeError);
+  ffmpegOutput.pipe(audiowaveformInput);
   const removeAbort = installAbortHandler(options.signal, [ffmpeg, audiowaveform]);
   try {
-    const [ffmpegCode, audiowaveformCode] = await Promise.all([
-      waitForProcess(ffmpeg, 'FFmpeg'),
-      waitForProcess(audiowaveform, 'audiowaveform'),
+    const [ffmpegCode, audiowaveformCode] = await Promise.race([
+      Promise.all([ffmpegCompletion, audiowaveformCompletion]),
+      inputPipeFailure,
     ]);
     if (options.signal.aborted) throw new Error('Waveform block generation cancelled');
     if (ffmpegCode !== 0) throw new Error(`FFmpeg exited with ${ffmpegCode}: ${ffmpegError.trim()}`);
@@ -575,6 +592,10 @@ async function generateWithAudiowaveform(options: {
     };
   } finally {
     removeAbort();
+    ffmpegOutput.unpipe(audiowaveformInput);
+    if (ffmpeg.exitCode === null && ffmpeg.signalCode === null) ffmpeg.kill('SIGKILL');
+    if (audiowaveform.exitCode === null && audiowaveform.signalCode === null) audiowaveform.kill('SIGKILL');
+    await Promise.allSettled([ffmpegCompletion, audiowaveformCompletion]);
   }
 }
 
