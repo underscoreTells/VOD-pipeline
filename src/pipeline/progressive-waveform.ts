@@ -8,6 +8,7 @@ import type { WaveformBlock, WaveformBlockStatus } from '../shared/contracts/ele
 import {
   DEFAULT_WAVEFORM_PIXELS_PER_SECOND,
   getWaveformBlockIndexes,
+  STANDARD_WAVEFORM_PIXELS_PER_SECOND,
   WAVEFORM_BLOCK_DURATION_SECONDS,
 } from '../shared/utils/waveform-blocks.js';
 
@@ -93,6 +94,46 @@ export function reducePcmS16leChunks(
   const reducer = createPcmS16leReducer(sampleRate, pixelsPerSecond);
   for (const chunk of chunks) reducer.push(chunk);
   return reducer.finish();
+}
+
+export function downsampleWaveformPeaks(
+  source: Int8Array,
+  sourcePixelsPerSecond: number,
+  targetPixelsPerSecond: number
+): Int8Array {
+  if (source.length % 2 !== 0) throw new Error('Waveform peak data must contain min/max pairs');
+  if (!Number.isFinite(sourcePixelsPerSecond) || sourcePixelsPerSecond <= 0) {
+    throw new Error('Source waveform resolution must be positive');
+  }
+  if (!Number.isFinite(targetPixelsPerSecond) || targetPixelsPerSecond <= 0) {
+    throw new Error('Target waveform resolution must be positive');
+  }
+  if (targetPixelsPerSecond >= sourcePixelsPerSecond || source.length === 0) {
+    return new Int8Array(source);
+  }
+
+  const sourcePairCount = source.length / 2;
+  const targetPairCount = Math.max(
+    1,
+    Math.ceil(sourcePairCount * targetPixelsPerSecond / sourcePixelsPerSecond)
+  );
+  const output = new Int8Array(targetPairCount * 2);
+  for (let targetIndex = 0; targetIndex < targetPairCount; targetIndex += 1) {
+    const sourceStart = Math.floor(targetIndex * sourcePixelsPerSecond / targetPixelsPerSecond);
+    const sourceEnd = Math.min(
+      sourcePairCount,
+      Math.max(sourceStart + 1, Math.ceil((targetIndex + 1) * sourcePixelsPerSecond / targetPixelsPerSecond))
+    );
+    let minimum = 127;
+    let maximum = -128;
+    for (let sourceIndex = sourceStart; sourceIndex < sourceEnd; sourceIndex += 1) {
+      minimum = Math.min(minimum, source[sourceIndex * 2]);
+      maximum = Math.max(maximum, source[sourceIndex * 2 + 1]);
+    }
+    output[targetIndex * 2] = minimum;
+    output[targetIndex * 2 + 1] = maximum;
+  }
+  return output;
 }
 
 function createPcmS16leReducer(sampleRate: number, pixelsPerSecond: number): {
@@ -285,11 +326,27 @@ export async function requestProgressiveWaveformBlocks(
     }
 
     report(blockIndex, 'queued');
-    const generationKey = `waveform:${sourceFingerprint}:${request.trackIndex}:${pixelsPerSecond}:${blockIndex}`;
+    const generationPixelsPerSecond = Math.max(
+      pixelsPerSecond,
+      STANDARD_WAVEFORM_PIXELS_PER_SECOND
+    );
+    const generationCachePath = getWaveformBlockCachePath(
+      request.cacheRoot,
+      sourceFingerprint,
+      request.trackIndex,
+      generationPixelsPerSecond,
+      blockIndex
+    );
+    const generationMetadata = {
+      ...expected,
+      pixelsPerSecond: generationPixelsPerSecond,
+      duration: expectedDuration,
+    };
+    const generationKey = `waveform:${sourceFingerprint}:${request.trackIndex}:${generationPixelsPerSecond}:${blockIndex}`;
     const run = (signal: AbortSignal) => generateAndCacheBlock({
       sourcePath: request.sourcePath,
-      cachePath,
-      metadata: { ...expected, duration: expectedDuration },
+      cachePath: generationCachePath,
+      metadata: generationMetadata,
       duration: expectedDuration,
       ffmpegPath: request.ffmpegPath,
       ffprobePath: request.ffprobePath,
@@ -301,11 +358,34 @@ export async function requestProgressiveWaveformBlocks(
       const generated = request.scheduleBlock
         ? await request.scheduleBlock(generationKey, run)
         : await runDeduplicated(generationKey, run);
+      const targetPeaks = generationPixelsPerSecond === pixelsPerSecond
+        ? generated.peaks
+        : downsampleWaveformPeaks(
+            generated.peaks,
+            generationPixelsPerSecond,
+            pixelsPerSecond
+          );
+      const targetMetadata = { ...expected, duration: generated.duration };
+      if (generationPixelsPerSecond !== pixelsPerSecond) {
+        const existingTarget = await readCachedBlock(cachePath, expected);
+        if (!existingTarget) {
+          try {
+            await writeWaveformBlockAtomic(
+              cachePath,
+              encodeWaveformBlock(targetMetadata, targetPeaks)
+            );
+          } catch (error) {
+            // A renderer request and background prewarm may derive the same
+            // tier together. Treat the winning atomic write as success.
+            if (!(await readCachedBlock(cachePath, expected))) throw error;
+          }
+        }
+      }
       completedBlocks += 1;
       report(blockIndex, 'ready', generated.backend);
       return toPublicBlock(
-        { ...expected, duration: generated.duration },
-        generated.peaks
+        targetMetadata,
+        targetPeaks
       );
     } catch (error) {
       report(blockIndex, 'error', undefined, error instanceof Error ? error.message : String(error));

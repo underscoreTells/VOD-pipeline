@@ -3,7 +3,12 @@
   import { SvelteMap } from 'svelte/reactivity';
   import type { VodCutRange } from '$shared/types/database';
   import type { WaveformBlock } from '$shared/contracts/electron-api';
-  import { WAVEFORM_BLOCK_DURATION_SECONDS } from '$shared/utils/waveform-blocks';
+  import {
+    COARSE_WAVEFORM_PIXELS_PER_SECOND,
+    getWaveformBlockKey,
+    getWaveformResolutionForZoom,
+    WAVEFORM_BLOCK_DURATION_SECONDS,
+  } from '$shared/utils/waveform-blocks';
   import {
     addVodCutRange,
     clearVodCutPendingRange,
@@ -25,7 +30,8 @@
   import { settingsState } from '../../state/settings.svelte.js';
   import { getArrowNavigationDelta } from '../../utils/transport-shortcuts.js';
   import {
-    getWaveformPeakAtTime,
+    countWaveformBlocksAtResolution,
+    getWaveformPeakForTimeRange,
     loadProgressiveWaveformRange,
   } from '../../utils/progressive-waveform.js';
 
@@ -41,7 +47,7 @@
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
   let viewportWidth = $state(0);
-  const waveformBlocks = new SvelteMap<number, WaveformBlock>();
+  const waveformBlocks = new SvelteMap<string, WaveformBlock>();
   let waveformStatus = $state<'loading' | 'ready' | 'unavailable'>('loading');
   let resizeObserver: ResizeObserver | null = null;
   let visibleWaveformController: AbortController | null = null;
@@ -367,7 +373,12 @@
     const visibleStart = viewportRef.scrollLeft / vodCutState.pixelsPerSecond;
     for (let x = 0; x < width; x += 1) {
       const time = visibleStart + x / vodCutState.pixelsPerSecond;
-      const peak = getWaveformPeakAtTime(waveformBlocks, time);
+      const peak = getWaveformPeakForTimeRange(
+        waveformBlocks,
+        time,
+        Math.min(vodCutState.duration, time + (1 / vodCutState.pixelsPerSecond)),
+        vodCutState.pixelsPerSecond
+      );
       if (!peak) continue;
       const center = height / 2;
       context.moveTo(x + 0.5, center + peak.min * center);
@@ -377,8 +388,9 @@
   }
 
   function installWaveformBlock(block: WaveformBlock): void {
-    if (waveformBlocks.has(block.index)) return;
-    waveformBlocks.set(block.index, block);
+    const key = getWaveformBlockKey(block.index, block.pixelsPerSecond);
+    if (waveformBlocks.has(key)) return;
+    waveformBlocks.set(key, block);
     waveformStatus = 'ready';
     requestAnimationFrame(drawWaveform);
   }
@@ -398,20 +410,37 @@
     visibleWaveformController = controller;
     const visibleStart = viewportRef.scrollLeft / vodCutState.pixelsPerSecond;
     const visibleEnd = Math.min(vodCutState.duration, visibleStart + visibleDuration);
-    const result = await loadProgressiveWaveformRange({
+    const coarseResult = await loadProgressiveWaveformRange({
       assetId,
       trackIndex: -1,
       startTime: visibleStart,
       endTime: visibleEnd,
       sourceDuration: vodCutState.duration,
+      pixelsPerSecond: COARSE_WAVEFORM_PIXELS_PER_SECOND,
       requestMode: 'interactive',
-      loadedIndexes: new Set(waveformBlocks.keys()),
+      loadedBlockKeys: new Set(waveformBlocks.keys()),
       signal: controller.signal,
       onBlock: installWaveformBlock,
     });
     if (controller.signal.aborted) return;
-    if (waveformBlocks.size === 0 && result.failed > 0) waveformStatus = 'unavailable';
+    if (waveformBlocks.size === 0 && coarseResult.failed > 0) waveformStatus = 'unavailable';
     startBackgroundWaveformLoad();
+
+    const targetResolution = getWaveformResolutionForZoom(vodCutState.pixelsPerSecond);
+    if (targetResolution === COARSE_WAVEFORM_PIXELS_PER_SECOND) return;
+    const overscan = WAVEFORM_BLOCK_DURATION_SECONDS;
+    await loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: Math.max(0, visibleStart - overscan),
+      endTime: Math.min(vodCutState.duration, visibleEnd + overscan),
+      sourceDuration: vodCutState.duration,
+      pixelsPerSecond: targetResolution,
+      requestMode: 'interactive',
+      loadedBlockKeys: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: installWaveformBlock,
+    });
   }
 
   function startBackgroundWaveformLoad(): void {
@@ -424,8 +453,9 @@
       startTime: 0,
       endTime: vodCutState.duration,
       sourceDuration: vodCutState.duration,
+      pixelsPerSecond: COARSE_WAVEFORM_PIXELS_PER_SECOND,
       requestMode: 'background',
-      loadedIndexes: new Set(waveformBlocks.keys()),
+      loadedBlockKeys: new Set(waveformBlocks.keys()),
       signal: controller.signal,
       onBlock: installWaveformBlock,
     });
@@ -469,7 +499,7 @@
     <div class="flex items-center gap-3">
       <span class="font-mono text-app-base tabular-nums text-text-primary">{formatTimecode(vodCutState.playheadTime)}</span>
       <span class="text-app-xs text-text-tertiary">{formatTime(vodCutState.playheadTime)} / {formatTime(vodCutState.duration)}</span>
-      <span class="text-app-xs text-text-disabled">{waveformStatus === 'loading' ? 'Loading visible waveform...' : waveformStatus === 'unavailable' ? 'Waveform unavailable' : `Waveform ${waveformBlocks.size}/${waveformBlockCount}`}</span>
+      <span class="text-app-xs text-text-disabled">{waveformStatus === 'loading' ? 'Loading visible waveform...' : waveformStatus === 'unavailable' ? 'Waveform unavailable' : `Waveform ${countWaveformBlocksAtResolution(waveformBlocks, COARSE_WAVEFORM_PIXELS_PER_SECOND)}/${waveformBlockCount}`}</span>
     </div>
     <div class="flex items-center gap-1.5">
       <button class="h-7 rounded-sm border border-border-default px-2 text-app-sm text-text-secondary hover:bg-surface-hover" onclick={() => setZoom(vodCutState.pixelsPerSecond / 1.25)} aria-label="Zoom out">-</button>

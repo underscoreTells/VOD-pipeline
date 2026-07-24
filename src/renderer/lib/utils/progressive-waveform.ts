@@ -1,7 +1,9 @@
 import type { WaveformBlock } from '$shared/contracts/electron-api';
 import {
-  DEFAULT_WAVEFORM_PIXELS_PER_SECOND,
+  getWaveformBlockKey,
   getWaveformBlockIndexes,
+  getWaveformResolutionForZoom,
+  WAVEFORM_RESOLUTION_TIERS,
   WAVEFORM_BLOCK_DURATION_SECONDS,
 } from '$shared/utils/waveform-blocks';
 
@@ -13,8 +15,9 @@ interface LoadProgressiveWaveformOptions {
   startTime: number;
   endTime: number;
   sourceDuration: number;
+  pixelsPerSecond: number;
   requestMode: 'background' | 'interactive';
-  loadedIndexes: ReadonlySet<number>;
+  loadedBlockKeys: ReadonlySet<string>;
   signal?: AbortSignal;
   concurrency?: number;
   onBlock: (block: WaveformBlock) => void;
@@ -32,8 +35,9 @@ export async function loadProgressiveWaveformRange({
   startTime,
   endTime,
   sourceDuration,
+  pixelsPerSecond,
   requestMode,
-  loadedIndexes,
+  loadedBlockKeys,
   signal,
   concurrency = requestMode === 'interactive' ? 2 : 1,
   onBlock,
@@ -45,7 +49,7 @@ export async function loadProgressiveWaveformRange({
   }
 
   const indexes = getWaveformBlockIndexes(boundedStart, boundedEnd)
-    .filter((index) => !loadedIndexes.has(index));
+    .filter((index) => !loadedBlockKeys.has(getWaveformBlockKey(index, pixelsPerSecond)));
   let cursor = 0;
   let loaded = 0;
   let failed = 0;
@@ -63,7 +67,7 @@ export async function loadProgressiveWaveformRange({
           trackIndex,
           startTime: blockStart,
           endTime: blockEnd,
-          pixelsPerSecond: DEFAULT_WAVEFORM_PIXELS_PER_SECOND,
+          pixelsPerSecond,
           requestMode,
         });
         if (signal?.aborted) return;
@@ -86,19 +90,71 @@ export async function loadProgressiveWaveformRange({
   return { requested: indexes.length, loaded, failed };
 }
 
-export function getWaveformPeakAtTime(
-  blocks: ReadonlyMap<number, WaveformBlock>,
-  sourceTime: number
+function getPreferredBlock(
+  blocks: ReadonlyMap<string, WaveformBlock>,
+  blockIndex: number,
+  targetPixelsPerSecond: number
+): WaveformBlock | null {
+  const targetResolution = getWaveformResolutionForZoom(targetPixelsPerSecond);
+  const higherOrEqual = WAVEFORM_RESOLUTION_TIERS.filter((tier) => tier >= targetResolution);
+  const lower = WAVEFORM_RESOLUTION_TIERS.filter((tier) => tier < targetResolution).reverse();
+  for (const resolution of [...higherOrEqual, ...lower]) {
+    const block = blocks.get(getWaveformBlockKey(blockIndex, resolution));
+    if (block) return block;
+  }
+  return null;
+}
+
+export function getWaveformPeakForTimeRange(
+  blocks: ReadonlyMap<string, WaveformBlock>,
+  sourceStartTime: number,
+  sourceEndTime: number,
+  targetPixelsPerSecond: number
 ): { min: number; max: number } | null {
-  const blockIndex = Math.floor(sourceTime / WAVEFORM_BLOCK_DURATION_SECONDS);
-  const block = blocks.get(blockIndex);
-  if (!block || sourceTime < block.startTime || sourceTime > block.startTime + block.duration) return null;
-  const pairIndex = Math.min(
-    block.peakCount - 1,
-    Math.max(0, Math.floor((sourceTime - block.startTime) * block.pixelsPerSecond))
-  ) * 2;
-  return {
-    min: block.peaks[pairIndex] / 128,
-    max: block.peaks[pairIndex + 1] / 128,
-  };
+  const boundedStart = Math.max(0, Math.min(sourceStartTime, sourceEndTime));
+  const boundedEnd = Math.max(boundedStart, Math.max(sourceStartTime, sourceEndTime));
+  const firstBlockIndex = Math.floor(boundedStart / WAVEFORM_BLOCK_DURATION_SECONDS);
+  const lastBlockIndex = Math.floor(
+    Math.max(boundedStart, boundedEnd - Number.EPSILON) / WAVEFORM_BLOCK_DURATION_SECONDS
+  );
+  let minimum = 1;
+  let maximum = -1;
+  let found = false;
+
+  for (let blockIndex = firstBlockIndex; blockIndex <= lastBlockIndex; blockIndex += 1) {
+    const block = getPreferredBlock(blocks, blockIndex, targetPixelsPerSecond);
+    if (!block || block.peakCount <= 0) continue;
+    const rangeStart = Math.max(boundedStart, block.startTime);
+    const rangeEnd = Math.min(
+      Math.max(boundedEnd, rangeStart + (1 / Math.max(1, targetPixelsPerSecond))),
+      block.startTime + block.duration
+    );
+    if (rangeEnd <= rangeStart) continue;
+    const firstPeakIndex = Math.max(
+      0,
+      Math.floor((rangeStart - block.startTime) * block.pixelsPerSecond)
+    );
+    const lastPeakIndex = Math.min(
+      block.peakCount - 1,
+      Math.max(firstPeakIndex, Math.ceil((rangeEnd - block.startTime) * block.pixelsPerSecond) - 1)
+    );
+    for (let peakIndex = firstPeakIndex; peakIndex <= lastPeakIndex; peakIndex += 1) {
+      minimum = Math.min(minimum, block.peaks[peakIndex * 2] / 128);
+      maximum = Math.max(maximum, block.peaks[peakIndex * 2 + 1] / 128);
+      found = true;
+    }
+  }
+
+  return found ? { min: minimum, max: maximum } : null;
+}
+
+export function countWaveformBlocksAtResolution(
+  blocks: ReadonlyMap<string, WaveformBlock>,
+  pixelsPerSecond: number
+): number {
+  let count = 0;
+  for (const block of blocks.values()) {
+    if (block.pixelsPerSecond === pixelsPerSecond) count += 1;
+  }
+  return count;
 }

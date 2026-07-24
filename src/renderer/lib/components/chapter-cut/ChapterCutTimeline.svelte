@@ -5,6 +5,13 @@
   import type { ProjectAsset } from '$shared/contracts/ipc';
   import type { WaveformBlock } from '$shared/contracts/electron-api';
   import {
+    COARSE_WAVEFORM_PIXELS_PER_SECOND,
+    getWaveformBlockKey,
+    getWaveformResolutionForZoom,
+    STANDARD_WAVEFORM_PIXELS_PER_SECOND,
+    WAVEFORM_BLOCK_DURATION_SECONDS,
+  } from '$shared/utils/waveform-blocks';
+  import {
     createProjectClip,
     executeDeleteClip,
     executeSlideClipWindow,
@@ -47,7 +54,7 @@
   import { settingsState } from '../../state/settings.svelte.js';
   import { getArrowNavigationDelta } from '../../utils/transport-shortcuts.js';
   import {
-    getWaveformPeakAtTime,
+    getWaveformPeakForTimeRange,
     loadProgressiveWaveformRange,
   } from '../../utils/progressive-waveform.js';
 
@@ -83,7 +90,7 @@
   let overviewRef = $state<HTMLDivElement | null>(null);
   let waveformCanvas = $state<HTMLCanvasElement | null>(null);
   let viewportWidth = $state(0);
-  const waveformBlocks = new SvelteMap<number, WaveformBlock>();
+  const waveformBlocks = new SvelteMap<string, WaveformBlock>();
   let waveformStatus = $state<ChapterWaveformStatus>('loading');
   let visibleWaveformController: AbortController | null = null;
   let backgroundWaveformController: AbortController | null = null;
@@ -683,7 +690,12 @@
     for (let x = 0; x < width; x += 1) {
       const chapterLocal = visibleStart + x / timelineState.zoomLevel;
       const source = chapter.start_time + chapterLocal;
-      const peak = getWaveformPeakAtTime(waveformBlocks, source);
+      const peak = getWaveformPeakForTimeRange(
+        waveformBlocks,
+        source,
+        Math.min(chapter.end_time, source + (1 / timelineState.zoomLevel)),
+        timelineState.zoomLevel
+      );
       if (!peak) continue;
       const center = height / 2;
       context.moveTo(x + 0.5, center + peak.min * center);
@@ -693,8 +705,9 @@
   }
 
   function installWaveformBlock(assetId: number, block: WaveformBlock): void {
-    if (activeAsset?.id !== assetId || waveformBlocks.has(block.index)) return;
-    waveformBlocks.set(block.index, block);
+    const key = getWaveformBlockKey(block.index, block.pixelsPerSecond);
+    if (activeAsset?.id !== assetId || waveformBlocks.has(key)) return;
+    waveformBlocks.set(key, block);
     waveformStatus = 'ready';
     requestAnimationFrame(drawWaveform);
   }
@@ -717,37 +730,70 @@
     const sourceDuration = Math.max(chapter.end_time, waveformAsset.duration ?? chapter.end_time);
     const visibleStart = chapter.start_time + viewportRef.scrollLeft / timelineState.zoomLevel;
     const visibleEnd = Math.min(chapter.end_time, visibleStart + visibleDuration);
-    const result = await loadProgressiveWaveformRange({
+    const coarseResult = await loadProgressiveWaveformRange({
       assetId,
       trackIndex: -1,
       startTime: visibleStart,
       endTime: visibleEnd,
       sourceDuration,
+      pixelsPerSecond: COARSE_WAVEFORM_PIXELS_PER_SECOND,
       requestMode: 'interactive',
-      loadedIndexes: new Set(waveformBlocks.keys()),
+      loadedBlockKeys: new Set(waveformBlocks.keys()),
       signal: controller.signal,
       onBlock: (block) => installWaveformBlock(assetId, block),
     });
     if (controller.signal.aborted || activeAsset?.id !== assetId) return;
-    if (waveformBlocks.size === 0 && result.failed > 0) waveformStatus = 'unavailable';
+    if (waveformBlocks.size === 0 && coarseResult.failed > 0) waveformStatus = 'unavailable';
     startBackgroundWaveformLoad(assetId, sourceDuration);
+
+    const targetResolution = getWaveformResolutionForZoom(timelineState.zoomLevel);
+    if (targetResolution === COARSE_WAVEFORM_PIXELS_PER_SECOND) return;
+    const overscan = WAVEFORM_BLOCK_DURATION_SECONDS;
+    await loadProgressiveWaveformRange({
+      assetId,
+      trackIndex: -1,
+      startTime: Math.max(chapter.start_time, visibleStart - overscan),
+      endTime: Math.min(chapter.end_time, visibleEnd + overscan),
+      sourceDuration,
+      pixelsPerSecond: targetResolution,
+      requestMode: 'interactive',
+      loadedBlockKeys: new Set(waveformBlocks.keys()),
+      signal: controller.signal,
+      onBlock: (block) => installWaveformBlock(assetId, block),
+    });
   }
 
   function startBackgroundWaveformLoad(assetId: number, sourceDuration: number): void {
     if (backgroundWaveformController || activeAsset?.id !== assetId) return;
     const controller = new AbortController();
     backgroundWaveformController = controller;
-    void loadProgressiveWaveformRange({
-      assetId,
-      trackIndex: -1,
-      startTime: chapter.start_time,
-      endTime: chapter.end_time,
-      sourceDuration,
-      requestMode: 'background',
-      loadedIndexes: new Set(waveformBlocks.keys()),
-      signal: controller.signal,
-      onBlock: (block) => installWaveformBlock(assetId, block),
-    });
+    void (async () => {
+      await loadProgressiveWaveformRange({
+        assetId,
+        trackIndex: -1,
+        startTime: chapter.start_time,
+        endTime: chapter.end_time,
+        sourceDuration,
+        pixelsPerSecond: COARSE_WAVEFORM_PIXELS_PER_SECOND,
+        requestMode: 'background',
+        loadedBlockKeys: new Set(waveformBlocks.keys()),
+        signal: controller.signal,
+        onBlock: (block) => installWaveformBlock(assetId, block),
+      });
+      if (controller.signal.aborted || activeAsset?.id !== assetId) return;
+      await loadProgressiveWaveformRange({
+        assetId,
+        trackIndex: -1,
+        startTime: chapter.start_time,
+        endTime: chapter.end_time,
+        sourceDuration,
+        pixelsPerSecond: STANDARD_WAVEFORM_PIXELS_PER_SECOND,
+        requestMode: 'background',
+        loadedBlockKeys: new Set(waveformBlocks.keys()),
+        signal: controller.signal,
+        onBlock: (block) => installWaveformBlock(assetId, block),
+      });
+    })();
   }
 
   onMount(() => {

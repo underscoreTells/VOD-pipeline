@@ -25,7 +25,7 @@
     updateVodCutRange,
     vodCutState,
   } from '../state/vod-cut.svelte.js';
-  import { buildPlayableAssetUrl } from '../utils/media.js';
+  import { buildPlayableAssetUrl, setPitchPreservingPlaybackRate } from '../utils/media.js';
   import { createQueuedMediaSeek } from '../utils/queuedMediaSeek.js';
   import { formatTime, formatTimePrecise } from '../utils/time.js';
   import { settingsState } from '../state/settings.svelte.js';
@@ -125,7 +125,7 @@
     }
     shuttleDirection = 1;
     shuttleSpeed = 1;
-    videoRef.playbackRate = 1;
+    setPitchPreservingPlaybackRate(videoRef, 1);
     await videoRef.play();
     isPlaying = true;
   }
@@ -137,7 +137,7 @@
     shuttleDirection = 0;
     shuttleSpeed = 1;
     if (videoRef && !videoRef.paused) videoRef.pause();
-    if (videoRef) videoRef.playbackRate = 1;
+    if (videoRef) setPitchPreservingPlaybackRate(videoRef, 1);
     isPlaying = false;
   }
 
@@ -148,7 +148,7 @@
     reversePreviousTime = null;
     shuttleSpeed = shuttleDirection === 1 ? nextShuttleSpeed(shuttleSpeed) : 1;
     shuttleDirection = 1;
-    videoRef.playbackRate = shuttleSpeed;
+    setPitchPreservingPlaybackRate(videoRef, shuttleSpeed);
     await videoRef.play();
     isPlaying = true;
   }

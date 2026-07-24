@@ -10,6 +10,7 @@ import {
   WAVEFORM_PCM_SAMPLE_RATE,
   createWaveformSourceFingerprint,
   decodeWaveformBlock,
+  downsampleWaveformPeaks,
   encodeWaveformBlock,
   getVisibleWaveformBlockIndexes,
   getWaveformBlockCachePath,
@@ -49,6 +50,20 @@ describe('progressive waveform blocks', () => {
 
     expect(Array.from(result.peaks)).toEqual([-12, 8, -20, 23]);
     expect(result.duration).toBe(1);
+  });
+
+  it('downsamples peak envelopes without losing extrema', () => {
+    const source = Int8Array.from([
+      -10, 10,
+      -20, 20,
+      -30, 30,
+      -40, 40,
+    ]);
+
+    expect(Array.from(downsampleWaveformPeaks(source, 4, 2))).toEqual([
+      -20, 20,
+      -40, 40,
+    ]);
   });
 
   it('round-trips compact binary blocks and rejects mismatched metadata', () => {
@@ -125,5 +140,56 @@ describe('progressive waveform blocks', () => {
     expect(result.blocks).toHaveLength(1);
     expect(Array.from(result.blocks[0].peaks)).toEqual([-100, 100]);
     expect(statuses).toEqual(['cached']);
+  });
+
+  it('derives a coarse block from the cached standard tier without starting FFmpeg', async () => {
+    const sourcePath = path.join(tempDir, 'pyramid-source.mp4');
+    fs.writeFileSync(sourcePath, 'source');
+    const fingerprint = await createWaveformSourceFingerprint(sourcePath);
+    const standardPixelsPerSecond = 16;
+    const coarsePixelsPerSecond = 1;
+    const standardCachePath = getWaveformBlockCachePath(
+      tempDir,
+      fingerprint,
+      -1,
+      standardPixelsPerSecond,
+      0
+    );
+    const standardPeaks = Int8Array.from([
+      -10, 10, -20, 20, -30, 30, -40, 40,
+      -50, 50, -60, 60, -70, 70, -80, 80,
+      -90, 90, -100, 100, -110, 110, -120, 120,
+      -30, 30, -40, 40, -50, 50, -60, 60,
+    ]);
+    await writeWaveformBlockAtomic(standardCachePath, encodeWaveformBlock({
+      index: 0,
+      trackIndex: -1,
+      startTime: 0,
+      duration: 1,
+      pixelsPerSecond: standardPixelsPerSecond,
+      sampleRate: WAVEFORM_PCM_SAMPLE_RATE,
+    }, standardPeaks));
+
+    const result = await requestProgressiveWaveformBlocks({
+      sourcePath,
+      sourceDuration: 1,
+      cacheRoot: tempDir,
+      trackIndex: -1,
+      startTime: 0,
+      endTime: 1,
+      pixelsPerSecond: coarsePixelsPerSecond,
+      ffmpegPath: '/must/not/run/ffmpeg',
+      ffprobePath: '/must/not/run/ffprobe',
+    });
+
+    expect(result.blocks[0].pixelsPerSecond).toBe(coarsePixelsPerSecond);
+    expect(Array.from(result.blocks[0].peaks)).toEqual([-120, 120]);
+    expect(fs.existsSync(getWaveformBlockCachePath(
+      tempDir,
+      fingerprint,
+      -1,
+      coarsePixelsPerSecond,
+      0
+    ))).toBe(true);
   });
 });

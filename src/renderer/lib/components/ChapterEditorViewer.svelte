@@ -4,7 +4,7 @@
   import type { AssetAvailability } from '$shared/contracts/ipc';
   import Icon from './ui/Icon.svelte';
   import { Clapperboard, Play, Pause } from '../constants';
-  import { buildPlayableAssetUrl } from '../utils/media';
+  import { buildPlayableAssetUrl, setPitchPreservingPlaybackRate } from '../utils/media';
   import { formatTime } from '../utils/time';
   import {
     clampToChapter,
@@ -307,23 +307,6 @@
     };
   }
 
-  function setPitchCorrection(media: HTMLVideoElement, enabled: boolean) {
-    const element = media as HTMLVideoElement & {
-      preservesPitch?: boolean;
-      webkitPreservesPitch?: boolean;
-      mozPreservesPitch?: boolean;
-    };
-    if (typeof element.preservesPitch === 'boolean') {
-      element.preservesPitch = enabled;
-    }
-    if (typeof element.webkitPreservesPitch === 'boolean') {
-      element.webkitPreservesPitch = enabled;
-    }
-    if (typeof element.mozPreservesPitch === 'boolean') {
-      element.mozPreservesPitch = enabled;
-    }
-  }
-
   function clearReversePollTimer() {
     if (reversePollTimerId !== null) {
       window.clearTimeout(reversePollTimerId);
@@ -494,9 +477,8 @@
       if (!videoRef.paused) {
         videoRef.pause();
       }
-      videoRef.playbackRate = 1;
+      setPitchPreservingPlaybackRate(videoRef, 1);
       videoRef.muted = false;
-      setPitchCorrection(videoRef, true);
       return;
     }
 
@@ -513,9 +495,8 @@
         if (!videoRef.paused) {
           videoRef.pause();
         }
-        videoRef.playbackRate = 1;
+        setPitchPreservingPlaybackRate(videoRef, 1);
         videoRef.muted = false;
-        setPitchCorrection(videoRef, false);
         return;
       }
 
@@ -535,9 +516,8 @@
       }
 
       const speed = Math.max(1, timelineState.shuttleSpeed);
-      videoRef.playbackRate = speed;
+      setPitchPreservingPlaybackRate(videoRef, speed);
       videoRef.muted = false;
-      setPitchCorrection(videoRef, false);
 
       if (videoRef.paused) {
         void videoRef.play().catch(() => {
@@ -556,9 +536,8 @@
     }
 
     const speed = Math.max(1, timelineState.shuttleSpeed);
-    videoRef.playbackRate = speed;
+    setPitchPreservingPlaybackRate(videoRef, speed);
     videoRef.muted = false;
-    setPitchCorrection(videoRef, speed <= 1);
     if (videoRef.paused) {
       void videoRef.play().catch(() => {
         setPlaying(false);
