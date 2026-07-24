@@ -39,8 +39,12 @@ describe('chapter cut workspace', () => {
     expect(contextMenuSource).not.toContain('text-app-base');
   });
 
-  it('renders retained ranges in the waveform track even when peaks are unavailable', () => {
+  it('separates waveform seeking from retained-range editing', () => {
     expect(timelineSource).toContain('chapter-waveform-track');
+    expect(timelineSource).toContain('chapter-retained-clips-track');
+    expect(timelineSource).toContain('aria-label="Chapter waveform scrubber"');
+    expect(timelineSource).toContain('onpointerdown={handleScrubPointerDown}');
+    expect(timelineSource).toContain('onpointerdown={handleTimelinePointerDown}');
     expect(timelineSource).toContain('{#each clips as clip (clip.id)}');
     expect(timelineSource).toContain('chapter-clip-overlay');
     expect(timelineSource).toContain('Waveform unavailable · timeline editing still works');
@@ -71,8 +75,9 @@ describe('chapter cut workspace', () => {
   });
 
   it('clears waveform data while loading a different asset', () => {
-    expect(timelineSource).toContain('waveformPeaks = [];');
-    expect(timelineSource).toContain('waveformDuration = 0;');
+    expect(timelineSource).toContain('`${assetId}:${chapter.id}:${chapter.start_time}:${chapter.end_time}`');
+    expect(timelineSource).toContain('waveformBlocks.clear();');
+    expect(timelineSource).toContain("waveformStatus = waveformScope ? 'loading' : 'unavailable';");
   });
 
   it('previews the selected cut asset and clamps displayed times to the chapter', () => {

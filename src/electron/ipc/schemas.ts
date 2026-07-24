@@ -99,6 +99,11 @@ export const vodCutRangeSchema = z.object({
 
 export const vodCutDraftSaveSchema = vodCutDraftKeySchema.extend({
   ranges: z.array(vodCutRangeSchema),
+  view: z.object({
+    playheadTime: z.coerce.number().finite().nonnegative(),
+    pixelsPerSecond: z.coerce.number().finite().positive(),
+    scrollLeft: z.coerce.number().finite().nonnegative(),
+  }).optional(),
 });
 
 export const vodCutCommitSchema = vodCutDraftKeySchema.extend({
@@ -231,6 +236,16 @@ export const waveformGenerateTierSchema = z.object({
   assetId: optionalNumber,
   trackIndex: optionalNumber,
   tierLevel: optionalNumber,
+});
+
+export const waveformBlocksRequestSchema = z.object({
+  requestId: z.string().uuid(),
+  assetId: z.coerce.number().int().positive(),
+  trackIndex: z.coerce.number().int().min(-1),
+  startTime: z.coerce.number().finite().min(0),
+  endTime: z.coerce.number().finite().positive(),
+  pixelsPerSecond: z.coerce.number().int().min(1).max(500).optional(),
+  requestMode: z.enum(['background', 'interactive']).optional(),
 });
 
 // ===========================================================================

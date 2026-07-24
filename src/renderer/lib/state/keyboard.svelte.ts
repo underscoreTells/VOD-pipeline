@@ -29,6 +29,13 @@ import {
   splitClipAtSourceTime,
 } from '../../../shared/utils/clip-timing.js';
 import { vodCutState } from './vod-cut.svelte.js';
+import { projectDetail } from './project-detail.svelte.js';
+import { settingsState } from './settings.svelte.js';
+import {
+  getArrowNavigationDelta,
+  isEditableKeyboardTarget,
+} from '../utils/transport-shortcuts.js';
+import { formatTimecode as formatFpsTimecode } from '../utils/time.js';
 
 type ShortcutHandler = () => void | Promise<unknown>;
 
@@ -47,10 +54,10 @@ const SHORTCUTS: Record<string, ShortcutHandler> = {
   'Shift+Tab': () => {
     jumpToAdjacentClip('previous');
   },
-  'ArrowLeft': () => handleArrowNavigation('previous', -1),
-  'ArrowRight': () => handleArrowNavigation('next', 1),
-  'Shift+ArrowLeft': () => nudgePlayhead(-10),
-  'Shift+ArrowRight': () => nudgePlayhead(10),
+  'ArrowLeft': () => handleArrowNavigation('previous', false),
+  'ArrowRight': () => handleArrowNavigation('next', false),
+  'Shift+ArrowLeft': () => handleArrowNavigation('previous', true),
+  'Shift+ArrowRight': () => handleArrowNavigation('next', true),
   
   // Undo/Redo
   'Ctrl+z': undo,
@@ -78,13 +85,7 @@ const SHORTCUTS: Record<string, ShortcutHandler> = {
 
 // Track if user is in an input field
 function isInputFieldActive(): boolean {
-  const activeElement = document.activeElement;
-  if (!activeElement) return false;
-  
-  const tagName = activeElement.tagName.toLowerCase();
-  const isEditable = activeElement.getAttribute('contenteditable') === 'true';
-  
-  return tagName === 'input' || tagName === 'textarea' || isEditable;
+  return isEditableKeyboardTarget(document.activeElement);
 }
 
 // Get shortcut key string
@@ -119,12 +120,23 @@ function normalizeShortcutKey(event: KeyboardEvent): string {
   return key;
 }
 
-// Nudge playhead by frames
-function nudgePlayhead(frames: number) {
-  const fps = 30; // Assume 30fps
-  const frameDuration = 1 / fps;
-  const newTime = timelineState.playheadTime + (frames * frameDuration);
-  setPlayhead(Math.max(0, newTime));
+function getTimelineFps(): number {
+  const asset = projectDetail.assets.find((candidate) => candidate.id === timelineState.activeAssetId);
+  const fps = asset?.metadata?.fps;
+  return typeof fps === 'number' && Number.isFinite(fps) && fps > 0 ? fps : 30;
+}
+
+function nudgePlayhead(direction: -1 | 1, coarse: boolean) {
+  const chapter = getSelectedChapter();
+  const delta = getArrowNavigationDelta({
+    key: direction < 0 ? 'ArrowLeft' : 'ArrowRight',
+    shiftKey: coarse,
+    fps: getTimelineFps(),
+    coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+  }) ?? 0;
+  const minimum = chapter?.start_time ?? 0;
+  const maximum = chapter?.end_time ?? Number.POSITIVE_INFINITY;
+  setPlayhead(Math.min(maximum, Math.max(minimum, timelineState.playheadTime + delta)));
 }
 
 function getChapterScopedClips(): Clip[] {
@@ -167,15 +179,15 @@ function jumpToAdjacentClip(direction: 'previous' | 'next'): boolean {
   return false;
 }
 
-function handleArrowNavigation(direction: 'previous' | 'next', fallbackFrames: number) {
-  if (timelineState.excludeCutContent) {
+function handleArrowNavigation(direction: 'previous' | 'next', coarse: boolean) {
+  if (!coarse && timelineState.excludeCutContent) {
     const jumped = jumpToAdjacentClip(direction);
     if (jumped) {
       return;
     }
   }
 
-  nudgePlayhead(fallbackFrames);
+  nudgePlayhead(direction === 'previous' ? -1 : 1, coarse);
 }
 
 function clipContainsSplitPoint(clip: Clip, splitTime: number): boolean {
@@ -289,19 +301,7 @@ export function initKeyboardShortcuts(): () => void {
 
 // Format time as HH:MM:SS:FF (at 30fps)
 export function formatTimecode(seconds: number): string {
-  const fps = 30;
-  const totalFrames = Math.floor(seconds * fps);
-  
-  const frames = totalFrames % fps;
-  const totalSeconds = Math.floor(totalFrames / fps);
-  
-  const secs = totalSeconds % 60;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  
-  const mins = totalMinutes % 60;
-  const hours = Math.floor(totalMinutes / 60);
-  
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+  return formatFpsTimecode(seconds, 30);
 }
 
 // Format time as MM:SS.ms

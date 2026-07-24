@@ -12,6 +12,21 @@ export function buildPlayableAssetUrl(asset: { id: number; availability?: { exis
   return buildAssetUrl(asset.id);
 }
 
+export function setPitchPreservingPlaybackRate(media: HTMLMediaElement, playbackRate: number): void {
+  const element = media as HTMLMediaElement & {
+    webkitPreservesPitch?: boolean;
+    mozPreservesPitch?: boolean;
+  };
+  element.preservesPitch = true;
+  if (typeof element.webkitPreservesPitch === 'boolean') {
+    element.webkitPreservesPitch = true;
+  }
+  if (typeof element.mozPreservesPitch === 'boolean') {
+    element.mozPreservesPitch = true;
+  }
+  element.playbackRate = playbackRate;
+}
+
 export function looksLikeExternalStoragePath(filePath: string | null | undefined): boolean {
   if (!filePath) {
     return false;

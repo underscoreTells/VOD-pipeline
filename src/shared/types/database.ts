@@ -70,7 +70,14 @@ export interface VodCutDraft {
   project_id: number;
   asset_id: number;
   ranges: VodCutRange[];
+  view?: VodCutViewState;
   updated_at: string;
+}
+
+export interface VodCutViewState {
+  playheadTime: number;
+  pixelsPerSecond: number;
+  scrollLeft: number;
 }
 
 export interface Transcript {

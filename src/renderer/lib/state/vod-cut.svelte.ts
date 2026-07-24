@@ -24,6 +24,7 @@ interface VodCutState {
   revision: number;
   isLoading: boolean;
   isSaving: boolean;
+  hasPersistedView: boolean;
   lastSavedAt: string | null;
   error: string | null;
 }
@@ -34,6 +35,7 @@ let nextRangeId = 1;
 let undoStack: VodCutSnapshot[] = [];
 let redoStack: VodCutSnapshot[] = [];
 let pendingDraftRanges: VodCutRange[] | null = null;
+let pendingDraftPlayhead: number | null = null;
 
 export const vodCutState = $state<VodCutState>({
   projectId: null,
@@ -51,6 +53,7 @@ export const vodCutState = $state<VodCutState>({
   revision: 0,
   isLoading: false,
   isSaving: false,
+  hasPersistedView: false,
   lastSavedAt: null,
   error: null,
 });
@@ -166,17 +169,22 @@ export function initializeVodCut(options: {
   pendingDraftRanges = draftRanges.length > 0 && vodCutState.duration <= 0
     ? cloneRanges(draftRanges)
     : null;
+  const draftPlayhead = options.draft?.view?.playheadTime ?? 0;
+  pendingDraftPlayhead = vodCutState.duration <= 0 && Number.isFinite(draftPlayhead)
+    ? Math.max(0, draftPlayhead)
+    : null;
   vodCutState.ranges = [];
   vodCutState.selectedRangeId = null;
   vodCutState.pendingIn = null;
   vodCutState.pendingOut = null;
-  vodCutState.playheadTime = 0;
-  vodCutState.pixelsPerSecond = 1;
-  vodCutState.scrollLeft = 0;
+  vodCutState.playheadTime = pendingDraftPlayhead ?? clampTime(draftPlayhead);
+  vodCutState.pixelsPerSecond = options.draft?.view?.pixelsPerSecond ?? 1;
+  vodCutState.scrollLeft = options.draft?.view?.scrollLeft ?? 0;
   vodCutState.dirty = false;
   vodCutState.revision = 0;
   vodCutState.isLoading = pendingDraftRanges !== null;
   vodCutState.isSaving = false;
+  vodCutState.hasPersistedView = options.draft?.view !== undefined;
   vodCutState.lastSavedAt = options.draft?.updated_at ?? null;
   vodCutState.error = null;
   if (!pendingDraftRanges) applyDraftRanges(draftRanges);
@@ -191,22 +199,36 @@ export function clearVodCut(): void {
 }
 
 export function setVodCutPlayhead(time: number): void {
-  vodCutState.playheadTime = clampTime(time);
+  const next = clampTime(time);
+  pendingDraftPlayhead = null;
+  if (Math.abs(next - vodCutState.playheadTime) < 1e-6) return;
+  vodCutState.playheadTime = next;
+  vodCutState.dirty = true;
+  vodCutState.revision += 1;
 }
 
 export function setVodCutDuration(duration: number): void {
   if (!Number.isFinite(duration) || duration <= 0) return;
   vodCutState.duration = duration;
-  vodCutState.playheadTime = clampTime(vodCutState.playheadTime);
+  vodCutState.playheadTime = clampTime(pendingDraftPlayhead ?? vodCutState.playheadTime);
+  pendingDraftPlayhead = null;
   if (pendingDraftRanges) applyDraftRanges(pendingDraftRanges);
 }
 
 export function setVodCutView(pixelsPerSecond: number, scrollLeft: number): void {
+  let changed = false;
   if (Number.isFinite(pixelsPerSecond) && pixelsPerSecond > 0) {
+    changed ||= Math.abs(vodCutState.pixelsPerSecond - pixelsPerSecond) >= 1e-6;
     vodCutState.pixelsPerSecond = pixelsPerSecond;
   }
   if (Number.isFinite(scrollLeft)) {
-    vodCutState.scrollLeft = Math.max(0, scrollLeft);
+    const nextScrollLeft = Math.max(0, scrollLeft);
+    changed ||= Math.abs(vodCutState.scrollLeft - nextScrollLeft) >= 0.5;
+    vodCutState.scrollLeft = nextScrollLeft;
+  }
+  if (changed) {
+    vodCutState.dirty = true;
+    vodCutState.revision += 1;
   }
 }
 

@@ -114,4 +114,67 @@ describe('vod cut state', () => {
     expect(vodCutState.isLoading).toBe(false);
     expect(vodCutState.error).toBe('Some invalid saved chapter ranges were removed.');
   });
+
+  it('restores and tracks the persisted VOD viewport', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: 3600,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        view: { playheadTime: 120, pixelsPerSecond: 16, scrollLeft: 800 },
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.playheadTime).toBe(120);
+    expect(vodCutState.pixelsPerSecond).toBe(16);
+    expect(vodCutState.scrollLeft).toBe(800);
+    expect(vodCutState.hasPersistedView).toBe(true);
+    expect(vodCutState.dirty).toBe(false);
+
+    setVodCutPlayhead(121);
+    expect(vodCutState.dirty).toBe(true);
+  });
+
+  it('does not treat a migrated draft without view state as a persisted viewport', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: 3600,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.lastSavedAt).toBe('2026-07-18T00:00:00.000Z');
+    expect(vodCutState.hasPersistedView).toBe(false);
+  });
+
+  it('restores a persisted playhead after duration metadata becomes available', () => {
+    initializeVodCut({
+      projectId: 1,
+      assetId: 2,
+      duration: Number.NaN,
+      draft: {
+        project_id: 1,
+        asset_id: 2,
+        ranges: [],
+        view: { playheadTime: 120, pixelsPerSecond: 16, scrollLeft: 800 },
+        updated_at: '2026-07-18T00:00:00.000Z',
+      },
+    });
+
+    expect(vodCutState.playheadTime).toBe(120);
+
+    setVodCutDuration(100);
+
+    expect(vodCutState.playheadTime).toBe(100);
+    expect(vodCutState.dirty).toBe(false);
+  });
 });

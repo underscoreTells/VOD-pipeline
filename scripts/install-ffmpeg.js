@@ -185,11 +185,16 @@ function findBinaryRoot(dir, platform) {
     }
   }
 
-  const files = fs.readdirSync(dir);
-  for (const file of files) {
-    const fullPath = path.join(dir, file);
-    if (fs.statSync(fullPath).isDirectory() && file.includes('ffmpeg')) {
-      return fullPath;
+  const queue = [dir];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (fs.existsSync(path.join(current, FFmpegConfig[platform].binaryName))
+      && fs.existsSync(path.join(current, FFmpegConfig[platform].ffprobeName))) {
+      return current;
+    }
+    for (const file of fs.readdirSync(current)) {
+      const fullPath = path.join(current, file);
+      if (fs.statSync(fullPath).isDirectory()) queue.push(fullPath);
     }
   }
   return dir;

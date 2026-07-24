@@ -79,12 +79,18 @@ describe("vod-cut handlers", () => {
         { id: "a", title: "Intro", start_time: 0, end_time: 120 },
         { id: "b", title: "Mid", start_time: 120, end_time: 300 },
       ],
+      view: { playheadTime: 42, pixelsPerSecond: 8, scrollLeft: 120 },
     });
 
-    expect(databaseMocks.saveVodCutDraft).toHaveBeenCalledWith(7, 9, [
-      { id: "a", title: "Intro", start_time: 0, end_time: 120 },
-      { id: "b", title: "Mid", start_time: 120, end_time: 300 },
-    ]);
+    expect(databaseMocks.saveVodCutDraft).toHaveBeenCalledWith(
+      7,
+      9,
+      [
+        { id: "a", title: "Intro", start_time: 0, end_time: 120 },
+        { id: "b", title: "Mid", start_time: 120, end_time: 300 },
+      ],
+      { playheadTime: 42, pixelsPerSecond: 8, scrollLeft: 120 },
+    );
     expect(result).toEqual({ success: true, data: draft });
   });
 

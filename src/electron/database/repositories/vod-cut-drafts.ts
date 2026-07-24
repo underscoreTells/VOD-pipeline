@@ -1,4 +1,4 @@
-import type { Chapter, VodCutDraft, VodCutRange } from '../../../shared/types/database.js';
+import type { Chapter, VodCutDraft, VodCutRange, VodCutViewState } from '../../../shared/types/database.js';
 import { getDatabase } from '../client.js';
 
 export interface CommitVodCutRange {
@@ -28,6 +28,7 @@ export async function saveVodCutDraft(
   projectId: number,
   assetId: number,
   ranges: VodCutRange[],
+  view?: VodCutViewState,
 ): Promise<VodCutDraft> {
   const database = await getDatabase();
   const asset = database.prepare(
@@ -37,35 +38,62 @@ export async function saveVodCutDraft(
 
   const updatedAt = new Date().toISOString();
   database.prepare(`
-    INSERT INTO vod_cut_drafts (project_id, asset_id, ranges_json, updated_at)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO vod_cut_drafts (project_id, asset_id, ranges_json, view_json, updated_at)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(project_id, asset_id) DO UPDATE SET
       ranges_json = excluded.ranges_json,
+      view_json = excluded.view_json,
       updated_at = excluded.updated_at
-  `).run(projectId, assetId, JSON.stringify(ranges), updatedAt);
+  `).run(projectId, assetId, JSON.stringify(ranges), view ? JSON.stringify(view) : null, updatedAt);
 
-  return { project_id: projectId, asset_id: assetId, ranges, updated_at: updatedAt };
+  return {
+    project_id: projectId,
+    asset_id: assetId,
+    ranges,
+    ...(view ? { view } : {}),
+    updated_at: updatedAt,
+  };
 }
 
 export async function loadVodCutDraft(projectId: number, assetId: number): Promise<VodCutDraft | null> {
   const database = await getDatabase();
   const row = database.prepare(`
-    SELECT project_id, asset_id, ranges_json, updated_at
+    SELECT project_id, asset_id, ranges_json, view_json, updated_at
     FROM vod_cut_drafts
     WHERE project_id = ? AND asset_id = ?
   `).get(projectId, assetId) as {
     project_id: number;
     asset_id: number;
     ranges_json: string;
+    view_json: string | null;
     updated_at: string;
   } | undefined;
   if (!row) return null;
+  const view = parseView(row.view_json);
   return {
     project_id: row.project_id,
     asset_id: row.asset_id,
     ranges: parseRanges(row.ranges_json),
+    ...(view ? { view } : {}),
     updated_at: row.updated_at,
   };
+}
+
+function parseView(value: string | null): VodCutViewState | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as Partial<VodCutViewState>;
+    if (!Number.isFinite(parsed.playheadTime)
+      || !Number.isFinite(parsed.pixelsPerSecond)
+      || !Number.isFinite(parsed.scrollLeft)) return undefined;
+    return {
+      playheadTime: Math.max(0, parsed.playheadTime as number),
+      pixelsPerSecond: Math.max(0.001, parsed.pixelsPerSecond as number),
+      scrollLeft: Math.max(0, parsed.scrollLeft as number),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function clearVodCutDraft(projectId: number, assetId: number): Promise<boolean> {

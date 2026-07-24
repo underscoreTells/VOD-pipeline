@@ -8,6 +8,10 @@ export function getProxyDirectoryPath(): string {
   return path.join(app.getPath('userData'), 'proxies');
 }
 
+export function getWaveformCacheDirectoryPath(): string {
+  return path.join(app.getPath('userData'), 'waveforms');
+}
+
 export async function ensureProxyDirectory(): Promise<string> {
   const proxiesDir = getProxyDirectoryPath();
   await fs.promises.mkdir(proxiesDir, { recursive: true });

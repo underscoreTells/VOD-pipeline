@@ -25,9 +25,15 @@
     updateVodCutRange,
     vodCutState,
   } from '../state/vod-cut.svelte.js';
-  import { buildPlayableAssetUrl } from '../utils/media.js';
+  import { buildPlayableAssetUrl, setPitchPreservingPlaybackRate } from '../utils/media.js';
   import { createQueuedMediaSeek } from '../utils/queuedMediaSeek.js';
   import { formatTime, formatTimePrecise } from '../utils/time.js';
+  import { settingsState } from '../state/settings.svelte.js';
+  import {
+    getArrowNavigationDelta,
+    isEditableKeyboardTarget,
+    nextShuttleSpeed,
+  } from '../utils/transport-shortcuts.js';
   import VodCutTimeline from './vod-cut/VodCutTimeline.svelte';
 
   type AvailabilityAwareAsset = Asset & { availability?: AssetAvailability | null };
@@ -48,9 +54,13 @@
   let isCompleting = $state(false);
   let discardArmed = $state(false);
   let previewRangeId = $state<string | null>(null);
+  let shuttleDirection = $state<-1 | 0 | 1>(0);
+  let shuttleSpeed = $state(1);
   let mediaDuration = $state(0);
   let saveTimer: number | null = null;
   let preserveDraftOnCleanup = true;
+  let reverseAnimationFrame: number | null = null;
+  let reversePreviousTime: number | null = null;
   const videoSrc = $derived(buildPlayableAssetUrl(asset));
   const assetUnavailable = $derived(asset.availability?.exists === false);
   const selectedRange = $derived(vodCutState.ranges.find((range) => range.id === vodCutState.selectedRangeId) ?? null);
@@ -94,12 +104,14 @@
     if (!videoRef || !Number.isFinite(videoRef.duration) || videoRef.duration <= 0) return;
     mediaDuration = videoRef.duration;
     setVodCutDuration(videoRef.duration);
+    if (isReady) seekController.commit(vodCutState.playheadTime);
   }
 
   function handleTimelineSeek(time: number, commit: boolean): void {
     if (!videoRef || assetUnavailable) return;
     if (!videoRef.paused) videoRef.pause();
     isPlaying = false;
+    stopVodShuttle();
     previewRangeId = null;
     if (commit) seekController.commit(time);
     else seekController.preview(time);
@@ -108,17 +120,67 @@
   async function togglePlayback(): Promise<void> {
     if (!videoRef || assetUnavailable) return;
     previewRangeId = null;
-    if (videoRef.paused) {
-      await videoRef.play();
-      isPlaying = true;
-    } else {
-      videoRef.pause();
-      isPlaying = false;
+    if (isPlaying) {
+      stopVodShuttle();
+      return;
     }
+    shuttleDirection = 1;
+    shuttleSpeed = 1;
+    setPitchPreservingPlaybackRate(videoRef, 1);
+    await videoRef.play();
+    isPlaying = true;
+  }
+
+  function stopVodShuttle(): void {
+    if (reverseAnimationFrame !== null) cancelAnimationFrame(reverseAnimationFrame);
+    reverseAnimationFrame = null;
+    reversePreviousTime = null;
+    shuttleDirection = 0;
+    shuttleSpeed = 1;
+    if (videoRef && !videoRef.paused) videoRef.pause();
+    if (videoRef) setPitchPreservingPlaybackRate(videoRef, 1);
+    isPlaying = false;
+  }
+
+  async function shuttleForward(): Promise<void> {
+    if (!videoRef || assetUnavailable) return;
+    if (reverseAnimationFrame !== null) cancelAnimationFrame(reverseAnimationFrame);
+    reverseAnimationFrame = null;
+    reversePreviousTime = null;
+    shuttleSpeed = shuttleDirection === 1 ? nextShuttleSpeed(shuttleSpeed) : 1;
+    shuttleDirection = 1;
+    setPitchPreservingPlaybackRate(videoRef, shuttleSpeed);
+    await videoRef.play();
+    isPlaying = true;
+  }
+
+  function shuttleReverse(): void {
+    if (!videoRef || assetUnavailable) return;
+    shuttleSpeed = shuttleDirection === -1 ? nextShuttleSpeed(shuttleSpeed) : 1;
+    shuttleDirection = -1;
+    if (!videoRef.paused) videoRef.pause();
+    isPlaying = true;
+    if (reverseAnimationFrame === null) reverseAnimationFrame = requestAnimationFrame(stepReverseShuttle);
+  }
+
+  function stepReverseShuttle(timestamp: number): void {
+    reverseAnimationFrame = null;
+    if (!videoRef || shuttleDirection !== -1) return;
+    const elapsed = reversePreviousTime === null ? 0 : Math.min(0.1, (timestamp - reversePreviousTime) / 1000);
+    reversePreviousTime = timestamp;
+    const next = Math.max(0, videoRef.currentTime - elapsed * shuttleSpeed);
+    videoRef.currentTime = next;
+    setVodCutPlayhead(next);
+    if (next <= 0) {
+      stopVodShuttle();
+      return;
+    }
+    reverseAnimationFrame = requestAnimationFrame(stepReverseShuttle);
   }
 
   async function previewRange(range: VodCutRange): Promise<void> {
     if (!videoRef || assetUnavailable) return;
+    stopVodShuttle();
     selectVodCutRange(range.id);
     previewRangeId = range.id;
     setVodCutPlayhead(range.start_time);
@@ -162,6 +224,11 @@
         projectId: projectIdAtSave,
         assetId: assetIdAtSave,
         ranges: rangesAtSave,
+        view: {
+          playheadTime: vodCutState.playheadTime,
+          pixelsPerSecond: vodCutState.pixelsPerSecond,
+          scrollLeft: vodCutState.scrollLeft,
+        },
       });
     } catch (error) {
       setVodCutSaving(false);
@@ -222,8 +289,7 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     if (!isReady) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.matches('input, textarea, [contenteditable="true"]')) return;
+    if (isEditableKeyboardTarget(event.target)) return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (ctrl && event.key.toLowerCase() === 'z') {
       event.preventDefault();
@@ -236,20 +302,38 @@
       void saveNow();
       return;
     }
-    const frame = 1 / Math.max(1, vodCutState.fps);
     if (event.code === 'Space') {
       event.preventDefault();
       void togglePlayback();
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      const time = vodCutState.playheadTime - (event.shiftKey ? 1 : frame);
+      const time = vodCutState.playheadTime + (getArrowNavigationDelta({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        fps: vodCutState.fps,
+        coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+      }) ?? 0);
       setVodCutPlayhead(time);
       handleTimelineSeek(vodCutState.playheadTime, true);
     } else if (event.key === 'ArrowRight') {
       event.preventDefault();
-      const time = vodCutState.playheadTime + (event.shiftKey ? 1 : frame);
+      const time = vodCutState.playheadTime + (getArrowNavigationDelta({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        fps: vodCutState.fps,
+        coarseJumpSeconds: settingsState.settings.coarseJumpSeconds,
+      }) ?? 0);
       setVodCutPlayhead(time);
       handleTimelineSeek(vodCutState.playheadTime, true);
+    } else if (event.key.toLowerCase() === 'j') {
+      event.preventDefault();
+      shuttleReverse();
+    } else if (event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      stopVodShuttle();
+    } else if (event.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      void shuttleForward();
     } else if (event.key.toLowerCase() === 'i') {
       event.preventDefault();
       markVodCutIn();
@@ -281,7 +365,9 @@
   $effect(() => {
     if (!isReady || isCompleting || !vodCutState.dirty || vodCutState.isSaving) return;
     const rangeSignature = vodCutState.ranges.map((range) => `${range.id}:${range.title}:${range.start_time}:${range.end_time}`).join('|');
+    const viewSignature = `${vodCutState.playheadTime}:${vodCutState.pixelsPerSecond}:${vodCutState.scrollLeft}`;
     void rangeSignature;
+    void viewSignature;
     if (saveTimer !== null) window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       saveTimer = null;
@@ -308,6 +394,9 @@
         fps: asset.metadata?.fps,
         draft: result.success ? result.data : null,
       });
+      if (videoRef && Number.isFinite(videoRef.duration) && videoRef.duration > 0) {
+        seekController.commit(vodCutState.playheadTime);
+      }
       if (!result.success) setVodCutError(result.error || 'Could not load the saved VOD cut draft.');
       isReady = true;
     };
@@ -318,11 +407,17 @@
       window.removeEventListener('keydown', handleKeydown);
       if (saveTimer !== null) window.clearTimeout(saveTimer);
       seekController.reset();
+      stopVodShuttle();
       const pendingDraft = preserveDraftOnCleanup && vodCutState.dirty && vodCutState.projectId && vodCutState.assetId
         ? {
             projectId: vodCutState.projectId,
             assetId: vodCutState.assetId,
             ranges: vodCutState.ranges.map((range) => ({ ...range })),
+            view: {
+              playheadTime: vodCutState.playheadTime,
+              pixelsPerSecond: vodCutState.pixelsPerSecond,
+              scrollLeft: vodCutState.scrollLeft,
+            },
           }
         : null;
       clearVodCut();
@@ -387,13 +482,13 @@
             onseeked={handleSeeked}
             onloadedmetadata={handleLoadedMetadata}
             onplay={() => isPlaying = true}
-            onpause={() => isPlaying = false}
+            onpause={() => { if (shuttleDirection !== -1) isPlaying = false; }}
           ><track kind="captions" /></video>
         {/if}
         <div class="absolute inset-x-3 bottom-3 flex items-center gap-2 rounded-md border border-white/10 bg-black/75 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-md">
           <button class="h-8 min-w-16 rounded-sm bg-white px-3 text-app-sm font-semibold text-[#161616] active:translate-y-px disabled:opacity-40" onclick={togglePlayback} disabled={assetUnavailable || !isReady}>{isPlaying ? 'Pause' : 'Play'}</button>
-          <button class="h-8 rounded-sm border border-white/15 px-3 text-app-sm text-white/80 hover:bg-white/10 disabled:opacity-40" onclick={() => { setVodCutPlayhead(vodCutState.playheadTime - 1); handleTimelineSeek(vodCutState.playheadTime, true); }} disabled={!isReady}>-1 sec</button>
-          <button class="h-8 rounded-sm border border-white/15 px-3 text-app-sm text-white/80 hover:bg-white/10 disabled:opacity-40" onclick={() => { setVodCutPlayhead(vodCutState.playheadTime + 1); handleTimelineSeek(vodCutState.playheadTime, true); }} disabled={!isReady}>+1 sec</button>
+          <button class="h-8 rounded-sm border border-white/15 px-3 text-app-sm text-white/80 hover:bg-white/10 disabled:opacity-40" onclick={() => { setVodCutPlayhead(vodCutState.playheadTime - settingsState.settings.coarseJumpSeconds); handleTimelineSeek(vodCutState.playheadTime, true); }} disabled={!isReady}>-{settingsState.settings.coarseJumpSeconds}s</button>
+          <button class="h-8 rounded-sm border border-white/15 px-3 text-app-sm text-white/80 hover:bg-white/10 disabled:opacity-40" onclick={() => { setVodCutPlayhead(vodCutState.playheadTime + settingsState.settings.coarseJumpSeconds); handleTimelineSeek(vodCutState.playheadTime, true); }} disabled={!isReady}>+{settingsState.settings.coarseJumpSeconds}s</button>
           <span class="ml-auto font-mono text-app-sm tabular-nums text-white/85">{formatTimePrecise(vodCutState.playheadTime)}</span>
         </div>
       </section>

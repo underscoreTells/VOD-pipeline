@@ -59,6 +59,7 @@ export const defaultSettings: Settings = {
   autoClipNamingModel: DEFAULT_NAMING_MODEL,
   autoThreadNamingModel: DEFAULT_NAMING_MODEL,
   autoTranscribeOnImport: true,
+  coarseJumpSeconds: 10,
 };
 
 export function buildProxyOptions(

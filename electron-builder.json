@@ -13,27 +13,39 @@
   "asarUnpack": [
     "node_modules/better-sqlite3/**/*"
   ],
-  "extraResources": [
-    {
-      "from": "binaries/",
-      "to": "binaries/",
-      "filter": ["**/*"]
-    }
-  ],
+  "beforePack": "./scripts/prepare-native-binaries.js",
   "win": {
-    "target": ["nsis"],
-    "icon": "assets/icon.ico"
+    "target": [{
+      "target": "nsis",
+      "arch": ["x64"]
+    }],
+    "icon": "assets/icon.ico",
+    "extraResources": [{
+      "from": "binaries/win32/${arch}/",
+      "to": "binaries/win32/${arch}/",
+      "filter": ["ffmpeg.exe", "ffprobe.exe", "audiowaveform.exe"]
+    }]
   },
   "mac": {
     "target": ["dmg"],
     "icon": "assets/icon.icns",
     "category": "public.app-category.video",
     "hardenedRuntime": true,
-    "gatekeeperAssess": false
+    "gatekeeperAssess": false,
+    "extraResources": [{
+      "from": "binaries/darwin/${arch}/",
+      "to": "binaries/darwin/${arch}/",
+      "filter": ["ffmpeg", "ffprobe"]
+    }]
   },
   "linux": {
     "target": ["AppImage"],
     "icon": "assets/icon.png",
-    "category": "Video"
+    "category": "Video",
+    "extraResources": [{
+      "from": "binaries/linux/${arch}/",
+      "to": "binaries/linux/${arch}/",
+      "filter": ["ffmpeg", "ffprobe"]
+    }]
   }
 }

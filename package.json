@@ -18,6 +18,8 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json && node ./scripts/copy-database.js && node ./scripts/copy-preload.js",
     "dist": "pnpm build && electron-builder",
+    "native:prepare": "node ./scripts/prepare-native-binaries.js",
+    "native:verify": "node ./scripts/prepare-native-binaries.js --verify-only",
     "typecheck": "pnpm typecheck:renderer && pnpm typecheck:backend",
     "typecheck:renderer": "svelte-check --tsconfig ./tsconfig.json",
     "typecheck:backend": "tsc -p tsconfig.electron.json --noEmit",

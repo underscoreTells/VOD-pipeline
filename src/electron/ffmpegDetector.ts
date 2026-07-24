@@ -8,6 +8,11 @@ export interface FFmpegPathResult {
   version: string;
 }
 
+interface DetectionCandidate {
+  path: string;
+  source: FFmpegPathResult['source'];
+}
+
 let cachedResult: FFmpegPathResult | null = null;
 
 /**
@@ -24,36 +29,21 @@ export async function detectFFmpeg(): Promise<FFmpegPathResult | null> {
 
   try {
     const platform = process.platform;
-    const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-    const resourcesPath = process.resourcesPath || process.cwd();
-
     const userDataPath = await getElectronUserDataPath();
-    const detectionOrder: Array<{ path: string; source: FFmpegPathResult['source'] }> = [
-      {
-        path: path.join(resourcesPath, 'binaries', platform, binaryName),
-        source: 'bundled',
-      },
-      {
-        path: path.join(process.cwd(), 'binaries', platform, binaryName),
-        source: 'development',
-      },
-      {
-        path: binaryName,
-        source: 'system',
-      },
-    ];
-
-    if (userDataPath) {
-      detectionOrder.splice(2, 0, {
-        path: path.join(userDataPath, 'binaries', binaryName),
-        source: 'userData',
-      });
-    }
+    const detectionOrder = getFFmpegDetectionCandidates({
+      platform,
+      arch: process.arch,
+      resourcesPath: process.resourcesPath || process.cwd(),
+      cwd: process.cwd(),
+      userDataPath,
+    });
 
     for (const { path: testPath, source } of detectionOrder) {
       if (await isExecutable(testPath)) {
         const version = await getFFmpegVersion(testPath);
-        if (version) {
+        const ffprobePath = getFFprobePath(testPath);
+        const ffprobeVersion = await getFFprobeVersion(ffprobePath);
+        if (version && ffprobeVersion) {
           cachedResult = { path: testPath, source, version };
           console.log(`[FFmpeg] Found at: ${testPath} (source: ${source}, version: ${version})`);
           return cachedResult;
@@ -124,6 +114,10 @@ export async function getFFmpegVersion(executablePath: string): Promise<string |
       output += data.toString();
     });
 
+    proc.stderr.on('data', (data) => {
+      output += data.toString();
+    });
+
     proc.on('error', () => resolve(null));
 
     proc.on('exit', (code) => {
@@ -137,6 +131,51 @@ export async function getFFmpegVersion(executablePath: string): Promise<string |
       resolve(match ? match[1] : null);
     });
   });
+}
+
+export async function getFFprobeVersion(executablePath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const proc = spawn(executablePath, ['-version']);
+    let output = '';
+    proc.stdout.on('data', (data) => { output += data.toString(); });
+    proc.stderr.on('data', (data) => { output += data.toString(); });
+    proc.on('error', () => resolve(null));
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      const match = output.match(/ffprobe version\s+(\S+)/i);
+      resolve(match ? match[1] : null);
+    });
+  });
+}
+
+export function getFFmpegDetectionCandidates(options: {
+  platform: NodeJS.Platform;
+  arch: string;
+  resourcesPath: string;
+  cwd: string;
+  userDataPath: string | null;
+}): DetectionCandidate[] {
+  const { platform, arch, resourcesPath, cwd, userDataPath } = options;
+  const binaryName = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const candidates: DetectionCandidate[] = [
+    { path: path.join(resourcesPath, 'binaries', platform, arch, binaryName), source: 'bundled' },
+    { path: path.join(resourcesPath, 'binaries', platform, binaryName), source: 'bundled' },
+    { path: path.join(cwd, 'binaries', platform, arch, binaryName), source: 'development' },
+    { path: path.join(cwd, 'binaries', platform, binaryName), source: 'development' },
+  ];
+
+  if (userDataPath) {
+    candidates.push(
+      { path: path.join(userDataPath, 'binaries', platform, arch, binaryName), source: 'userData' },
+      { path: path.join(userDataPath, 'binaries', binaryName), source: 'userData' },
+    );
+  }
+
+  candidates.push({ path: binaryName, source: 'system' });
+  return candidates;
 }
 
 /**

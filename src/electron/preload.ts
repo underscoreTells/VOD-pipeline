@@ -4,6 +4,7 @@ import type {
   ProxyOptions,
   ProxyProgressEvent,
   TranscriptionProgressEvent,
+  WaveformBlockProgressEvent,
   WaveformProgressEvent,
 } from '../shared/contracts/electron-api.js';
 import type { AgentStreamEvent } from '../shared/types/agent-ipc.js';
@@ -146,6 +147,13 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, data: WaveformProgressEvent) => callback(data);
       ipcRenderer.on('waveform:progress', handler);
       return () => ipcRenderer.removeListener('waveform:progress', handler);
+    },
+    requestBlocks: (request) => ipcRenderer.invoke('waveform:blocks-request', request),
+    cancelBlockRequest: (requestId) => ipcRenderer.invoke('waveform:blocks-cancel', { requestId }),
+    onBlockProgress: (callback) => {
+      const handler = (_event: unknown, data: WaveformBlockProgressEvent) => callback(data);
+      ipcRenderer.on('waveform:block-progress', handler);
+      return () => ipcRenderer.removeListener('waveform:block-progress', handler);
     },
   },
   transcription: {

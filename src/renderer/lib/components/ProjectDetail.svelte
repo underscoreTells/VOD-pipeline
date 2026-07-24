@@ -506,6 +506,11 @@
       ?? selectedChapterAssets[0]
       ?? null;
   });
+
+  $effect(() => {
+    timelineState.activeAssetId = chapterPreviewAsset?.id ?? null;
+  });
+
   const hasChapterAssets = $derived.by(() =>
     selectedChapter ? chaptersState.chapterAssets.has(selectedChapter.id) : false
   );

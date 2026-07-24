@@ -6,6 +6,7 @@ import {
   enqueueHeavyMediaJob,
   isCancellationError,
   resetHeavyMediaScheduler,
+  subscribeHeavyMediaJob,
 } from "../../src/electron/ipc/support/heavy-media-queue.js";
 
 // The heavy media queue is a module-level singleton. Tests pin every pool to a
@@ -116,6 +117,49 @@ describe("heavy media queue cancellation", () => {
     expect(cancelHeavyMediaJob(runningKey)).toBe(false);
   });
 
+  it("keeps a deduplicated job running until its last subscription is cancelled", async () => {
+    const key = "subscription-cancel:shared";
+    let capturedSignal: AbortSignal | undefined;
+    let runCallCount = 0;
+    const run = (signal: AbortSignal) => {
+      runCallCount += 1;
+      capturedSignal = signal;
+      return resolveOnAbort("aborted")(signal);
+    };
+    const first = subscribeHeavyMediaJob(key, "waveformBlock", "background", run);
+    const second = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", run);
+
+    expect(runCallCount).toBe(1);
+    expect(first.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(false);
+    await expect(first.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    expect(second.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+    await expect(second.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+  });
+
+  it("does not abort a shared job when a persistent consumer remains", async () => {
+    const key = "subscription-cancel:persistent";
+    let capturedSignal: AbortSignal | undefined;
+    let resolveJob!: (value: string) => void;
+    const run = (signal: AbortSignal) => {
+      capturedSignal = signal;
+      return new Promise<string>((resolve) => {
+        resolveJob = resolve;
+      });
+    };
+    const persistent = enqueueHeavyMediaJob(key, "waveformBlock", "background", run);
+    const subscription = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", run);
+
+    expect(subscription.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(false);
+    await expect(subscription.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    resolveJob("complete");
+    await expect(persistent).resolves.toBe("complete");
+  });
+
   it("re-runs fresh when re-enqueued with the same key after cancellation", async () => {
     const dedupeKey = "dedupe-after-cancel:job";
     let runCallCount = 0;
@@ -154,5 +198,36 @@ describe("heavy media queue cancellation", () => {
 
     const result = await secondPromise;
     expect(result).toBe("fresh-value");
+  });
+
+  it("creates a fresh subscription while an aborted job is still settling", async () => {
+    configureHeavyMediaScheduler({ interactiveOverflow: 0 });
+    const key = "subscription-cancel:resubscribe";
+    let settleCancelledJob!: () => void;
+    let firstSignal: AbortSignal | undefined;
+    const first = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", (signal) => {
+      firstSignal = signal;
+      return new Promise<string>((resolve) => {
+        settleCancelledJob = () => resolve("cancelled");
+      });
+    });
+
+    expect(first.cancel()).toBe(true);
+    expect(firstSignal?.aborted).toBe(true);
+    await expect(first.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    let secondSignal: AbortSignal | undefined;
+    const second = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", (signal) => {
+      secondSignal = signal;
+      return Promise.resolve("fresh");
+    });
+    expect(secondSignal).toBeUndefined();
+
+    settleCancelledJob();
+    await flushPending();
+
+    expect(secondSignal).toBeDefined();
+    expect(secondSignal?.aborted).toBe(false);
+    await expect(second.promise).resolves.toBe("fresh");
   });
 });

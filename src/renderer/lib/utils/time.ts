@@ -32,6 +32,19 @@ export function formatTimePrecise(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
 }
 
+export function formatTimecode(seconds: number, fps: number): string {
+  const normalizedFps = Number.isFinite(fps) ? Math.max(1, Math.min(240, Math.round(fps))) : 30;
+  const normalizedSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const totalFrames = Math.round(normalizedSeconds * normalizedFps);
+  const frames = totalFrames % normalizedFps;
+  const totalSeconds = Math.floor(totalFrames / normalizedFps);
+  const secs = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+}
+
 /**
  * Parse time string (HH:MM:SS or MM:SS) to seconds
  */

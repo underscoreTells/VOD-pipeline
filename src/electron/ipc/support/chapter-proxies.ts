@@ -1,23 +1,25 @@
 import * as fs from 'node:fs';
-import { isAudiowaveformAvailable } from '../../audiowaveformDetector.js';
+import { getAudiowaveformPath } from '../../audiowaveformDetector.js';
 import {
   createChapterProxy,
   getAsset,
   getAssetsForChapter,
   getChapter,
   getChapterProxyByChapterAsset,
-  getWaveform,
   updateChapterProxyDefinition,
   updateChapterProxyMetadata,
   updateChapterProxyStatus,
 } from '../../database/index.js';
 import type { Asset, ChapterProxy } from '../../../shared/types/database.js';
 import type { ProxyOptions } from '../../../shared/contracts/electron-api.js';
+import { COARSE_WAVEFORM_PIXELS_PER_SECOND } from '../../../shared/utils/waveform-blocks.js';
 import {
   ensureProxyDirectory,
   getChapterProxyPath,
   getChapterProxyTempPath,
+  getWaveformCacheDirectoryPath,
 } from '../../paths.js';
+import { getFFmpegPath, getFFprobePath } from '../../ffmpegDetector.js';
 import {
   GPUProxyFallbackError,
   generateAIProxy,
@@ -25,9 +27,7 @@ import {
   resolveProxyResourceClass,
   type ProxyFallbackContext,
 } from '../../../pipeline/ffmpeg.js';
-import {
-  generateWaveformTiers,
-} from '../../../pipeline/waveform.js';
+import { requestProgressiveWaveformBlocks } from '../../../pipeline/progressive-waveform.js';
 import {
   bumpGenerationEpoch,
   enqueueChapterMediaPrewarm,
@@ -426,12 +426,17 @@ export async function invalidateChapterProxy(
   });
 }
 
-async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
-  if (!isAudiowaveformAvailable()) {
-    return;
-  }
+async function ensureChapterMixWaveformReady(chapter: ChapterRecord, asset: Asset): Promise<void> {
+  const ffmpeg = getFFmpegPath();
+  if (!ffmpeg) return;
+  const startTime = Math.max(0, chapter.start_time);
+  const sourceDuration = asset.duration && asset.duration > 0
+    ? asset.duration
+    : chapter.end_time;
+  const endTime = Math.min(sourceDuration, chapter.end_time);
+  if (endTime <= startTime) return;
 
-  const lockKey = `${asset.id}:-1`;
+  const lockKey = `${chapter.id}:${asset.id}:-1`;
   const inFlight = chapterWaveformPrewarmLocks.get(lockKey);
   if (inFlight) {
     return inFlight;
@@ -442,13 +447,24 @@ async function ensureAssetMixWaveformReady(asset: Asset): Promise<void> {
       return;
     }
 
-    const existingTier1 = await getWaveform(asset.id, -1, 1);
-    if (existingTier1) {
-      return;
-    }
-
-    await generateWaveformTiers(asset.file_path, asset.id, -1, undefined, {
-      includeTier2: false,
+    await requestProgressiveWaveformBlocks({
+      sourcePath: asset.file_path,
+      sourceDuration,
+      cacheRoot: getWaveformCacheDirectoryPath(),
+      trackIndex: -1,
+      startTime,
+      endTime,
+      pixelsPerSecond: COARSE_WAVEFORM_PIXELS_PER_SECOND,
+      ffmpegPath: ffmpeg.path,
+      ffprobePath: getFFprobePath(ffmpeg.path),
+      audiowaveform: getAudiowaveformPath(),
+      scheduleBlock: (key, run) => enqueueHeavyMediaJob(
+        key,
+        'waveformBlock',
+        'background',
+        run,
+        { resourceClass: 'cpu' }
+      ),
     });
   })();
 
@@ -500,7 +516,7 @@ async function prewarmChapterMedia(
   }
 
   try {
-    await ensureAssetMixWaveformReady(asset);
+    await ensureChapterMixWaveformReady(chapter, asset);
   } catch (error) {
     console.warn(`[ChapterPrewarm] Failed waveform chapter=${chapter.id} asset=${asset.id}:`, error);
   }
