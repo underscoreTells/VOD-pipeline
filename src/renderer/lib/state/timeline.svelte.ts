@@ -13,6 +13,7 @@ interface TimelineStateStore {
   zoomLevel: number;
   scrollPosition: number;
   playheadTime: number;
+  activeAssetId: number | null;
   selectedClipIds: Set<number>;
   isPlaying: boolean;
   shuttleDirection: -1 | 0 | 1;
@@ -41,6 +42,7 @@ export const timelineState = $state<TimelineStateStore>({
   zoomLevel: 100,        // pixels per second
   scrollPosition: 0,     // seconds from start
   playheadTime: 0,       // current position
+  activeAssetId: null,
   selectedClipIds: new Set<number>(),
   isPlaying: false,
   shuttleDirection: 0,

@@ -348,7 +348,11 @@ function getOrCreateHeavyMediaJob<T>(
   options: HeavyMediaEnqueueOptions<T> | undefined,
   persistentConsumer: boolean
 ): HeavyMediaJob<T> {
-  const existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
+  let existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
+  if (existing?.controller.signal.aborted) {
+    if (heavyMediaJobs.get(key) === existing) heavyMediaJobs.delete(key);
+    existing = undefined;
+  }
   if (existing) {
     if (persistentConsumer) existing.persistentConsumer = true;
     if (!existing.started && getHeavyMediaPriorityRank(priority) < getHeavyMediaPriorityRank(existing.priority)) {

@@ -180,6 +180,7 @@
 
   async function previewRange(range: VodCutRange): Promise<void> {
     if (!videoRef || assetUnavailable) return;
+    stopVodShuttle();
     selectVodCutRange(range.id);
     previewRangeId = range.id;
     setVodCutPlayhead(range.start_time);

@@ -121,10 +121,7 @@ function normalizeShortcutKey(event: KeyboardEvent): string {
 }
 
 function getTimelineFps(): number {
-  const chapter = getSelectedChapter();
-  if (!chapter) return 30;
-  const assetIds = new Set(getAssetsForChapter(chapter.id));
-  const asset = projectDetail.assets.find((candidate) => assetIds.has(candidate.id));
+  const asset = projectDetail.assets.find((candidate) => candidate.id === timelineState.activeAssetId);
   const fps = asset?.metadata?.fps;
   return typeof fps === 'number' && Number.isFinite(fps) && fps > 0 ? fps : 30;
 }

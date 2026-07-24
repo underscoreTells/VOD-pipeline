@@ -199,4 +199,35 @@ describe("heavy media queue cancellation", () => {
     const result = await secondPromise;
     expect(result).toBe("fresh-value");
   });
+
+  it("creates a fresh subscription while an aborted job is still settling", async () => {
+    configureHeavyMediaScheduler({ interactiveOverflow: 0 });
+    const key = "subscription-cancel:resubscribe";
+    let settleCancelledJob!: () => void;
+    let firstSignal: AbortSignal | undefined;
+    const first = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", (signal) => {
+      firstSignal = signal;
+      return new Promise<string>((resolve) => {
+        settleCancelledJob = () => resolve("cancelled");
+      });
+    });
+
+    expect(first.cancel()).toBe(true);
+    expect(firstSignal?.aborted).toBe(true);
+    await expect(first.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    let secondSignal: AbortSignal | undefined;
+    const second = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", (signal) => {
+      secondSignal = signal;
+      return Promise.resolve("fresh");
+    });
+    expect(secondSignal).toBeUndefined();
+
+    settleCancelledJob();
+    await flushPending();
+
+    expect(secondSignal).toBeDefined();
+    expect(secondSignal?.aborted).toBe(false);
+    await expect(second.promise).resolves.toBe("fresh");
+  });
 });
