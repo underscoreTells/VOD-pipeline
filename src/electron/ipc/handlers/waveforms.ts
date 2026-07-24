@@ -251,6 +251,7 @@ export function registerWaveformHandlers(): void {
           });
         },
         onProgress: (progress) => {
+          if (event.sender.isDestroyed()) return;
           event.sender.send(IPC_CHANNELS.WAVEFORM_BLOCK_PROGRESS, {
             assetId,
             trackIndex,

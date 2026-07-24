@@ -80,9 +80,10 @@ describe('waveform block IPC handler', () => {
     );
     expect(registration).toBeDefined();
     const send = vi.fn();
+    const isDestroyed = vi.fn(() => false);
     const handler = registration![1];
 
-    const response = await handler({ sender: { send } }, {
+    const response = await handler({ sender: { send, isDestroyed } }, {
       requestId: '5fd565bc-0479-4a46-bbbb-3113e61eab3e',
       assetId: 7,
       trackIndex: -1,
@@ -118,6 +119,16 @@ describe('waveform block IPC handler', () => {
       blockIndex: 3,
       status: 'queued',
     }));
+
+    isDestroyed.mockReturnValue(true);
+    request.onProgress({
+      blockIndex: 3,
+      completedBlocks: 1,
+      totalBlocks: 1,
+      percent: 100,
+      status: 'ready',
+    });
+    expect(send).toHaveBeenCalledTimes(1);
 
     const run = vi.fn();
     request.scheduleBlock('waveform:key', run);
@@ -156,7 +167,7 @@ describe('waveform block IPC handler', () => {
       ([channel]) => channel === 'waveform:blocks-cancel'
     )![1];
     const requestId = '46fd8d9e-f469-4898-820a-265df832a7f7';
-    const responsePromise = requestHandler({ sender: { send: vi.fn() } }, {
+    const responsePromise = requestHandler({ sender: { send: vi.fn(), isDestroyed: () => false } }, {
       requestId,
       assetId: 7,
       trackIndex: -1,

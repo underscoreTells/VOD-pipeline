@@ -75,8 +75,9 @@ describe('chapter cut workspace', () => {
   });
 
   it('clears waveform data while loading a different asset', () => {
+    expect(timelineSource).toContain('`${assetId}:${chapter.id}:${chapter.start_time}:${chapter.end_time}`');
     expect(timelineSource).toContain('waveformBlocks.clear();');
-    expect(timelineSource).toContain("waveformStatus = assetId ? 'loading' : 'unavailable';");
+    expect(timelineSource).toContain("waveformStatus = waveformScope ? 'loading' : 'unavailable';");
   });
 
   it('previews the selected cut asset and clamps displayed times to the chapter', () => {

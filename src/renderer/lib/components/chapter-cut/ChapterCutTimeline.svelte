@@ -816,15 +816,18 @@
 
   $effect(() => {
     const assetId = activeAsset?.id;
+    const waveformScope = assetId
+      ? `${assetId}:${chapter.id}:${chapter.start_time}:${chapter.end_time}`
+      : null;
     untrack(() => {
       visibleWaveformController?.abort();
       backgroundWaveformController?.abort();
       visibleWaveformController = null;
       backgroundWaveformController = null;
       waveformBlocks.clear();
-      waveformStatus = assetId ? 'loading' : 'unavailable';
+      waveformStatus = waveformScope ? 'loading' : 'unavailable';
       requestAnimationFrame(drawWaveform);
-      if (assetId) scheduleVisibleWaveformRequest(0);
+      if (waveformScope && assetId) scheduleVisibleWaveformRequest(0);
     });
   });
 
