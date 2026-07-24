@@ -29,6 +29,11 @@ export interface HeavyMediaEnqueueOptions<T = unknown> {
   };
 }
 
+export interface HeavyMediaJobSubscription<T> {
+  promise: Promise<T>;
+  cancel: () => boolean;
+}
+
 export interface HeavyMediaSchedulerLimits {
   readonly cpuProxy: number;
   readonly gpuProxy: number;
@@ -58,6 +63,8 @@ type HeavyMediaJob<T> = {
   controller: AbortController;
   cpuFallback: HeavyMediaEnqueueOptions<T>['cpuFallback'];
   runAttempt: number;
+  persistentConsumer: boolean;
+  subscriptionCount: number;
 };
 
 export class HeavyMediaCancellationError extends Error {
@@ -333,21 +340,23 @@ function pumpHeavyMediaQueue(): void {
   }
 }
 
-export function enqueueHeavyMediaJob<T>(
+function getOrCreateHeavyMediaJob<T>(
   key: string,
   type: HeavyMediaJobType,
   priority: HeavyMediaJobPriority,
   run: (signal: AbortSignal) => Promise<T>,
-  options?: HeavyMediaEnqueueOptions<T>
-): Promise<T> {
+  options: HeavyMediaEnqueueOptions<T> | undefined,
+  persistentConsumer: boolean
+): HeavyMediaJob<T> {
   const existing = heavyMediaJobs.get(key) as HeavyMediaJob<T> | undefined;
   if (existing) {
+    if (persistentConsumer) existing.persistentConsumer = true;
     if (!existing.started && getHeavyMediaPriorityRank(priority) < getHeavyMediaPriorityRank(existing.priority)) {
       existing.priority = priority;
       sortHeavyMediaQueue();
       pumpHeavyMediaQueue();
     }
-    return existing.promise;
+    return existing;
   }
 
   const resourceClass: HeavyMediaResourceClass = options?.resourceClass === 'gpu' ? 'gpu' : 'cpu';
@@ -380,13 +389,61 @@ export function enqueueHeavyMediaJob<T>(
     controller: new AbortController(),
     cpuFallback: options?.cpuFallback,
     runAttempt: 0,
+    persistentConsumer,
+    subscriptionCount: 0,
   };
 
   heavyMediaJobs.set(key, job as HeavyMediaJob<unknown>);
   heavyMediaQueue.push(job as HeavyMediaJob<unknown>);
   sortHeavyMediaQueue();
   pumpHeavyMediaQueue();
-  return promise;
+  return job;
+}
+
+export function enqueueHeavyMediaJob<T>(
+  key: string,
+  type: HeavyMediaJobType,
+  priority: HeavyMediaJobPriority,
+  run: (signal: AbortSignal) => Promise<T>,
+  options?: HeavyMediaEnqueueOptions<T>
+): Promise<T> {
+  return getOrCreateHeavyMediaJob(key, type, priority, run, options, true).promise;
+}
+
+export function subscribeHeavyMediaJob<T>(
+  key: string,
+  type: HeavyMediaJobType,
+  priority: HeavyMediaJobPriority,
+  run: (signal: AbortSignal) => Promise<T>,
+  options?: HeavyMediaEnqueueOptions<T>
+): HeavyMediaJobSubscription<T> {
+  const job = getOrCreateHeavyMediaJob(key, type, priority, run, options, false);
+  job.subscriptionCount += 1;
+
+  let active = true;
+  let rejectCancellation!: (reason: unknown) => void;
+  const cancellation = new Promise<never>((_, reject) => {
+    rejectCancellation = reject;
+  });
+  const release = (): void => {
+    if (!active) return;
+    active = false;
+    job.subscriptionCount -= 1;
+  };
+  const promise = Promise.race([job.promise, cancellation]).finally(release);
+
+  return {
+    promise,
+    cancel: () => {
+      if (!active) return false;
+      release();
+      rejectCancellation(new HeavyMediaCancellationError());
+      if (!job.persistentConsumer && job.subscriptionCount === 0 && heavyMediaJobs.get(key) === job) {
+        cancelHeavyMediaJob(key);
+      }
+      return true;
+    },
+  };
 }
 
 export function promoteHeavyMediaJob(key: string): void {

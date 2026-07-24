@@ -18,7 +18,7 @@ import {
   waveformBlocksRequestSchema,
   waveformGetSchema,
 } from '../schemas.js';
-import { cancelHeavyMediaJob, enqueueHeavyMediaJob } from '../support/heavy-media-queue.js';
+import { subscribeHeavyMediaJob } from '../support/heavy-media-queue.js';
 
 const logger = createLogger('WaveformHandlers');
 
@@ -32,7 +32,7 @@ export const WAVEFORM_HANDLER_CHANNELS = [
 
 interface WaveformBlockRequestState {
   cancelled: boolean;
-  jobKeys: Set<string>;
+  jobs: Map<string, { cancel: () => boolean }>;
 }
 
 const waveformBlockRequests = new Map<string, WaveformBlockRequestState>();
@@ -44,8 +44,8 @@ export function registerWaveformHandlers(): void {
     if (!request) return createSuccessResponse({ cancelled: false });
     request.cancelled = true;
     let cancelled = false;
-    for (const key of request.jobKeys) cancelled = cancelHeavyMediaJob(key) || cancelled;
-    return createSuccessResponse({ cancelled: cancelled || request.jobKeys.size === 0 });
+    for (const subscription of request.jobs.values()) cancelled = subscription.cancel() || cancelled;
+    return createSuccessResponse({ cancelled: cancelled || request.jobs.size === 0 });
   });
 
   ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, payload) => {
@@ -206,7 +206,7 @@ export function registerWaveformHandlers(): void {
         return createErrorResponse('Invalid waveform block range', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
       const { requestId, assetId, trackIndex, startTime, endTime, pixelsPerSecond, requestMode } = parsed.data;
-      const requestState: WaveformBlockRequestState = { cancelled: false, jobKeys: new Set() };
+      const requestState: WaveformBlockRequestState = { cancelled: false, jobs: new Map() };
       waveformBlockRequests.set(requestId, requestState);
       const asset = await getAsset(assetId);
       if (!asset) {
@@ -238,15 +238,17 @@ export function registerWaveformHandlers(): void {
           if (requestState.cancelled) {
             return Promise.reject(new Error('Waveform block generation cancelled'));
           }
-          const requestJobKey = `${key}:request:${requestId}`;
-          requestState.jobKeys.add(requestJobKey);
-          return enqueueHeavyMediaJob(
-            requestJobKey,
+          const subscription = subscribeHeavyMediaJob(
+            key,
             'waveformBlock',
             requestMode ?? 'interactive',
             run,
             { resourceClass: 'cpu' }
           );
+          requestState.jobs.set(key, subscription);
+          return subscription.promise.finally(() => {
+            if (requestState.jobs.get(key) === subscription) requestState.jobs.delete(key);
+          });
         },
         onProgress: (progress) => {
           event.sender.send(IPC_CHANNELS.WAVEFORM_BLOCK_PROGRESS, {

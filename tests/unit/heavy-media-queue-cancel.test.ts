@@ -6,6 +6,7 @@ import {
   enqueueHeavyMediaJob,
   isCancellationError,
   resetHeavyMediaScheduler,
+  subscribeHeavyMediaJob,
 } from "../../src/electron/ipc/support/heavy-media-queue.js";
 
 // The heavy media queue is a module-level singleton. Tests pin every pool to a
@@ -114,6 +115,49 @@ describe("heavy media queue cancellation", () => {
 
     // After draining, the job is gone from the registry.
     expect(cancelHeavyMediaJob(runningKey)).toBe(false);
+  });
+
+  it("keeps a deduplicated job running until its last subscription is cancelled", async () => {
+    const key = "subscription-cancel:shared";
+    let capturedSignal: AbortSignal | undefined;
+    let runCallCount = 0;
+    const run = (signal: AbortSignal) => {
+      runCallCount += 1;
+      capturedSignal = signal;
+      return resolveOnAbort("aborted")(signal);
+    };
+    const first = subscribeHeavyMediaJob(key, "waveformBlock", "background", run);
+    const second = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", run);
+
+    expect(runCallCount).toBe(1);
+    expect(first.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(false);
+    await expect(first.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    expect(second.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+    await expect(second.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+  });
+
+  it("does not abort a shared job when a persistent consumer remains", async () => {
+    const key = "subscription-cancel:persistent";
+    let capturedSignal: AbortSignal | undefined;
+    let resolveJob!: (value: string) => void;
+    const run = (signal: AbortSignal) => {
+      capturedSignal = signal;
+      return new Promise<string>((resolve) => {
+        resolveJob = resolve;
+      });
+    };
+    const persistent = enqueueHeavyMediaJob(key, "waveformBlock", "background", run);
+    const subscription = subscribeHeavyMediaJob(key, "waveformBlock", "interactive", run);
+
+    expect(subscription.cancel()).toBe(true);
+    expect(capturedSignal?.aborted).toBe(false);
+    await expect(subscription.promise).rejects.toSatisfy((error: unknown) => isCancellationError(error));
+
+    resolveJob("complete");
+    await expect(persistent).resolves.toBe("complete");
   });
 
   it("re-runs fresh when re-enqueued with the same key after cancellation", async () => {

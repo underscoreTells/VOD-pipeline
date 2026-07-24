@@ -22,6 +22,14 @@ afterEach(() => {
 });
 
 describe("native binary target manifest", () => {
+  it("only declares Windows packaging for architectures with pinned FFmpeg binaries", () => {
+    const config = JSON.parse(
+      readFileSync(`${repoRoot}/electron-builder.json`, "utf8"),
+    ) as { win: { target: Array<{ target: string; arch: string[] }> } };
+
+    expect(config.win.target).toEqual([{ target: "nsis", arch: ["x64"] }]);
+  });
+
   it("pins supported audiowaveform downloads with SHA-256 checksums", () => {
     const manifest = JSON.parse(
       readFileSync(`${repoRoot}/scripts/native-binaries.json`, "utf8"),

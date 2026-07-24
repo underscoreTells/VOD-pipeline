@@ -17,8 +17,7 @@ const progressiveMocks = vi.hoisted(() => ({
   requestProgressiveWaveformBlocks: vi.fn(),
 }));
 const schedulerMocks = vi.hoisted(() => ({
-  enqueueHeavyMediaJob: vi.fn(),
-  cancelHeavyMediaJob: vi.fn(),
+  subscribeHeavyMediaJob: vi.fn(),
 }));
 
 vi.mock('electron', () => electronMocks);
@@ -47,8 +46,11 @@ describe('waveform block IPC handler', () => {
     Object.values(databaseMocks).forEach((mock) => mock.mockReset());
     Object.values(detectorMocks).forEach((mock) => mock.mockReset());
     progressiveMocks.requestProgressiveWaveformBlocks.mockReset();
-    schedulerMocks.enqueueHeavyMediaJob.mockReset();
-    schedulerMocks.cancelHeavyMediaJob.mockReset();
+    schedulerMocks.subscribeHeavyMediaJob.mockReset();
+    schedulerMocks.subscribeHeavyMediaJob.mockReturnValue({
+      promise: Promise.resolve(undefined),
+      cancel: vi.fn(() => true),
+    });
 
     databaseMocks.getAsset.mockResolvedValue({
       id: 7,
@@ -119,8 +121,8 @@ describe('waveform block IPC handler', () => {
 
     const run = vi.fn();
     request.scheduleBlock('waveform:key', run);
-    expect(schedulerMocks.enqueueHeavyMediaJob).toHaveBeenCalledWith(
-      'waveform:key:request:5fd565bc-0479-4a46-bbbb-3113e61eab3e',
+    expect(schedulerMocks.subscribeHeavyMediaJob).toHaveBeenCalledWith(
+      'waveform:key',
       'waveformBlock',
       'interactive',
       run,
@@ -130,13 +132,16 @@ describe('waveform block IPC handler', () => {
 
   it('cancels a queued or running job when its renderer request is aborted', async () => {
     let rejectJob!: (error: Error) => void;
-    schedulerMocks.enqueueHeavyMediaJob.mockImplementation(() => new Promise((_, reject) => {
-      rejectJob = reject;
-    }));
-    schedulerMocks.cancelHeavyMediaJob.mockImplementation(() => {
+    const cancel = vi.fn(() => {
       rejectJob(new Error('Waveform block generation cancelled'));
       return true;
     });
+    schedulerMocks.subscribeHeavyMediaJob.mockImplementation(() => ({
+      promise: new Promise((_, reject) => {
+        rejectJob = reject;
+      }),
+      cancel,
+    }));
     progressiveMocks.requestProgressiveWaveformBlocks.mockImplementation(async (request) => {
       await request.scheduleBlock('waveform:key', vi.fn());
       return { blocks: [] };
@@ -159,14 +164,12 @@ describe('waveform block IPC handler', () => {
       endTime: 300,
       requestMode: 'interactive',
     });
-    await vi.waitFor(() => expect(schedulerMocks.enqueueHeavyMediaJob).toHaveBeenCalled());
+    await vi.waitFor(() => expect(schedulerMocks.subscribeHeavyMediaJob).toHaveBeenCalled());
 
     const cancellation = cancelHandler({}, { requestId });
 
     expect(cancellation).toMatchObject({ success: true, data: { cancelled: true } });
-    expect(schedulerMocks.cancelHeavyMediaJob).toHaveBeenCalledWith(
-      `waveform:key:request:${requestId}`
-    );
+    expect(cancel).toHaveBeenCalledOnce();
     await expect(responsePromise).resolves.toMatchObject({ success: false });
   });
 });
