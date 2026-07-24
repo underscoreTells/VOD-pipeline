@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { loadConfig, getProviderLLMConfig } from "../../config.js";
 import { createLLM, VIDEO_CAPABLE_PROVIDERS } from "../../providers/index.js";
-import { createVideoMessage, type VideoProvider } from "../../utils/video-messages.js";
+import {
+  createVideoMessage,
+  invokeGeminiVideoAnalysis,
+  type VideoProvider,
+} from "../../utils/video-messages.js";
+import { resolveProviderModel } from '../../../shared/llm/provider-registry.js';
 import { getMessageText } from "../provider-adapter.js";
 import type { ConversationTurnInput, ConversationWriter } from "../types.js";
 import type { ConversationToolAccumulator } from "./create-tools.js";
@@ -39,9 +44,26 @@ export async function analyzeChapterVideoEvidence(
 
   const agentConfig = await loadConfig();
   const llmConfig = getProviderLLMConfig(agentConfig, input.selectedProvider);
-  const llm = createLLM(llmConfig);
-  const prompt = buildVideoEvidencePrompt(request.focus);
+  const range = normalizeVideoEvidenceRange(input, request);
+  const prompt = buildVideoEvidencePrompt(request.focus, range);
   const provider = input.selectedProvider as VideoProvider;
+  if (provider === 'gemini') {
+    const content = await invokeGeminiVideoAnalysis({
+      apiKey: llmConfig.apiKey,
+      model: resolveProviderModel('gemini', llmConfig.model),
+      videoPath: groundedAsset.proxyPath,
+      textPrompt: prompt,
+      transcriptContext: input.context.transcript,
+      startOffsetSeconds: range?.start,
+      endOffsetSeconds: range?.end,
+      fps: 2,
+      signal: options?.signal,
+    });
+    const parsed = parseVideoEvidenceResponse(content);
+    return { ...parsed, assetId: groundedAsset.assetId };
+  }
+
+  const llm = createLLM(llmConfig);
   const videoMessage = await createVideoMessage({
     provider,
     videoPath: groundedAsset.proxyPath,
@@ -58,11 +80,16 @@ export async function analyzeChapterVideoEvidence(
   };
 }
 
-function buildVideoEvidencePrompt(focus: string): string {
+function buildVideoEvidencePrompt(
+  focus: string,
+  range: { start: number; end: number } | null
+): string {
   return `You are gathering factual evidence about a chapter video for an editing assistant.
 
 Focus:
 ${focus}
+
+${range ? `Inspect only chapter-local ${range.start.toFixed(2)}-${range.end.toFixed(2)} seconds. Report all observation timestamps in chapter-local seconds.` : 'Inspect the full chapter. Report all observation timestamps in chapter-local seconds.'}
 
 Inspect the visuals and dialogue as evidence for editing decisions.
 Do not make edit recommendations, do not say what should be cut or kept, and do not propose timeline changes.
@@ -84,6 +111,29 @@ Return exactly one JSON object with this shape:
     }
   ]
 }`;
+}
+
+function normalizeVideoEvidenceRange(
+  input: ConversationTurnInput,
+  request: AnalyzeChapterVideoInput
+): { start: number; end: number } | null {
+  if (request.startLocalTime === undefined && request.endLocalTime === undefined) {
+    return null;
+  }
+  if (request.startLocalTime === undefined || request.endLocalTime === undefined) {
+    throw new Error('Both startLocalTime and endLocalTime are required for targeted video evidence.');
+  }
+  const chapter = input.context.chapter;
+  if (!chapter) {
+    throw new Error('An active chapter is required for targeted video evidence.');
+  }
+  const duration = Math.max(0.01, chapter.endTime - chapter.startTime);
+  const start = Math.min(duration, Math.max(0, request.startLocalTime));
+  const end = Math.min(duration, Math.max(start, request.endLocalTime));
+  if (end <= start) {
+    throw new Error('endLocalTime must be greater than startLocalTime.');
+  }
+  return { start, end };
 }
 
 function parseVideoEvidenceResponse(content: string): z.infer<typeof videoEvidenceSchema> {
@@ -194,7 +244,7 @@ export function createAnalyzeChapterVideoTool(
     description:
       "Inspect the current chapter video for factual visual evidence only. Use this when you need to verify what happens on screen before answering. This tool never makes recommendations.",
     schema: analyzeChapterVideoSchema,
-    execute: async ({ focus, assetId }, options) => {
+    execute: async ({ focus, assetId, startLocalTime, endLocalTime }, options) => {
       writer?.writeStatus({
         status: "analyzing_video",
         message: "Gathering visual evidence from the chapter video...",
@@ -202,7 +252,11 @@ export function createAnalyzeChapterVideoTool(
         nodeName: "conversation_runner",
       });
 
-      const evidence = await analyzeChapterVideoImpl(input, { focus, assetId }, options);
+      const evidence = await analyzeChapterVideoImpl(
+        input,
+        { focus, assetId, startLocalTime, endLocalTime },
+        options
+      );
       if (
         typeof evidence.assetId === "number" &&
         Number.isFinite(evidence.assetId) &&
@@ -210,8 +264,33 @@ export function createAnalyzeChapterVideoTool(
       ) {
         accumulator.hasSuccessfulVideoEvidence = true;
         accumulator.videoEvidenceAssetIds.add(evidence.assetId);
+        accumulator.evidenceReferences.push(...evidence.observations.flatMap((observation, index) => {
+          if (
+            typeof observation.in_point !== 'number'
+            || typeof observation.out_point !== 'number'
+            || observation.out_point <= observation.in_point
+          ) {
+            return [];
+          }
+          return [{
+            evidenceId: `video:${evidence.assetId}:${accumulator.currentStepIndex}:${index}`,
+            start: observation.in_point,
+            end: observation.out_point,
+            source: 'video' as const,
+            observedAtStep: accumulator.currentStepIndex,
+            assetId: evidence.assetId,
+          }];
+        }));
       }
-      return JSON.stringify(evidence);
+      return JSON.stringify({
+        ...evidence,
+        observations: evidence.observations.map((observation, index) => ({
+          ...observation,
+          evidenceId: typeof evidence.assetId === 'number'
+            ? `video:${evidence.assetId}:${accumulator.currentStepIndex}:${index}`
+            : undefined,
+        })),
+      });
     },
   });
 }

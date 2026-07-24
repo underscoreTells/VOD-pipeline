@@ -45,7 +45,7 @@ function buildClip(
 }
 
 describe("conversation system prompt", () => {
-  it("explains source-window clip semantics and aggressive edit bias", () => {
+  it("explains source-window semantics and conditional editing intent", () => {
     const prompt = buildConversationSystemPrompt(createInput());
 
     expect(prompt).toContain("inPoint/outPoint describe the kept source window");
@@ -57,8 +57,9 @@ describe("conversation system prompt", () => {
     expect(prompt).toContain("Chapter clip order is inferred from source timing");
     expect(prompt).toContain("delete_clip for committed clip removal, and split_clip to atomically replace one clip with ordered kept segments");
     expect(prompt).toContain("prefer drafting at least one concrete proposal instead of asking for clarification");
-    expect(prompt).toContain("cut dead air, repeated explanation, reset loops, stalled tangents");
-    expect(prompt).toContain("range_suggestion and update_clip can be grounded by transcript context");
+    expect(prompt).toContain("Default compression is balanced");
+    expect(prompt).toContain("as removal candidates, not automatic cuts");
+    expect(prompt).toContain("overview transcript excerpt is orientation only");
   });
 
   it("keeps the existing 18-line clip preview", () => {

@@ -17,7 +17,7 @@ export function normalizeTranscriptionModel(value: unknown): 'tiny' | 'base' | '
   if (value === 'tiny' || value === 'base' || value === 'small' || value === 'medium') {
     return value;
   }
-  return 'base';
+  return 'small';
 }
 
 export function normalizeComputeType(value: unknown): 'int8' | 'float16' {

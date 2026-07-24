@@ -29,6 +29,19 @@ export interface VideoMessageOptions {
   signal?: AbortSignal;
 }
 
+export interface GeminiVideoAnalysisOptions {
+  apiKey: string;
+  model: string;
+  videoPath: string;
+  textPrompt: string;
+  transcriptContext?: string;
+  mimeType?: string;
+  startOffsetSeconds?: number;
+  endOffsetSeconds?: number;
+  fps?: number;
+  signal?: AbortSignal;
+}
+
 function buildTranscriptContextBlock(transcriptContext?: string): string | null {
   if (typeof transcriptContext !== 'string') {
     return null;
@@ -45,6 +58,84 @@ function buildTranscriptContextBlock(transcriptContext?: string): string | null 
   }
 
   return `Transcript context:\n${truncated}`;
+}
+
+export async function invokeGeminiVideoAnalysis(
+  options: GeminiVideoAnalysisOptions
+): Promise<string> {
+  const {
+    apiKey,
+    model,
+    videoPath,
+    textPrompt,
+    transcriptContext,
+    mimeType = 'video/mp4',
+    startOffsetSeconds,
+    endOffsetSeconds,
+    fps = 2,
+    signal,
+  } = options;
+  signal?.throwIfAborted();
+
+  const fs = await import('fs');
+  const stats = await fs.promises.stat(videoPath);
+  const estimatedBase64Size = Math.ceil(stats.size * 4 / 3);
+  if (estimatedBase64Size > GEMINI_MAX_VIDEO_SIZE) {
+    throw new Error(
+      `Video file too large for Gemini API after base64 encoding (estimated ${(estimatedBase64Size / (1024 * 1024)).toFixed(1)}MB).`
+    );
+  }
+
+  const data = await readFileAsBase64(videoPath, signal);
+  const transcriptBlock = buildTranscriptContextBlock(transcriptContext);
+  const videoMetadata: Record<string, unknown> = { fps };
+  if (typeof startOffsetSeconds === 'number') {
+    videoMetadata.startOffset = `${startOffsetSeconds.toFixed(3)}s`;
+  }
+  if (typeof endOffsetSeconds === 'number') {
+    videoMetadata.endOffset = `${endOffsetSeconds.toFixed(3)}s`;
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            {
+              inlineData: { mimeType, data },
+              videoMetadata,
+            },
+            { text: transcriptBlock ? `${textPrompt}\n\n${transcriptBlock}` : textPrompt },
+          ],
+        }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+        },
+      }),
+      signal,
+    }
+  );
+
+  if (!response.ok) {
+    const details = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new Error(`Gemini video analysis failed (${response.status}): ${details || response.statusText}`);
+  }
+
+  const payload = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }>;
+  };
+  const text = payload.candidates?.[0]?.content?.parts
+    ?.flatMap((part) => typeof part.text === 'string' ? [part.text] : [])
+    .join('\n')
+    .trim();
+  if (!text) {
+    throw new Error('Gemini video analysis returned no text content.');
+  }
+  return text;
 }
 
 /**

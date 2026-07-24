@@ -1,8 +1,7 @@
 import { getClipVisibleRangeInChapter } from "../../../shared/utils/clip-timing.js";
-import type { DetailedTranscriptWindow } from "../../../shared/types/agent-ipc.js";
 import type { ConversationTurnInput, ProposalDraft } from "../types.js";
 import type { ConversationToolAccumulator } from "./create-tools.js";
-import { KEEP_WINDOW_REMOVAL_PREFIX, PLAYHEAD_GROUNDING_WINDOW_SECONDS } from "./constants.js";
+import { KEEP_WINDOW_REMOVAL_PREFIX } from "./constants.js";
 
 export function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void {
   for (const proposal of proposals) {
@@ -16,7 +15,7 @@ export function validateKeepWindowDescriptions(proposals: ProposalDraft[]): void
       continue;
     }
 
-    if (proposal.type === 'delete_clip') continue;
+    if (proposal.type === 'delete_clip' || proposal.type === 'remove_range') continue;
 
     if (proposal.type === 'split_clip') {
       proposal.segments.forEach((segment, index) => {
@@ -60,7 +59,6 @@ export function validateProposalGrounding(
   for (const proposal of proposals) {
     if (proposal.type === "create_clip") {
       validateCreateClipGrounding(input, accumulator, proposal);
-      continue;
     }
 
     if (proposal.type === 'delete_clip') {
@@ -71,18 +69,69 @@ export function validateProposalGrounding(
       validateSplitClipSegments(input, proposal);
     }
 
-    if (!accumulator.hasSuccessfulVideoEvidence && !hasNonVisualProposalGrounding(input, accumulator, proposal)) {
-      if (proposal.type !== "range_suggestion") {
-        throw new Error(
-          "Timeline edits require transcript context, a selected clip, the playhead region, or matching video evidence."
-        );
-      }
+    if (proposal.type === 'remove_range') {
+      validateRemoveRange(input, proposal);
+    }
 
+    if (proposal.type === 'delete_clip' && isExplicitlyReferencedClip(input, proposal.clipId)) {
+      continue;
+    }
+
+    attachAndValidatePriorEvidence(input, accumulator, proposal);
+  }
+}
+
+function attachAndValidatePriorEvidence(
+  input: ConversationTurnInput,
+  accumulator: ConversationToolAccumulator,
+  proposal: ProposalDraft
+): void {
+  const affectedRanges = getProposalAffectedRangesInChapter(input, proposal);
+  if (!affectedRanges || affectedRanges.length === 0) {
+    throw new Error(`${proposal.type} does not resolve to a valid chapter-local source range.`);
+  }
+
+  const requestedIds = new Set(proposal.evidenceIds ?? []);
+  const requiresAssetSpecificVideo = proposal.type === 'create_clip'
+    && (getGroundedVideoAssetIds(input).length > 1 || input.context.chapterAssetIds.length > 1);
+  const eligible = accumulator.evidenceReferences.filter((reference) =>
+    reference.observedAtStep < accumulator.currentStepIndex
+    && affectedRanges.some((range) =>
+      rangesOverlap(range.start, range.end, reference.start, reference.end)
+    )
+    && (requestedIds.size === 0 || requestedIds.has(reference.evidenceId))
+    && (!requiresAssetSpecificVideo || (
+      reference.source === 'video'
+      && reference.assetId === proposal.assetId
+    ))
+  );
+
+  if (requestedIds.size > 0) {
+    const eligibleIds = new Set(eligible.map((reference) => reference.evidenceId));
+    const invalidIds = [...requestedIds].filter((evidenceId) => !eligibleIds.has(evidenceId));
+    if (invalidIds.length > 0) {
       throw new Error(
-        "range_suggestion requires transcript context, detailed transcript windows, the playhead region, or matching video evidence."
+        `Proposal evidence must overlap the affected range and come from an earlier model step. Invalid evidenceIds: ${invalidIds.join(', ')}`
       );
     }
   }
+
+  const uncoveredRange = affectedRanges.find((range) => !eligible.some((reference) =>
+    rangesOverlap(range.start, range.end, reference.start, reference.end)
+  ));
+  if (uncoveredRange) {
+    throw new Error(
+      'Actionable edits require overlapping transcript or video evidence returned in an earlier model step. Load evidence, observe the result, then draft the proposal.'
+    );
+  }
+
+  proposal.evidenceIds = [...new Set(eligible.map((reference) => reference.evidenceId))];
+}
+
+function isExplicitlyReferencedClip(input: ConversationTurnInput, clipId: number): boolean {
+  return (input.context.referencedEntities ?? []).some(
+    (entity) => entity.type === 'clip' && entity.id === clipId
+  );
 }
 
 function validateTargetClipInChapter(
@@ -118,6 +167,23 @@ function validateSplitClipSegments(
   }
 }
 
+function validateRemoveRange(
+  input: ConversationTurnInput,
+  proposal: Extract<ProposalDraft, { type: 'remove_range' }>
+): void {
+  const targetRange = getChapterLocalClipRange(input, proposal.clipId);
+  if (!targetRange) {
+    throw new Error(`remove_range target clip ${proposal.clipId} is not available in this chapter.`);
+  }
+  if (
+    proposal.removeEnd <= proposal.removeStart
+    || proposal.removeStart < targetRange.start
+    || proposal.removeEnd > targetRange.end
+  ) {
+    throw new Error('remove_range must be a positive chapter-local interval inside the target clip.');
+  }
+}
+
 function validateCreateClipGrounding(
   input: ConversationTurnInput,
   accumulator: ConversationToolAccumulator,
@@ -131,156 +197,81 @@ function validateCreateClipGrounding(
   }
 
   if (
-    typeof proposal.assetId === "number" &&
-    accumulator.videoEvidenceAssetIds.has(proposal.assetId)
-  ) {
-    return;
-  }
-
-  if (
     groundedVideoAssetIds.length > 1 ||
     input.context.chapterAssetIds.length > 1
   ) {
-    const assetIdDetail =
-      typeof proposal.assetId === "number" ? ` for assetId ${proposal.assetId}` : "";
-    throw new Error(
-      `create_clip${assetIdDetail} requires analyzeChapterVideo evidence for that same asset earlier in the turn.`
-    );
+    if (proposal.assetId === undefined) {
+      throw new Error('assetId is required for create_clip when multiple chapter assets are available.');
+    }
   }
 
-  if (
-    !hasNonVisualProposalGrounding(
-      input,
-      accumulator,
-      proposal,
-      { requirePreciseWindowGrounding: true }
-    )
-  ) {
-    throw new Error(
-      "create_clip requires matching video evidence or strong local grounding from detailed transcript windows, selected clips, or the current playhead region."
-    );
-  }
+  // Single-asset create proposals are validated by range-specific evidence below.
 }
 
-function hasNonVisualProposalGrounding(
-  input: ConversationTurnInput,
-  accumulator: ConversationToolAccumulator,
-  proposal: ProposalDraft,
-  options: { requirePreciseWindowGrounding?: boolean } = {}
-): boolean {
-  const range = getProposalRangeInChapter(input, proposal);
-  const detailedTranscriptWindows = getDetailedTranscriptGroundingWindows(input, accumulator);
-  const hasDetailedTranscriptAnchor = range
-    ? detailedTranscriptWindows.some((window) =>
-        rangesOverlap(range.start, range.end, window.windowStart, window.windowEnd)
-      )
-    : detailedTranscriptWindows.length > 0;
-  const hasSelectedClipAnchor = hasSelectedClipGrounding(input, proposal, range);
-  const hasPlayheadAnchor = hasPlayheadGrounding(input, range);
-
-  if (options.requirePreciseWindowGrounding) {
-    return hasDetailedTranscriptAnchor || hasSelectedClipAnchor || hasPlayheadAnchor;
-  }
-
-  return hasTranscriptContext(input, accumulator) || hasDetailedTranscriptAnchor || hasSelectedClipAnchor || hasPlayheadAnchor;
-}
-
-function hasTranscriptContext(
-  input: ConversationTurnInput,
-  accumulator: ConversationToolAccumulator
-): boolean {
-  return Boolean(input.context.transcript?.trim()) || getDetailedTranscriptGroundingWindows(input, accumulator).length > 0;
-}
-
-function getDetailedTranscriptGroundingWindows(
-  input: ConversationTurnInput,
-  accumulator: ConversationToolAccumulator
-): DetailedTranscriptWindow[] {
-  return [...input.context.detailedTranscripts, ...accumulator.loadedDetailedTranscripts];
-}
-
-function hasSelectedClipGrounding(
-  input: ConversationTurnInput,
-  proposal: ProposalDraft,
-  range: { start: number; end: number } | null
-): boolean {
-  const groundedClipIds = new Set([
-    ...input.selectedClipIds,
-    ...(input.context.referencedEntities ?? [])
-      .filter((entity) => entity.type === 'clip')
-      .map((entity) => entity.id),
-  ]);
-  if (
-    proposal.type !== "range_suggestion" && proposal.type !== 'create_clip' &&
-    groundedClipIds.has(proposal.clipId)
-  ) {
-    return true;
-  }
-
-  if (!range || groundedClipIds.size === 0) {
-    return false;
-  }
-
-  return [...groundedClipIds].some((clipId) => {
-    const selectedRange = getChapterLocalClipRange(input, clipId);
-    return selectedRange
-      ? rangesOverlap(range.start, range.end, selectedRange.start, selectedRange.end)
-      : false;
-  });
-}
-
-function hasPlayheadGrounding(
-  input: ConversationTurnInput,
-  range: { start: number; end: number } | null
-): boolean {
-  const localPlayhead = getChapterLocalPlayheadTime(input);
-  if (localPlayhead === null) {
-    return false;
-  }
-
-  if (!range) {
-    return true;
-  }
-
-  return rangesOverlap(
-    range.start,
-    range.end,
-    localPlayhead - PLAYHEAD_GROUNDING_WINDOW_SECONDS,
-    localPlayhead + PLAYHEAD_GROUNDING_WINDOW_SECONDS
-  );
-}
-
-function getProposalRangeInChapter(
+function getProposalAffectedRangesInChapter(
   input: ConversationTurnInput,
   proposal: ProposalDraft
-): { start: number; end: number } | null {
+): Array<{ start: number; end: number }> | null {
   if (proposal.type === "range_suggestion") {
-    return { start: proposal.in_point, end: proposal.out_point };
+    return [{ start: proposal.in_point, end: proposal.out_point }];
   }
 
   if (proposal.type === "create_clip") {
-    return { start: proposal.inPoint, end: proposal.outPoint };
+    return [{ start: proposal.inPoint, end: proposal.outPoint }];
   }
 
-  if (proposal.type === 'delete_clip' || proposal.type === 'split_clip') {
-    return getChapterLocalClipRange(input, proposal.clipId);
+  if (proposal.type === 'remove_range') {
+    return [{ start: proposal.removeStart, end: proposal.removeEnd }];
   }
 
-  const existingRange = getChapterLocalClipRange(input, proposal.clipId);
-  const start = proposal.updates.inPoint ?? existingRange?.start;
-  const end = proposal.updates.outPoint ?? existingRange?.end;
-
-  if (
-    typeof start !== "number" ||
-    !Number.isFinite(start) ||
-    typeof end !== "number" ||
-    !Number.isFinite(end) ||
-    end <= start
-  ) {
-    return existingRange;
+  const targetRange = getChapterLocalClipRange(input, proposal.clipId);
+  if (!targetRange) {
+    return null;
   }
 
-  return { start, end };
+  if (proposal.type === 'delete_clip') {
+    return [targetRange];
+  }
+
+  if (proposal.type === 'split_clip') {
+    const removedRanges: Array<{ start: number; end: number }> = [];
+    let cursor = targetRange.start;
+    for (const segment of proposal.segments) {
+      if (segment.inPoint > cursor) {
+        removedRanges.push({ start: cursor, end: segment.inPoint });
+      }
+      cursor = Math.max(cursor, segment.outPoint);
+    }
+    if (cursor < targetRange.end) {
+      removedRanges.push({ start: cursor, end: targetRange.end });
+    }
+    return removedRanges.length > 0 ? removedRanges : [targetRange];
+  }
+
+  if (proposal.type === 'update_clip') {
+    const changedRanges: Array<{ start: number; end: number }> = [];
+    if (
+      proposal.updates.inPoint !== undefined
+      && proposal.updates.inPoint !== targetRange.start
+    ) {
+      changedRanges.push({
+        start: Math.min(targetRange.start, proposal.updates.inPoint),
+        end: Math.max(targetRange.start, proposal.updates.inPoint),
+      });
+    }
+    if (
+      proposal.updates.outPoint !== undefined
+      && proposal.updates.outPoint !== targetRange.end
+    ) {
+      changedRanges.push({
+        start: Math.min(targetRange.end, proposal.updates.outPoint),
+        end: Math.max(targetRange.end, proposal.updates.outPoint),
+      });
+    }
+    return changedRanges.length > 0 ? changedRanges : [targetRange];
+  }
+
+  return null;
 }
 
 function getChapterLocalClipRange(
@@ -315,20 +306,6 @@ function getChapterLocalClipRange(
   const start = Math.max(0, visibleRange.start - chapter.startTime);
   const end = Math.max(start, visibleRange.end - chapter.startTime);
   return end > start ? { start, end } : null;
-}
-
-function getChapterLocalPlayheadTime(input: ConversationTurnInput): number | null {
-  const chapter = input.context.chapter;
-  if (
-    !chapter ||
-    typeof input.playheadTime !== "number" ||
-    !Number.isFinite(input.playheadTime)
-  ) {
-    return null;
-  }
-
-  const chapterDuration = Math.max(0.01, chapter.endTime - chapter.startTime);
-  return Math.min(chapterDuration, Math.max(0, input.playheadTime - chapter.startTime));
 }
 
 function rangesOverlap(

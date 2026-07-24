@@ -3,19 +3,25 @@ import { canonicalSchema as s } from "../../tools/schema.js";
 import {
   CLIP_ROLE_VALUES,
   DEFAULT_CHAPTER_CUT_MAP_PAGE_SIZE,
+  DEFAULT_TRANSCRIPT_EDIT_CANDIDATES,
+  DEFAULT_TRANSCRIPT_EVIDENCE_SEGMENTS,
   MAX_CHAPTER_CUT_MAP_CLIP_IDS,
   MAX_CHAPTER_CUT_MAP_PAGE_SIZE,
   MAX_PROPOSAL_DRAFTS,
   MAX_TRANSCRIPT_WINDOW_REQUESTS,
+  MAX_TRANSCRIPT_EDIT_CANDIDATES,
+  MAX_TRANSCRIPT_EVIDENCE_SEGMENTS,
   MAX_VIDEO_OBSERVATIONS,
   TURN_OUTCOME_VALUES,
 } from "./constants.js";
-import type { ProposalDraft, TurnOutcome } from "../types.js";
+import type { EditingIntent, ProposalDraft, TurnOutcome } from "../types.js";
 import type { TranscriptDetailRequest } from "../../../shared/types/agent-ipc.js";
 
 export interface AnalyzeChapterVideoInput {
   focus: string;
   assetId?: number;
+  startLocalTime?: number;
+  endLocalTime?: number;
 }
 
 export interface LoadDetailedTranscriptWindowsInput {
@@ -23,6 +29,7 @@ export interface LoadDetailedTranscriptWindowsInput {
 }
 
 export interface DraftRoughCutProposalsInput {
+  editingIntent?: EditingIntent;
   proposals: ProposalDraft[];
 }
 
@@ -36,6 +43,21 @@ export interface LoadChapterCutMapInput {
   endLocalTime?: number;
   clipIds?: number[];
   offset?: number;
+  limit?: number;
+}
+
+export interface LoadFullTranscriptInput {
+  startLocalTime?: number;
+  endLocalTime?: number;
+  offset?: number;
+  limit?: number;
+}
+
+export interface FindTranscriptEditCandidatesInput {
+  startLocalTime?: number;
+  endLocalTime?: number;
+  categories?: Array<'filler' | 'repetition' | 'pause'>;
+  minimumPauseSeconds?: number;
   limit?: number;
 }
 
@@ -57,6 +79,7 @@ export const rangeSuggestionSchema = s.object(
       })
     ),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
   },
   { description: "Suggest a kept source window using chapter-local seconds." }
 );
@@ -83,6 +106,7 @@ export const createClipSchema = s.object(
       })
     ),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
   },
   {
     description:
@@ -123,6 +147,7 @@ export const updateClipSchema = s.object(
       })
     ),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
   },
   {
     description:
@@ -136,6 +161,7 @@ export const deleteClipSchema = s.object(
     clipId: s.required(s.integer({ minimum: 1 })),
     reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
   },
   { description: 'Delete an existing committed clip after preview and approval.' }
 );
@@ -159,6 +185,7 @@ export const splitClipSchema = s.object(
     )),
     reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
     supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
   },
   {
     description:
@@ -166,11 +193,43 @@ export const splitClipSchema = s.object(
   }
 );
 
+export const removeRangeSchema = s.object(
+  {
+    type: s.required(s.literalString('remove_range')),
+    clipId: s.required(s.integer({ minimum: 1 })),
+    removeStart: s.required(s.number({ minimum: 0 })),
+    removeEnd: s.required(s.number({ minimum: 0 })),
+    reasoning: s.optional(s.string({ minLength: 1, maxLength: 400 })),
+    supersedesSuggestionId: s.optional(s.integer({ minimum: 1 })),
+    evidenceIds: s.optional(s.array(s.string({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 16 })),
+  },
+  {
+    description:
+      'Remove one chapter-local source interval from an existing clip. Runtime translates it to a trim, split, or full clip deletion.',
+  }
+);
+
+export const editingIntentSchema = s.object(
+  {
+    scope: s.required(s.stringEnum(['playhead_region', 'selected_clips', 'whole_chapter'] as const)),
+    compression: s.required(s.stringEnum(['light', 'balanced', 'aggressive'] as const)),
+    protectedBeats: s.required(s.array(
+      s.string({ minLength: 1, maxLength: 120 }),
+      { minItems: 1, maxItems: 12 }
+    )),
+  },
+  {
+    description:
+      'Inferred editorial scope and compression level, plus story beats that must survive the proposed removals.',
+  }
+);
+
 export const draftRoughCutProposalsSchema = s.object(
   {
+    editingIntent: s.optional(editingIntentSchema),
     proposals: s.required(
       s.array(
-        s.discriminatedUnion("type", [rangeSuggestionSchema, createClipSchema, updateClipSchema, deleteClipSchema, splitClipSchema]),
+        s.discriminatedUnion("type", [rangeSuggestionSchema, createClipSchema, updateClipSchema, deleteClipSchema, splitClipSchema, removeRangeSchema]),
         {
           minItems: 1,
           maxItems: MAX_PROPOSAL_DRAFTS,
@@ -208,6 +267,42 @@ export const loadDetailedTranscriptWindowsSchema = s.object(
   { description: "One or more detailed transcript windows to fetch." }
 );
 
+export const loadFullTranscriptSchema = s.object(
+  {
+    startLocalTime: s.optional(s.number({ minimum: 0 })),
+    endLocalTime: s.optional(s.number({ minimum: 0 })),
+    offset: s.optional(s.integer({ minimum: 0 })),
+    limit: s.optional(s.integer({
+      minimum: 1,
+      maximum: MAX_TRANSCRIPT_EVIDENCE_SEGMENTS,
+    })),
+  },
+  {
+    description:
+      `Load a bounded page of the full chapter transcript with word timestamps when available. Defaults to offset=0, limit=${DEFAULT_TRANSCRIPT_EVIDENCE_SEGMENTS}.`,
+  }
+);
+
+export const findTranscriptEditCandidatesSchema = s.object(
+  {
+    startLocalTime: s.optional(s.number({ minimum: 0 })),
+    endLocalTime: s.optional(s.number({ minimum: 0 })),
+    categories: s.optional(s.array(
+      s.stringEnum(['filler', 'repetition', 'pause'] as const),
+      { minItems: 1, maxItems: 3 }
+    )),
+    minimumPauseSeconds: s.optional(s.number({ minimum: 0.4, maximum: 10 })),
+    limit: s.optional(s.integer({
+      minimum: 1,
+      maximum: MAX_TRANSCRIPT_EDIT_CANDIDATES,
+    })),
+  },
+  {
+    description:
+      `Find deterministic word-level filler, immediate repetition, and pause candidates. Defaults to all categories and limit=${DEFAULT_TRANSCRIPT_EDIT_CANDIDATES}.`,
+  }
+);
+
 export const analyzeChapterVideoSchema = s.object(
   {
     focus: s.required(
@@ -217,8 +312,10 @@ export const analyzeChapterVideoSchema = s.object(
       })
     ),
     assetId: s.optional(s.integer({ minimum: 1 })),
+    startLocalTime: s.optional(s.number({ minimum: 0 })),
+    endLocalTime: s.optional(s.number({ minimum: 0 })),
   },
-  { description: "The evidence question to answer from the chapter video." }
+  { description: "The evidence question and optional chapter-local video range to inspect." }
 );
 
 export const finalizeConversationTurnSchema = s.object(

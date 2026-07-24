@@ -110,6 +110,9 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         isEssential: typeof action.isEssential === 'boolean' ? action.isEssential : undefined,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
         supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+        ...(normalizeEvidenceIds(action.evidenceIds).length > 0
+          ? { evidenceIds: normalizeEvidenceIds(action.evidenceIds) }
+          : {}),
       });
       continue;
     }
@@ -158,6 +161,9 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         updates,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
         supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+        ...(normalizeEvidenceIds(action.evidenceIds).length > 0
+          ? { evidenceIds: normalizeEvidenceIds(action.evidenceIds) }
+          : {}),
       });
       continue;
     }
@@ -169,6 +175,9 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         clipId: action.clipId,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
         supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+        ...(normalizeEvidenceIds(action.evidenceIds).length > 0
+          ? { evidenceIds: normalizeEvidenceIds(action.evidenceIds) }
+          : {}),
       });
       continue;
     }
@@ -183,6 +192,9 @@ export function normalizeTimelineActions(value: unknown): TimelineAction[] {
         segments,
         reasoning: typeof action.reasoning === 'string' ? action.reasoning : undefined,
         supersedesSuggestionId: typeof action.supersedesSuggestionId === 'number' ? action.supersedesSuggestionId : undefined,
+        ...(normalizeEvidenceIds(action.evidenceIds).length > 0
+          ? { evidenceIds: normalizeEvidenceIds(action.evidenceIds) }
+          : {}),
       });
     }
   }
@@ -199,6 +211,29 @@ interface PersistableSuggestionDraft {
   target_clip_id: number | null;
   action_payload_json: string | null;
   supersedes_suggestion_id: number | null;
+  evidence_ids: string[];
+}
+
+function normalizeEvidenceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0).slice(0, 16);
+}
+
+function withEvidenceProvenance(payloadJson: string | null, evidenceIds: string[]): string | null {
+  if (evidenceIds.length === 0) return payloadJson;
+
+  let payload: Record<string, unknown> = {};
+  if (payloadJson) {
+    try {
+      const parsed: unknown = JSON.parse(payloadJson);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      payload = {};
+    }
+  }
+  return JSON.stringify({ ...payload, evidenceIds });
 }
 
 function normalizeSuggestionDrafts(value: unknown): PersistableSuggestionDraft[] {
@@ -221,6 +256,7 @@ function normalizeSuggestionDrafts(value: unknown): PersistableSuggestionDraft[]
         target_clip_id: null,
         action_payload_json: null,
         supersedes_suggestion_id: typeof record.supersedesSuggestionId === 'number' ? record.supersedesSuggestionId : null,
+        evidence_ids: normalizeEvidenceIds(record.evidenceIds),
       };
     })
     .filter((item): item is PersistableSuggestionDraft => item !== null);
@@ -249,6 +285,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
           target_clip_id: null,
           action_payload_json: JSON.stringify(payload),
           supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+          evidence_ids: action.evidenceIds ?? [],
         };
       }
 
@@ -262,6 +299,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
           reasoning: action.reasoning ?? null,
           action_payload_json: JSON.stringify({ delete: true }),
           supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+          evidence_ids: action.evidenceIds ?? [],
         };
       }
 
@@ -281,6 +319,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
             },
           }),
           supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+          evidence_ids: action.evidenceIds ?? [],
         };
       }
 
@@ -312,6 +351,7 @@ function timelineActionsToSuggestionDrafts(actions: TimelineAction[]): Persistab
         reasoning: action.reasoning ?? null,
         action_payload_json: JSON.stringify(payload),
         supersedes_suggestion_id: action.supersedesSuggestionId ?? null,
+        evidence_ids: action.evidenceIds ?? [],
       };
     })
     .filter((item): item is PersistableSuggestionDraft => Boolean(item));
@@ -443,7 +483,10 @@ export async function persistAgentSuggestions(
       provider: normalizeSuggestionProvider(provider),
       action_type: suggestion.action_type,
       target_clip_id: suggestion.target_clip_id,
-      action_payload_json: suggestion.action_payload_json,
+      action_payload_json: withEvidenceProvenance(
+        suggestion.action_payload_json,
+        suggestion.evidence_ids
+      ),
       preview_snapshot_json: null,
       status: 'pending',
       display_order: displayOrder,

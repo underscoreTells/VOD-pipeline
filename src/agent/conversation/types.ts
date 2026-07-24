@@ -21,7 +21,18 @@ export type ProposalDraft =
   | ({
       type: "update_clip";
     } & Extract<TimelineAction, { type: "update_clip" }>)
-  | Extract<TimelineAction, { type: 'delete_clip' | 'split_clip' }>;
+  | Extract<TimelineAction, { type: 'delete_clip' | 'split_clip' }>
+  | {
+      type: 'remove_range';
+      clipId: number;
+      removeStart: number;
+      removeEnd: number;
+      reasoning?: string;
+      supersedesSuggestionId?: number;
+      evidenceIds?: string[];
+    };
+
+export type EditingIntent = NonNullable<ConversationTurnResult['editingIntent']>;
 
 export interface ConversationChapterContext {
   id: string;

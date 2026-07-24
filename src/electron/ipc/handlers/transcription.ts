@@ -100,7 +100,10 @@ export function registerTranscriptionHandlers(): void {
 
         if (skipIfExists) {
           const existingTranscripts = await getTranscriptsByChapter(chapterId);
-          if (existingTranscripts.length > 0) {
+          const hasWordTimestamps = existingTranscripts.some(
+            (segment) => segment.words_json.length > 0
+          );
+          if (existingTranscripts.length > 0 && hasWordTimestamps) {
             event.sender.send(IPC_CHANNELS.TRANSCRIBE_PROGRESS, {
               chapterId,
               progress: { percent: 100, status: 'Using existing transcript' },
@@ -181,7 +184,7 @@ export function registerTranscriptionHandlers(): void {
             model: normalizeTranscriptionModel(options?.model),
             language: typeof options?.language === 'string' ? options.language : undefined,
             computeType: normalizeComputeType(options?.computeType),
-            wordTimestamps: false,
+            wordTimestamps: true,
           },
           (progress) => {
             event.sender.send(IPC_CHANNELS.TRANSCRIBE_PROGRESS, {
@@ -204,9 +207,23 @@ export function registerTranscriptionHandlers(): void {
               text: segment.text,
               start_time: start,
               end_time: end,
+              words_json: (segment.words ?? []).flatMap((word) => {
+                const wordStart = clamp(word.start, start, end);
+                const wordEnd = clamp(word.end, wordStart, end);
+                if (wordEnd <= wordStart || !word.word.trim()) {
+                  return [];
+                }
+
+                return [{
+                  word: word.word,
+                  start: wordStart,
+                  end: wordEnd,
+                  probability: word.probability,
+                }];
+              }),
             };
           })
-          .filter((segment): segment is { text: string; start_time: number; end_time: number } => segment !== null);
+          .filter((segment): segment is NonNullable<typeof segment> => segment !== null);
 
         await replaceTranscripts(chapterId, transcriptInputs);
         await deleteDetailedTranscriptsByChapter(chapterId);

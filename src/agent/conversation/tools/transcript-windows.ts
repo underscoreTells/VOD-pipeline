@@ -81,9 +81,18 @@ export function createLoadDetailedTranscriptWindowsTool(
       accumulator.transcriptDetailRequests.push(...normalizedRequests);
       const windows = await loadDetailedTranscriptWindowsImpl(input, normalizedRequests, options);
       accumulator.loadedDetailedTranscripts.push(...windows);
+      accumulator.evidenceReferences.push(...windows.map((window) => ({
+        evidenceId: `detailed-transcript:${window.assetId}:${window.windowStart.toFixed(3)}:${window.windowEnd.toFixed(3)}`,
+        start: window.windowStart,
+        end: window.windowEnd,
+        source: 'detailed_transcript' as const,
+        observedAtStep: accumulator.currentStepIndex,
+        assetId: window.assetId,
+      })));
 
       return JSON.stringify({
         windows: windows.map((window) => ({
+          evidenceId: `detailed-transcript:${window.assetId}:${window.windowStart.toFixed(3)}:${window.windowEnd.toFixed(3)}`,
           assetId: window.assetId,
           windowStart: window.windowStart,
           windowEnd: window.windowEnd,

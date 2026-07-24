@@ -29,7 +29,7 @@ This document describes the implemented architecture after the backend/agent ref
   - `src/agent/conversation/context-builder.ts`
     - `buildConversationSystemPrompt()` builds the canonical system prompt from chapter, clip, transcript, and proposal context.
   - `src/agent/conversation/tools/`
-    - one module per tool (`video-evidence.ts`, `transcript-windows.ts`, `proposals.ts`, `finalize.ts`) assembled by `create-tools.ts`
+    - one module per tool (`video-evidence.ts`, `transcript-evidence.ts`, `transcript-windows.ts`, `proposals.ts`, `finalize.ts`) assembled by `create-tools.ts`
     - `buildVideoEvidencePrompt()` (in `tools/video-evidence.ts`) is the canonical tool-scoped evidence prompt for visual inspection
 - The live tool loop is responsible for:
   - gathering transcript and video evidence
@@ -38,6 +38,18 @@ This document describes the implemented architecture after the backend/agent ref
 - Streaming: the user-facing reply is delivered through the `finalizeConversationTurn` tool call. `src/agent/conversation/streaming.ts` incrementally decodes the `assistantResponse` argument from streamed tool-call chunks and forwards live text deltas; providers without native streaming fall back to post-hoc chunking.
 - Model steps retry transient errors (429/5xx/network) with exponential backoff via `withLLMRetry`; retries stop once reply text has reached the renderer.
 - Tunable loop limits live in `src/agent/constants.ts`.
+
+### Precision Editing Evidence
+
+- Full chapter transcription defaults to Whisper `small` with word timestamps stored in `transcripts.words_json` (schema revision 9). Legacy text-only chapters are re-transcribed by the normal background reopen flow before `skipIfExists` succeeds.
+- The overview transcript in the system prompt is orientation only and cannot ground actionable timing.
+- `loadFullTranscript` pages through persistent segment/word evidence. `findTranscriptEditCandidates` deterministically surfaces conservative filler, immediate repetition, and pause candidates. `loadDetailedTranscriptWindows` remains available for focused higher-quality Whisper windows.
+- Every retrieved transcript segment, edit candidate, detailed window, and timed video observation has a stable `evidenceId`. Actionable proposals must overlap eligible evidence from an earlier model step; evidence fetched alongside a proposal in the same response is rejected.
+- Proposal evidence IDs are persisted in `suggestions.action_payload_json` for auditability. Execution traces persist safe counts and editing intent, not transcript/video payloads or credentials.
+- `draftRoughCutProposals` accepts per-turn editing intent (`scope`, `compression`, `protectedBeats`). Balanced compression is the fallback; aggressive compression requires a clear user request.
+- `remove_range` is the agent-facing removal operation. It translates to existing non-destructive `update_clip`, `split_clip`, or `delete_clip` suggestions, preserving the current preview/apply path.
+- Gemini video evidence uses the REST video part shape because the installed LangChain adapter discards `videoMetadata`. Requests set `fps: 2` and may set chapter-local start/end offsets; Kimi retains the existing multimodal adapter path.
+- `src/agent/evaluation/editorial-metrics.ts` scores user-annotated expected removals against proposals (precision, recall, boundary error, and protected-range overlap). No synthetic score is treated as a product baseline.
 
 ## LLM Provider Registry
 

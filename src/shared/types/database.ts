@@ -86,6 +86,7 @@ export interface Transcript {
   text: string;
   start_time: number;
   end_time: number;
+  words_json: DetailedTranscriptWord[];
 }
 
 export interface DetailedTranscriptWord {
@@ -164,7 +165,9 @@ export interface ExecutionTraceEntry {
 export type CreateProjectInput = Omit<Project, 'id' | 'created_at' | 'updated_at'>;
 export type CreateAssetInput = Omit<Asset, 'id' | 'created_at'>;
 export type CreateChapterInput = Omit<Chapter, 'id' | 'created_at' | 'display_order' | 'rough_cut_completed_at'> & { display_order?: number };
-export type CreateTranscriptInput = Omit<Transcript, 'id'>;
+export type CreateTranscriptInput = Omit<Transcript, 'id' | 'words_json'> & {
+  words_json?: DetailedTranscriptWord[];
+};
 export type CreateDetailedTranscriptInput = Omit<DetailedTranscript, 'id' | 'created_at'>;
 export type CreateChatConversationInput = Omit<ChatConversation, 'id' | 'thread_id' | 'created_at' | 'updated_at'> & {
   thread_id?: string;

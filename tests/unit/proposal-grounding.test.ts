@@ -33,6 +33,15 @@ function createAccumulator(): ConversationToolAccumulator {
     timelineActions: [],
     transcriptDetailRequests: [],
     loadedDetailedTranscripts: [],
+    evidenceReferences: [{
+      evidenceId: 'detailed-transcript:1:0.000:100.000',
+      start: 0,
+      end: 100,
+      source: 'detailed_transcript',
+      observedAtStep: 0,
+      assetId: 1,
+    }],
+    currentStepIndex: 1,
     hasSuccessfulVideoEvidence: false,
     videoEvidenceAssetIds: new Set(),
   };
@@ -76,5 +85,70 @@ describe('proposal grounding', () => {
       clipId: 7,
       reasoning: 'Remove the explicitly mentioned clip',
     }])).not.toThrow();
+  });
+
+  it('rejects evidence fetched in the same model step', () => {
+    const accumulator = createAccumulator();
+    accumulator.evidenceReferences[0]!.observedAtStep = 2;
+    accumulator.currentStepIndex = 2;
+
+    expect(() => validateProposalGrounding(createInput(), accumulator, [{
+      type: 'remove_range',
+      clipId: 7,
+      removeStart: 22,
+      removeEnd: 24,
+      reasoning: 'Remove repeated wording',
+    }])).toThrow('returned in an earlier model step');
+  });
+
+  it('rejects an overview transcript without precise evidence', () => {
+    const accumulator = createAccumulator();
+    accumulator.evidenceReferences = [];
+
+    expect(() => validateProposalGrounding(createInput(), accumulator, [{
+      type: 'range_suggestion',
+      in_point: 20,
+      out_point: 30,
+      description: 'Keep the concise explanation',
+    }])).toThrow('Actionable edits require overlapping transcript or video evidence');
+  });
+
+  it('requires update evidence at the changed trim boundary', () => {
+    const accumulator = createAccumulator();
+    accumulator.evidenceReferences = [{
+      evidenceId: 'unrelated-clip-evidence',
+      start: 35,
+      end: 36,
+      source: 'full_transcript',
+      observedAtStep: 0,
+    }];
+
+    expect(() => validateProposalGrounding(createInput(), accumulator, [{
+      type: 'update_clip',
+      clipId: 7,
+      updates: { inPoint: 25 },
+      reasoning: 'Trim repeated setup from the head',
+    }])).toThrow('Actionable edits require overlapping transcript or video evidence');
+  });
+
+  it('requires evidence for every gap removed by a direct split', () => {
+    const accumulator = createAccumulator();
+    accumulator.evidenceReferences = [{
+      evidenceId: 'first-gap-only',
+      start: 25,
+      end: 30,
+      source: 'full_transcript',
+      observedAtStep: 0,
+    }];
+
+    expect(() => validateProposalGrounding(createInput(), accumulator, [{
+      type: 'split_clip',
+      clipId: 7,
+      segments: [
+        { inPoint: 20, outPoint: 25 },
+        { inPoint: 30, outPoint: 35 },
+      ],
+      reasoning: 'Remove two separate pacing stalls',
+    }])).toThrow('Actionable edits require overlapping transcript or video evidence');
   });
 });

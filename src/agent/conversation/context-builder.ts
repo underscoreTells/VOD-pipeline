@@ -63,7 +63,7 @@ export function buildConversationSystemPrompt(input: ConversationTurnInput): str
     .slice(0, MAX_DETAILED_TRANSCRIPT_LINES)
     .map(
       (window) =>
-        `- asset=${window.assetId} range=${window.windowStart.toFixed(2)}-${window.windowEnd.toFixed(
+        `- evidenceId=detailed-transcript:${window.assetId}:${window.windowStart.toFixed(3)}:${window.windowEnd.toFixed(3)} asset=${window.assetId} range=${window.windowStart.toFixed(2)}-${window.windowEnd.toFixed(
           2
         )} reason=${window.reason ?? "n/a"}`
     )
@@ -113,12 +113,14 @@ ${referencedEntities || "- none"}
 Rules:
 - If the user asks to make the cut tighter, faster, cleaner, more engaging, less fluffy, or to improve the current section, prefer drafting at least one concrete proposal instead of asking for clarification.
 - Use clarification only when there is no local anchor from transcript context, detailed transcript windows, selected clips, or the playhead region and you cannot safely draft even one grounded proposal.
-- Default editorial bias: cut dead air, repeated explanation, reset loops, stalled tangents, and humor that stops story momentum.
-- Preserve setup -> escalation -> payoff continuity, strong transitions, exact payoff wording, and humor that improves pacing or meaningfully pays off a setup.
+- Before drafting, infer editingIntent: scope, compression, and protectedBeats. Pass it to draftRoughCutProposals. Default compression is balanced; use aggressive only when the user clearly requests a major reduction.
+- Within that intent, consider dead air, repeated explanation, reset loops, stalled tangents, and humor that stops story momentum as removal candidates, not automatic cuts.
+- Protected beats should normally include setup -> escalation -> payoff continuity, strong transitions, exact payoff wording, and humor that improves pacing or meaningfully pays off a setup.
 - Use chapter-local seconds only for any actionable edit proposal.
 - For clips, inPoint/outPoint describe the kept source window.
 - range_suggestion is a keep-only shorthand for the exact source window that stays in the cut.
-- If the user asks to cut, remove, trim, drop, skip, omit, or delete something, translate that into the kept result window or a clip-boundary update. Do not label the kept window as the removed material.
+- If the user asks to cut, remove, trim, drop, skip, or omit footage, prefer remove_range with the exact removed chapter-local interval. It will be translated into compatible kept-window actions.
+- For keep-window proposal types: Do not label the kept window as the removed material.
 - For proposal copy, description must describe what is inside the kept window or updated clip. reasoning may explain what the edit skips, trims, omits, or removes.
 - Chapter clip order is inferred from source timing, so do not propose timeline gaps or manual repositioning.
 - Use create_clip/update_clip to define or revise source windows, delete_clip for committed clip removal, and split_clip to atomically replace one clip with ordered kept segments. Gaps between split_clip segments remove footage.
@@ -127,12 +129,16 @@ Rules:
 - Do not invent clip identifiers or asset identifiers.
 - Treat explicitly referenced entities as the user's intended targets. Use their structured IDs, not names parsed from prose.
 - Use evidence tools when they are needed for factual verification.
+- Every autonomous actionable proposal must be grounded in evidence returned before the proposal step. Cite the relevant evidenceId values in evidenceIds; evidence from another tool call in the same response is not eligible.
+- The overview transcript excerpt is orientation only. It does not provide exact-enough evidence for actionable timing.
+- Use loadFullTranscript for bounded semantic review of the complete chapter and paginate for whole-chapter requests.
+- Use findTranscriptEditCandidates to surface conservative filler, immediate-repetition, and pause candidates from word timestamps.
 - Use loadDetailedTranscriptWindows for exact dialogue wording and timing.
 - Use analyzeChapterVideo when visual confirmation matters, when a beat depends on on-screen action or reaction, when choosing between multiple source assets, or when a proposal depends on visuals rather than dialogue or pacing alone.
 - The "Existing chapter clips" preview above only shows the first ${MAX_CLIP_PREVIEW_LINES} clips. For whole-chapter requests that need more than that preview (auditing the full cut, reviewing every clip, assessing overall pacing across the whole cut, or any analysis that depends on clips beyond the preview), call loadChapterCutMap before drafting proposals.
 - Use loadChapterCutMap to fetch a bounded, paginated, filterable view of the current chapter cut map when the ${MAX_CLIP_PREVIEW_LINES}-line preview above is not enough.
-- range_suggestion and update_clip can be grounded by transcript context, detailed transcript windows, selected clips, or the current playhead region even without a same-turn video call.
-- create_clip requires stronger grounding. Use matching analyzeChapterVideo evidence for multi-asset or visually dependent clips, and otherwise keep the clip anchored to the currently grounded local context.
+- All range_suggestion, create_clip, update_clip, split_clip, and autonomous delete_clip proposals require overlapping timed evidence from an earlier model step. An explicitly referenced clip may be deleted directly at the user's request.
+- create_clip requires asset-specific analyzeChapterVideo evidence for multi-asset chapters; single-asset creates may use matching precise transcript or video evidence.
 - If multiple grounded video assets are available, analyzeChapterVideo must specify assetId and create_clip must specify assetId.
 - If you provide actionable rough-cut edits, you MUST call draftRoughCutProposals first.
 - Never describe concrete trims, clip inserts, clip updates, or reorder proposals only in prose.

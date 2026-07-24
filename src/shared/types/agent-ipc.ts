@@ -14,6 +14,7 @@ export interface CreateClipAction {
   isEssential?: boolean;
   reasoning?: string;
   supersedesSuggestionId?: number;
+  evidenceIds?: string[];
 }
 
 export interface UpdateClipAction {
@@ -28,6 +29,7 @@ export interface UpdateClipAction {
   };
   reasoning?: string;
   supersedesSuggestionId?: number;
+  evidenceIds?: string[];
 }
 
 export interface DeleteClipAction {
@@ -35,6 +37,7 @@ export interface DeleteClipAction {
   clipId: number;
   reasoning?: string;
   supersedesSuggestionId?: number;
+  evidenceIds?: string[];
 }
 
 export interface SplitClipSegment {
@@ -51,6 +54,7 @@ export interface SplitClipAction {
   segments: SplitClipSegment[];
   reasoning?: string;
   supersedesSuggestionId?: number;
+  evidenceIds?: string[];
 }
 
 export type TimelineAction = CreateClipAction | UpdateClipAction | DeleteClipAction | SplitClipAction;
@@ -77,6 +81,7 @@ export interface AgentSuggestionDraft {
   description?: string;
   reasoning?: string;
   supersedesSuggestionId?: number;
+  evidenceIds?: string[];
 }
 
 export interface ConversationTurnResult {
@@ -87,6 +92,11 @@ export interface ConversationTurnResult {
   // Deprecated for renderer-facing chat flows. Persisted suggestions are canonical.
   timelineActions?: TimelineAction[];
   transcriptDetailRequests?: TranscriptDetailRequest[];
+  editingIntent?: {
+    scope: 'playhead_region' | 'selected_clips' | 'whole_chapter';
+    compression: 'light' | 'balanced' | 'aggressive';
+    protectedBeats: string[];
+  };
 }
 
 export interface AgentChatData {

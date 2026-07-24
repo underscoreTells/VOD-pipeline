@@ -196,7 +196,7 @@ export function assertNoAmbiguousLegacyClipsTable(database: Database.Database): 
  * Schema revision expected by this build. Bump when schema.sql or the
  * imperative ensure* migrations change shape.
  */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export async function getSchemaVersion(database?: Database.Database): Promise<number> {
   const activeDatabase = database ?? await getDatabase();
@@ -215,6 +215,7 @@ export function ensureSchemaColumns(database: Database.Database): void {
     { table: 'chapters', column: 'created_at', definition: 'DATETIME DEFAULT CURRENT_TIMESTAMP' },
     { table: 'chapters', column: 'display_order', definition: 'INTEGER DEFAULT 0' },
     { table: 'chapters', column: 'rough_cut_completed_at', definition: 'DATETIME' },
+    { table: 'transcripts', column: 'words_json', definition: 'TEXT' },
     { table: 'suggestions', column: 'conversation_id', definition: 'INTEGER REFERENCES chat_conversations(id) ON DELETE CASCADE' },
     { table: 'suggestions', column: 'chat_message_id', definition: 'INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE' },
     { table: 'suggestions', column: 'clip_id', definition: 'INTEGER REFERENCES clips(id) ON DELETE SET NULL' },

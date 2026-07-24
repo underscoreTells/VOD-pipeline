@@ -40,6 +40,9 @@ interface ConversationRunnerDependencies extends ConversationToolDependencies {
       timelineActions: ConversationRunResult["timelineActions"];
       transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
       loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
+      evidenceReferences: import('./tools/transcript-evidence.js').ConversationEvidenceReference[];
+      currentStepIndex: number;
+      editingIntent?: import('./types.js').EditingIntent;
       hasSuccessfulVideoEvidence: boolean;
       videoEvidenceAssetIds: Set<number>;
       finalOutcome?: ConversationRunResult["outcome"];
@@ -91,6 +94,9 @@ export async function runConversationTurn(
     timelineActions: NonNullable<ConversationRunResult["timelineActions"]>;
     transcriptDetailRequests: NonNullable<ConversationRunResult["transcriptDetailRequests"]>;
     loadedDetailedTranscripts: ConversationTurnInput["context"]["detailedTranscripts"];
+    evidenceReferences: import('./tools/transcript-evidence.js').ConversationEvidenceReference[];
+    currentStepIndex: number;
+    editingIntent?: import('./types.js').EditingIntent;
     hasSuccessfulVideoEvidence: boolean;
     videoEvidenceAssetIds: Set<number>;
     finalOutcome?: ConversationRunResult["outcome"];
@@ -100,6 +106,15 @@ export async function runConversationTurn(
     timelineActions: [],
     transcriptDetailRequests: [],
     loadedDetailedTranscripts: [],
+    evidenceReferences: input.context.detailedTranscripts.map((window) => ({
+      evidenceId: `detailed-transcript:${window.assetId}:${window.windowStart.toFixed(3)}:${window.windowEnd.toFixed(3)}`,
+      start: window.windowStart,
+      end: window.windowEnd,
+      source: 'detailed_transcript' as const,
+      observedAtStep: 0,
+      assetId: window.assetId,
+    })),
+    currentStepIndex: 0,
     hasSuccessfulVideoEvidence: false,
     videoEvidenceAssetIds: new Set<number>(),
   };
@@ -129,6 +144,7 @@ export async function runConversationTurn(
     }
 
     currentStepIndex = step;
+    accumulator.currentStepIndex = step;
     assertNotAborted(options.signal);
 
     writer?.writeStatus({
@@ -255,6 +271,7 @@ export async function runConversationTurn(
           toolName: toolCall.name,
           state: "completed",
           output: content,
+          message: summarizeCompletedToolCall(toolCall.name, content),
           stepIndex: step,
         });
       } catch (error) {
@@ -309,6 +326,37 @@ function sortJsonValue(value: unknown): unknown {
     }, {});
 }
 
+function summarizeCompletedToolCall(toolName: string, content: string): string {
+  try {
+    const output = JSON.parse(content) as Record<string, unknown>;
+    if (toolName === 'loadFullTranscript') {
+      const count = Array.isArray(output.segments) ? output.segments.length : 0;
+      return `${toolName} completed: segments=${count}, nextOffset=${String(output.nextOffset ?? 'none')}, wordTimestamps=${String(output.wordTimestampsAvailable === true)}`;
+    }
+    if (toolName === 'findTranscriptEditCandidates') {
+      const count = Array.isArray(output.candidates) ? output.candidates.length : 0;
+      return `${toolName} completed: candidates=${count}, wordTimestamps=${String(output.wordTimestampsAvailable === true)}`;
+    }
+    if (toolName === 'loadDetailedTranscriptWindows') {
+      const count = Array.isArray(output.windows) ? output.windows.length : 0;
+      return `${toolName} completed: windows=${count}`;
+    }
+    if (toolName === 'analyzeChapterVideo') {
+      const count = Array.isArray(output.observations) ? output.observations.length : 0;
+      return `${toolName} completed: assetId=${String(output.assetId ?? 'none')}, observations=${count}`;
+    }
+    if (toolName === 'draftRoughCutProposals') {
+      const intent = output.editingIntent && typeof output.editingIntent === 'object'
+        ? output.editingIntent as Record<string, unknown>
+        : {};
+      return `${toolName} completed: accepted=${String(output.acceptedCount ?? 0)}, rejected=${String(output.rejectedCount ?? 0)}, scope=${String(intent.scope ?? 'unknown')}, compression=${String(intent.compression ?? 'unknown')}`;
+    }
+  } catch {
+    // Tool output remains available transiently; persisted trace uses only this safe label.
+  }
+  return `${toolName} completed`;
+}
+
 function createControlledFailure(message: string): ConversationRunResult {
   return {
     assistantResponse: message,
@@ -323,6 +371,7 @@ function finalizeConversationResult(
     suggestionDrafts: ConversationRunResult["suggestionDrafts"];
     timelineActions: ConversationRunResult["timelineActions"];
     transcriptDetailRequests: ConversationRunResult["transcriptDetailRequests"];
+    editingIntent?: import('./types.js').EditingIntent;
     finalOutcome?: ConversationRunResult["outcome"];
     finalAssistantResponse?: string;
   },
@@ -362,6 +411,7 @@ function finalizeConversationResult(
       accumulator.transcriptDetailRequests && accumulator.transcriptDetailRequests.length > 0
         ? accumulator.transcriptDetailRequests
         : undefined,
+    editingIntent: accumulator.editingIntent,
   };
 }
 

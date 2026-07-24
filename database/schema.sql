@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
   text TEXT NOT NULL,
   start_time REAL NOT NULL,
   end_time REAL NOT NULL,
+  words_json TEXT,
   FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
 );
 
