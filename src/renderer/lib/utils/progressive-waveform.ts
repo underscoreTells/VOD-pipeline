@@ -69,7 +69,7 @@ export async function loadProgressiveWaveformRange({
           endTime: blockEnd,
           pixelsPerSecond,
           requestMode,
-        });
+        }, signal);
         if (signal?.aborted) return;
         if (!result.success || !result.data) throw new Error(result.error || 'Waveform block request failed');
         for (const block of result.data.blocks) onBlock(block);

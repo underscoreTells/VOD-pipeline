@@ -149,6 +149,7 @@ const electronAPI: ElectronAPI = {
       return () => ipcRenderer.removeListener('waveform:progress', handler);
     },
     requestBlocks: (request) => ipcRenderer.invoke('waveform:blocks-request', request),
+    cancelBlockRequest: (requestId) => ipcRenderer.invoke('waveform:blocks-cancel', { requestId }),
     onBlockProgress: (callback) => {
       const handler = (_event: unknown, data: WaveformBlockProgressEvent) => callback(data);
       ipcRenderer.on('waveform:block-progress', handler);

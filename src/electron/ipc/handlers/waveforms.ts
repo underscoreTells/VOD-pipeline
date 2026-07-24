@@ -18,7 +18,7 @@ import {
   waveformBlocksRequestSchema,
   waveformGetSchema,
 } from '../schemas.js';
-import { enqueueHeavyMediaJob } from '../support/heavy-media-queue.js';
+import { cancelHeavyMediaJob, enqueueHeavyMediaJob } from '../support/heavy-media-queue.js';
 
 const logger = createLogger('WaveformHandlers');
 
@@ -27,9 +27,27 @@ export const WAVEFORM_HANDLER_CHANNELS = [
   IPC_CHANNELS.WAVEFORM_GET,
   IPC_CHANNELS.WAVEFORM_GENERATE_TIER,
   IPC_CHANNELS.WAVEFORM_BLOCKS_REQUEST,
+  IPC_CHANNELS.WAVEFORM_BLOCKS_CANCEL,
 ];
 
+interface WaveformBlockRequestState {
+  cancelled: boolean;
+  jobKeys: Set<string>;
+}
+
+const waveformBlockRequests = new Map<string, WaveformBlockRequestState>();
+
 export function registerWaveformHandlers(): void {
+  ipcMain.handle(IPC_CHANNELS.WAVEFORM_BLOCKS_CANCEL, (_, payload) => {
+    const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+    const request = waveformBlockRequests.get(requestId);
+    if (!request) return createSuccessResponse({ cancelled: false });
+    request.cancelled = true;
+    let cancelled = false;
+    for (const key of request.jobKeys) cancelled = cancelHeavyMediaJob(key) || cancelled;
+    return createSuccessResponse({ cancelled: cancelled || request.jobKeys.size === 0 });
+  });
+
   ipcMain.handle(IPC_CHANNELS.WAVEFORM_GENERATE, async (event, payload) => {
     const playbackActive = payload?.playbackActive;
     logger.info('waveform:generate', payload?.assetId, payload?.trackIndex, { playbackActive });
@@ -187,7 +205,9 @@ export function registerWaveformHandlers(): void {
       if (!parsed.success || parsed.data.endTime <= parsed.data.startTime) {
         return createErrorResponse('Invalid waveform block range', IPC_ERROR_CODES.VALIDATION_ERROR);
       }
-      const { assetId, trackIndex, startTime, endTime, pixelsPerSecond, requestMode } = parsed.data;
+      const { requestId, assetId, trackIndex, startTime, endTime, pixelsPerSecond, requestMode } = parsed.data;
+      const requestState: WaveformBlockRequestState = { cancelled: false, jobKeys: new Set() };
+      waveformBlockRequests.set(requestId, requestState);
       const asset = await getAsset(assetId);
       if (!asset) {
         return createErrorResponse('Asset not found', IPC_ERROR_CODES.NOT_FOUND);
@@ -214,13 +234,20 @@ export function registerWaveformHandlers(): void {
         ffmpegPath: ffmpeg.path,
         ffprobePath: getFFprobePath(ffmpeg.path),
         audiowaveform: getAudiowaveformPath(),
-        scheduleBlock: (key, run) => enqueueHeavyMediaJob(
-          key,
-          'waveformBlock',
-          requestMode ?? 'interactive',
-          run,
-          { resourceClass: 'cpu' }
-        ),
+        scheduleBlock: (key, run) => {
+          if (requestState.cancelled) {
+            return Promise.reject(new Error('Waveform block generation cancelled'));
+          }
+          const requestJobKey = `${key}:request:${requestId}`;
+          requestState.jobKeys.add(requestJobKey);
+          return enqueueHeavyMediaJob(
+            requestJobKey,
+            'waveformBlock',
+            requestMode ?? 'interactive',
+            run,
+            { resourceClass: 'cpu' }
+          );
+        },
         onProgress: (progress) => {
           event.sender.send(IPC_CHANNELS.WAVEFORM_BLOCK_PROGRESS, {
             assetId,
@@ -238,6 +265,9 @@ export function registerWaveformHandlers(): void {
       });
     } catch (error) {
       return createErrorResponse(error, IPC_ERROR_CODES.WAVEFORM_GENERATION_FAILED);
+    } finally {
+      const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+      waveformBlockRequests.delete(requestId);
     }
   });
 }

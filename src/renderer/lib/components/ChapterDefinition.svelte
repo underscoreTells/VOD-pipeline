@@ -104,6 +104,7 @@
     if (!videoRef || !Number.isFinite(videoRef.duration) || videoRef.duration <= 0) return;
     mediaDuration = videoRef.duration;
     setVodCutDuration(videoRef.duration);
+    if (isReady) seekController.commit(vodCutState.playheadTime);
   }
 
   function handleTimelineSeek(time: number, commit: boolean): void {
@@ -392,6 +393,9 @@
         fps: asset.metadata?.fps,
         draft: result.success ? result.data : null,
       });
+      if (videoRef && Number.isFinite(videoRef.duration) && videoRef.duration > 0) {
+        seekController.commit(vodCutState.playheadTime);
+      }
       if (!result.success) setVodCutError(result.error || 'Could not load the saved VOD cut draft.');
       isReady = true;
     };

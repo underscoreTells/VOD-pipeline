@@ -239,6 +239,7 @@ export const waveformGenerateTierSchema = z.object({
 });
 
 export const waveformBlocksRequestSchema = z.object({
+  requestId: z.string().uuid(),
   assetId: z.coerce.number().int().positive(),
   trackIndex: z.coerce.number().int().min(-1),
   startTime: z.coerce.number().finite().min(0),

@@ -42,9 +42,21 @@ export function onWaveformProgress(
 }
 
 export async function requestWaveformBlocks(
-  request: WaveformBlocksRequest
+  request: WaveformBlocksRequest,
+  signal?: AbortSignal
 ): Promise<WaveformBlocksResult> {
-  return await getElectronApi().waveforms.requestBlocks(request);
+  if (signal?.aborted) throw new DOMException('Waveform block request aborted', 'AbortError');
+  const requestId = crypto.randomUUID();
+  const api = getElectronApi().waveforms;
+  const cancel = () => void api.cancelBlockRequest(requestId).catch(() => undefined);
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await api.requestBlocks({ ...request, requestId });
+    if (signal?.aborted) throw new DOMException('Waveform block request aborted', 'AbortError');
+    return result;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
 }
 
 export function onWaveformBlockProgress(

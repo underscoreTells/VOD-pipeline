@@ -575,6 +575,10 @@ export interface WaveformBlocksRequest {
   requestMode?: 'background' | 'interactive';
 }
 
+export interface WaveformBlocksIpcRequest extends WaveformBlocksRequest {
+  requestId: string;
+}
+
 export type WaveformBlockStatus =
   | 'queued'
   | 'generating'
@@ -796,7 +800,8 @@ export interface ElectronAPI {
       options?: WaveformGenerateOptions
     ) => Promise<WaveformGenerationResult>;
     onProgress: (callback: (data: WaveformProgressEvent) => void) => () => void;
-    requestBlocks: (request: WaveformBlocksRequest) => Promise<WaveformBlocksResult>;
+    requestBlocks: (request: WaveformBlocksIpcRequest) => Promise<WaveformBlocksResult>;
+    cancelBlockRequest: (requestId: string) => Promise<CancelJobResult>;
     onBlockProgress: (callback: (data: WaveformBlockProgressEvent) => void) => () => void;
   };
   transcription: {
